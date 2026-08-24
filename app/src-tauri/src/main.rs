@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
@@ -30,8 +31,11 @@ use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
 };
 use io::osc::{OscInput, OscInputEvent};
+#[cfg(test)]
+use io::remote_ws::DJ_LINK_SHUTDOWN_DEADLINE;
 use io::remote_ws::{
-    DjLinkDispatchHandler, DjLinkDispatchOutcome, RemoteInputEvent, RemoteWsServer,
+    new_dj_link_process_fence, DjLinkDispatchHandler, DjLinkDispatchOutcome,
+    DjLinkProcessFenceHandle, RemoteInputEvent, RemoteWsServer,
 };
 use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
@@ -95,7 +99,7 @@ use protocol::{
     VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
     VideoTransitionBusId, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
@@ -105,6 +109,7 @@ use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 // deny-write/delete-handle path.
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use tauri::ipc::{CommandArg, CommandItem, InvokeBody, InvokeError};
 use tauri::Emitter;
 use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
@@ -121,6 +126,186 @@ mod output_lease;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
 pub mod timeline_cue_audio;
+
+/// Tauri normally deserializes each command argument from a key named after
+/// the Rust parameter. This adapter deserializes the complete JSON argument
+/// object into a typed value instead, preserving the existing flat IPC
+/// payload while allowing the Rust implementation to pass one cohesive
+/// request through its command boundary.
+enum FlatInvokePayload<T> {
+    Json(T),
+    Raw,
+}
+
+struct FlatInvokeArgs<T> {
+    command_name: &'static str,
+    payload: FlatInvokePayload<T>,
+}
+
+impl FlatInvokeArgs<Value> {
+    fn from_body(command_name: &'static str, body: &InvokeBody) -> Self {
+        let payload = match body {
+            InvokeBody::Json(value) => FlatInvokePayload::Json(value.clone()),
+            InvokeBody::Raw(_) => FlatInvokePayload::Raw,
+        };
+        Self {
+            command_name,
+            payload,
+        }
+    }
+
+    fn invalid_args(&self, key: &str, detail: impl std::fmt::Display) -> String {
+        format!(
+            "invalid args `{key}` for command `{}`: {detail}",
+            self.command_name
+        )
+    }
+
+    fn raw_payload_error(&self, key: &str) -> String {
+        self.invalid_args(
+            key,
+            format_args!(
+                "command {} expected a value for key {key} but the IPC call used a bytes payload",
+                self.command_name
+            ),
+        )
+    }
+
+    fn get_required<T: DeserializeOwned>(&self, key: &str) -> Result<T, String> {
+        let FlatInvokePayload::Json(value) = &self.payload else {
+            return Err(self.raw_payload_error(key));
+        };
+        let value = value.get(key).cloned().ok_or_else(|| {
+            self.invalid_args(
+                key,
+                format_args!("command {} missing required key {key}", self.command_name),
+            )
+        })?;
+        serde_json::from_value(value).map_err(|error| self.invalid_args(key, error))
+    }
+
+    fn get_optional<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
+        let FlatInvokePayload::Json(value) = &self.payload else {
+            return Err(self.raw_payload_error(key));
+        };
+        let Some(value) = value.get(key).cloned() else {
+            return Ok(None);
+        };
+        serde_json::from_value(value).map_err(|error| self.invalid_args(key, error))
+    }
+}
+
+impl<'de, R> CommandArg<'de, R> for FlatInvokeArgs<Value>
+where
+    R: tauri::Runtime,
+{
+    fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
+        Ok(Self::from_body(command.name, command.message.payload()))
+    }
+}
+
+macro_rules! read_flat_invoke_args {
+    ($args:ident;) => {};
+    ($args:ident; $name:ident : Option<$inner:ty> => $key:literal, $($rest:tt)*) => {
+        let $name: Option<$inner> = $args.get_optional($key)?;
+        read_flat_invoke_args!($args; $($rest)*);
+    };
+    ($args:ident; $name:ident : $ty:ty => $key:literal, $($rest:tt)*) => {
+        let $name: $ty = $args.get_required($key)?;
+        read_flat_invoke_args!($args; $($rest)*);
+    };
+}
+
+macro_rules! project_replacement_plan {
+    ($coordinator_effect:expr, $emit_authority_event:expr, $validate:expr, $capture:expr, $lease:expr) => {
+        ProjectReplacementCoordinatorPlan {
+            coordinator_effect: $coordinator_effect,
+            emit_authority_event: $emit_authority_event,
+            validate_before_publication: $validate,
+            capture_after_commit: $capture,
+            lease_authorization: $lease,
+        }
+    };
+}
+
+macro_rules! read_video_clip_slot_authoritative_args {
+    ($args:ident, $request_type:ty) => {
+        (
+            $args.get_required::<$request_type>("request")?,
+            $args.get_required::<u64>("requestId")?,
+            $args.get_required::<u64>("expectedEpoch")?,
+            $args.get_required::<u64>("expectedRevision")?,
+            $args.get_required::<String>("expectedCheckpointHash")?,
+            $args.get_required::<String>("ownerId")?,
+        )
+    };
+}
+
+#[cfg(test)]
+mod flat_invoke_args_tests {
+    use super::*;
+
+    fn args(command_name: &'static str, body: InvokeBody) -> FlatInvokeArgs<Value> {
+        FlatInvokeArgs::from_body(command_name, &body)
+    }
+
+    #[test]
+    fn flat_json_preserves_required_and_optional_argument_semantics() {
+        let args = args(
+            "test_command",
+            InvokeBody::Json(json!({ "count": 7, "label": "front" })),
+        );
+        assert_eq!(args.get_required::<u64>("count"), Ok(7));
+        assert_eq!(
+            args.get_optional::<String>("label"),
+            Ok(Some("front".to_string()))
+        );
+    }
+
+    #[test]
+    fn omitted_and_null_optional_arguments_are_none() {
+        let omitted = args("test_command", InvokeBody::Json(json!({})));
+        let null = args("test_command", InvokeBody::Json(json!({ "label": null })));
+        assert_eq!(omitted.get_optional::<String>("label"), Ok(None));
+        assert_eq!(null.get_optional::<String>("label"), Ok(None));
+    }
+
+    #[test]
+    fn missing_required_argument_uses_the_tauri_invalid_args_shape() {
+        let args = args("test_command", InvokeBody::Json(json!({})));
+        assert_eq!(
+            args.get_required::<u64>("count"),
+            Err("invalid args `count` for command `test_command`: command test_command missing required key count".to_string())
+        );
+    }
+
+    #[test]
+    fn wrong_type_uses_the_tauri_invalid_args_shape() {
+        let args = args("test_command", InvokeBody::Json(json!({ "count": "nope" })));
+        assert_eq!(
+            args.get_required::<u64>("count"),
+            Err("invalid args `count` for command `test_command`: invalid type: string \"nope\", expected u64".to_string())
+        );
+    }
+
+    #[test]
+    fn raw_json_bytes_are_rejected_without_being_parsed() {
+        let args = args("test_command", InvokeBody::Raw(br#"{"count":7}"#.to_vec()));
+        assert_eq!(
+            args.get_required::<u64>("count"),
+            Err("invalid args `count` for command `test_command`: command test_command expected a value for key count but the IPC call used a bytes payload".to_string())
+        );
+    }
+
+    #[test]
+    fn raw_non_json_bytes_are_rejected_with_the_same_tauri_shape() {
+        let args = args("test_command", InvokeBody::Raw(vec![0xff, 0x00]));
+        assert_eq!(
+            args.get_optional::<String>("label"),
+            Err("invalid args `label` for command `test_command`: command test_command expected a value for key label but the IPC call used a bytes payload".to_string())
+        );
+    }
+}
 
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
@@ -718,7 +903,7 @@ const DJ_LINK_DEDUPE_TTL: Duration = Duration::from_secs(15 * 60);
 /// deliberately not part of ProjectFile, templates, backups, or standby
 /// checkpoints. A project identity or mapping replacement clears the play
 /// session ledger before the next peer event is admitted.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DjLinkRuntime {
     project_epoch: u64,
     mappings: Vec<protocol::DjTrackTriggerMapping>,
@@ -811,13 +996,25 @@ impl DjLinkRuntime {
     }
 }
 
-fn dj_link_timeline_state(
+fn dj_link_engine_position_bars(snapshot: &EngineSnapshot) -> u64 {
+    let bpm = snapshot.clock.bpm;
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return 0;
+    }
+    let bar_ms =
+        (60_000.0_f64 / f64::from(bpm) * f64::from(protocol::DJ_LINK_BEATS_PER_BAR)).round();
+    if !bar_ms.is_finite() || bar_ms < 1.0 || bar_ms > u64::MAX as f64 {
+        return 0;
+    }
+    snapshot.timeline.position_ms / (bar_ms as u64)
+}
+
+fn dj_link_timeline_state_from_snapshot(
     runtime: &DjLinkRuntime,
-    engine: &EngineHandle,
+    snapshot: &EngineSnapshot,
     event_id: &str,
     sequence: u64,
 ) -> protocol::DjLinkTimelineState {
-    let snapshot = engine.snapshot();
     let timeline_id = runtime
         .timeline_id
         .clone()
@@ -827,15 +1024,9 @@ fn dj_link_timeline_state(
             snapshot.timeline.loop_runtime.status,
             protocol::TimelineLoopRuntimeStatus::Disabled
         );
-    let position_bars = runtime
-        .track_bpm
-        .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
-        .and_then(|bpm| {
-            let bar_ms = (60_000.0_f64 / bpm * f64::from(protocol::DJ_LINK_BEATS_PER_BAR)).round();
-            (bar_ms.is_finite() && bar_ms >= 1.0)
-                .then(|| snapshot.timeline.position_ms / (bar_ms as u64))
-        })
-        .unwrap_or(runtime.position_bars);
+    // The engine's acknowledged clock is the only grid authority. The
+    // Rekordbox track BPM is diagnostic metadata and may be stale or absent.
+    let position_bars = dj_link_engine_position_bars(snapshot);
     let state = if runtime.timeline_id.is_none() {
         protocol::DjLinkTimelineStateValue::Idle
     } else if snapshot.timeline.playing
@@ -864,6 +1055,17 @@ fn dj_link_rejected(code: &str, state_generation: u64) -> DjLinkDispatchOutcome 
     DjLinkDispatchOutcome::Rejected {
         code: code.to_string(),
         state_generation,
+    }
+}
+
+/// Best-effort diagnostic generation for a fail-fast Busy reply. A DJ socket
+/// worker must never wait on the runtime mutex merely to explain that another
+/// project/runtime authority already owns the lane.
+fn dj_link_runtime_generation_if_available(runtime: &Mutex<DjLinkRuntime>) -> u64 {
+    match runtime.try_lock() {
+        Ok(runtime) => runtime.state_generation,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().state_generation,
+        Err(TryLockError::WouldBlock) => 0,
     }
 }
 
@@ -938,28 +1140,36 @@ fn dispatch_dj_link_event(
     let Some(_admission) = try_lock_project_external_command_admission(external_admission) else {
         return DjLinkDispatchOutcome::Busy {
             code: "project_admission_busy".to_string(),
-            state_generation: runtime
-                .lock()
-                .map(|runtime| runtime.state_generation)
-                .unwrap_or(0),
+            state_generation: dj_link_runtime_generation_if_available(runtime),
         };
     };
     if project_transaction_active.load(Ordering::Acquire) {
         return DjLinkDispatchOutcome::Busy {
             code: "project_transaction_busy".to_string(),
-            state_generation: runtime
-                .lock()
-                .map(|runtime| runtime.state_generation)
-                .unwrap_or(0),
+            state_generation: dj_link_runtime_generation_if_available(runtime),
         };
     }
-    let coordinator = match project_coordinator.lock() {
+    let coordinator = match project_coordinator.try_lock() {
         Ok(coordinator) => coordinator,
-        Err(_) => return dj_link_rejected("project_coordinator_poisoned", 0),
+        Err(TryLockError::WouldBlock) => {
+            return DjLinkDispatchOutcome::Busy {
+                code: "project_coordinator_busy".to_string(),
+                state_generation: dj_link_runtime_generation_if_available(runtime),
+            }
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return dj_link_rejected("project_coordinator_poisoned", 0)
+        }
     };
-    let mut runtime = match runtime.lock() {
+    let mut runtime = match runtime.try_lock() {
         Ok(runtime) => runtime,
-        Err(_) => return dj_link_rejected("dj_link_runtime_poisoned", 0),
+        Err(TryLockError::WouldBlock) => {
+            return DjLinkDispatchOutcome::Busy {
+                code: "dj_link_runtime_busy".to_string(),
+                state_generation: 0,
+            }
+        }
+        Err(TryLockError::Poisoned(_)) => return dj_link_rejected("dj_link_runtime_poisoned", 0),
     };
     runtime.sync_project(&coordinator);
     runtime.purge_dedupe(Instant::now());
@@ -1050,9 +1260,13 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            if engine.dj_link_start_timeline(mapping.timeline_id).is_err() {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
+            let snapshot =
+                match engine.dj_link_start_timeline_with_canonical_snapshot(mapping.timeline_id) {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        return dj_link_rejected("engine_publication_rejected", current_generation)
+                    }
+                };
             runtime
                 .seen_play_sessions
                 .insert(dedupe_key, Instant::now());
@@ -1068,7 +1282,9 @@ fn dispatch_dj_link_event(
             runtime.state_generation = next;
             DjLinkDispatchOutcome::TimelineState {
                 state_generation: next,
-                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
             }
         }
         protocol::DjLinkMessageType::LoopState => {
@@ -1086,13 +1302,6 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            let target_released = !payload.enabled;
-            if runtime.loop_division == Some(payload.division)
-                && runtime.released == target_released
-            {
-                runtime.last_event_id = Some(envelope.event_id);
-                return dj_link_accepted(current_generation);
-            }
             if engine
                 .dj_link_set_timeline_loop_absolute(payload.division, payload.enabled)
                 .is_err()
@@ -1110,19 +1319,18 @@ fn dispatch_dj_link_event(
             if serde_json::from_value::<protocol::DjLinkReleasePayload>(envelope.payload).is_err() {
                 return dj_link_rejected("invalid_release_payload", current_generation);
             }
-            if runtime.released {
-                runtime.last_event_id = Some(envelope.event_id);
-                return dj_link_accepted(current_generation);
-            }
             let next = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
                 Err(_) => {
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            if engine.dj_link_release().is_err() {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
+            let snapshot = match engine.dj_link_release_with_canonical_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
+                }
+            };
             runtime.released = false;
             runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
             runtime.loop_active = false;
@@ -1130,7 +1338,9 @@ fn dispatch_dj_link_event(
             runtime.state_generation = next;
             DjLinkDispatchOutcome::TimelineState {
                 state_generation: next,
-                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
             }
         }
         protocol::DjLinkMessageType::StateSync => {
@@ -1142,45 +1352,70 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("invalid_state_sync_payload", current_generation)
                 }
             };
-            runtime.master_deck = payload.master_deck.clone();
-            runtime.master = runtime.master_deck.is_some();
-            runtime.released = payload.released;
+            // Stage the diagnostic image first. A StateSync is allowed to
+            // converge an explicit loop division only while the peer reports
+            // an active loop; released=true is observational and must never
+            // synthesize a RELEASE engine command. Nothing is committed to
+            // runtime diagnostics until the optional canonical engine ACK is
+            // definitive.
+            let mut next_runtime = runtime.clone();
+            next_runtime.master_deck = payload.master_deck.clone();
+            next_runtime.master = next_runtime.master_deck.is_some();
+            next_runtime.released = payload.released;
             if let Some(track) = payload.master_track.as_ref() {
-                runtime.track_active = true;
-                runtime.playing = track.playing;
-                runtime.track_playing = track.playing;
-                runtime.track_content_id = track.content_id.clone();
-                runtime.track_title = track.title.clone();
-                runtime.track_artist = track.artist.clone();
-                runtime.track_bpm = track.track_bpm;
-                runtime.position_sec = track.position_sec;
-                runtime.track_started_at = track.started_at.clone();
-                runtime.track_deck_id = track.deck_id.clone();
+                next_runtime.track_active = true;
+                next_runtime.playing = track.playing;
+                next_runtime.track_playing = track.playing;
+                next_runtime.track_content_id = track.content_id.clone();
+                next_runtime.track_title = track.title.clone();
+                next_runtime.track_artist = track.artist.clone();
+                next_runtime.track_bpm = track.track_bpm;
+                next_runtime.position_sec = track.position_sec;
+                next_runtime.track_started_at = track.started_at.clone();
+                next_runtime.track_deck_id = track.deck_id.clone();
             } else {
-                runtime.track_active = false;
-                runtime.playing = false;
-                runtime.track_playing = false;
-                runtime.track_content_id = None;
-                runtime.track_title = None;
-                runtime.track_artist = None;
-                runtime.track_deck_id = None;
-                runtime.track_started_at = None;
-                runtime.track_bpm = None;
-                runtime.position_sec = None;
+                next_runtime.track_active = false;
+                next_runtime.playing = false;
+                next_runtime.track_playing = false;
+                next_runtime.track_content_id = None;
+                next_runtime.track_title = None;
+                next_runtime.track_artist = None;
+                next_runtime.track_deck_id = None;
+                next_runtime.track_started_at = None;
+                next_runtime.track_bpm = None;
+                next_runtime.position_sec = None;
             }
             if let Some(division) = payload.loop_division {
-                // STATE_SYNC is diagnostics/order only.  It never publishes an
-                // engine loop command; the authoritative timeline lane owns
-                // convergence after its explicit request/ACK.
-                runtime.loop_division = Some(division);
+                next_runtime.loop_division = Some(division);
+                if !payload.released
+                    && engine
+                        .dj_link_set_timeline_loop_absolute(division, true)
+                        .is_err()
+                {
+                    return dj_link_rejected("engine_publication_rejected", current_generation);
+                }
+                next_runtime.loop_active = !payload.released;
+            } else if payload.released {
+                next_runtime.loop_active = false;
             }
-            runtime.last_event_id = Some(envelope.event_id);
+            next_runtime.last_event_id = Some(envelope.event_id);
+            *runtime = next_runtime;
             dj_link_accepted(runtime.state_generation)
         }
-        protocol::DjLinkMessageType::TimelineStateRequest => DjLinkDispatchOutcome::TimelineState {
-            state_generation: current_generation,
-            state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
-        },
+        protocol::DjLinkMessageType::TimelineStateRequest => {
+            let Some(snapshot) = engine.try_snapshot() else {
+                return DjLinkDispatchOutcome::Busy {
+                    code: "engine_snapshot_busy".to_string(),
+                    state_generation: current_generation,
+                };
+            };
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: current_generation,
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
+            }
+        }
         protocol::DjLinkMessageType::TimelineBeatJump => {
             let payload = match serde_json::from_value::<protocol::DjLinkTimelineBeatJumpPayload>(
                 envelope.payload,
@@ -1205,30 +1440,26 @@ fn dispatch_dj_link_event(
             if timeline_id == 0 {
                 return dj_link_rejected("invalid_timeline_id", current_generation);
             }
-            if engine
-                .dj_link_timeline_beat_jump(TimelineId(timeline_id), payload.bars)
-                .is_err()
-            {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
-            runtime.position_bars = if payload.bars > 0 {
-                match runtime.position_bars.checked_add(payload.bars as u64) {
-                    Some(position) => position,
-                    None => return dj_link_rejected("position_overflow", current_generation),
-                }
-            } else {
-                match runtime
-                    .position_bars
-                    .checked_sub(payload.bars.unsigned_abs() as u64)
-                {
-                    Some(position) => position,
-                    None => return dj_link_rejected("position_underflow", current_generation),
+            let snapshot = match engine.dj_link_timeline_beat_jump_with_canonical_snapshot(
+                TimelineId(timeline_id),
+                payload.bars,
+            ) {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
                 }
             };
+            // The ACK is the mutation boundary. Read the exact post-ACK
+            // engine image and derive bars from its authoritative clock; do
+            // not perform fallible arithmetic against stale runtime or track
+            // metadata after a successful mutation.
+            runtime.position_bars = dj_link_engine_position_bars(&snapshot);
             runtime.last_event_id = Some(event_id.clone());
             DjLinkDispatchOutcome::TimelineState {
                 state_generation: current_generation,
-                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
             }
         }
         protocol::DjLinkMessageType::TimelineLoopSet => {
@@ -1250,18 +1481,23 @@ fn dispatch_dj_link_event(
                 return dj_link_rejected("timeline_identity_mismatch", current_generation);
             }
             let division = runtime.loop_division.unwrap_or(0);
-            if engine
-                .dj_link_set_timeline_loop_absolute(division, payload.active)
-                .is_err()
-            {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
+            let snapshot = match engine.dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
+                division,
+                payload.active,
+            ) {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
+                }
+            };
             // The ACK is based on the engine publication.  The returned state
             // is built from the post-ACK snapshot, never from the request.
             runtime.last_event_id = Some(event_id.clone());
             DjLinkDispatchOutcome::TimelineState {
                 state_generation: current_generation,
-                state: dj_link_timeline_state(&runtime, engine, &event_id, sequence),
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
             }
         }
         protocol::DjLinkMessageType::Heartbeat | protocol::DjLinkMessageType::Hello => {
@@ -1402,7 +1638,14 @@ struct AppState {
     midi_feedback_runtime: Mutex<Option<MidiFeedbackRuntime>>,
     midi_feedback_last_error: Arc<Mutex<Option<String>>>,
     osc_input: Mutex<Option<OscInput>>,
+    /// Serializes listener stop/join and replacement without holding the
+    /// general remote-control state mutex across worker joins or socket bind.
+    remote_control_lifecycle: Mutex<()>,
     remote_control: Mutex<Option<RemoteWsServer>>,
+    /// Process-lifetime DJ physical-event fence. Listener/session state is
+    /// instance-local; this handle is deliberately retained across
+    /// stop/start and recreated only with a fresh AppState/process.
+    dj_link_process_fence: DjLinkProcessFenceHandle,
     dj_link_runtime: Arc<Mutex<DjLinkRuntime>>,
     dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
     pending_project_open_paths: Mutex<Vec<String>>,
@@ -1464,6 +1707,14 @@ struct AppState {
     /// only recovery for a dead authority boundary.
     project_transaction_owner_retirement_failures: Mutex<HashSet<String>>,
     project_transaction_owner_retirement_failure_overflow: AtomicBool,
+    /// Linearizes installation/removal of the temporary Destroyed-retirement
+    /// fence with every caller that checks window authority. The existing
+    /// owner-rotation mutex protects owner-map mutation; this separate guard
+    /// is intentionally safe to acquire from paths that already hold it.
+    project_transaction_owner_authority_barrier: Mutex<()>,
+    /// Window labels whose Destroyed retirement has started but has not yet
+    /// either completed or promoted to the permanent fail-closed registry.
+    project_transaction_owner_retiring: Mutex<HashSet<String>>,
     /// Serializes capture/revalidation of a B3 caller incarnation with owner
     /// rotation. This is intentionally distinct from external command
     /// admission because authored/runtime commit helpers acquire that gate.
@@ -1522,6 +1773,12 @@ impl AppState {
         window_label: &str,
     ) -> Result<(), String> {
         validate_project_transaction_window_label(window_label)?;
+        let _authority_barrier = self
+            .project_transaction_owner_authority_barrier
+            .lock()
+            .map_err(|_| {
+                "Project window authority barrier was poisoned; restart Syndocal".to_string()
+            })?;
         if self
             .project_transaction_owner_retirement_failure_overflow
             .load(Ordering::Acquire)
@@ -1542,11 +1799,100 @@ impl AppState {
                 "Project window '{window_label}' is permanently blocked after failed authority retirement; restart Syndocal"
             ));
         }
+        let retiring = self
+            .project_transaction_owner_retiring
+            .lock()
+            .map_err(|_| {
+                "Project window authority retirement registry was poisoned; restart Syndocal"
+                    .to_string()
+            })?;
+        if retiring.contains(window_label) {
+            return Err(format!(
+                "Project window '{window_label}' authority retirement is in progress; retry from the current window"
+            ));
+        }
+        Ok(())
+    }
+
+    fn begin_window_authority_retirement(&self, window_label: &str) -> Result<(), String> {
+        validate_project_transaction_window_label(window_label)?;
+        let _authority_barrier = self
+            .project_transaction_owner_authority_barrier
+            .lock()
+            .map_err(|_| {
+                "Project window authority barrier was poisoned; restart Syndocal".to_string()
+            })?;
+        if self
+            .project_transaction_owner_retirement_failure_overflow
+            .load(Ordering::Acquire)
+        {
+            return Err(
+                "Project window authority failure registry is full; restart Syndocal".to_string(),
+            );
+        }
+        let failures = self
+            .project_transaction_owner_retirement_failures
+            .lock()
+            .map_err(|_| {
+                "Project window authority failure registry lock was poisoned; restart Syndocal"
+                    .to_string()
+            })?;
+        if failures.contains(window_label) {
+            return Err(format!(
+                "Project window '{window_label}' is permanently blocked after failed authority retirement; restart Syndocal"
+            ));
+        }
+        let mut retiring = self
+            .project_transaction_owner_retiring
+            .lock()
+            .map_err(|_| {
+                "Project window authority retirement registry was poisoned; restart Syndocal"
+                    .to_string()
+            })?;
+        if retiring.contains(window_label) {
+            return Err(format!(
+                "Project window '{window_label}' authority retirement is already in progress"
+            ));
+        }
+        if failures.len().saturating_add(retiring.len())
+            >= MAX_PROJECT_TRANSACTION_OWNER_RETIREMENT_FAILURES
+        {
+            self.project_transaction_owner_retirement_failure_overflow
+                .store(true, Ordering::Release);
+            return Err(
+                "Project window authority failure registry is full; restart Syndocal".to_string(),
+            );
+        }
+        retiring.insert(window_label.to_string());
+        Ok(())
+    }
+
+    fn complete_window_authority_retirement(&self, window_label: &str) -> Result<(), String> {
+        validate_project_transaction_window_label(window_label)?;
+        let _authority_barrier = self
+            .project_transaction_owner_authority_barrier
+            .lock()
+            .map_err(|_| {
+                "Project window authority barrier was poisoned; restart Syndocal".to_string()
+            })?;
+        self.project_transaction_owner_retiring
+            .lock()
+            .map_err(|_| {
+                "Project window authority retirement registry was poisoned; restart Syndocal"
+                    .to_string()
+            })?
+            .remove(window_label);
         Ok(())
     }
 
     fn record_window_authority_retirement_failure(&self, window_label: &str) -> Result<(), String> {
         validate_project_transaction_window_label(window_label)?;
+        let _authority_barrier = self
+            .project_transaction_owner_authority_barrier
+            .lock()
+            .map_err(|_| {
+                "Project window authority barrier was poisoned; restart Syndocal".to_string()
+            })?;
         if self
             .project_transaction_owner_retirement_failure_overflow
             .load(Ordering::Acquire)
@@ -1572,6 +1918,17 @@ impl AppState {
             );
         }
         failures.insert(window_label.to_string());
+        drop(failures);
+        // Promotion is one critical section with installation: callers can
+        // observe either the temporary retirement fence or its permanent
+        // successor, never an unguarded interval between them.
+        self.project_transaction_owner_retiring
+            .lock()
+            .map_err(|_| {
+                "Project window authority retirement registry was poisoned; restart Syndocal"
+                    .to_string()
+            })?
+            .remove(window_label);
         Ok(())
     }
 
@@ -1926,7 +2283,7 @@ struct VideoClipSlotAuthoritativeFailureResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", content = "result", rename_all = "snake_case")]
 enum VideoClipSlotAuthoritativeTerminalResult {
-    Authored(VideoClipSlotAuthoritativeAuthoredResult),
+    Authored(Box<VideoClipSlotAuthoritativeAuthoredResult>),
     Runtime(VideoClipSlotAuthoritativeRuntimeOutcome),
     Failure(VideoClipSlotAuthoritativeFailureResult),
 }
@@ -1982,6 +2339,9 @@ enum TimelineTrimEdge {
     End,
 }
 
+type TimelineItemEditParameters = (bool, f32);
+type TimelineFadeEnvelopeSplit = ((u64, u64), (u64, u64));
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct TimelineItemLaneTarget {
     item: TimelineItemRef,
@@ -1992,7 +2352,7 @@ struct TimelineItemLaneTarget {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TimelineAdvancedMutationRequest {
     Apply {
-        authoring: TimelineAdvancedAuthoringSummary,
+        authoring: Box<TimelineAdvancedAuthoringSummary>,
     },
     InsertMedia {
         media_asset_id: MediaAssetId,
@@ -2159,8 +2519,8 @@ struct VideoEffectCatalogAuthoritativeRequestShape {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", content = "result", rename_all = "snake_case")]
 enum VideoEffectCatalogAuthoritativeTerminalResult {
-    Applied(VideoEffectCatalogAuthoritativeResult),
-    Timeline(TimelineAdvancedAuthoritativeResult),
+    Applied(Box<VideoEffectCatalogAuthoritativeResult>),
+    Timeline(Box<TimelineAdvancedAuthoritativeResult>),
     Runtime(VideoLayerTransitionAuthoritativeRuntimeOutcome),
     TimelineFollowAbort(TimelineFollowAbortAuthoritativeResult),
 }
@@ -3087,13 +3447,13 @@ impl MediaAssetOperationRegistry {
                 .lock()
                 .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
             match active.get(&request_id) {
-                Some(entry) if entry.generation == generation && entry.owner_id == owner_id => {
-                    if entry.admission.try_cancel() {
-                        entry.cancel.store(true, Ordering::Release);
-                        true
-                    } else {
-                        false
-                    }
+                Some(entry)
+                    if entry.generation == generation
+                        && entry.owner_id == owner_id
+                        && entry.admission.try_cancel() =>
+                {
+                    entry.cancel.store(true, Ordering::Release);
+                    true
                 }
                 _ => false,
             }
@@ -3115,9 +3475,8 @@ impl MediaAssetOperationRegistry {
                     .get(&generation)
                     .is_some_and(|entry| entry.admission.try_cancel());
                 let retired = if won {
-                    prepared.remove(&generation).map(|entry| {
+                    prepared.remove(&generation).inspect(|entry| {
                         entry.cancel.store(true, Ordering::Release);
-                        entry
                     })
                 } else {
                     None
@@ -3145,9 +3504,8 @@ impl MediaAssetOperationRegistry {
                     .get(&generation)
                     .is_some_and(|entry| entry.admission.try_cancel());
                 let retired = if won {
-                    prepared.remove(&generation).map(|entry| {
+                    prepared.remove(&generation).inspect(|entry| {
                         entry.cancel.store(true, Ordering::Release);
-                        entry
                     })
                 } else {
                     None
@@ -3193,11 +3551,11 @@ impl MediaAssetOperationRegistry {
             .lock()
             .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
         let retired = Self::take_expired_prepared_imports(&mut entries, Instant::now());
-        let result = if entries.contains_key(&token) {
-            Err("Prepared media asset token collision; retry the import".to_string())
-        } else {
-            entries.insert(token, prepared);
+        let result = if let std::collections::hash_map::Entry::Vacant(e) = entries.entry(token) {
+            e.insert(prepared);
             Ok(())
+        } else {
+            Err("Prepared media asset token collision; retry the import".to_string())
         };
         drop(entries);
         drop(active);
@@ -3339,11 +3697,11 @@ impl MediaAssetOperationRegistry {
             .lock()
             .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
         let retired = Self::take_expired_prepared_relinks(&mut entries, Instant::now());
-        let result = if entries.contains_key(&token) {
-            Err("Prepared media asset relink token collision; retry".to_string())
-        } else {
-            entries.insert(token, prepared);
+        let result = if let std::collections::hash_map::Entry::Vacant(e) = entries.entry(token) {
+            e.insert(prepared);
             Ok(())
+        } else {
+            Err("Prepared media asset relink token collision; retry".to_string())
         };
         drop(entries);
         drop(active);
@@ -3414,9 +3772,9 @@ impl MediaAssetOperationRegistry {
         operation_generation: u64,
         owner_id: &str,
         authority: &MediaAssetPrepareAuthority,
-        replacement_source: FinalizedLocalMediaSource,
-        legacy_source: Option<FinalizedLocalMediaSource>,
+        sources: (FinalizedLocalMediaSource, Option<FinalizedLocalMediaSource>),
     ) -> Result<(), String> {
+        let (replacement_source, legacy_source) = sources;
         let mut incoming_replacement = Some(replacement_source);
         let mut incoming_legacy = legacy_source;
         let mut entries = self
@@ -4555,6 +4913,46 @@ struct MediaAssetPrepareAuthority {
     checkpoint_hash: String,
 }
 
+struct MediaAssetPrepareBatchContext<'a> {
+    expected_epoch: u64,
+    owner_id: &'a str,
+    authority: MediaAssetPrepareAuthority,
+    legacy_operation: Option<&'a LegacyMediaAssetCompatibilityOperation>,
+}
+
+type MediaAssetOperationIdentity = (u64, u64);
+
+struct MediaAssetAuthoritativeRequest {
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+}
+
+#[cfg(test)]
+macro_rules! media_asset_authoritative_request {
+    ($prepared_token:expr, $request_id:expr, $operation_generation:expr, $expected_epoch:expr, $expected_revision:expr, $expected_checkpoint_hash:expr, $owner_id:expr) => {
+        MediaAssetAuthoritativeRequest {
+            prepared_token: $prepared_token,
+            request_id: $request_id,
+            operation_generation: $operation_generation,
+            expected_epoch: $expected_epoch,
+            expected_revision: $expected_revision,
+            expected_checkpoint_hash: $expected_checkpoint_hash.to_string(),
+            owner_id: $owner_id.to_string(),
+        }
+    };
+}
+
+struct MediaAssetRelinkPrepareContext<'a> {
+    expected_epoch: u64,
+    owner_id: &'a str,
+    legacy_operation: Option<&'a LegacyMediaAssetCompatibilityOperation>,
+}
+
 /// Server-private identity used while adapting a legacy IPC request to the
 /// staged Media Asset protocol. It is intentionally never serialized into an
 /// old command's return payload, preserving that command's established JSON
@@ -4569,6 +4967,7 @@ struct LegacyMediaAssetCompatibilityOperation {
     /// operation's generic `values().any(...)` registration check.
     window_label: String,
     owner_id: String,
+    owner_incarnation: u64,
     authority: MediaAssetPrepareAuthority,
 }
 
@@ -4662,7 +5061,7 @@ struct LegacyMediaAssetSourceIdentity {
 #[derive(Debug, Clone)]
 enum PreparedMediaAssetRelinkDecision {
     Ready {
-        replacement: PreparedLocalMediaAsset,
+        replacement: Box<PreparedLocalMediaAsset>,
         adopted_replacement: bool,
         legacy_source_identity: Option<LegacyMediaAssetSourceIdentity>,
     },
@@ -4923,7 +5322,7 @@ fn sha256_local_media_file_streaming_before_probe(
         if cancel.load(Ordering::Acquire) {
             return Err("Media asset operation was cancelled".to_string());
         }
-        return Ok((hash, before.byte_size, before, metadata));
+        Ok((hash, before.byte_size, before, metadata))
     }
     #[cfg(unix)]
     {
@@ -6005,7 +6404,7 @@ fn evaluate_prepared_media_asset_relink(
                 ));
             }
             Ok(PreparedMediaAssetRelinkDecision::Ready {
-                replacement,
+                replacement: Box::new(replacement),
                 adopted_replacement: false,
                 legacy_source_identity: None,
             })
@@ -6027,7 +6426,7 @@ fn evaluate_prepared_media_asset_relink(
                 ))
             }
             Some(identity) => Ok(PreparedMediaAssetRelinkDecision::Ready {
-                replacement,
+                replacement: Box::new(replacement),
                 adopted_replacement: false,
                 legacy_source_identity: Some(identity),
             }),
@@ -6037,7 +6436,7 @@ fn evaluate_prepared_media_asset_relink(
                 ))
             }
             None => Ok(PreparedMediaAssetRelinkDecision::Ready {
-                replacement,
+                replacement: Box::new(replacement),
                 adopted_replacement: true,
                 legacy_source_identity: None,
             }),
@@ -6853,12 +7252,7 @@ fn reconcile_catalog_clip_overrides(
 fn normalize_video_effect_catalog_ids_with_allocator<FC, FS, FE, FP, FG, FB>(
     authored_video: &protocol::VideoSnapshot,
     request: &VideoEffectCatalogApplyRequest,
-    mut allocate_chain: FC,
-    mut allocate_stage: FS,
-    mut allocate_effect: FE,
-    mut allocate_preset: FP,
-    mut allocate_group: FG,
-    mut allocate_bus: FB,
+    allocators: (FC, FS, FE, FP, FG, FB),
 ) -> Result<VideoEffectCatalogApplyRequest, String>
 where
     FC: FnMut() -> Result<protocol::VideoEffectChainId, String>,
@@ -6868,6 +7262,14 @@ where
     FG: FnMut() -> Result<protocol::VideoLayerGroupId, String>,
     FB: FnMut() -> Result<protocol::VideoTransitionBusId, String>,
 {
+    let (
+        mut allocate_chain,
+        mut allocate_stage,
+        mut allocate_effect,
+        mut allocate_preset,
+        mut allocate_group,
+        mut allocate_bus,
+    ) = allocators;
     let known_chains = authored_video
         .effect_chains
         .iter()
@@ -7011,12 +7413,14 @@ fn normalize_video_effect_catalog_ids(
     normalize_video_effect_catalog_ids_with_allocator(
         authored_video,
         request,
-        || Ok(state.engine.allocate_video_effect_chain_id()),
-        || Ok(state.engine.allocate_video_effect_stage_id()),
-        || Ok(state.engine.allocate_video_effect_id()),
-        || Ok(state.engine.allocate_video_effect_preset_id()),
-        || Ok(state.engine.allocate_video_layer_group_id()),
-        || Ok(state.engine.allocate_video_transition_bus_id()),
+        (
+            || Ok(state.engine.allocate_video_effect_chain_id()),
+            || Ok(state.engine.allocate_video_effect_stage_id()),
+            || Ok(state.engine.allocate_video_effect_id()),
+            || Ok(state.engine.allocate_video_effect_preset_id()),
+            || Ok(state.engine.allocate_video_layer_group_id()),
+            || Ok(state.engine.allocate_video_transition_bus_id()),
+        ),
     )
 }
 
@@ -8386,9 +8790,9 @@ fn trim_timeline_items(
     primary: TimelineItemRef,
     edge: TimelineTrimEdge,
     boundary_ms: u64,
-    isolate: bool,
-    bpm: f32,
+    parameters: TimelineItemEditParameters,
 ) -> Result<Vec<TimelineItemRef>, String> {
+    let (isolate, bpm) = parameters;
     if !bpm.is_finite() || bpm <= 0.0 {
         return Err("Timeline BPM must be finite and positive".to_string());
     }
@@ -8718,7 +9122,7 @@ fn split_timeline_fade_envelope(
     fade_in_ms: u64,
     fade_out_ms: u64,
     split_offset_ms: u64,
-) -> Result<((u64, u64), (u64, u64)), String> {
+) -> Result<TimelineFadeEnvelopeSplit, String> {
     let right_duration_ms = duration_ms
         .checked_sub(split_offset_ms)
         .filter(|duration_ms| *duration_ms > 0)
@@ -8825,9 +9229,9 @@ fn split_timeline_items(
     requested_items: &[TimelineItemRef],
     primary: TimelineItemRef,
     boundary_ms: u64,
-    isolate: bool,
-    bpm: f32,
+    parameters: TimelineItemEditParameters,
 ) -> Result<Vec<TimelineItemRef>, String> {
+    let (isolate, bpm) = parameters;
     if !bpm.is_finite() || bpm <= 0.0 {
         return Err("Timeline Split requires a finite positive BPM".to_string());
     }
@@ -9264,7 +9668,7 @@ fn timeline_advanced_candidate_for_request(
         TimelineAdvancedMutationRequest::Apply {
             authoring: requested,
         } => {
-            authoring = requested.clone();
+            authoring = requested.as_ref().clone();
             for phase in &mut authoring.phases {
                 if phase.id.0 == 0 {
                     phase.id = state.engine.allocate_timeline_phase_id();
@@ -9887,8 +10291,7 @@ fn timeline_bank_candidate_for_request(
                 *primary,
                 *edge,
                 *boundary_ms,
-                *isolate,
-                before.clock.bpm,
+                (*isolate, before.clock.bpm),
             )?;
         }
         TimelineAdvancedMutationRequest::SplitItems {
@@ -9908,8 +10311,7 @@ fn timeline_bank_candidate_for_request(
                 items,
                 *primary,
                 *boundary_ms,
-                *isolate,
-                before.clock.bpm,
+                (*isolate, before.clock.bpm),
             )?;
         }
         TimelineAdvancedMutationRequest::DeleteItems { items } => {
@@ -10318,10 +10720,10 @@ fn apply_video_effect_catalog_authoritative_command_impl(
                 &expected_authority,
                 &request,
             )
-            .map(VideoEffectCatalogAuthoritativeTerminalResult::Applied)
+            .map(|result| VideoEffectCatalogAuthoritativeTerminalResult::Applied(Box::new(result)))
         })?;
     match terminal {
-        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(*result),
         VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
             Err("Video effect catalog command received a Timeline terminal result".to_string())
         }
@@ -10373,10 +10775,10 @@ fn apply_timeline_advanced_authoritative_command_impl(
                 &expected_authority,
                 &request,
             )
-            .map(VideoEffectCatalogAuthoritativeTerminalResult::Timeline)
+            .map(|result| VideoEffectCatalogAuthoritativeTerminalResult::Timeline(Box::new(result)))
         })?;
     match terminal {
-        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Timeline(result) => Ok(*result),
         VideoEffectCatalogAuthoritativeTerminalResult::Applied(_) => {
             Err("Timeline command received a video effect terminal result".to_string())
         }
@@ -11156,7 +11558,7 @@ fn expect_video_clip_slot_authored_terminal(
     terminal: VideoClipSlotAuthoritativeTerminalResult,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
     match terminal {
-        VideoClipSlotAuthoritativeTerminalResult::Authored(result) => Ok(result),
+        VideoClipSlotAuthoritativeTerminalResult::Authored(result) => Ok(*result),
         VideoClipSlotAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
         other => Err(format!(
             "Video clip slot authored command received an unexpected terminal result: {other:?}"
@@ -11346,7 +11748,10 @@ fn commit_prepared_media_asset_layers_locked(
         || state.engine.allocate_video_clip_slot_id(),
     )?;
     let transaction = match bootstrap_output {
-        Some(output) => MediaAssetTransaction::BootstrapVjShow { candidate, output },
+        Some(output) => MediaAssetTransaction::BootstrapVjShow {
+            candidate,
+            output: Box::new(output),
+        },
         None => MediaAssetTransaction::Import(candidate),
     };
     // Linearization point: admit iff no cancel has won. Once admitted, cancel
@@ -11507,6 +11912,8 @@ struct MidiFeedbackRuntime {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
+type MidiFeedbackCallbackState = (Arc<AtomicU64>, u64, Arc<AtomicBool>);
+
 impl MidiFeedbackRuntime {
     fn start(
         engine: EngineHandle,
@@ -11514,10 +11921,9 @@ impl MidiFeedbackRuntime {
         operator_selection: Arc<Mutex<OperatorSelectionContext>>,
         mappings: Vec<MidiControlMapping>,
         last_error: Arc<Mutex<Option<String>>>,
-        callback_epoch: Arc<AtomicU64>,
-        captured_callback_epoch: u64,
-        callback_installed: Arc<AtomicBool>,
+        callback: MidiFeedbackCallbackState,
     ) -> Result<Self, String> {
+        let (callback_epoch, captured_callback_epoch, callback_installed) = callback;
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker = std::thread::Builder::new()
@@ -12473,14 +12879,13 @@ fn native_timeline_guide_asset_key(
     }
 }
 
-fn enumerate_timeline_cue_audio_outputs() -> Result<
-    (
-        Vec<(String, rodio::cpal::Device)>,
-        String,
-        Vec<TimelineCueAudioEndpointSummary>,
-    ),
+type TimelineCueAudioOutputs = (
+    Vec<(String, rodio::cpal::Device)>,
     String,
-> {
+    Vec<TimelineCueAudioEndpointSummary>,
+);
+
+fn enumerate_timeline_cue_audio_outputs() -> Result<TimelineCueAudioOutputs, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
     let mut devices = Vec::new();
@@ -13485,6 +13890,10 @@ struct PreparedTimelineAudioClip {
     decoder: Option<rodio::Decoder<std::io::BufReader<fs::File>>>,
 }
 
+type PreparedTimelineAudioClipError = (TimelineAudioPrepareRequest, String);
+type PreparedTimelineAudioClipResult =
+    Result<PreparedTimelineAudioClip, Box<PreparedTimelineAudioClipError>>;
+
 const MEDIA_AUDIO_RESYNC_THRESHOLD_MS: u64 = 75;
 const MEDIA_AUDIO_RESYNC_COOLDOWN: Duration = Duration::from_millis(250);
 const MEDIA_AUDIO_SYNC_INTERVAL: Duration = Duration::from_millis(25);
@@ -13919,9 +14328,8 @@ fn sync_timeline_audio_without_blocking_playback_lock(
         prepared_output = Some(output);
         Some(mixer)
     };
-    let mut prepared_clips: Vec<
-        Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>,
-    > = Vec::with_capacity(plan.prepares.len());
+    let mut prepared_clips: Vec<PreparedTimelineAudioClipResult> =
+        Vec::with_capacity(plan.prepares.len());
     if let Some(mixer) = mixer.as_ref() {
         for request in std::mem::take(&mut plan.prepares) {
             if Instant::now() >= transaction_deadline {
@@ -13937,11 +14345,11 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                 ));
             }
             if !authority_is_current() {
-                prepared_clips.push(Err((
+                prepared_clips.push(Err(Box::new((
                     request,
                     "Timeline audio source projection changed during decoder preparation"
                         .to_string(),
-                )));
+                ))));
                 continue;
             }
             prepared_clips.push(prepare_timeline_audio_clip(request, mixer));
@@ -15657,7 +16065,7 @@ fn prepare_media_audio_output(
 fn prepare_timeline_audio_clip(
     request: TimelineAudioPrepareRequest,
     mixer: &rodio::mixer::Mixer,
-) -> Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)> {
+) -> PreparedTimelineAudioClipResult {
     let file = match fs::File::open(&request.clip.path) {
         Ok(file) => file,
         Err(error) => {
@@ -15665,7 +16073,7 @@ fn prepare_timeline_audio_clip(
                 "Timeline audio clip {} could not open '{}': {error}",
                 request.clip.id, request.clip.path
             );
-            return Err((request, message));
+            return Err(Box::new((request, message)));
         }
     };
     let decoder = match rodio::Decoder::try_from(file) {
@@ -15675,7 +16083,7 @@ fn prepare_timeline_audio_clip(
                 "Timeline audio clip {} could not decode '{}': {error}",
                 request.clip.id, request.clip.path
             );
-            return Err((request, message));
+            return Err(Box::new((request, message)));
         }
     };
     let sink = rodio::Sink::connect_new(mixer);
@@ -15690,8 +16098,8 @@ fn prepare_timeline_audio_clip(
 
 fn rebase_prepared_timeline_audio_clips(
     current: &engine::TimelineAudioRuntimeSnapshot,
-    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
-) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    prepared_clips: Vec<PreparedTimelineAudioClipResult>,
+) -> Vec<PreparedTimelineAudioClipResult> {
     let active = timeline_audio_active_clips(current)
         .into_iter()
         .map(|(key, clip, position_ms)| (key, (clip, position_ms)))
@@ -15721,8 +16129,8 @@ fn rebase_prepared_timeline_audio_clips(
 }
 
 fn seek_prepared_timeline_audio_decoders(
-    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
-) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    prepared_clips: Vec<PreparedTimelineAudioClipResult>,
+) -> Vec<PreparedTimelineAudioClipResult> {
     use rodio::Source;
 
     prepared_clips
@@ -15731,10 +16139,10 @@ fn seek_prepared_timeline_audio_decoders(
             let mut prepared = prepared?;
             let Some(decoder) = prepared.decoder.as_mut() else {
                 prepared.sink.stop();
-                return Err((
+                return Err(Box::new((
                     prepared.request,
                     "Timeline audio decoder was already consumed before sink install".to_string(),
-                ));
+                )));
             };
             if prepared.request.source_position_ms > 0 {
                 if let Err(error) =
@@ -15745,7 +16153,7 @@ fn seek_prepared_timeline_audio_decoders(
                         "Timeline audio clip {} decoder seek failed: {error}",
                         prepared.request.clip.id
                     );
-                    return Err((prepared.request, message));
+                    return Err(Box::new((prepared.request, message)));
                 }
             }
             Ok(prepared)
@@ -15754,18 +16162,18 @@ fn seek_prepared_timeline_audio_decoders(
 }
 
 fn append_prepared_timeline_audio_decoders(
-    prepared_clips: Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>>,
-) -> Vec<Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>> {
+    prepared_clips: Vec<PreparedTimelineAudioClipResult>,
+) -> Vec<PreparedTimelineAudioClipResult> {
     prepared_clips
         .into_iter()
         .map(|prepared| {
             let mut prepared = prepared?;
             let Some(decoder) = prepared.decoder.take() else {
                 prepared.sink.stop();
-                return Err((
+                return Err(Box::new((
                     prepared.request,
                     "Timeline audio decoder was already consumed before sink append".to_string(),
-                ));
+                )));
             };
             prepared.sink.append(decoder);
             Ok(prepared)
@@ -15775,7 +16183,7 @@ fn append_prepared_timeline_audio_decoders(
 
 fn prepared_timeline_audio_clips_need_rebase(
     current: &engine::TimelineAudioRuntimeSnapshot,
-    prepared_clips: &[Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>],
+    prepared_clips: &[PreparedTimelineAudioClipResult],
 ) -> bool {
     let active = timeline_audio_active_clips(current)
         .into_iter()
@@ -16166,8 +16574,8 @@ impl MediaAudioPlayback {
         let stale_ids = self
             .timeline_sinks
             .keys()
+            .filter(|&key| !active_ids.contains(key))
             .cloned()
-            .filter(|key| !active_ids.contains(key))
             .collect::<Vec<_>>();
         for key in stale_ids {
             self.stop_timeline_clip(key);
@@ -16257,9 +16665,7 @@ impl MediaAudioPlayback {
         plan: TimelineAudioSyncPlan,
         current: &engine::TimelineAudioRuntimeSnapshot,
         prepared_output: Option<PreparedMediaAudioOutput>,
-        prepared_clips: Vec<
-            Result<PreparedTimelineAudioClip, (TimelineAudioPrepareRequest, String)>,
-        >,
+        prepared_clips: Vec<PreparedTimelineAudioClipResult>,
         seek_results: Vec<(TimelineAudioSeekRequest, Result<(), String>)>,
     ) -> Result<(), String> {
         if current.source_projection_authority != plan.authority
@@ -16353,7 +16759,8 @@ impl MediaAudioPlayback {
                     self.timeline_sinks
                         .insert(prepared.request.key, prepared.sink);
                 }
-                Err((request, error)) => {
+                Err(error) => {
+                    let (request, error) = *error;
                     self.timeline_failures.insert(
                         request.key,
                         TimelineAudioPlaybackFailure {
@@ -16457,8 +16864,8 @@ impl MediaAudioPlayback {
         let stale_ids = self
             .timeline_sinks
             .keys()
+            .filter(|&key| !active_ids.contains(key))
             .cloned()
-            .filter(|key| !active_ids.contains(key))
             .collect::<Vec<_>>();
         for key in stale_ids {
             self.stop_timeline_clip(key);
@@ -16742,7 +17149,9 @@ impl MediaAudioPlayback {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Default)]
 enum CueCaptureScope {
+    #[default]
     All,
     LightingOnly,
     SelectedFixture {
@@ -16755,12 +17164,6 @@ enum CueCaptureScope {
     },
     VideoOnly,
     EffectsOnly,
-}
-
-impl Default for CueCaptureScope {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -17742,6 +18145,7 @@ enum ProjectTransactionRecovery {
 struct ProjectTransactionLane {
     in_flight_commands: AtomicU64,
     closing: AtomicBool,
+    renderer_dispatch_started: AtomicBool,
 }
 
 impl ProjectTransactionLane {
@@ -17749,6 +18153,7 @@ impl ProjectTransactionLane {
         Self {
             in_flight_commands: AtomicU64::new(0),
             closing: AtomicBool::new(false),
+            renderer_dispatch_started: AtomicBool::new(false),
         }
     }
 
@@ -17789,6 +18194,23 @@ impl ProjectTransactionLane {
             );
         }
         Ok(())
+    }
+
+    fn admit_renderer_dispatch_once(
+        self: &Arc<Self>,
+    ) -> Result<ProjectTransactionLaneGuard, String> {
+        let guard = self.admit()?;
+        if self
+            .renderer_dispatch_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(
+                "Project transaction mutation dispatch was already attempted; cancel it and begin a new operation"
+                    .to_string(),
+            );
+        }
+        Ok(guard)
     }
 }
 
@@ -18342,6 +18764,416 @@ fn lock_renderer_ticketed_project_mutation<'a>(
     Ok((external_admission, coordinator, transaction_admission))
 }
 
+fn required_tauri_invoke_json_string(
+    payload: &serde_json::Value,
+    field: &str,
+) -> Result<String, String> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("Tauri mutation admission requires string field '{field}'"))
+}
+
+fn required_tauri_invoke_json_u64(payload: &serde_json::Value, field: &str) -> Result<u64, String> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            format!("Tauri mutation admission requires unsigned integer field '{field}'")
+        })
+}
+
+fn current_project_transaction_owner_for_window(
+    state: &AppState,
+    window_label: &str,
+) -> Result<String, String> {
+    state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?
+        .get(window_label)
+        .cloned()
+        .ok_or_else(|| {
+            format!("Window '{window_label}' has no current project transaction owner registration")
+        })
+}
+
+fn ensure_project_operator_runtime_mutation_allowed(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    owner_id: &str,
+) -> Result<(), String> {
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let Some(session) = project_operator_session_for_policy(&mut sessions, coordinator, owner_id)
+    else {
+        return Ok(());
+    };
+    if session.unlocked || session.policy.lock_mode == OperatorLockMode::Partial {
+        return Ok(());
+    }
+    Err("Operator Full Lock blocks runtime mutations for this renderer session".to_string())
+}
+
+const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 2] =
+    ["patch_fixtures", "repair_fixture_profile"];
+
+fn is_self_admitted_renderer_ticketed_route(command: &str) -> bool {
+    RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES
+        .binary_search(&command)
+        .is_ok()
+}
+
+fn admit_outer_renderer_dispatch(
+    command: &str,
+    lane: &Arc<ProjectTransactionLane>,
+) -> Result<Option<ProjectTransactionLaneGuard>, String> {
+    if is_self_admitted_renderer_ticketed_route(command) {
+        // These routes own an authoritative receipt and re-admit at their
+        // final publication seam. Do not consume the generic one-attempt seal:
+        // an exact reply-loss retry must reach that retained receipt.
+        Ok(None)
+    } else {
+        lane.admit_renderer_dispatch_once().map(Some)
+    }
+}
+
+/// Synchronous renderer routes which mutate the current engine/project image
+/// without an inner authority seam. Keep the external-admission gate through
+/// their generated handler so a replacement or Begin cannot linearize between
+/// admission against A and the actual engine send into B.
+const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
+    "clear_cue_live_modifier",
+    "clear_fixture_flags",
+    "clear_programmer",
+    "clear_vj_preview",
+    "fade_video_layer_opacity",
+    "jump_video_cue_point",
+    "jump_video_cue_point_relative",
+    "release_cue",
+    "reset_engine_telemetry",
+    "scale_timeline_loop",
+    "seek_direct_child_timeline",
+    "seek_timeline",
+    "seek_timeline_beat",
+    "seek_vj_preview",
+    "set_auto_vj_armed",
+    "set_auto_vj_hold",
+    "set_bpm",
+    "set_cue_fade_paused",
+    "set_cue_live_modifier",
+    "set_direct_child_timeline_playing",
+    "set_fixture_highlight",
+    "set_fixture_park",
+    "set_fixture_solo",
+    "set_group_highlight",
+    "set_group_park",
+    "set_group_solo",
+    "set_group_strobe",
+    "set_group_submaster",
+    "set_lighting_master",
+    "set_operator_feature_fader",
+    "set_operator_selection_context",
+    "set_playback_executor_level",
+    "set_playback_master",
+    "set_program_audio_handoff_config",
+    "set_programmer_attribute",
+    "set_programmer_fixture_attribute_batch",
+    "set_programmer_group_attribute",
+    "set_programmer_mode",
+    "set_timeline_loop_enabled",
+    "set_timeline_playing",
+    "set_video_layer_audio_monitor_volume",
+    "set_video_master_opacity",
+    "set_vj_preview_playing",
+    "set_vj_preview_speed",
+    "sync_ableton_link_clock",
+    "sync_ltc_timecode",
+    "tap_bpm",
+    "trigger_cue",
+    "trigger_cue_list_next",
+    "trigger_cue_list_previous",
+    "trigger_next_cue",
+    "trigger_playback_executor",
+    "trigger_previous_cue",
+];
+
+/// Exact complement of the outer-fenced project/runtime sends. These routes
+/// are read/prepare/file/device operations, or have a narrower authoritative
+/// final seam. Holding the project mutation mutex through them would cover
+/// dialogs, hardware I/O, joins, or async work and would invert lifecycle
+/// ordering without strengthening project identity.
+const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
+    "acquire_output_lease_v2",
+    "add_display_output_v2",
+    "add_local_media_layers",
+    "add_still_image_layer",
+    "add_video_file_layer",
+    "analyze_timeline_audio_clip_path",
+    "arm_output_control_v2",
+    "begin_media_asset_preview",
+    "bootstrap_vj_show",
+    "cancel_queued_video_clip_slot_authoritative",
+    "close_open_video_output_windows",
+    "close_pane_window",
+    "close_video_output_window",
+    "connect_midi_clock",
+    "connect_midi_control",
+    "connect_midi_feedback",
+    "create_custom_fixture_profile",
+    "disconnect_midi_clock",
+    "disconnect_midi_control",
+    "disconnect_midi_feedback",
+    "disconnect_remote_client",
+    "discover_art_rdm_devices",
+    "discover_usb_rdm_devices",
+    "enable_output_control_v2",
+    "end_media_asset_preview",
+    "finalize_prepared_media_asset_relink",
+    "finalize_prepared_media_assets",
+    "force_transfer_output_lease_v2",
+    "import_gdtf",
+    "launch_video_clip_slot_authoritative",
+    "launch_video_layer_transition_bus_authoritative",
+    "learn_dmx_control",
+    "learn_midi_control",
+    "learn_osc_control",
+    "load_custom_fixture_profile",
+    "load_gdtf_model_file",
+    "load_gdtf_wheel_media",
+    "load_midi_mappings",
+    "load_osc_mappings",
+    "load_stage_map_preset_file",
+    "load_verified_fixture_profile",
+    "open_pane_window",
+    "open_video_output_window",
+    "play_video_layer_audio_monitor",
+    "prepare_local_media_assets",
+    "prepare_media_asset_relink",
+    "prepare_reserved_media_asset_relink",
+    "prepare_reserved_media_assets",
+    "pulse_video_layer_isf_event",
+    "queue_video_clip_slot_authoritative",
+    "recover_output_lease_v2",
+    "refresh_video_layer_metadata",
+    "release_blackout_output_control_v2",
+    "release_video_layer_transition_bus_authoritative",
+    "relink_media_asset",
+    "relinquish_output_lease_v2",
+    "renew_output_lease_v2",
+    "rotate_dj_link_token",
+    "seek_video_clip_slot_authoritative",
+    "send_art_rdm_request",
+    "send_dmx_routes_test_frame",
+    "send_dmx_test_frame",
+    "send_midi_feedback",
+    "send_usb_rdm_request",
+    "set_display_output_window_open_v2",
+    "set_machine_timeline_cue_audio_settings",
+    "set_midi_feedback_auto",
+    "set_timeline_transport_playing_runtime_v1",
+    "stage_vj_preview_layer",
+    "start_art_rdm_full_discovery",
+    "start_dmx_input",
+    "start_live_audio_input",
+    "start_osc_input",
+    "start_remote_control",
+    "start_standby_sync",
+    "start_video_output_recording",
+    "stop_dmx_input",
+    "stop_live_audio_input",
+    "stop_osc_input",
+    "stop_remote_control",
+    "stop_standby_sync",
+    "stop_video_layer_audio_monitor",
+    "stop_video_output_recording",
+    "sync_external_video_transports",
+    "sync_open_video_output_windows",
+    "sync_video_output_window",
+    "take_open_project_paths",
+    "take_over_output_control_v2",
+    "use_fixture_profile",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeInvokeDispatchPolicy {
+    HoldProjectFenceThroughSyncHandler,
+    PreflightOnlyNonProjectOrInnerAuthority,
+}
+
+fn runtime_route_dispatch_policy(command: &str) -> Option<RuntimeInvokeDispatchPolicy> {
+    if OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES
+        .binary_search(&command)
+        .is_ok()
+    {
+        Some(RuntimeInvokeDispatchPolicy::HoldProjectFenceThroughSyncHandler)
+    } else if PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES
+        .binary_search(&command)
+        .is_ok()
+    {
+        Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
+    } else {
+        None
+    }
+}
+
+/// App-command admission is intentionally outside the generated Tauri
+/// dispatcher so raw `window.__TAURI_INTERNALS__.invoke` calls cross the same
+/// authority seam as facade calls. Plugin IPC is routed by Tauri before this
+/// application handler and is not part of the frozen 478-command inventory.
+fn admit_tauri_app_invoke<R: tauri::Runtime>(
+    invoke: &tauri::ipc::Invoke<R>,
+) -> Result<Option<ProjectTransactionLaneGuard>, String> {
+    use control_plane::TauriRouteAdmissionClass as Class;
+
+    let command = invoke.message.command();
+    let class = control_plane::tauri_route_admission_class(command).ok_or_else(|| {
+        format!("Tauri app command '{command}' is not in the reviewed admission inventory")
+    })?;
+    if class == Class::Retired {
+        return Err(format!(
+            "Tauri app command '{command}' is retired and unavailable"
+        ));
+    }
+    if class == Class::RuntimeMutation && runtime_route_dispatch_policy(command).is_none() {
+        return Err(format!(
+            "Tauri runtime command '{command}' has no reviewed dispatch-fence policy"
+        ));
+    }
+    if class == Class::ReadOnly
+        || matches!(
+            class,
+            Class::BackendAuthoritativeProjectMutation
+                | Class::ProjectReplacement
+                | Class::ProjectHistory
+                | Class::SafetyMutation
+                | Class::RecoveryMaintenance
+        )
+    {
+        return Ok(None);
+    }
+
+    let state = invoke
+        .message
+        .state_ref()
+        .try_get::<AppState>()
+        .ok_or_else(|| "Tauri mutation admission could not access application state".to_string())?;
+    let containing_window = invoke.message.webview_ref().window();
+    let window_label = containing_window.label();
+
+    if class == Class::RendererTicketedProjectMutation {
+        let payload = match invoke.message.payload() {
+            tauri::ipc::InvokeBody::Json(payload) => payload,
+            tauri::ipc::InvokeBody::Raw(_) => {
+                return Err(format!(
+                    "Tauri project mutation '{command}' rejects raw invoke payloads"
+                ))
+            }
+        };
+        let transaction_id = required_tauri_invoke_json_u64(payload, "projectTransactionId")?;
+        let expected_epoch = required_tauri_invoke_json_u64(payload, "expectedEpoch")?;
+        let owner_id = required_tauri_invoke_json_string(payload, "ownerId")?;
+        let (external_admission, coordinator, nested_admission) =
+            lock_renderer_ticketed_project_mutation(
+                &state,
+                window_label,
+                command,
+                transaction_id,
+                expected_epoch,
+                &owner_id,
+            )?;
+        let pending = project_transaction_for_owner_epoch(
+            &coordinator,
+            transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+        let lane = project_transaction_lane_for_operation(&state, &pending.client_operation_id)?;
+        let dispatch_admission = admit_outer_renderer_dispatch(command, &lane)?;
+        drop(nested_admission);
+        drop(coordinator);
+        drop(external_admission);
+        return Ok(dispatch_admission);
+    }
+
+    let owner_id = current_project_transaction_owner_for_window(&state, window_label)?;
+    let external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    project_transaction_owner_binding_for_window(&state, window_label, &owner_id)?;
+    if class == Class::FileExportMutation {
+        ensure_project_operator_authoritative_mutation_allowed(&state, &coordinator, &owner_id)?;
+    } else {
+        ensure_project_operator_runtime_mutation_allowed(&state, &coordinator, &owner_id)?;
+    }
+    drop(coordinator);
+    drop(external_admission);
+    Ok(None)
+}
+
+fn dispatch_admitted_tauri_app_invoke<R: tauri::Runtime>(
+    invoke: tauri::ipc::Invoke<R>,
+    generated_handler: impl Fn(tauri::ipc::Invoke<R>) -> bool,
+) -> bool {
+    let command = invoke.message.command().to_string();
+    if control_plane::tauri_route_admission_class(&command)
+        == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
+        && runtime_route_dispatch_policy(&command)
+            == Some(RuntimeInvokeDispatchPolicy::HoldProjectFenceThroughSyncHandler)
+    {
+        let containing_window = invoke.message.webview_ref().window().clone();
+        let state = containing_window.state::<AppState>();
+        let window_label = containing_window.label();
+        let owner_id = match current_project_transaction_owner_for_window(&state, window_label) {
+            Ok(owner_id) => owner_id,
+            Err(error) => {
+                invoke.resolver.reject(error);
+                return true;
+            }
+        };
+        let external_admission = match lock_project_external_command_admission(&state) {
+            Ok(admission) => admission,
+            Err(error) => {
+                invoke.resolver.reject(error);
+                return true;
+            }
+        };
+        let coordinator = match lock_project_coordinator(&state) {
+            Ok(coordinator) => coordinator,
+            Err(error) => {
+                invoke.resolver.reject(error);
+                return true;
+            }
+        };
+        if let Err(error) = project_transaction_owner_binding_for_window(
+            &state,
+            window_label,
+            &owner_id,
+        )
+        .and_then(|_| {
+            ensure_project_operator_runtime_mutation_allowed(&state, &coordinator, &owner_id)
+        }) {
+            invoke.resolver.reject(error);
+            return true;
+        }
+        drop(coordinator);
+        let handled = generated_handler(invoke);
+        drop(external_admission);
+        return handled;
+    }
+
+    let _dispatch_admission = match admit_tauri_app_invoke(&invoke) {
+        Ok(admission) => admission,
+        Err(error) => {
+            invoke.resolver.reject(error);
+            return true;
+        }
+    };
+    generated_handler(invoke)
+}
+
 fn lock_project_external_command_admission_inner<'a>(
     state: &'a AppState,
     allow_active_display_finalize: bool,
@@ -18449,6 +19281,121 @@ fn ensure_optional_project_epoch_matches(
     expected_epoch.map_or(Ok(()), |epoch| {
         ensure_project_epoch_matches(coordinator, epoch)
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectReplacementInvocationFence {
+    state_address: usize,
+    command_name: &'static str,
+    window_label: String,
+    owner_id: String,
+    owner_incarnation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+}
+
+type ProjectReplacementAuthorityExpectation = (Option<u64>, u64, u64, String);
+
+thread_local! {
+    /// A replacement command can spend an unbounded amount of time in a native
+    /// dialog or filesystem parser before it reaches the mutation boundary.
+    /// Keep only immutable invocation identity in TLS; worker threads never
+    /// inherit it, and no project lock is retained while that I/O runs.
+    static PROJECT_REPLACEMENT_INVOCATION_FENCE: RefCell<Option<ProjectReplacementInvocationFence>> = const { RefCell::new(None) };
+}
+
+fn ensure_exact_project_authority_matches(
+    coordinator: &ProjectCoordinator,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: &str,
+) -> Result<(), String> {
+    if coordinator.epoch != expected_epoch
+        || coordinator.revision != expected_revision
+        || coordinator.checkpoint_hash != expected_checkpoint_hash
+    {
+        return Err(format!(
+            "Project authority changed before mutation (expected epoch {expected_epoch} revision {expected_revision})"
+        ));
+    }
+    Ok(())
+}
+
+fn with_project_replacement_invocation<T>(
+    state: &AppState,
+    window_label: &str,
+    command_name: &'static str,
+    owner_id: String,
+    authority: ProjectReplacementAuthorityExpectation,
+    replace: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let (entry_owner_incarnation, expected_epoch, expected_revision, expected_checkpoint_hash) =
+        authority;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    if entry_owner_incarnation.is_some_and(|entry| entry != owner_incarnation) {
+        return Err(format!(
+            "{command_name} belongs to a retired renderer incarnation"
+        ));
+    }
+    let fence = ProjectReplacementInvocationFence {
+        state_address: std::ptr::from_ref(state).addr(),
+        command_name,
+        window_label: window_label.to_string(),
+        owner_id,
+        owner_incarnation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    };
+    struct ProjectReplacementInvocationFenceGuard;
+    impl Drop for ProjectReplacementInvocationFenceGuard {
+        fn drop(&mut self) {
+            PROJECT_REPLACEMENT_INVOCATION_FENCE.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    PROJECT_REPLACEMENT_INVOCATION_FENCE.with(|slot| {
+        if slot.borrow().is_some() {
+            return Err("Nested project replacement invocation is not allowed".to_string());
+        }
+        *slot.borrow_mut() = Some(fence);
+        let _scope = ProjectReplacementInvocationFenceGuard;
+        replace()
+    })
+}
+
+fn validate_project_replacement_invocation_at_publication(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> Result<(), String> {
+    let fence = PROJECT_REPLACEMENT_INVOCATION_FENCE.with(|slot| slot.borrow().clone());
+    let Some(fence) = fence else {
+        // Internal recovery/standby paths do not originate in a renderer
+        // invocation and retain their existing dedicated authority fences.
+        return Ok(());
+    };
+    if fence.state_address != std::ptr::from_ref(state).addr() {
+        return Err(
+            "Project replacement invocation belongs to another application state".to_string(),
+        );
+    }
+    let current_incarnation =
+        project_transaction_owner_binding_for_window(state, &fence.window_label, &fence.owner_id)?;
+    if current_incarnation != fence.owner_incarnation {
+        return Err(format!(
+            "{} belongs to a retired renderer incarnation",
+            fence.command_name
+        ));
+    }
+    ensure_project_operator_authoritative_mutation_allowed(state, coordinator, &fence.owner_id)?;
+    ensure_exact_project_authority_matches(
+        coordinator,
+        fence.expected_epoch,
+        fence.expected_revision,
+        &fence.expected_checkpoint_hash,
+    )
 }
 
 fn reserve_project_callback_epoch(callback_epoch: &AtomicU64) -> Result<u64, String> {
@@ -18596,6 +19543,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::CreateEmptyCuePublished { .. }
         | EngineCommand::UpdateCue { .. }
         | EngineCommand::UpdateCuePublished { .. }
+        | EngineCommand::MoveCueBetweenBanksPublished { .. }
         | EngineCommand::SetCueEffectTargetsPublished { .. }
         | EngineCommand::SetCueStepsPublished { .. }
         | EngineCommand::SetCueDetailsPublished { .. }
@@ -18857,7 +19805,7 @@ mod legacy_output_control_route_tests {
 
     #[test]
     fn legacy_tauri_output_error_identifies_r4_and_native_confirmation() {
-        let error = reject_legacy_output_control_route::<()>(&"video output enable")
+        let error = reject_legacy_output_control_route::<()>("video output enable")
             .expect_err("legacy output routes must never produce a value");
         assert!(error.contains("OutputControl R4"));
         assert!(error.contains("native confirmation"));
@@ -18923,6 +19871,157 @@ mod legacy_output_control_route_tests {
             "legacy blackout was sent through the shared callback seam"
         );
     }
+
+    #[test]
+    fn external_semantic_predicate_table_blocks_all_three_ingresses_without_engine_drift() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let callback_installed = Arc::new(AtomicBool::new(true));
+        let captured_epoch = harness
+            .state
+            .project_mapping_callback_epoch
+            .load(Ordering::Acquire);
+        let before = serde_json::to_vec(&harness.state.engine.snapshot()).unwrap();
+        let cases = [
+            (
+                ExternalControlIngress::MidiControl,
+                EngineCommand::SetEffectEnabled {
+                    effect_id: 1,
+                    enabled: true,
+                },
+            ),
+            (
+                ExternalControlIngress::MidiControl,
+                EngineCommand::SetTimelinePlaying(true),
+            ),
+            (
+                ExternalControlIngress::OscInput,
+                EngineCommand::SetEffectEnabled {
+                    effect_id: 1,
+                    enabled: true,
+                },
+            ),
+            (
+                ExternalControlIngress::OscInput,
+                EngineCommand::SetTimelinePlaying(true),
+            ),
+            (
+                ExternalControlIngress::RemoteControl,
+                EngineCommand::SetEffectEnabled {
+                    effect_id: 1,
+                    enabled: true,
+                },
+            ),
+            (
+                ExternalControlIngress::RemoteControl,
+                EngineCommand::SetTimelinePlaying(true),
+            ),
+        ];
+        for (ingress, command) in cases {
+            assert!(external_unversioned_semantic_command_requires_fail_closed(
+                ingress, &command
+            ));
+            match ingress {
+                ExternalControlIngress::MidiControl | ExternalControlIngress::OscInput => {
+                    send_external_control_command_if_callback_epoch(
+                        ExternalControlCallbackSendRequest {
+                            ingress,
+                            engine: &harness.state.engine,
+                            callback_epoch: &harness.state.project_mapping_callback_epoch,
+                            project_transaction_active: &harness.state.project_transaction_active,
+                            project_external_command_admission: &harness
+                                .state
+                                .project_external_command_admission,
+                            callback_installed: &callback_installed,
+                            captured_epoch,
+                            command,
+                        },
+                    );
+                }
+                ExternalControlIngress::RemoteControl => {}
+            }
+        }
+        assert!(!external_unversioned_semantic_command_requires_fail_closed(
+            ExternalControlIngress::MidiControl,
+            &EngineCommand::SetBpm(120.0),
+        ));
+        assert!(midi_control_event_requires_fail_closed(
+            &MidiControlEvent::SetEffectEnabled {
+                effect_id: 1,
+                enabled: true,
+            }
+        ));
+        assert!(midi_control_event_requires_fail_closed(
+            &MidiControlEvent::SetTimelinePlaying(true)
+        ));
+        assert!(!midi_control_event_requires_fail_closed(
+            &MidiControlEvent::SetBpm(120.0)
+        ));
+        assert!(osc_input_event_requires_fail_closed(
+            &OscInputEvent::SetEffectEnabled {
+                effect_id: 1,
+                enabled: true,
+            }
+        ));
+        assert!(osc_input_event_requires_fail_closed(
+            &OscInputEvent::SetTimelinePlaying(true)
+        ));
+        assert!(!osc_input_event_requires_fail_closed(
+            &OscInputEvent::SetBpm(120.0)
+        ));
+        assert!(remote_input_event_requires_fail_closed(
+            &RemoteInputEvent::SetEffectEnabled {
+                effect_id: 1,
+                enabled: true,
+            }
+        ));
+        assert!(remote_input_event_requires_fail_closed(
+            &RemoteInputEvent::SetTimelinePlaying(true)
+        ));
+        assert!(!remote_input_event_requires_fail_closed(
+            &RemoteInputEvent::SetBpm(120.0)
+        ));
+        assert_eq!(
+            serde_json::to_vec(&harness.state.engine.snapshot()).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn remote_production_callback_checks_event_guard_before_admission() {
+        let source = include_str!("main.rs");
+        let route_start = source
+            .rfind("let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(")
+            .expect("production Web Remote server route");
+        let route_end = source[route_start..]
+            .find("        move || snapshot_engine.try_snapshot(),")
+            .map(|offset| route_start + offset)
+            .expect("production Web Remote callback route end");
+        let route = &source[route_start..route_end];
+        let event_guard = route
+            .find("if remote_input_event_requires_fail_closed(&event) {")
+            .expect("Web Remote callback event-level fail-closed guard");
+        let admission = route
+            .find("let admitted = run_if_project_external_command_admitted(")
+            .expect("Web Remote callback project admission");
+        assert!(
+            event_guard < admission,
+            "Web Remote must reject legacy semantics before admission can send"
+        );
+        assert_eq!(
+            route
+                .matches("if remote_input_event_requires_fail_closed(&event) {")
+                .count(),
+            1,
+            "the production callback must retain exactly one event-level guard"
+        );
+        assert_eq!(
+            route
+                .matches("let admitted = run_if_project_external_command_admitted(")
+                .count(),
+            1,
+            "the production callback must retain its normal admission seam"
+        );
+    }
 }
 
 fn send_engine_command_if_callback_epoch(
@@ -18958,6 +20057,133 @@ fn send_engine_command_if_callback_epoch(
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalControlIngress {
+    MidiControl,
+    OscInput,
+    RemoteControl,
+}
+
+impl ExternalControlIngress {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MidiControl => "MIDI control",
+            Self::OscInput => "OSC input",
+            Self::RemoteControl => "Web Remote",
+        }
+    }
+}
+
+fn reject_external_unversioned_semantic_event(
+    ingress: ExternalControlIngress,
+    semantic: &'static str,
+) -> bool {
+    eprintln!(
+        "Ignoring {} {semantic} event: legacy unversioned external semantic is fail-closed; use the authenticated local path",
+        ingress.label()
+    );
+    true
+}
+
+fn midi_control_event_requires_fail_closed(event: &MidiControlEvent) -> bool {
+    match event {
+        MidiControlEvent::SetEffectEnabled { .. } => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::MidiControl,
+            "SetEffectEnabled",
+        ),
+        MidiControlEvent::SetTimelinePlaying(_) => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::MidiControl,
+            "SetTimelinePlaying",
+        ),
+        _ => false,
+    }
+}
+
+fn osc_input_event_requires_fail_closed(event: &OscInputEvent) -> bool {
+    match event {
+        OscInputEvent::SetEffectEnabled { .. } => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::OscInput,
+            "SetEffectEnabled",
+        ),
+        OscInputEvent::SetTimelinePlaying(_) => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::OscInput,
+            "SetTimelinePlaying",
+        ),
+        _ => false,
+    }
+}
+
+fn remote_input_event_requires_fail_closed(event: &RemoteInputEvent) -> bool {
+    match event {
+        RemoteInputEvent::SetEffectEnabled { .. } => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::RemoteControl,
+            "SetEffectEnabled",
+        ),
+        RemoteInputEvent::SetTimelinePlaying(_) => reject_external_unversioned_semantic_event(
+            ExternalControlIngress::RemoteControl,
+            "SetTimelinePlaying",
+        ),
+        _ => false,
+    }
+}
+
+/// Legacy unversioned semantic commands have no authenticated local R4
+/// confirmation when they arrive through these three external control
+/// ingresses. Keep this predicate deliberately narrow: MIDI Clock uses the
+/// same EngineCommand variants for its transport Start/Continue/Stop route
+/// and must not be filtered by the generic callback sender.
+fn external_unversioned_semantic_command_requires_fail_closed(
+    ingress: ExternalControlIngress,
+    command: &EngineCommand,
+) -> bool {
+    let semantic = match command {
+        EngineCommand::SetEffectEnabled { .. } => "SetEffectEnabled",
+        EngineCommand::SetTimelinePlaying(_) => "SetTimelinePlaying",
+        _ => return false,
+    };
+    reject_external_unversioned_semantic_event(ingress, semantic)
+}
+
+#[cfg(test)]
+struct ExternalControlCallbackSendRequest<'a> {
+    ingress: ExternalControlIngress,
+    engine: &'a EngineHandle,
+    callback_epoch: &'a Arc<AtomicU64>,
+    project_transaction_active: &'a Arc<AtomicBool>,
+    project_external_command_admission: &'a Arc<ProjectExternalCommandAdmission>,
+    callback_installed: &'a Arc<AtomicBool>,
+    captured_epoch: u64,
+    command: EngineCommand,
+}
+
+#[cfg(test)]
+fn send_external_control_command_if_callback_epoch(
+    request: ExternalControlCallbackSendRequest<'_>,
+) {
+    let ExternalControlCallbackSendRequest {
+        ingress,
+        engine,
+        callback_epoch,
+        project_transaction_active,
+        project_external_command_admission,
+        callback_installed,
+        captured_epoch,
+        command,
+    } = request;
+    if external_unversioned_semantic_command_requires_fail_closed(ingress, &command) {
+        return;
+    }
+    send_engine_command_if_callback_epoch(
+        engine,
+        callback_epoch,
+        project_transaction_active,
+        project_external_command_admission,
+        callback_installed,
+        captured_epoch,
+        command,
+    );
+}
+
 fn callback_epoch_allows_send(callback_epoch: &AtomicU64, captured_epoch: u64) -> bool {
     callback_epoch.load(Ordering::Acquire) == captured_epoch
 }
@@ -18984,13 +20210,13 @@ fn run_if_project_callback_epoch<T>(
     // the next current-generation event will be admitted after the boundary.
     let _admission =
         try_lock_project_external_command_admission(project_external_command_admission)?;
-    let result = run_if_project_callback_epoch_while_admitted(
+
+    run_if_project_callback_epoch_while_admitted(
         callback_epoch,
         captured_epoch,
         project_transaction_active,
         send,
-    );
-    result
+    )
 }
 
 /// A callback-capable input constructor can synchronously invoke its callback
@@ -19041,8 +20267,8 @@ fn run_if_project_external_command_admitted<T>(
 ) -> Option<T> {
     let _admission =
         try_lock_project_external_command_admission(project_external_command_admission)?;
-    let result = (!project_transaction_active.load(Ordering::Acquire)).then(send);
-    result
+
+    (!project_transaction_active.load(Ordering::Acquire)).then(send)
 }
 
 /// Called only while the canonical external-admission guard and coordinator
@@ -19919,16 +21145,18 @@ fn search_gdtf_share(request: GdtfShareSearchRequest) -> Result<GdtfShareSearchR
         }
         Ok(filter_gdtf_share_results(
             fixtures,
-            request.manufacturer.as_deref().unwrap_or_default(),
-            request.fixture.as_deref().unwrap_or_default(),
-            request.query.as_deref().unwrap_or_default(),
-            request.mode.as_deref().unwrap_or_default(),
-            request.min_footprint,
-            request.max_footprint,
-            request.release_only.unwrap_or(false),
-            request.tested_in_visualizer.unwrap_or(false),
-            request.tested_in_real_life.unwrap_or(false),
-            request.limit.unwrap_or(40),
+            GdtfShareFilterOptions {
+                manufacturer: request.manufacturer.as_deref().unwrap_or_default(),
+                fixture: request.fixture.as_deref().unwrap_or_default(),
+                query: request.query.as_deref().unwrap_or_default(),
+                mode: request.mode.as_deref().unwrap_or_default(),
+                min_footprint: request.min_footprint,
+                max_footprint: request.max_footprint,
+                release_only: request.release_only.unwrap_or(false),
+                tested_in_visualizer: request.tested_in_visualizer.unwrap_or(false),
+                tested_in_real_life: request.tested_in_real_life.unwrap_or(false),
+                limit: request.limit.unwrap_or(40),
+            },
         ))
     })();
     let _ = fs::remove_file(&cookie_path);
@@ -20055,30 +21283,32 @@ fn load_verified_fixture_profile(profile_id: String) -> Result<FixtureProfileSum
 fn repair_fixture_profile(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    fixture_id: FixtureId,
-    profile_path: String,
-    mode_name: Option<String>,
-    profile: FixtureProfileSummary,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<ProjectTransactionCommandResult, String> {
+    let fixture_id = args.get_required("fixtureId")?;
+    let profile_path = args.get_required("profilePath")?;
+    let mode_name = args.get_optional("modeName")?;
+    let profile = args.get_required("profile")?;
+    let project_transaction_id = args.get_required("projectTransactionId")?;
+    let expected_epoch = args.get_required("expectedEpoch")?;
+    let owner_id = args.get_required("ownerId")?;
     repair_fixture_profile_for_window_label_with_resolve_observer(
         &state,
-        fixture_id,
-        profile_path,
-        mode_name,
-        profile,
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window.label(),
+        FixtureProfileRepairRequest {
+            fixture_id,
+            profile_path,
+            mode_name,
+            profile,
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+            window_label: window.label().to_string(),
+        },
         || {},
     )
 }
 
-fn repair_fixture_profile_for_window_label_with_resolve_observer(
-    state: &AppState,
+struct FixtureProfileRepairRequest {
     fixture_id: FixtureId,
     profile_path: String,
     mode_name: Option<String>,
@@ -20086,19 +21316,17 @@ fn repair_fixture_profile_for_window_label_with_resolve_observer(
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
-    window_label: &str,
+    window_label: String,
+}
+
+fn repair_fixture_profile_for_window_label_with_resolve_observer(
+    state: &AppState,
+    request: FixtureProfileRepairRequest,
     before_resolve: impl FnOnce(),
 ) -> Result<ProjectTransactionCommandResult, String> {
     repair_fixture_profile_for_window_label_with_resolve_and_publish(
         state,
-        fixture_id,
-        profile_path,
-        mode_name,
-        profile,
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window_label,
+        request,
         before_resolve,
         |engine, fixture_id, profile, mode_name| {
             engine.repair_fixture_profile_published_classified(fixture_id, profile, mode_name)
@@ -20108,14 +21336,7 @@ fn repair_fixture_profile_for_window_label_with_resolve_observer(
 
 fn repair_fixture_profile_for_window_label_with_resolve_and_publish(
     state: &AppState,
-    fixture_id: FixtureId,
-    profile_path: String,
-    mode_name: Option<String>,
-    profile: FixtureProfileSummary,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
-    window_label: &str,
+    request: FixtureProfileRepairRequest,
     before_resolve: impl FnOnce(),
     publish: impl FnOnce(
         &EngineHandle,
@@ -20124,6 +21345,17 @@ fn repair_fixture_profile_for_window_label_with_resolve_and_publish(
         Option<String>,
     ) -> Result<(), FixturePatchPublicationFailure>,
 ) -> Result<ProjectTransactionCommandResult, String> {
+    let FixtureProfileRepairRequest {
+        fixture_id,
+        profile_path,
+        mode_name,
+        profile,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+    } = request;
+    let window_label = window_label.as_str();
     let request_digest = project_transaction_command_request_digest(
         "repair_fixture_profile",
         &(&fixture_id, &profile_path, &mode_name, &profile),
@@ -20361,59 +21593,58 @@ fn patch_fixtures(
 ) -> Result<ProjectTransactionCommandResult, String> {
     patch_fixtures_in_project_transaction(
         &state,
-        requests,
-        profiles,
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window.label(),
-        "patch_fixtures",
+        PatchFixturesTransactionRequest {
+            requests,
+            profiles,
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+            window_label: window.label().to_string(),
+            command_name: "patch_fixtures".to_string(),
+        },
     )
+}
+
+struct PatchFixturesTransactionRequest {
+    requests: Vec<PatchFixtureRequest>,
+    profiles: Option<Vec<FixtureProfileSummary>>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: String,
+    command_name: String,
+}
+
+#[cfg(test)]
+macro_rules! patch_fixtures_transaction_request {
+    ($requests:expr, $profiles:expr, $project_transaction_id:expr, $expected_epoch:expr, $owner_id:expr, $window_label:expr, $command_name:expr) => {
+        PatchFixturesTransactionRequest {
+            requests: $requests,
+            profiles: $profiles,
+            project_transaction_id: $project_transaction_id,
+            expected_epoch: $expected_epoch,
+            owner_id: $owner_id.to_string(),
+            window_label: $window_label.to_string(),
+            command_name: $command_name.to_string(),
+        }
+    };
 }
 
 fn patch_fixtures_in_project_transaction(
     state: &AppState,
-    requests: Vec<PatchFixtureRequest>,
-    profiles: Option<Vec<FixtureProfileSummary>>,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
-    window_label: &str,
-    command_name: &str,
+    request: PatchFixturesTransactionRequest,
 ) -> Result<ProjectTransactionCommandResult, String> {
-    patch_fixtures_in_project_transaction_with_resolve_observer(
-        state,
-        requests,
-        profiles,
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window_label,
-        command_name,
-        || {},
-    )
+    patch_fixtures_in_project_transaction_with_resolve_observer(state, request, || {})
 }
 
 fn patch_fixtures_in_project_transaction_with_resolve_observer(
     state: &AppState,
-    requests: Vec<PatchFixtureRequest>,
-    profiles: Option<Vec<FixtureProfileSummary>>,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
-    window_label: &str,
-    command_name: &str,
+    request: PatchFixturesTransactionRequest,
     before_resolve: impl FnOnce(),
 ) -> Result<ProjectTransactionCommandResult, String> {
     patch_fixtures_in_project_transaction_with_resolve_and_publish(
         state,
-        requests,
-        profiles,
-        project_transaction_id,
-        expected_epoch,
-        owner_id,
-        window_label,
-        command_name,
+        request,
         before_resolve,
         |engine, patches| engine.patch_fixtures_allocated_published_classified(patches),
     )
@@ -20421,19 +21652,24 @@ fn patch_fixtures_in_project_transaction_with_resolve_observer(
 
 fn patch_fixtures_in_project_transaction_with_resolve_and_publish(
     state: &AppState,
-    requests: Vec<PatchFixtureRequest>,
-    profiles: Option<Vec<FixtureProfileSummary>>,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
-    window_label: &str,
-    command_name: &str,
+    request: PatchFixturesTransactionRequest,
     before_resolve: impl FnOnce(),
     publish: impl FnOnce(
         &EngineHandle,
         Vec<(PatchFixtureRequest, FixtureProfileSummary)>,
     ) -> Result<Vec<FixtureId>, FixturePatchPublicationFailure>,
 ) -> Result<ProjectTransactionCommandResult, String> {
+    let PatchFixturesTransactionRequest {
+        requests,
+        profiles,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+        command_name,
+    } = request;
+    let window_label = window_label.as_str();
+    let command_name = command_name.as_str();
     let request_digest =
         project_transaction_command_request_digest(command_name, &(&requests, &profiles))?;
     let (_external_admission, coordinator, transaction_admission) =
@@ -20918,13 +22154,16 @@ fn get_fixture_groups(state: State<'_, AppState>) -> Result<Vec<FixtureGroupSumm
 fn create_fixture_group(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    color: Option<String>,
-    fixture_ids: Vec<FixtureId>,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<FixtureGroupSummary, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        color: Option<String> => "color",
+        fixture_ids: Vec<FixtureId> => "fixtureIds",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     create_fixture_group_for_window_label(
         &state,
         label,
@@ -21995,10 +23234,7 @@ fn analyze_audio_file(
     Ok(Some(analysis))
 }
 
-fn analyze_timeline_audio_path(
-    state: &AppState,
-    path: &Path,
-) -> Result<AudioAnalysisSummary, String> {
+fn analyze_timeline_audio_path(path: &Path) -> Result<AudioAnalysisSummary, String> {
     if !AUDIO_FILE_EXTENSIONS
         .iter()
         .any(|extension| has_extension(path, extension))
@@ -22008,18 +23244,12 @@ fn analyze_timeline_audio_path(
             AUDIO_FILE_EXTENSIONS.join(", ")
         ));
     }
-    let analysis = audio::analyze_audio_file(path).map_err(|error| error.to_string())?;
-    state
-        .engine
-        .send(EngineCommand::SetTimelineAudio(Some(analysis.clone())))
-        .map_err(|error| error.to_string())?;
-    Ok(analysis)
+    audio::analyze_audio_file(path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn select_timeline_audio_clip_file(
     window: WebviewWindow,
-    state: State<'_, AppState>,
 ) -> Result<Option<AudioAnalysisSummary>, String> {
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Audio Files", AUDIO_FILE_EXTENSIONS)
@@ -22027,15 +23257,12 @@ fn select_timeline_audio_clip_file(
     else {
         return Ok(None);
     };
-    analyze_timeline_audio_path(&state, &path).map(Some)
+    analyze_timeline_audio_path(&path).map(Some)
 }
 
 #[tauri::command]
-fn analyze_timeline_audio_clip_path(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<AudioAnalysisSummary, String> {
-    analyze_timeline_audio_path(&state, Path::new(path.trim()))
+fn analyze_timeline_audio_clip_path(path: String) -> Result<AudioAnalysisSummary, String> {
+    analyze_timeline_audio_path(Path::new(path.trim()))
 }
 
 fn sanitize_timeline_audio_clip_request(
@@ -22382,6 +23609,9 @@ fn connect_midi_control(
     let callback_installed = Arc::new(AtomicBool::new(false));
     let callback_installed_for_worker = Arc::clone(&callback_installed);
     let connection = io::midi::connect_midi_control(input_index, mappings, move |event| {
+        if midi_control_event_requires_fail_closed(&event) {
+            return;
+        }
         let command = match event {
             MidiControlEvent::SetAttribute {
                 fixture_id,
@@ -22597,6 +23827,12 @@ fn connect_midi_control(
                 }
             }
         };
+        if external_unversioned_semantic_command_requires_fail_closed(
+            ExternalControlIngress::MidiControl,
+            &command,
+        ) {
+            return;
+        }
         send_engine_command_if_callback_epoch(
             &engine,
             &callback_epoch_for_worker,
@@ -22768,9 +24004,11 @@ fn set_midi_feedback_auto(
             Arc::clone(&state.operator_selection),
             mappings,
             Arc::clone(&state.midi_feedback_last_error),
-            Arc::clone(&callback_epoch),
-            captured_callback_epoch,
-            Arc::clone(&callback_installed),
+            (
+                Arc::clone(&callback_epoch),
+                captured_callback_epoch,
+                Arc::clone(&callback_installed),
+            ),
         )?;
         if !project_input_installation_is_current(
             coordinator.epoch,
@@ -23445,17 +24683,28 @@ fn learn_osc_control(
     Ok(learned)
 }
 
+type ExternalControlDispatchState<'a> = (
+    &'a Arc<AtomicU64>,
+    &'a Arc<AtomicBool>,
+    &'a Arc<ProjectExternalCommandAdmission>,
+    &'a Arc<AtomicBool>,
+    u64,
+);
+
 fn dispatch_external_control_event(
     engine: &EngineHandle,
     operator_selection: &Arc<Mutex<OperatorSelectionContext>>,
-    callback_epoch: &Arc<AtomicU64>,
-    project_transaction_active: &Arc<AtomicBool>,
-    project_external_command_admission: &Arc<ProjectExternalCommandAdmission>,
-    callback_installed: &Arc<AtomicBool>,
-    captured_callback_epoch: u64,
+    dispatch_state: ExternalControlDispatchState<'_>,
     event: OscInputEvent,
     source: &str,
 ) {
+    let (
+        callback_epoch,
+        project_transaction_active,
+        project_external_command_admission,
+        callback_installed,
+        captured_callback_epoch,
+    ) = dispatch_state;
     if external_control_source_requires_local_r4(source) {
         // DMX mappings are not bound to an R4 lease/owner or local
         // confirmation. Dropping the complete mapping event is safer than
@@ -23723,6 +24972,9 @@ fn start_osc_input(
     let callback_installed = Arc::new(AtomicBool::new(false));
     let callback_installed_for_worker = Arc::clone(&callback_installed);
     let input = OscInput::start_with_mappings(config, mappings, move |event| {
+        if osc_input_event_requires_fail_closed(&event) {
+            return;
+        }
         let command = match event {
             OscInputEvent::SetAttribute {
                 fixture_id,
@@ -23943,6 +25195,12 @@ fn start_osc_input(
                 source,
             },
         };
+        if external_unversioned_semantic_command_requires_fail_closed(
+            ExternalControlIngress::OscInput,
+            &command,
+        ) {
+            return;
+        }
         send_engine_command_if_callback_epoch(
             &engine,
             &callback_epoch_for_worker,
@@ -23987,12 +25245,12 @@ fn stop_osc_input(state: State<'_, AppState>, expected_epoch: Option<u64>) -> Re
 }
 
 #[tauri::command]
-async fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        build_remote_access_urls(&config, discover_lan_ip())
-    })
-    .await
-    .unwrap_or_default()
+fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
+    // UDP connect here performs no packet exchange; it only asks the OS which
+    // local address would route to the destination. Keeping this synchronous
+    // avoids carrying a Tauri Invoke/EventLoopMessage context across a worker
+    // completion for this small read-only query.
+    build_remote_access_urls(&config, discover_lan_ip())
 }
 
 /// Return only addresses that are explicitly reported by an adapter's
@@ -24140,12 +25398,53 @@ fn external_video_transport_sync_fail_closed() -> Value {
 #[tauri::command]
 fn start_remote_control(
     state: State<'_, AppState>,
-    mut config: RemoteControlConfig,
+    config: RemoteControlConfig,
 ) -> Result<(), String> {
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     drop(coordinator);
+    drop(_external_admission);
+    start_remote_control_after_project_preflight(&state, config)
+}
+
+/// Test adapter which repeats the production project preflight before entering
+/// the same listener, handler, process-fence, and serial replacement core.
+#[cfg(test)]
+fn start_remote_control_for_state(
+    state: &AppState,
+    config: RemoteControlConfig,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    drop(coordinator);
+    // Binding/listener startup can perform OS I/O and spawn worker threads.
+    // The short mutation preflight above is complete; do not serialize that
+    // long-running work behind the project admission lane.
+    drop(_external_admission);
+    start_remote_control_after_project_preflight(state, config)
+}
+
+fn start_remote_control_after_project_preflight(
+    state: &AppState,
+    mut config: RemoteControlConfig,
+) -> Result<(), String> {
+    // A repeated Start is the production listener-replacement route. It
+    // retires and joins the previous instance before binding the same port,
+    // so the new listener may share the process-lifetime DJ fence without
+    // creating parallel listener authorities. HELLO/session replacement is a
+    // separate generation-fenced protocol and is not a stop/join substitute.
+    let _remote_lifecycle = state
+        .remote_control_lifecycle
+        .lock()
+        .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    let previous_remote = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?
+        .take();
+    drop(previous_remote);
     config.dj_link_token = state
         .dj_link_token
         .lock()
@@ -24159,6 +25458,11 @@ fn start_remote_control(
     let snapshot_engine = state.engine.clone();
     let render_plans_engine = state.engine.clone();
     let io_plans_engine = state.engine.clone();
+    // Probe executable/backend availability before the listener owns any
+    // socket workers. Generic Web requests only clone this immutable image,
+    // so stop/join never waits for a filesystem probe.
+    let remote_video_runtime_status = video::video_runtime_status();
+    let io_plans_video_runtime_status = remote_video_runtime_status.clone();
     let transport_status = Arc::clone(&state.external_video_transport);
     let transport_status_engine = state.engine.clone();
     let dj_link_engine = state.engine.clone();
@@ -24176,9 +25480,12 @@ fn start_remote_control(
             dj_link_transaction_active.as_ref(),
         )
     });
-    let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+    let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(
         config,
         move |event| {
+            if remote_input_event_requires_fail_closed(&event) {
+                return;
+            }
             let persistence_admission = Arc::clone(&remote_project_external_command_admission);
             let admitted = run_if_project_external_command_admitted(
                 &remote_project_external_command_admission,
@@ -24420,7 +25727,10 @@ fn start_remote_control(
                             duration_ms,
                         },
                         RemoteInputEvent::SetVideoOutputMapping { output_id, mapping } => {
-                            EngineCommand::SetVideoOutputMapping { output_id, mapping }
+                            EngineCommand::SetVideoOutputMapping {
+                                output_id,
+                                mapping: *mapping,
+                            }
                         }
                         RemoteInputEvent::SetVideoOutputMappingField {
                             output_id,
@@ -24451,6 +25761,12 @@ fn start_remote_control(
                             EngineCommand::SetLightingMaster(master)
                         }
                     };
+                    if external_unversioned_semantic_command_requires_fail_closed(
+                        ExternalControlIngress::RemoteControl,
+                        &command,
+                    ) {
+                        return;
+                    }
                     if let Some(reason) = external_output_command_requires_local_r4(&command) {
                         eprintln!(
                             "Ignoring remote output command ({reason}); use the local OutputControl R4 path"
@@ -24472,11 +25788,11 @@ fn start_remote_control(
                 );
             }
         },
-        move || snapshot_engine.snapshot(),
-        video::video_runtime_status,
-        move || {
-            let snapshot = render_plans_engine.snapshot();
-            match video::build_video_output_render_plans(&snapshot.video) {
+        move || snapshot_engine.try_snapshot(),
+        (
+            move || remote_video_runtime_status.clone(),
+            move || match render_plans_engine.try_snapshot() {
+            Some(snapshot) => match video::build_video_output_render_plans(&snapshot.video) {
                 Ok(plans) => serde_json::to_value(plans).unwrap_or_else(|_| {
                     json!({
                         "plans": [],
@@ -24487,13 +25803,16 @@ fn start_remote_control(
                     "plans": [],
                     "error": format!("{error:?}"),
                 }),
-            }
-        },
-        move || {
-            let snapshot = io_plans_engine.snapshot();
-            serde_json::to_value(video::build_external_video_io_route_plans(
+            },
+            None => json!({
+                "plans": [],
+                "error": "Engine snapshot is temporarily unavailable; retry",
+            }),
+            },
+            move || match io_plans_engine.try_snapshot() {
+            Some(snapshot) => serde_json::to_value(video::build_external_video_io_route_plans(
                 &snapshot.video,
-                &video::video_runtime_status(),
+                &io_plans_video_runtime_status,
             ))
             .unwrap_or_else(|_| {
                 json!({
@@ -24501,34 +25820,42 @@ fn start_remote_control(
                     "outputs": [],
                     "error": "External video I/O plan serialization failed",
                 })
-            })
-        },
-        move || match external_video_transport_status_for(
-            transport_status.as_ref(),
-            &transport_status_engine,
-        ) {
-            Ok(status) => serde_json::to_value(status).unwrap_or_else(|_| {
-                json!({
-                    "active_routes": [],
-                    "active_count": 0,
-                    "error": "External video transport status serialization failed",
-                })
             }),
-            Err(error) => json!({
-                "active_routes": [],
-                "active_count": 0,
-                "error": error,
+            None => json!({
+                "inputs": [],
+                "outputs": [],
+                "error": "Engine snapshot is temporarily unavailable; retry",
             }),
-        },
-        external_video_transport_sync_fail_closed,
+            },
+            move || {
+                match external_video_transport_status_nonblocking_for(
+                    transport_status.as_ref(),
+                    &transport_status_engine,
+                ) {
+                    Ok(status) => serde_json::to_value(status).unwrap_or_else(|_| {
+                        json!({
+                            "active_routes": [],
+                            "active_count": 0,
+                            "error": "External video transport status serialization failed",
+                        })
+                    }),
+                    Err(error) => json!({
+                        "active_routes": [],
+                        "active_count": 0,
+                        "error": error,
+                    }),
+                }
+            },
+            external_video_transport_sync_fail_closed,
+        ),
         Some(dj_link_handler),
+        Some(Arc::clone(&state.dj_link_process_fence)),
     )
     .map_err(|error| error.to_string())?;
-    let mut guard = state
+    *state
         .remote_control
         .lock()
-        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
-    *guard = Some(server);
+        .map_err(|_| "Remote control state lock was poisoned".to_string())? = Some(server);
     Ok(())
 }
 
@@ -24591,6 +25918,10 @@ async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlSta
 /// show-once and is never persisted or included in status.
 #[tauri::command]
 fn rotate_dj_link_token(state: State<'_, AppState>) -> Result<String, String> {
+    let _remote_lifecycle = state
+        .remote_control_lifecycle
+        .lock()
+        .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
     let token = generate_dj_link_token()?;
     let mut secret = state
         .dj_link_token
@@ -24598,11 +25929,12 @@ fn rotate_dj_link_token(state: State<'_, AppState>) -> Result<String, String> {
         .map_err(|_| "DJ Link token state lock was poisoned".to_string())?;
     *secret = Some(token.clone());
     drop(secret);
-    let mut remote = state
+    let previous_remote = state
         .remote_control
         .lock()
-        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
-    *remote = None;
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?
+        .take();
+    drop(previous_remote);
     Ok(token)
 }
 
@@ -24623,11 +25955,23 @@ fn disconnect_remote_client(state: State<'_, AppState>, client_id: u64) -> Resul
 
 #[tauri::command]
 fn stop_remote_control(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state
+    stop_remote_control_for_state(&state)
+}
+
+/// Production stop body shared with the loopback lifecycle proof. The
+/// lifecycle mutex remains held until `RemoteWsServer::drop` has stopped the
+/// listener, shut every accepted socket, and joined every retained worker.
+fn stop_remote_control_for_state(state: &AppState) -> Result<(), String> {
+    let _remote_lifecycle = state
+        .remote_control_lifecycle
+        .lock()
+        .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    let previous_remote = state
         .remote_control
         .lock()
-        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
-    *guard = None;
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?
+        .take();
+    drop(previous_remote);
     Ok(())
 }
 
@@ -24724,11 +26068,13 @@ fn start_dmx_input(
                     dispatch_external_control_event(
                         &engine,
                         &operator_selection,
-                        &callback_epoch_for_worker,
-                        &project_transaction_active_for_worker,
-                        &project_external_command_admission_for_worker,
-                        &callback_installed_for_worker,
-                        captured_callback_epoch,
+                        (
+                            &callback_epoch_for_worker,
+                            &project_transaction_active_for_worker,
+                            &project_external_command_admission_for_worker,
+                            &callback_installed_for_worker,
+                            captured_callback_epoch,
+                        ),
                         event,
                         "DMX",
                     );
@@ -26231,6 +27577,144 @@ fn update_cue_from_current(
 }
 
 #[tauri::command]
+fn update_cue_from_current_batch(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<(), String> {
+    read_flat_invoke_args!(args;
+        cue_id: CueId => "cueId",
+        label: String => "label",
+        fade_ms: u64 => "fadeMs",
+        capture_scopes: Vec<CueCaptureScope> => "captureScopes",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
+    if capture_scopes.is_empty() || capture_scopes.len() > 256 {
+        return Err("Cue capture batch requires between 1 and 256 scopes".to_string());
+    }
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("Cue label is required".to_string());
+    }
+    let mut identities = HashSet::new();
+    for scope in &capture_scopes {
+        let identity = match scope {
+            CueCaptureScope::All => "all".to_string(),
+            CueCaptureScope::LightingOnly => "lighting".to_string(),
+            CueCaptureScope::SelectedFixture { fixture_id } => format!("fixture:{fixture_id}"),
+            CueCaptureScope::SelectedGroup { group_id } => {
+                format!("group:{}", normalize_group_id(group_id)?)
+            }
+            CueCaptureScope::VideoOnly => "video".to_string(),
+            CueCaptureScope::EffectsOnly => "effects".to_string(),
+        };
+        if !identities.insert(identity) {
+            return Err("Cue capture batch contains a duplicate scope".to_string());
+        }
+    }
+    let (_external_admission, _coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            &state,
+            window.label(),
+            "update_cue_from_current_batch",
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+    let mut snapshot = state.engine.persistence_snapshot()?;
+    use_authored_video_snapshot(&mut snapshot);
+    apply_programmer_preview_to_snapshot(&mut snapshot);
+    let existing_cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    let has_palette_targets = !existing_cue.palette_targets.is_empty();
+    for scope in capture_scopes {
+        let captured = cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
+        let merged = merge_cue_update_targets(&snapshot, cue_id, &scope, captured, None)?;
+        ensure_cue_targets_present(
+            &merged.0,
+            &merged.1,
+            &merged.2,
+            &merged.3,
+            &merged.4,
+            has_palette_targets,
+            "updating",
+        )?;
+        let cue = snapshot
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .expect("cue existence was validated");
+        cue.targets = merged.0;
+        cue.video_targets = merged.1;
+        cue.video_output_targets = merged.2;
+        cue.node_graph_targets = merged.3;
+        cue.effect_targets = merged.4;
+    }
+    let cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .expect("cue existence was validated");
+    state.engine.update_cue_published(
+        cue_id,
+        label,
+        fade_ms,
+        cue.targets.clone(),
+        cue.video_targets.clone(),
+        cue.video_output_targets.clone(),
+        cue.node_graph_targets.clone(),
+        cue.effect_targets.clone(),
+    )
+}
+
+#[tauri::command]
+fn move_cue_between_scene_banks_batch(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<(), String> {
+    read_flat_invoke_args!(args;
+        cue_id: CueId => "cueId",
+        target_cue_list_id: protocol::CueListId => "targetCueListId",
+        target_group_id: Option<String> => "targetGroupId",
+        target_cue_id: Option<CueId> => "targetCueId",
+        position: String => "position",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
+    let insert_after = match position.as_str() {
+        "before" => false,
+        "after" => true,
+        _ => return Err("Scene Bank move position must be 'before' or 'after'".to_string()),
+    };
+    let target_group_id = target_group_id
+        .map(|group_id| normalize_group_id(&group_id))
+        .transpose()?;
+    let (_external_admission, _coordinator, _transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            &state,
+            window.label(),
+            "move_cue_between_scene_banks_batch",
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+    state.engine.move_cue_between_banks_published(
+        cue_id,
+        target_cue_list_id,
+        target_group_id,
+        target_cue_id,
+        insert_after,
+    )
+}
+
+#[tauri::command]
 fn set_cue_effect_targets(
     state: State<'_, AppState>,
     cue_id: CueId,
@@ -26303,24 +27787,24 @@ fn apply_programmer_preview_to_snapshot(snapshot: &mut EngineSnapshot) {
 }
 
 #[tauri::command]
-fn set_cue_metadata(
-    state: State<'_, AppState>,
-    cue_id: CueId,
-    cue_number: String,
-    label: String,
-    group_id: Option<String>,
-    recall_mode: RecallMode,
-    fade_ms: u64,
-    authored_beats: Option<f32>,
-    pre_wait_ms: u64,
-    follow_ms: Option<u64>,
-    ifcb_timing: protocol::CueIfcbTiming,
-    parts: Vec<protocol::CuePartSummary>,
-    mark: bool,
-    mib_fixture_ids: Vec<FixtureId>,
-    tracking: bool,
-    notes: String,
-) -> Result<(), String> {
+fn set_cue_metadata(state: State<'_, AppState>, args: FlatInvokeArgs<Value>) -> Result<(), String> {
+    read_flat_invoke_args!(args;
+        cue_id: CueId => "cueId",
+        cue_number: String => "cueNumber",
+        label: String => "label",
+        group_id: Option<String> => "groupId",
+        recall_mode: RecallMode => "recallMode",
+        fade_ms: u64 => "fadeMs",
+        authored_beats: Option<f32> => "authoredBeats",
+        pre_wait_ms: u64 => "preWaitMs",
+        follow_ms: Option<u64> => "followMs",
+        ifcb_timing: protocol::CueIfcbTiming => "ifcbTiming",
+        parts: Vec<protocol::CuePartSummary> => "parts",
+        mark: bool => "mark",
+        mib_fixture_ids: Vec<FixtureId> => "mibFixtureIds",
+        tracking: bool => "tracking",
+        notes: String => "notes",
+    );
     let cue_number = cue_number.trim().to_string();
     if cue_number.is_empty() {
         return Err("Cue number is required".to_string());
@@ -26959,19 +28443,33 @@ fn validate_timeline_scene_block_fields(
     Ok(())
 }
 
+type TimelineSceneBlockTiming = (
+    u64,
+    Option<f64>,
+    u64,
+    Option<f64>,
+    bool,
+    bool,
+    u16,
+    Option<TimelineEventId>,
+);
+
 fn validate_timeline_scene_block_request(
     snapshot: &EngineSnapshot,
     owner: &str,
     cue_id: CueId,
-    time_ms: u64,
-    time_beats: Option<f64>,
-    duration_ms: u64,
-    duration_beats: Option<f64>,
-    conform_to_tempo: bool,
-    loop_fill: bool,
-    loop_count: u16,
-    jump_to_event_id: Option<TimelineEventId>,
+    timing: TimelineSceneBlockTiming,
 ) -> Result<(), String> {
+    let (
+        time_ms,
+        time_beats,
+        duration_ms,
+        duration_beats,
+        conform_to_tempo,
+        loop_fill,
+        loop_count,
+        jump_to_event_id,
+    ) = timing;
     let cue = snapshot
         .cues
         .iter()
@@ -27017,14 +28515,16 @@ fn add_timeline_scene_block(
         &snapshot,
         "Timeline scene block",
         cue_id,
-        time_ms,
-        time_beats,
-        duration_ms,
-        duration_beats,
-        conform_to_tempo,
-        loop_fill,
-        loop_count,
-        jump_to_event_id,
+        (
+            time_ms,
+            time_beats,
+            duration_ms,
+            duration_beats,
+            conform_to_tempo,
+            loop_fill,
+            loop_count,
+            jump_to_event_id,
+        ),
     )?;
     let event_id = state.engine.allocate_timeline_event_id();
     state.engine.add_timeline_scene_block(
@@ -27080,14 +28580,16 @@ fn set_timeline_scene_block(
         &snapshot,
         &format!("Timeline scene block {event_id}"),
         cue_id,
-        time_ms,
-        time_beats,
-        duration_ms,
-        duration_beats,
-        conform_to_tempo,
-        loop_fill,
-        loop_count,
-        jump_to_event_id,
+        (
+            time_ms,
+            time_beats,
+            duration_ms,
+            duration_beats,
+            conform_to_tempo,
+            loop_fill,
+            loop_count,
+            jump_to_event_id,
+        ),
     )?;
     state.engine.set_timeline_scene_block(
         event_id,
@@ -27404,19 +28906,39 @@ fn reserve_legacy_media_asset_compatibility_operation(
     window: &WebviewWindow,
 ) -> Result<LegacyMediaAssetCompatibilityOperation, String> {
     let window_label = window.label().to_string();
+    // A Destroyed retirement installs a temporary or permanent label fence
+    // before owner/lease cleanup. Check it before resolving the legacy owner;
+    // otherwise a raw compatibility call could retain the stale owner while
+    // retirement is in flight.
+    state.ensure_window_authority_not_blocked(&window_label)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
     // Resolve the concrete window generation only while the same admission
     // boundary that excludes owner rotation is held. Looking it up before this
     // boundary left an ABA gap: A could read X, rotate to Y, and B could claim
     // the now-free X before the old operation reserved its server token.
-    let owner_id = {
+    let (owner_id, owner_incarnation) = {
         let owners = state
             .project_transaction_owners
             .lock()
             .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-        legacy_media_asset_compatibility_owner_for_window_label(&owners, &window_label)?
+        let owner_id =
+            legacy_media_asset_compatibility_owner_for_window_label(&owners, &window_label)?;
+        let incarnations = state
+            .project_transaction_owner_incarnations
+            .lock()
+            .map_err(|_| {
+                "Project transaction owner incarnation registry lock was poisoned".to_string()
+            })?;
+        let owner_incarnation = incarnations.get(&window_label).copied().ok_or_else(|| {
+            "Legacy media compatibility IPC requires a registered renderer incarnation".to_string()
+        })?;
+        (owner_id, owner_incarnation)
     };
+    // Recheck after owner lookup while admission is held. A Destroyed marker
+    // installed between the entry check and this point must reject before any
+    // compatibility operation handle is reserved.
+    state.ensure_window_authority_not_blocked(&window_label)?;
     reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
     ensure_project_transaction_owner_registered(state, &owner_id)?;
     ensure_no_pending_project_transaction(&coordinator)?;
@@ -27430,6 +28952,7 @@ fn reserve_legacy_media_asset_compatibility_operation(
         operation_generation: handle.generation,
         window_label,
         owner_id,
+        owner_incarnation,
         authority,
     })
 }
@@ -27460,11 +28983,14 @@ async fn run_prepared_local_media_asset_batch(
     operation: MediaAssetOperationGuard,
     kind: VideoSourceKind,
     paths: Vec<String>,
-    expected_epoch: u64,
-    owner_id: &str,
-    authority: MediaAssetPrepareAuthority,
-    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    context: MediaAssetPrepareBatchContext<'_>,
 ) -> Result<MediaAssetImportReport, String> {
+    let MediaAssetPrepareBatchContext {
+        expected_epoch,
+        owner_id,
+        authority,
+        legacy_operation,
+    } = context;
     let registry = Arc::clone(&state.media_asset_operations);
     let handle = operation.handle();
     let request_id = handle.request_id;
@@ -27527,12 +29053,14 @@ async fn run_prepared_local_media_asset_batch(
 /// reveals the generation in its reply, after hashing has already run.
 #[tauri::command]
 fn start_media_asset_operation(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     request_id: u64,
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<MediaAssetOperationStartReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     // Capture (and reconcile) the authority first so a busy/replaced project
     // fails fast before a generation is burned, and the client learns the exact
     // A baseline it will later fence its staged commit against.
@@ -27558,12 +29086,14 @@ fn start_media_asset_operation(
 /// long verified inspection cannot advance revision or history.
 #[tauri::command]
 fn start_media_asset_availability_operation(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     request_id: u64,
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<MediaAssetOperationStartReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let (authority, _) =
         capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
     let handle = state.media_asset_operations.reserve_availability(
@@ -27587,14 +29117,14 @@ fn start_media_asset_availability_operation(
 /// single-call flow stays byte-for-byte compatible.
 async fn prepare_reserved_media_assets_impl(
     state: &AppState,
-    request_id: u64,
-    operation_generation: u64,
+    operation_identity: MediaAssetOperationIdentity,
     kind: VideoSourceKind,
     paths: Vec<String>,
     expected_epoch: u64,
     owner_id: &str,
     legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetImportReport, String> {
+    let (request_id, operation_generation) = operation_identity;
     let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
         request_id,
         operation_generation,
@@ -27615,10 +29145,12 @@ async fn prepare_reserved_media_assets_impl(
         operation,
         kind,
         paths,
-        expected_epoch,
-        owner_id,
-        reserved_authority,
-        legacy_operation,
+        MediaAssetPrepareBatchContext {
+            expected_epoch,
+            owner_id,
+            authority: reserved_authority,
+            legacy_operation,
+        },
     )
     .await
 }
@@ -27636,8 +29168,7 @@ async fn prepare_reserved_media_assets(
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     prepare_reserved_media_assets_impl(
         &state,
-        request_id,
-        operation_generation,
+        (request_id, operation_generation),
         kind,
         paths,
         expected_epoch,
@@ -27669,21 +29200,25 @@ async fn prepare_local_media_assets(
         operation,
         kind,
         paths,
-        expected_epoch,
-        &owner_id,
-        authority,
-        None,
+        MediaAssetPrepareBatchContext {
+            expected_epoch,
+            owner_id: &owner_id,
+            authority,
+            legacy_operation: None,
+        },
     )
     .await
 }
 
 #[tauri::command]
 fn cancel_media_asset_operation(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     request_id: u64,
     operation_generation: u64,
     owner_id: String,
 ) -> Result<bool, String> {
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     state
         .media_asset_operations
         .cancel_exact(request_id, operation_generation, owner_id)
@@ -27693,12 +29228,11 @@ async fn run_media_asset_availability_inspection(
     state: &AppState,
     operation: MediaAssetOperationGuard,
     authority: MediaAssetPrepareAuthority,
-    assets: Vec<MediaAssetSummary>,
-    asset_ids: Vec<MediaAssetId>,
-    verify_hash: bool,
+    inspection: (Vec<MediaAssetSummary>, Vec<MediaAssetId>, bool),
     expected_epoch: u64,
     owner_id: &str,
 ) -> Result<MediaAssetAvailabilityReport, String> {
+    let (assets, asset_ids, verify_hash) = inspection;
     let handle = operation.handle();
     let cancel = operation.cancellation_flag();
     let availability = tauri::async_runtime::spawn_blocking(move || {
@@ -27789,9 +29323,7 @@ async fn inspect_media_asset_availability(
         &state,
         operation,
         authority,
-        assets,
-        asset_ids,
-        false,
+        (assets, asset_ids, false),
         expected_epoch,
         &owner_id,
     )
@@ -27821,9 +29353,7 @@ async fn inspect_reserved_media_asset_availability(
         &state,
         operation,
         reserved_authority,
-        assets,
-        asset_ids,
-        verify_hash,
+        (assets, asset_ids, verify_hash),
         expected_epoch,
         &owner_id,
     )
@@ -27906,7 +29436,7 @@ async fn run_prepared_media_asset_relink_batch(
                     asset_id,
                     authority: authority.clone(),
                     original_asset,
-                    replacement,
+                    replacement: *replacement,
                     adopted_replacement,
                     legacy_source_identity,
                     cancel,
@@ -27967,15 +29497,18 @@ async fn prepare_media_asset_relink_impl(
 /// entry points are unchanged.
 async fn prepare_reserved_media_asset_relink_impl(
     state: &AppState,
-    request_id: u64,
-    operation_generation: u64,
+    operation_identity: MediaAssetOperationIdentity,
     asset_id: MediaAssetId,
     replacement_path: String,
     policy: MediaAssetRelinkPolicy,
-    expected_epoch: u64,
-    owner_id: &str,
-    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    context: MediaAssetRelinkPrepareContext<'_>,
 ) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let (request_id, operation_generation) = operation_identity;
+    let MediaAssetRelinkPrepareContext {
+        expected_epoch,
+        owner_id,
+        legacy_operation,
+    } = context;
     let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
         request_id,
         operation_generation,
@@ -28013,25 +29546,29 @@ async fn prepare_reserved_media_asset_relink_impl(
 #[tauri::command]
 async fn prepare_reserved_media_asset_relink(
     state: State<'_, AppState>,
-    request_id: u64,
-    operation_generation: u64,
-    asset_id: MediaAssetId,
-    replacement_path: String,
-    policy: MediaAssetRelinkPolicy,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetRelinkPrepareReport, String> {
+    read_flat_invoke_args!(args;
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        asset_id: MediaAssetId => "assetId",
+        replacement_path: String => "replacementPath",
+        policy: MediaAssetRelinkPolicy => "policy",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     prepare_reserved_media_asset_relink_impl(
         &state,
-        request_id,
-        operation_generation,
+        (request_id, operation_generation),
         asset_id,
         replacement_path,
         policy,
-        expected_epoch,
-        &owner_id,
-        None,
+        MediaAssetRelinkPrepareContext {
+            expected_epoch,
+            owner_id: &owner_id,
+            legacy_operation: None,
+        },
     )
     .await
 }
@@ -28201,8 +29738,7 @@ async fn finalize_prepared_media_asset_relink_impl(
         operation_generation,
         owner_id,
         &authority,
-        replacement_source,
-        legacy_source,
+        (replacement_source, legacy_source),
     )?;
     Ok(MediaAssetRelinkPrepareReport {
         request_id,
@@ -28241,13 +29777,16 @@ async fn finalize_prepared_media_asset_relink(
 async fn commit_prepared_media_asset_relink(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    prepared_relink_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetRelinkReport, String> {
+    read_flat_invoke_args!(args;
+        prepared_relink_token: u64 => "preparedRelinkToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
@@ -28516,13 +30055,16 @@ async fn finalize_prepared_media_assets(
 async fn commit_prepared_media_assets(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetImportReport, String> {
+    read_flat_invoke_args!(args;
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
@@ -28776,7 +30318,7 @@ fn apply_media_asset_transaction_to_candidate_video(
             }
             video.media_assets = candidate.assets.clone();
             video.layers = candidate.layers.clone();
-            video.outputs = vec![output.clone()];
+            video.outputs = vec![output.as_ref().clone()];
         }
         MediaAssetTransaction::Update(asset) => {
             let current = video
@@ -29852,14 +31394,17 @@ fn commit_authoritative_media_asset_transaction<R>(
 /// republishing the catalog or advancing history twice.
 fn commit_prepared_media_assets_authoritative_command_impl(
     state: &AppState,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeImportResult, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     ensure_project_transaction_owner_registered(state, &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
@@ -29961,37 +31506,47 @@ fn commit_prepared_media_assets_authoritative_command_impl(
 
 #[tauri::command]
 fn commit_prepared_media_assets_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeImportResult, String> {
+    read_flat_invoke_args!(args;
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_media_assets_authoritative_command_impl(
         &state,
-        prepared_import_token,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_import_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
+    )
+}
+
+fn get_media_asset_operation_terminal_result_impl(
+    state: &AppState,
+    request: MediaAssetAuthoritativeRequest,
+) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token,
         request_id,
         operation_generation,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         owner_id,
-    )
-}
-
-fn get_media_asset_operation_terminal_result_impl(
-    state: &AppState,
-    prepared_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
-) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     ensure_project_transaction_owner_registered(state, &owner_id)?;
     let operation_key = media_asset_authoritative_operation_key(
@@ -30015,24 +31570,31 @@ fn get_media_asset_operation_terminal_result_impl(
 
 #[tauri::command]
 fn get_media_asset_operation_terminal_result(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    prepared_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
+    read_flat_invoke_args!(args;
+        prepared_token: u64 => "preparedToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     get_media_asset_operation_terminal_result_impl(
         &state,
-        prepared_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
@@ -30100,7 +31662,7 @@ fn create_video_clip_slot_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Create,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![slot_id],
@@ -30109,7 +31671,7 @@ fn create_video_clip_slot_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: request.before_slot_id,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30120,13 +31682,16 @@ fn create_video_clip_slot_authoritative_command_impl(
 fn create_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotCreateRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotCreateRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     create_video_clip_slot_authoritative_command_impl(
@@ -30190,7 +31755,7 @@ fn assign_video_clip_slot_asset_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Assign,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![request.slot_id],
@@ -30199,7 +31764,7 @@ fn assign_video_clip_slot_asset_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: None,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30210,13 +31775,16 @@ fn assign_video_clip_slot_asset_authoritative_command_impl(
 fn assign_video_clip_slot_asset_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotAssignRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotAssignRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     assign_video_clip_slot_asset_authoritative_command_impl(
@@ -30278,7 +31846,7 @@ fn update_video_clip_slot_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Update,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![request.slot.id],
@@ -30287,7 +31855,7 @@ fn update_video_clip_slot_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: None,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30298,13 +31866,16 @@ fn update_video_clip_slot_authoritative_command_impl(
 fn update_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotUpdateRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotUpdateRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     update_video_clip_slot_authoritative_command_impl(
@@ -30365,7 +31936,7 @@ fn remove_video_clip_slot_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Remove,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![request.slot_id],
@@ -30374,7 +31945,7 @@ fn remove_video_clip_slot_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: None,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30385,13 +31956,16 @@ fn remove_video_clip_slot_authoritative_command_impl(
 fn remove_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotRemoveRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotRemoveRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     remove_video_clip_slot_authoritative_command_impl(
@@ -30454,7 +32028,7 @@ fn reorder_video_clip_slots_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Reorder,
                     layer_id: request.layer_id,
                     affected_slot_ids: request.slot_ids.clone(),
@@ -30463,7 +32037,7 @@ fn reorder_video_clip_slots_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: None,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30474,13 +32048,16 @@ fn reorder_video_clip_slots_authoritative_command_impl(
 fn reorder_video_clip_slots_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotReorderRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotReorderRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     reorder_video_clip_slots_authoritative_command_impl(
@@ -30547,7 +32124,7 @@ fn duplicate_video_clip_slot_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::Duplicate,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![request.source_slot_id, new_slot_id],
@@ -30556,7 +32133,7 @@ fn duplicate_video_clip_slot_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: request.before_slot_id,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30567,13 +32144,16 @@ fn duplicate_video_clip_slot_authoritative_command_impl(
 fn duplicate_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotDuplicateRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotDuplicateRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     duplicate_video_clip_slot_authoritative_command_impl(
@@ -30634,7 +32214,7 @@ fn set_default_video_clip_slot_authoritative_command_impl(
                 },
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                VideoClipSlotAuthoritativeAuthoredResult {
+                Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                     command_kind: VideoClipSlotAuthoritativeCommitKind::SetDefault,
                     layer_id: request.layer_id,
                     affected_slot_ids: vec![request.slot_id],
@@ -30643,7 +32223,7 @@ fn set_default_video_clip_slot_authoritative_command_impl(
                     imported_asset_ids: Vec::new(),
                     insertion_before_slot_id: None,
                     mutation,
-                },
+                }),
             ))
         },
     )?;
@@ -30654,13 +32234,16 @@ fn set_default_video_clip_slot_authoritative_command_impl(
 fn set_default_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotSetDefaultRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeAuthoredResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotSetDefaultRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     set_default_video_clip_slot_authoritative_command_impl(
@@ -30758,13 +32341,16 @@ fn queue_video_clip_slot_authoritative_command_impl(
 fn queue_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotQueueRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotQueueRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     queue_video_clip_slot_authoritative_command_impl(
@@ -30841,13 +32427,16 @@ fn cancel_queued_video_clip_slot_authoritative_command_impl(
 fn cancel_queued_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotCancelQueueRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotCancelQueueRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     cancel_queued_video_clip_slot_authoritative_command_impl(
@@ -30929,13 +32518,16 @@ fn launch_video_clip_slot_authoritative_command_impl(
 fn launch_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotLaunchRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotLaunchRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     launch_video_clip_slot_authoritative_command_impl(
@@ -31012,13 +32604,16 @@ fn seek_video_clip_slot_authoritative_command_impl(
 fn seek_video_clip_slot_authoritative(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: VideoClipSlotSeekRequest,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoClipSlotAuthoritativeRuntimeResult, String> {
+    let (
+        request,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    ) = read_video_clip_slot_authoritative_args!(args, VideoClipSlotSeekRequest);
     let binding =
         capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     seek_video_clip_slot_authoritative_command_impl(
@@ -31274,7 +32869,7 @@ fn import_and_assign_video_clip_slots_authoritative_command_impl(
                     );
                     let focus_slot_id = created_slot_ids.first().copied();
                     Ok(VideoClipSlotAuthoritativeTerminalResult::Authored(
-                        VideoClipSlotAuthoritativeAuthoredResult {
+                        Box::new(VideoClipSlotAuthoritativeAuthoredResult {
                             command_kind: VideoClipSlotAuthoritativeCommitKind::ImportAndAssign,
                             layer_id: request.target_layer_id,
                             affected_slot_ids: created_slot_ids.clone(),
@@ -31283,7 +32878,7 @@ fn import_and_assign_video_clip_slots_authoritative_command_impl(
                             imported_asset_ids,
                             insertion_before_slot_id: request.before_slot_id,
                             mutation,
-                        },
+                        }),
                     ))
                 }
                 Err(error) if prepared.admission.is_admitted() => {
@@ -31423,23 +33018,26 @@ fn get_video_clip_slot_operation_terminal_result(
 
 fn commit_prepared_media_asset_relink_authoritative_impl(
     state: &AppState,
-    prepared_relink_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: &str,
+    request: MediaAssetAuthoritativeRequest,
     legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
-    ensure_legacy_media_asset_compatibility_operation_current(state, legacy_operation, owner_id)?;
-    ensure_project_transaction_owner_registered(state, owner_id)?;
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_relink_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
+    ensure_legacy_media_asset_compatibility_operation_current(state, legacy_operation, &owner_id)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let operation_key = media_asset_authoritative_operation_key(
         prepared_relink_token,
         request_id,
         operation_generation,
-        owner_id,
+        &owner_id,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
@@ -31451,13 +33049,13 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
             prepared_relink_token,
             request_id,
             operation_generation,
-            owner_id,
+            &owner_id,
         )?;
         verify_authoritative_prepared_relink(
             state,
             &prepared,
             expected_epoch,
-            owner_id,
+            &owner_id,
             &expected_authority,
             legacy_operation,
         )?;
@@ -31476,7 +33074,7 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
             state,
             prepared.admission.as_ref(),
             expected_epoch,
-            owner_id,
+            &owner_id,
             &expected_authority,
             "Relink media asset",
             "",
@@ -31528,7 +33126,7 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
         prepared_relink_token,
         request_id,
         operation_generation,
-        owner_id,
+        &owner_id,
     );
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Relink(result) => Ok(result),
@@ -31541,48 +33139,39 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
 
 fn commit_prepared_media_asset_relink_authoritative_command_impl(
     state: &AppState,
-    prepared_relink_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    mut request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    commit_prepared_media_asset_relink_authoritative_impl(
-        state,
-        prepared_relink_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        &owner_id,
-        None,
-    )
+    request.owner_id = normalize_project_transaction_owner_id(request.owner_id)?;
+    commit_prepared_media_asset_relink_authoritative_impl(state, request, None)
 }
 
 #[tauri::command]
 fn commit_prepared_media_asset_relink_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    prepared_relink_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
+    read_flat_invoke_args!(args;
+        prepared_relink_token: u64 => "preparedRelinkToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_media_asset_relink_authoritative_command_impl(
         &state,
-        prepared_relink_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_relink_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
@@ -31691,7 +33280,7 @@ fn commit_prepared_media_asset_layers_authoritative(
                     Ok((
                         MediaAssetTransaction::BootstrapVjShow {
                             candidate,
-                            output: safe_first_run_vj_output(output_id),
+                            output: Box::new(safe_first_run_vj_output(output_id)),
                         },
                         PreparedAuthoritativeLayerCommandResult::Bootstrap(setup),
                     ))
@@ -31738,14 +33327,17 @@ fn commit_prepared_media_asset_layers_authoritative(
 fn commit_prepared_video_file_layer_authoritative_command_impl(
     state: &AppState,
     label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let shape = media_asset_authoritative_shape(
@@ -31784,40 +33376,50 @@ fn commit_prepared_video_file_layer_authoritative_command_impl(
 
 #[tauri::command]
 fn commit_prepared_video_file_layer_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_video_file_layer_authoritative_command_impl(
         &state,
         label,
-        prepared_import_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_import_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
 fn commit_prepared_still_image_layer_authoritative_command_impl(
     state: &AppState,
     label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let shape = media_asset_authoritative_shape(
@@ -31856,40 +33458,50 @@ fn commit_prepared_still_image_layer_authoritative_command_impl(
 
 #[tauri::command]
 fn commit_prepared_still_image_layer_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_still_image_layer_authoritative_command_impl(
         &state,
         label,
-        prepared_import_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_import_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
 fn commit_prepared_local_media_layers_authoritative_command_impl(
     state: &AppState,
     kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let kind_name = media_asset_video_source_kind_name(&kind);
     let shape = media_asset_authoritative_shape(
@@ -31923,40 +33535,50 @@ fn commit_prepared_local_media_layers_authoritative_command_impl(
 
 #[tauri::command]
 fn commit_prepared_local_media_layers_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    read_flat_invoke_args!(args;
+        kind: VideoSourceKind => "kind",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_local_media_layers_authoritative_command_impl(
         &state,
         kind,
-        prepared_import_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_import_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
 fn commit_prepared_bootstrap_vj_show_authoritative_command_impl(
     state: &AppState,
     kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: MediaAssetAuthoritativeRequest,
 ) -> Result<MediaAssetAuthoritativeBootstrapResult, String> {
+    let MediaAssetAuthoritativeRequest {
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     if kind != VideoSourceKind::File {
         return Err("First-run VJ setup requires local video files".to_string());
@@ -31992,26 +33614,33 @@ fn commit_prepared_bootstrap_vj_show_authoritative_command_impl(
 
 #[tauri::command]
 fn commit_prepared_bootstrap_vj_show_authoritative(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<MediaAssetAuthoritativeBootstrapResult, String> {
+    read_flat_invoke_args!(args;
+        kind: VideoSourceKind => "kind",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_bootstrap_vj_show_authoritative_command_impl(
         &state,
         kind,
-        prepared_import_token,
-        request_id,
-        operation_generation,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        MediaAssetAuthoritativeRequest {
+            prepared_token: prepared_import_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
@@ -32021,14 +33650,17 @@ fn commit_prepared_bootstrap_vj_show_authoritative(
 fn commit_prepared_video_file_layer(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoLayerId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
@@ -32080,14 +33712,17 @@ fn commit_prepared_video_file_layer(
 fn commit_prepared_local_media_layers(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<Vec<VideoLayerId>, String> {
+    read_flat_invoke_args!(args;
+        kind: VideoSourceKind => "kind",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
@@ -32175,14 +33810,17 @@ fn validate_bootstrap_vj_prepared_import(
 fn commit_prepared_bootstrap_vj_show(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    kind: VideoSourceKind,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VjFirstRunSetupResult, String> {
+    read_flat_invoke_args!(args;
+        kind: VideoSourceKind => "kind",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let receipt_key = media_asset_commit_receipt_key(
@@ -32249,14 +33887,17 @@ fn commit_prepared_bootstrap_vj_show(
 fn commit_prepared_still_image_layer(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    prepared_import_token: u64,
-    request_id: u64,
-    operation_generation: u64,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoLayerId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        prepared_import_token: u64 => "preparedImportToken",
+        request_id: u64 => "requestId",
+        operation_generation: u64 => "operationGeneration",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
@@ -32337,8 +33978,7 @@ async fn legacy_media_asset_compatibility_prepare_finalize_local_media(
 ) -> Result<u64, String> {
     let prepared = prepare_reserved_media_assets_impl(
         state,
-        operation.request_id,
-        operation.operation_generation,
+        (operation.request_id, operation.operation_generation),
         kind,
         paths,
         operation.authority.epoch,
@@ -32456,7 +34096,7 @@ fn legacy_media_asset_refresh_target(
         .source
         .path
         .as_deref()
-        .map_or(true, |path| path.trim().is_empty())
+        .is_none_or(|path| path.trim().is_empty())
     {
         return Err("Video layer local media source path is required".to_string());
     }
@@ -32755,17 +34395,18 @@ async fn refresh_video_layer_metadata(
         })?;
         let prepared = prepare_reserved_media_asset_relink_impl(
             &state,
-            operation.request_id,
-            operation.operation_generation,
+            (operation.request_id, operation.operation_generation),
             target.asset_id,
             replacement_path,
             // Metadata refresh never adopts different bytes. Same-path bytes
             // are rehashed/probed, then update the catalog and every layer
             // projection through one acknowledged MediaAssetTransaction::Update.
             MediaAssetRelinkPolicy::RequireContentMatch,
-            operation.authority.epoch,
-            &operation.owner_id,
-            Some(&operation),
+            MediaAssetRelinkPrepareContext {
+                expected_epoch: operation.authority.epoch,
+                owner_id: &operation.owner_id,
+                legacy_operation: Some(&operation),
+            },
         )
         .await?;
         let prepared_relink_token = prepared.prepared_relink_token.ok_or_else(|| {
@@ -32796,13 +34437,15 @@ async fn refresh_video_layer_metadata(
         }
         let committed = commit_prepared_media_asset_relink_authoritative_impl(
             &state,
-            prepared_relink_token,
-            operation.request_id,
-            operation.operation_generation,
-            operation.authority.epoch,
-            operation.authority.revision,
-            operation.authority.checkpoint_hash.clone(),
-            &operation.owner_id,
+            MediaAssetAuthoritativeRequest {
+                prepared_token: prepared_relink_token,
+                request_id: operation.request_id,
+                operation_generation: operation.operation_generation,
+                expected_epoch: operation.authority.epoch,
+                expected_revision: operation.authority.revision,
+                expected_checkpoint_hash: operation.authority.checkpoint_hash.clone(),
+                owner_id: operation.owner_id.clone(),
+            },
             Some(&operation),
         )?;
         match committed.report.outcome {
@@ -32825,13 +34468,16 @@ async fn refresh_video_layer_metadata(
 fn add_video_input_layer(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    label: String,
-    kind: VideoSourceKind,
-    name: String,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoLayerId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        kind: VideoSourceKind => "kind",
+        name: String => "name",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let label = normalize_video_layer_label(label)?;
@@ -33319,10 +34965,10 @@ where
                 &captured_authority,
                 &request,
             )
-            .map(VideoEffectCatalogAuthoritativeTerminalResult::Applied)
+            .map(|result| VideoEffectCatalogAuthoritativeTerminalResult::Applied(Box::new(result)))
         })?;
     match terminal {
-        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(result),
+        VideoEffectCatalogAuthoritativeTerminalResult::Applied(result) => Ok(*result),
         VideoEffectCatalogAuthoritativeTerminalResult::Timeline(_) => {
             Err("Legacy video effect command received a Timeline terminal result".to_string())
         }
@@ -33385,14 +35031,17 @@ fn legacy_video_effect_from_catalog_result(
 fn set_video_layer_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    effect: Option<VideoIsfEffectSummary>,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        effect: Option<VideoIsfEffectSummary> => "effect",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     let effect = effect.map(sanitize_video_isf_effect).transpose()?;
     let shape = legacy_video_effect_catalog_authoritative_shape(
         "set_video_layer_isf_effect",
@@ -33418,14 +35067,17 @@ fn set_video_layer_isf_effect(
 fn apply_builtin_video_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    preset_id: String,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        preset_id: String => "presetId",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     let preset_id = preset_id.trim();
     let effect = video::builtin_isf_effect(preset_id)
         .map_err(|error| error.to_string())?
@@ -33484,19 +35136,34 @@ fn legacy_video_effect_catalog_append_response(
     }
 }
 
-fn append_video_isf_effect(
-    state: &AppState,
-    window: &WebviewWindow,
+struct LegacyVideoEffectAppendRequest {
     layer_id: VideoLayerId,
     effect: VideoIsfEffectSummary,
     command: &'static str,
-    builtin_preset_id: Option<&str>,
+    builtin_preset_id: Option<String>,
     request_id: u64,
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
     owner_id: String,
+}
+
+fn append_video_isf_effect(
+    state: &AppState,
+    window: &WebviewWindow,
+    request: LegacyVideoEffectAppendRequest,
 ) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
+    let LegacyVideoEffectAppendRequest {
+        layer_id,
+        effect,
+        command,
+        builtin_preset_id,
+        request_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let effect = sanitize_video_isf_effect(effect)?;
     if !effect.stack.is_empty() {
         return Err("Only one ISF stage can be appended at a time".to_string());
@@ -33506,8 +35173,12 @@ fn append_video_isf_effect(
     // reprojecting that catalog here would incorrectly return stage zero when
     // appending a later stage.
     let response = effect.clone();
-    let shape =
-        legacy_video_effect_catalog_append_shape(command, layer_id, &effect, builtin_preset_id)?;
+    let shape = legacy_video_effect_catalog_append_shape(
+        command,
+        layer_id,
+        &effect,
+        builtin_preset_id.as_deref(),
+    )?;
     let result = mutate_legacy_video_effect_catalog_for_window(
         state,
         window,
@@ -33537,26 +35208,31 @@ fn append_video_isf_effect(
 fn add_video_layer_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    effect: VideoIsfEffectSummary,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        effect: VideoIsfEffectSummary => "effect",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     append_video_isf_effect(
         state.inner(),
         &window,
-        layer_id,
-        effect,
-        "add_video_layer_isf_effect",
-        None,
-        request_id,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        LegacyVideoEffectAppendRequest {
+            layer_id,
+            effect,
+            command: "add_video_layer_isf_effect",
+            builtin_preset_id: None,
+            request_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
@@ -33564,14 +35240,17 @@ fn add_video_layer_isf_effect(
 fn add_builtin_video_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    preset_id: String,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoIsfEffectAuthoritativeResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        preset_id: String => "presetId",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     let preset_id = preset_id.trim();
     let effect = video::builtin_isf_effect(preset_id)
         .map_err(|error| error.to_string())?
@@ -33579,15 +35258,17 @@ fn add_builtin_video_isf_effect(
     append_video_isf_effect(
         state.inner(),
         &window,
-        layer_id,
-        effect,
-        "add_builtin_video_isf_effect",
-        Some(preset_id),
-        request_id,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        owner_id,
+        LegacyVideoEffectAppendRequest {
+            layer_id,
+            effect,
+            command: "add_builtin_video_isf_effect",
+            builtin_preset_id: Some(preset_id.to_string()),
+            request_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        },
     )
 }
 
@@ -33741,15 +35422,18 @@ fn mutate_legacy_video_layer_isf_catalog(
 fn move_video_layer_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    stage_index: usize,
-    delta: i32,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        stage_index: usize => "stageIndex",
+        delta: i32 => "delta",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     mutate_legacy_video_layer_isf_catalog(
         &state,
         &window,
@@ -33767,14 +35451,17 @@ fn move_video_layer_isf_effect(
 fn remove_video_layer_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    stage_index: usize,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        stage_index: usize => "stageIndex",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     mutate_legacy_video_layer_isf_catalog(
         &state,
         &window,
@@ -33792,15 +35479,18 @@ fn remove_video_layer_isf_effect(
 fn set_video_layer_isf_effect_enabled(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    stage_index: usize,
-    enabled: bool,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        stage_index: usize => "stageIndex",
+        enabled: bool => "enabled",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     mutate_legacy_video_layer_isf_catalog(
         &state,
         &window,
@@ -33821,14 +35511,17 @@ fn set_video_layer_isf_effect_enabled(
 fn reset_video_layer_isf_effect(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    stage_index: usize,
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        stage_index: usize => "stageIndex",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     mutate_legacy_video_layer_isf_catalog(
         &state,
         &window,
@@ -33846,16 +35539,19 @@ fn reset_video_layer_isf_effect(
 fn set_video_layer_isf_control(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    layer_id: VideoLayerId,
-    stage_index: usize,
-    control_name: String,
-    value: [f32; 4],
-    request_id: u64,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<LegacyVideoEffectCatalogMutationResult, String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        stage_index: usize => "stageIndex",
+        control_name: String => "controlName",
+        value: [f32; 4] => "value",
+        request_id: u64 => "requestId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        owner_id: String => "ownerId",
+    );
     mutate_legacy_video_layer_isf_catalog(
         &state,
         &window,
@@ -35304,11 +37000,13 @@ unsafe extern "C" fn asio_bridge_sample_callback(
             context.sample_rate,
             LiveAudioChannelMix::AverageAll,
             Duration::from_nanos(capture_delay_ns),
-            &context.capture.free_capture_slots,
-            &context.capture.ready_capture_chunks,
-            &context.capture.capture_telemetry,
-            &context.capture.safety,
-            &context.capture.worker_wake,
+            (
+                &context.capture.free_capture_slots,
+                &context.capture.ready_capture_chunks,
+                &context.capture.capture_telemetry,
+                &context.capture.safety,
+                &context.capture.worker_wake,
+            ),
             |value| value,
         );
     }));
@@ -35498,11 +37196,13 @@ where
                     capture.sample_rate,
                     capture.channel_mix,
                     callback_info,
-                    &capture.free_capture_slots,
-                    &capture.ready_capture_chunks,
-                    &capture.capture_telemetry,
-                    &capture.safety,
-                    &capture.worker_wake,
+                    (
+                        &capture.free_capture_slots,
+                        &capture.ready_capture_chunks,
+                        &capture.capture_telemetry,
+                        &capture.safety,
+                        &capture.worker_wake,
+                    ),
                     |value| <f32 as rodio::cpal::Sample>::from_sample(value),
                 )
             }));
@@ -35682,20 +37382,20 @@ fn start_live_audio_input(
         .name("syndocal-live-audio-fft".to_string())
         .spawn(move || {
             let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_live_audio_fft(
-                    worker_free_slots,
-                    worker_ready_chunks,
-                    worker_telemetry,
+                run_live_audio_fft(LiveAudioFftContext {
+                    free_capture_slots: worker_free_slots,
+                    ready_capture_chunks: worker_ready_chunks,
+                    capture_telemetry: worker_telemetry,
                     sample_rate,
-                    Arc::clone(&worker_generation),
-                    Arc::clone(&worker_generation_gate),
-                    worker_engine.clone(),
-                    Arc::clone(&worker_stop),
-                    worker_capture_started,
-                    Arc::clone(&worker_status),
-                    Arc::clone(&worker_safety),
-                    worker_deferred_terminal_fault,
-                )
+                    generation: Arc::clone(&worker_generation),
+                    generation_gate: Arc::clone(&worker_generation_gate),
+                    engine: worker_engine.clone(),
+                    stop: Arc::clone(&worker_stop),
+                    capture_started: worker_capture_started,
+                    status: Arc::clone(&worker_status),
+                    safety: Arc::clone(&worker_safety),
+                    deferred_terminal_fault: worker_deferred_terminal_fault,
+                })
             }));
             if run_result.is_err() && !worker_stop.load(Ordering::Acquire) {
                 let _generation_gate = worker_generation_gate
@@ -35833,17 +37533,21 @@ fn mix_live_audio_frame<T: Copy>(
     }
 }
 
+type LiveAudioCaptureQueueResources<'a> = (
+    &'a crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    &'a crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
+    &'a LiveAudioInputCaptureTelemetry,
+    &'a LiveAudioInputSafety,
+    &'a std::thread::Thread,
+);
+
 fn queue_live_audio_samples<T: Copy>(
     data: &[T],
     channels: u16,
     sample_rate: u32,
     channel_mix: LiveAudioChannelMix,
     callback_info: &rodio::cpal::InputCallbackInfo,
-    free_capture_slots: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
-    ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
-    capture_telemetry: &LiveAudioInputCaptureTelemetry,
-    safety: &LiveAudioInputSafety,
-    worker_wake: &std::thread::Thread,
+    resources: LiveAudioCaptureQueueResources<'_>,
     convert: impl Fn(T) -> f32,
 ) {
     let timestamp = callback_info.timestamp();
@@ -35857,11 +37561,7 @@ fn queue_live_audio_samples<T: Copy>(
         sample_rate,
         channel_mix,
         device_delay,
-        free_capture_slots,
-        ready_capture_chunks,
-        capture_telemetry,
-        safety,
-        worker_wake,
+        resources,
         convert,
     );
 }
@@ -35872,13 +37572,11 @@ fn queue_live_audio_samples_with_delay<T: Copy>(
     sample_rate: u32,
     channel_mix: LiveAudioChannelMix,
     device_delay: Duration,
-    free_capture_slots: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
-    ready_capture_chunks: &crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>,
-    capture_telemetry: &LiveAudioInputCaptureTelemetry,
-    safety: &LiveAudioInputSafety,
-    worker_wake: &std::thread::Thread,
+    resources: LiveAudioCaptureQueueResources<'_>,
     convert: impl Fn(T) -> f32,
 ) {
+    let (free_capture_slots, ready_capture_chunks, capture_telemetry, safety, worker_wake) =
+        resources;
     if safety.terminal_faulted() {
         return;
     }
@@ -36448,6 +38146,17 @@ fn publish_live_audio_analysis_with(
     }
 }
 
+struct LiveAudioFeaturePublishContext<'a> {
+    engine: &'a EngineHandle,
+    generation: u64,
+    captured_at: Instant,
+    status: &'a Mutex<LiveAudioInputStatus>,
+    safety: &'a LiveAudioInputSafety,
+    spectrum: &'a protocol::AudioSpectrumPoint,
+    features: &'a LiveAudioFeaturePresentation,
+    pending_onsets: &'a mut PendingLiveAudioOnsets,
+}
+
 #[cfg(test)]
 fn publish_live_audio_spectrum_with(
     status: &Mutex<LiveAudioInputStatus>,
@@ -36459,16 +38168,17 @@ fn publish_live_audio_spectrum_with(
     publish_live_audio_analysis_with(status, safety, spectrum, None, send_spectrum, send_clear)
 }
 
-fn publish_live_audio_features(
-    engine: &EngineHandle,
-    generation: u64,
-    captured_at: Instant,
-    status: &Mutex<LiveAudioInputStatus>,
-    safety: &LiveAudioInputSafety,
-    spectrum: &protocol::AudioSpectrumPoint,
-    features: &LiveAudioFeaturePresentation,
-    pending_onsets: &mut PendingLiveAudioOnsets,
-) -> bool {
+fn publish_live_audio_features(context: LiveAudioFeaturePublishContext<'_>) -> bool {
+    let LiveAudioFeaturePublishContext {
+        engine,
+        generation,
+        captured_at,
+        status,
+        safety,
+        spectrum,
+        features,
+        pending_onsets,
+    } = context;
     let published_spectrum = spectrum.clone();
     let feature_sequence = features.frame.sequence;
     let reactive_features = live_audio_reactive_features(features);
@@ -36584,7 +38294,7 @@ fn live_audio_feature_beat_phase(
     (elapsed_seconds * bpm / 60.0).rem_euclid(1.0)
 }
 
-fn run_live_audio_fft(
+struct LiveAudioFftContext {
     free_capture_slots: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
     ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
     capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
@@ -36597,7 +38307,23 @@ fn run_live_audio_fft(
     status: Arc<Mutex<LiveAudioInputStatus>>,
     safety: Arc<LiveAudioInputSafety>,
     deferred_terminal_fault: Arc<DeferredLiveAudioTerminalFaultLatch>,
-) {
+}
+
+fn run_live_audio_fft(context: LiveAudioFftContext) {
+    let LiveAudioFftContext {
+        free_capture_slots,
+        ready_capture_chunks,
+        capture_telemetry,
+        sample_rate,
+        generation,
+        generation_gate,
+        engine,
+        stop,
+        capture_started,
+        status,
+        safety,
+        deferred_terminal_fault,
+    } = context;
     capture_telemetry.mark_worker_heartbeat();
     while !stop.load(Ordering::Acquire) && !capture_started.load(Ordering::Acquire) {
         std::thread::park_timeout(LIVE_AUDIO_RECEIVE_POLL_INTERVAL);
@@ -36791,16 +38517,16 @@ fn run_live_audio_fft(
             let spectrum = live_audio_feature_spectrum(&frame);
             let beat_phase = live_audio_feature_beat_phase(&frame, last_onset_end_sample);
             let presentation = LiveAudioFeaturePresentation { frame, beat_phase };
-            if !publish_live_audio_features(
-                &engine,
-                generation.load(Ordering::Acquire),
+            if !publish_live_audio_features(LiveAudioFeaturePublishContext {
+                engine: &engine,
+                generation: generation.load(Ordering::Acquire),
                 captured_at,
-                &status,
-                &safety,
-                &spectrum,
-                &presentation,
-                &mut pending_real_onsets,
-            ) {
+                status: &status,
+                safety: &safety,
+                spectrum: &spectrum,
+                features: &presentation,
+                pending_onsets: &mut pending_real_onsets,
+            }) {
                 continue;
             }
         }
@@ -37344,16 +39070,14 @@ fn video_display_monitor_names_match(left: &str, right: &str) -> bool {
 
 const VIDEO_DISPLAY_MONITOR_IDENTITY_DOMAIN: &str = "syndocal.display-monitor.v2";
 
+type VideoDisplayMonitorIdentityGeometry = (u32, u32, i32, i32, f64, bool);
+
 fn video_display_monitor_identity(
     name: &str,
     device_path: &str,
-    width: u32,
-    height: u32,
-    position_x: i32,
-    position_y: i32,
-    scale_factor: f64,
-    primary: bool,
+    geometry: VideoDisplayMonitorIdentityGeometry,
 ) -> String {
+    let (width, height, position_x, position_y, scale_factor, primary) = geometry;
     let identity_material = format!(
         "{VIDEO_DISPLAY_MONITOR_IDENTITY_DOMAIN}\0{name}\0{device_path}\0{width}\0{height}\0{position_x}\0{position_y}\0{}\0{}",
         scale_factor.to_bits(),
@@ -37366,13 +39090,9 @@ fn make_video_display_monitor(
     index: u32,
     name: String,
     device_path: String,
-    width: u32,
-    height: u32,
-    position_x: i32,
-    position_y: i32,
-    scale_factor: f64,
-    primary: bool,
+    geometry: VideoDisplayMonitorIdentityGeometry,
 ) -> Result<VideoDisplayMonitor, String> {
+    let (width, height, position_x, position_y, scale_factor, primary) = geometry;
     if name.trim().is_empty() || width == 0 || height == 0 {
         return Err(format!(
             "Display {index} reported an invalid authoritative descriptor"
@@ -37383,16 +39103,7 @@ fn make_video_display_monitor(
     }
     Ok(VideoDisplayMonitor {
         index,
-        identity: video_display_monitor_identity(
-            &name,
-            &device_path,
-            width,
-            height,
-            position_x,
-            position_y,
-            scale_factor,
-            primary,
-        ),
+        identity: video_display_monitor_identity(&name, &device_path, geometry),
         name,
         physical_width: width,
         physical_height: height,
@@ -37465,8 +39176,6 @@ fn query_windows_display_config() -> Result<Vec<WindowsDisplayConfigRecord>, Str
             windows::Win32::Devices::Display::DISPLAYCONFIG_MODE_INFO::default();
             mode_count as usize
         ];
-        let mut path_count = path_count;
-        let mut mode_count = mode_count;
         let status = unsafe {
             QueryDisplayConfig(
                 QDC_ONLY_ACTIVE_PATHS,
@@ -37610,12 +39319,14 @@ fn video_display_monitors_from_available(
             index,
             record.source_name,
             record.monitor_device_path,
-            record.width,
-            record.height,
-            record.position_x,
-            record.position_y,
-            monitor.scale_factor(),
-            primary,
+            (
+                record.width,
+                record.height,
+                record.position_x,
+                record.position_y,
+                monitor.scale_factor(),
+                primary,
+            ),
         )?);
     }
     if result.iter().filter(|monitor| monitor.primary).count() > 1 {
@@ -37649,12 +39360,14 @@ fn video_display_monitors_from_available(
                 index,
                 name,
                 "tauri-monitor".to_string(),
-                size.width,
-                size.height,
-                position.x,
-                position.y,
-                monitor.scale_factor(),
-                position.x == 0 && position.y == 0,
+                (
+                    size.width,
+                    size.height,
+                    position.x,
+                    position.y,
+                    monitor.scale_factor(),
+                    position.x == 0 && position.y == 0,
+                ),
             )
         })
         .collect()
@@ -37663,14 +39376,17 @@ fn video_display_monitors_from_available(
 #[tauri::command]
 fn add_video_output(
     state: State<'_, AppState>,
-    label: String,
-    kind: VideoOutputKind,
-    width: u32,
-    height: u32,
-    fullscreen: bool,
-    monitor_id: Option<u32>,
-    endpoint_name: Option<String>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<VideoOutputId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        kind: VideoOutputKind => "kind",
+        width: u32 => "width",
+        height: u32 => "height",
+        fullscreen: bool => "fullscreen",
+        monitor_id: Option<u32> => "monitorId",
+        endpoint_name: Option<String> => "endpointName",
+    );
     reject_legacy_output_control_route::<VideoOutputId>("Video output creation")?;
     let config = normalize_video_output_config(
         label,
@@ -37718,16 +39434,19 @@ fn remove_video_output(state: State<'_, AppState>, output_id: VideoOutputId) -> 
 #[tauri::command]
 fn set_video_output_config(
     state: State<'_, AppState>,
-    output_id: VideoOutputId,
-    label: String,
-    kind: VideoOutputKind,
-    width: u32,
-    height: u32,
-    fullscreen: bool,
-    monitor_id: Option<u32>,
-    monitor_identity: Option<String>,
-    endpoint_name: Option<String>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<(), String> {
+    read_flat_invoke_args!(args;
+        output_id: VideoOutputId => "outputId",
+        label: String => "label",
+        kind: VideoOutputKind => "kind",
+        width: u32 => "width",
+        height: u32 => "height",
+        fullscreen: bool => "fullscreen",
+        monitor_id: Option<u32> => "monitorId",
+        monitor_identity: Option<String> => "monitorIdentity",
+        endpoint_name: Option<String> => "endpointName",
+    );
     reject_legacy_output_control_route::<()>("Video output configuration")?;
     validate_video_output_exists(&state.engine.snapshot(), output_id)?;
     let config = normalize_video_output_config(
@@ -37742,7 +39461,7 @@ fn set_video_output_config(
     if config.kind == VideoOutputKind::Display
         && monitor_identity
             .as_deref()
-            .map_or(true, |identity| identity.trim().is_empty())
+            .is_none_or(|identity| identity.trim().is_empty())
     {
         return Err(
             "Display output configuration requires the persisted monitor identity; re-detect the display"
@@ -38468,6 +40187,7 @@ fn query_display_add_lease_authority_for_window(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
 ) -> Result<DisplayAddLeaseAuthorityQueryV1, String> {
+    state.ensure_window_authority_not_blocked(window_label)?;
     let _owner_rotation = match state.project_transaction_owner_rotation.try_lock() {
         Ok(guard) => guard,
         Err(TryLockError::WouldBlock) => {
@@ -39461,19 +41181,40 @@ fn load_fixture_preset_for_all_matching(
 }
 
 #[tauri::command]
-fn new_project(state: State<'_, AppState>) -> Result<ProjectLoadResult, String> {
-    load_project_from_file(
+fn new_project(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+) -> Result<ProjectLoadResult, String> {
+    with_project_replacement_invocation(
         &state,
-        ProjectFile {
-            version: PROJECT_FILE_VERSION,
-            app: APP_NAME.to_string(),
-            operator_policy: None,
-            custom_profiles: Vec::new(),
-            fixture_groups: Vec::new(),
-            snapshot: EngineSnapshot::default(),
+        window.label(),
+        "new_project",
+        owner_id,
+        (
+            None,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || {
+            load_project_from_file(
+                &state,
+                ProjectFile {
+                    version: PROJECT_FILE_VERSION,
+                    app: APP_NAME.to_string(),
+                    operator_policy: None,
+                    custom_profiles: Vec::new(),
+                    fixture_groups: Vec::new(),
+                    snapshot: EngineSnapshot::default(),
+                },
+                "New project".to_string(),
+                None,
+            )
         },
-        "New project".to_string(),
-        None,
     )
 }
 
@@ -39669,13 +41410,14 @@ fn ensure_project_operator_video_clip_slot_runtime_allowed(
 
 #[tauri::command]
 fn lock_project_operator_session(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     owner_id: String,
 ) -> Result<OperatorLockMode, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let mut sessions = state
         .project_operator_sessions
         .lock()
@@ -39688,23 +41430,26 @@ fn lock_project_operator_session(
 
 #[tauri::command]
 async fn unlock_project_operator_session(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     owner_id: String,
     password: String,
 ) -> Result<(), String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     validate_operator_password_input(&password)?;
-    let (project_epoch, policy) = {
+    let window_label = window.label().to_string();
+    let (project_epoch, owner_incarnation, policy) = {
         let _external_admission = lock_project_external_command_admission(&state)?;
         let coordinator = lock_project_coordinator(&state)?;
-        ensure_project_transaction_owner_registered(&state, &owner_id)?;
+        let owner_incarnation =
+            project_transaction_owner_binding_for_window(&state, &window_label, &owner_id)?;
         let policy = coordinator
             .ancillary
             .operator_policy
             .clone()
             .ok_or_else(|| "This project has no Operator policy".to_string())?;
         validate_operator_policy(&policy)?;
-        (coordinator.epoch, policy)
+        (coordinator.epoch, owner_incarnation, policy)
     };
     let verification_policy = policy.clone();
     let verified = tauri::async_runtime::spawn_blocking(move || {
@@ -39723,7 +41468,11 @@ async fn unlock_project_operator_session(
     // exact policy and epoch before granting this owner an unlocked session.
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let current_incarnation =
+        project_transaction_owner_binding_for_window(&state, &window_label, &owner_id)?;
+    if current_incarnation != owner_incarnation {
+        return Err("Operator unlock belongs to a retired renderer incarnation".to_string());
+    }
     if coordinator.epoch != project_epoch
         || coordinator.ancillary.operator_policy.as_ref() != Some(&policy)
     {
@@ -39871,7 +41620,13 @@ fn clear_operator_policy_for_window_label(
 fn load_user_template(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<Option<UserTemplateLoadResult>, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal User Template", &["sdctemplate"])
         .pick_file()
@@ -39899,22 +41654,36 @@ fn load_user_template(
         dj_track_triggers,
         ..
     } = template;
-    let loaded = load_project_from_file_with_control_mappings_and_disposition(
+    let loaded = with_project_replacement_invocation(
         &state,
-        // Ownership fencing controls effective output. Do not rewrite the
-        // template's authored output intent: a later explicit Arm must be
-        // able to restore the saved DMX/video configuration unchanged.
-        project,
-        ProjectControlMappings {
-            midi_mappings: midi_mappings.clone(),
-            osc_mappings: osc_mappings.clone(),
-            dmx_mappings: dmx_mappings.clone(),
-            dj_track_triggers: dj_track_triggers.clone(),
-            legacy_dj_transition_discarded: false,
+        window.label(),
+        "load_user_template",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || {
+            load_project_from_file_with_control_mappings_and_disposition(
+                &state,
+                // Ownership fencing controls effective output. Do not rewrite the
+                // template's authored output intent: a later explicit Arm must be
+                // able to restore the saved DMX/video configuration unchanged.
+                project,
+                ProjectControlMappings {
+                    midi_mappings: midi_mappings.clone(),
+                    osc_mappings: osc_mappings.clone(),
+                    dmx_mappings: dmx_mappings.clone(),
+                    dj_track_triggers: dj_track_triggers.clone(),
+                    legacy_dj_transition_discarded: false,
+                },
+                format!("Template {label}"),
+                None,
+                ProjectAuthorityDisposition::UnsavedReplacement,
+            )
         },
-        format!("Template {label}"),
-        None,
-        ProjectAuthorityDisposition::UnsavedReplacement,
     )?;
     Ok(Some(UserTemplateLoadResult {
         path: path.to_string_lossy().to_string(),
@@ -40153,14 +41922,14 @@ fn project_publication_shape_hash_v1(
 #[derive(Debug)]
 enum BeginProjectPublicationV1 {
     New {
-        ticket: ProjectSaveTicket,
+        ticket: Box<ProjectSaveTicket>,
         pending: PersistedProjectPublicationPendingV1,
     },
     Resume {
-        ticket: ProjectSaveTicket,
+        ticket: Box<ProjectSaveTicket>,
         pending: PersistedProjectPublicationPendingV1,
     },
-    Existing(ProjectPublicationStatusV1),
+    Existing(Box<ProjectPublicationStatusV1>),
 }
 
 fn project_publication_request_key_matches(
@@ -40280,12 +42049,12 @@ fn begin_project_publication_v1(
                     .to_string(),
             );
         }
-        return Ok(BeginProjectPublicationV1::Existing(
+        return Ok(BeginProjectPublicationV1::Existing(Box::new(
             project_publication_terminal_status_v1(
                 terminal,
                 publication_terminal_authority_if_current(state, coordinator, terminal),
             ),
-        ));
+        )));
     }
     if let Some(pending) = durable
         .publication_journal
@@ -40305,9 +42074,9 @@ fn begin_project_publication_v1(
             ProjectPublicationPendingPhaseV1::Selecting
                 | ProjectPublicationPendingPhaseV1::Prepared
         ) {
-            return Ok(BeginProjectPublicationV1::Existing(
+            return Ok(BeginProjectPublicationV1::Existing(Box::new(
                 project_publication_pending_status_v1(&pending, durable.serial),
-            ));
+            )));
         }
         let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
         if ticket.checkpoint.epoch != pending.project_epoch
@@ -40327,7 +42096,10 @@ fn begin_project_publication_v1(
         coordinator.next_save_reservation_generation = coordinator
             .next_save_reservation_generation
             .max(durable.publication_journal.latest_reservation_generation);
-        return Ok(BeginProjectPublicationV1::Resume { ticket, pending });
+        return Ok(BeginProjectPublicationV1::Resume {
+            ticket: Box::new(ticket),
+            pending,
+        });
     }
     if durable.publication_journal.pending.len() >= MAX_PROJECT_PUBLICATION_PENDING
         || durable
@@ -40466,7 +42238,10 @@ fn begin_project_publication_v1(
     persist_project_recovery_authority_state_to_path(journal_path, &durable)?;
     coordinator.next_save_reservation_generation = reservation_generation;
     coordinator.latest_save_reservation_generation = reservation_generation;
-    Ok(BeginProjectPublicationV1::New { ticket, pending })
+    Ok(BeginProjectPublicationV1::New {
+        ticket: Box::new(ticket),
+        pending,
+    })
 }
 
 fn persist_project_publication_target_v1(
@@ -40733,8 +42508,8 @@ struct PreparedProjectPublicationReconcilePlanV1 {
 #[derive(Debug)]
 enum ProjectPublicationLookupV1 {
     Missing,
-    Status(ProjectPublicationStatusV1),
-    Prepared(PreparedProjectPublicationReconcilePlanV1),
+    Status(Box<ProjectPublicationStatusV1>),
+    Prepared(Box<PreparedProjectPublicationReconcilePlanV1>),
 }
 
 #[derive(Debug)]
@@ -40763,12 +42538,12 @@ fn snapshot_project_publication_lookup_v1(
                     .to_string(),
             );
         }
-        return Ok(ProjectPublicationLookupV1::Status(
+        return Ok(ProjectPublicationLookupV1::Status(Box::new(
             project_publication_terminal_status_v1(
                 terminal,
                 publication_terminal_authority_if_current(state, coordinator, terminal),
             ),
-        ));
+        )));
     }
     let Some(pending) = durable
         .publication_journal
@@ -40785,16 +42560,16 @@ fn snapshot_project_publication_lookup_v1(
         );
     }
     if pending.phase == ProjectPublicationPendingPhaseV1::Prepared {
-        return Ok(ProjectPublicationLookupV1::Prepared(
+        return Ok(ProjectPublicationLookupV1::Prepared(Box::new(
             PreparedProjectPublicationReconcilePlanV1 {
                 pending,
                 recovery_authority_serial: durable.serial,
             },
-        ));
+        )));
     }
-    Ok(ProjectPublicationLookupV1::Status(
+    Ok(ProjectPublicationLookupV1::Status(Box::new(
         project_publication_pending_status_v1(&pending, durable.serial),
-    ))
+    )))
 }
 
 fn observe_prepared_project_publication_v1(
@@ -41151,8 +42926,8 @@ where
             .project_save_publication
             .lock()
             .map_err(|_| "Project publication lock was poisoned".to_string())?;
-        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
-        let coordinator = lock_project_coordinator(&state)?;
+        let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+        let coordinator = lock_project_coordinator(state)?;
         snapshot_project_publication_lookup_v1(
             state,
             &coordinator,
@@ -41164,7 +42939,7 @@ where
     let ProjectPublicationLookupV1::Prepared(plan) = lookup else {
         return Ok(match lookup {
             ProjectPublicationLookupV1::Missing => None,
-            ProjectPublicationLookupV1::Status(status) => Some(status),
+            ProjectPublicationLookupV1::Status(status) => Some(*status),
             ProjectPublicationLookupV1::Prepared(_) => unreachable!(),
         });
     };
@@ -41177,8 +42952,8 @@ where
             .project_save_publication
             .lock()
             .map_err(|_| "Project publication lock was poisoned".to_string())?;
-        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
-        let _coordinator = lock_project_coordinator(&state)?;
+        let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+        let _coordinator = lock_project_coordinator(state)?;
         let will_terminalize = prepared_project_publication_observation_will_terminalize_v1(
             journal_path,
             &plan,
@@ -41199,8 +42974,8 @@ where
             .project_save_publication
             .lock()
             .map_err(|_| "Project publication lock was poisoned".to_string())?;
-        let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
-        let _coordinator = lock_project_coordinator(&state)?;
+        let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+        let _coordinator = lock_project_coordinator(state)?;
         prepared_project_publication_observation_will_terminalize_v1(
             journal_path,
             &plan,
@@ -41223,8 +42998,8 @@ where
         .project_save_publication
         .lock()
         .map_err(|_| "Project publication lock was poisoned".to_string())?;
-    let _external_admission = lock_project_recovery_maintenance_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let _external_admission = lock_project_recovery_maintenance_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
     commit_prepared_project_publication_observation_v1(
         state,
         &mut coordinator,
@@ -41340,7 +43115,7 @@ fn acknowledge_project_publication_receipt_in_state_v1(
         .publication_journal
         .terminals
         .iter()
-        .position(|terminal| project_publication_request_key_matches(&request, &terminal.request));
+        .position(|terminal| project_publication_request_key_matches(request, &terminal.request));
     let origin_index = durable
         .publication_journal
         .origins
@@ -41653,8 +43428,15 @@ fn persist_project_publication_auto_target_v1(
 }
 
 enum ProjectPublicationTargetSelectionV1 {
-    Selected(PersistedProjectPublicationPendingV1),
-    Terminal(ProjectPublicationStatusV1),
+    Selected(Box<PersistedProjectPublicationPendingV1>),
+    Terminal(Box<ProjectPublicationStatusV1>),
+}
+
+struct ProjectPublicationDialogTargetSpec<'a> {
+    filter_name: &'a str,
+    extension: &'a str,
+    default_file_name: &'a str,
+    normalize: fn(PathBuf) -> Result<PathBuf, String>,
 }
 
 fn select_project_publication_dialog_target_v1(
@@ -41662,15 +43444,18 @@ fn select_project_publication_dialog_target_v1(
     state: &AppState,
     journal_path: &Path,
     pending: &PersistedProjectPublicationPendingV1,
-    filter_name: &str,
-    extension: &str,
-    default_file_name: &str,
-    normalize: fn(PathBuf) -> Result<PathBuf, String>,
+    spec: ProjectPublicationDialogTargetSpec<'_>,
 ) -> Result<ProjectPublicationTargetSelectionV1, String> {
+    let ProjectPublicationDialogTargetSpec {
+        filter_name,
+        extension,
+        default_file_name,
+        normalize,
+    } = spec;
     if pending.phase == ProjectPublicationPendingPhaseV1::Selected {
-        return Ok(ProjectPublicationTargetSelectionV1::Selected(
+        return Ok(ProjectPublicationTargetSelectionV1::Selected(Box::new(
             pending.clone(),
-        ));
+        )));
     }
     let should_open = {
         let _publication = state
@@ -41722,9 +43507,9 @@ fn select_project_publication_dialog_target_v1(
                 warning: None,
             },
         )?;
-        return Ok(ProjectPublicationTargetSelectionV1::Terminal(
+        return Ok(ProjectPublicationTargetSelectionV1::Terminal(Box::new(
             project_publication_terminal_status_v1(&terminal, None),
-        ));
+        )));
     };
     let path = normalize(path)?;
     let selected = {
@@ -41748,7 +43533,9 @@ fn select_project_publication_dialog_target_v1(
             false,
         )?
     };
-    Ok(ProjectPublicationTargetSelectionV1::Selected(selected))
+    Ok(ProjectPublicationTargetSelectionV1::Selected(Box::new(
+        selected,
+    )))
 }
 
 fn persist_project_publication_prepared_v1(
@@ -42067,31 +43854,33 @@ fn execute_project_save_publication_v1(
     let (journal_path, begin) =
         begin_project_publication_command_v1(window, state, request, surface)?;
     let (ticket, pending) = match begin {
-        BeginProjectPublicationV1::Existing(status) => return Ok(status),
+        BeginProjectPublicationV1::Existing(status) => return Ok(*status),
         BeginProjectPublicationV1::New { ticket, pending }
-        | BeginProjectPublicationV1::Resume { ticket, pending } => (ticket, pending),
+        | BeginProjectPublicationV1::Resume { ticket, pending } => (*ticket, pending),
     };
     let selected = match surface {
         ProjectPublicationSurfaceV1::Save => {
             if let Some(path) = ticket.current_project_path.as_deref() {
-                ProjectPublicationTargetSelectionV1::Selected(
+                ProjectPublicationTargetSelectionV1::Selected(Box::new(
                     persist_project_publication_auto_target_v1(
                         state,
                         &journal_path,
                         &pending,
                         path,
                     )?,
-                )
+                ))
             } else {
                 select_project_publication_dialog_target_v1(
                     window,
                     state,
                     &journal_path,
                     &pending,
-                    "Syndocal Project",
-                    "sdc",
-                    "show.sdc",
-                    normalize_project_save_path,
+                    ProjectPublicationDialogTargetSpec {
+                        filter_name: "Syndocal Project",
+                        extension: "sdc",
+                        default_file_name: "show.sdc",
+                        normalize: normalize_project_save_path,
+                    },
                 )?
             }
         }
@@ -42100,20 +43889,24 @@ fn execute_project_save_publication_v1(
             state,
             &journal_path,
             &pending,
-            "Syndocal Project",
-            "sdc",
-            "show.sdc",
-            normalize_project_save_path,
+            ProjectPublicationDialogTargetSpec {
+                filter_name: "Syndocal Project",
+                extension: "sdc",
+                default_file_name: "show.sdc",
+                normalize: normalize_project_save_path,
+            },
         )?,
         ProjectPublicationSurfaceV1::UserTemplate => select_project_publication_dialog_target_v1(
             window,
             state,
             &journal_path,
             &pending,
-            "Syndocal User Template",
-            "sdctemplate",
-            "show.sdctemplate",
-            normalize_user_template_save_path,
+            ProjectPublicationDialogTargetSpec {
+                filter_name: "Syndocal User Template",
+                extension: "sdctemplate",
+                default_file_name: "show.sdctemplate",
+                normalize: normalize_user_template_save_path,
+            },
         )?,
         ProjectPublicationSurfaceV1::Backup => {
             return Err("Backup publication must use its managed target service".to_string());
@@ -42123,7 +43916,7 @@ fn execute_project_save_publication_v1(
         let ProjectPublicationTargetSelectionV1::Terminal(status) = selected else {
             unreachable!()
         };
-        return Ok(status);
+        return Ok(*status);
     };
     let target = selected
         .target_path
@@ -42146,9 +43939,7 @@ fn execute_project_save_publication_v1(
     } else {
         project_save_ticket_bytes(&ticket)?
     };
-    if let Err(error) = prepare_project_save_bytes_at(&temp, &bytes) {
-        return Err(error);
-    }
+    prepare_project_save_bytes_at(&temp, &bytes)?;
     let prepared =
         match persist_project_publication_prepared_v1(state, &journal_path, &staged, target, &temp)
         {
@@ -42347,7 +44138,7 @@ fn prepare_project_save_bytes_at(temp: &Path, bytes: &[u8]) -> Result<(), String
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temp)
+            .open(temp)
             .map_err(|error| {
                 format!(
                     "Unable to create temporary project file {}: {error}",
@@ -42361,7 +44152,7 @@ fn prepare_project_save_bytes_at(temp: &Path, bytes: &[u8]) -> Result<(), String
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(temp);
     }
     result
 }
@@ -42606,22 +44397,30 @@ fn get_project_control_mappings(
 
 #[tauri::command]
 fn set_project_control_mappings(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    expected_epoch: u64,
-    expected_revision: u64,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<ProjectControlMappingsStatus, String> {
+    read_flat_invoke_args!(args;
+        owner_id: String => "ownerId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        midi_mappings: Vec<MidiControlMapping> => "midiMappings",
+        osc_mappings: Vec<OscControlMapping> => "oscMappings",
+        dmx_mappings: Vec<DmxControlMapping> => "dmxMappings",
+        dj_track_triggers: Vec<protocol::DjTrackTriggerMapping> => "djTrackTriggers",
+    );
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let midi_mappings = validate_midi_control_mappings(midi_mappings)?;
     let osc_mappings = validate_osc_control_mappings(osc_mappings)?;
     let dmx_mappings = validate_dmx_control_mappings(dmx_mappings)?;
     let dj_track_triggers = validate_dj_track_triggers(dj_track_triggers)?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
     ensure_no_pending_project_transaction(&coordinator)?;
+    ensure_project_operator_authoritative_mutation_allowed(&state, &coordinator, &owner_id)?;
     if coordinator.epoch != expected_epoch || coordinator.revision != expected_revision {
         return Err(format!(
             "Project mappings are stale (expected epoch {expected_epoch} revision {expected_revision}, current epoch {} revision {})",
@@ -42916,19 +44715,35 @@ where
 /// command generation plus this coordinator stamp form a small seqlock: an
 /// admitted send or coordinator mutation makes the attempt retry instead of
 /// returning a mixed A/B bundle.
+type ProjectAuthorityPollCursor = (
+    u64,
+    u64,
+    String,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+);
+
 fn poll_project_authority_bundle_seqlock(
     state: &AppState,
-    known_epoch: u64,
-    known_revision: u64,
-    known_checkpoint_hash: &str,
-    known_path_generation: Option<u64>,
-    known_history_generation: Option<u64>,
-    known_mapping_replacement_generation: Option<u64>,
-    known_authority_disposition_generation: Option<u64>,
-    known_recovery_authority_serial: Option<u64>,
-    known_project_input_runtime_generation: Option<u64>,
-    known_mapping_input_runtime_generation: Option<u64>,
+    cursor: ProjectAuthorityPollCursor,
 ) -> Result<Option<ProjectAuthorityBundle>, String> {
+    let (
+        known_epoch,
+        known_revision,
+        known_checkpoint_hash,
+        known_path_generation,
+        known_history_generation,
+        known_mapping_replacement_generation,
+        known_authority_disposition_generation,
+        known_recovery_authority_serial,
+        known_project_input_runtime_generation,
+        known_mapping_input_runtime_generation,
+    ) = cursor;
     capture_project_authority_without_external_admission(
         &state.project_external_command_admission,
         |admitted_before| {
@@ -43025,31 +44840,36 @@ fn poll_project_authority_bundle_seqlock(
 #[tauri::command]
 async fn poll_project_authority_bundle(
     app: tauri::AppHandle,
-    known_epoch: u64,
-    known_revision: u64,
-    known_checkpoint_hash: String,
-    known_path_generation: Option<u64>,
-    known_history_generation: Option<u64>,
-    known_mapping_replacement_generation: Option<u64>,
-    known_authority_disposition_generation: Option<u64>,
-    known_recovery_authority_serial: Option<u64>,
-    known_project_input_runtime_generation: Option<u64>,
-    known_mapping_input_runtime_generation: Option<u64>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<Option<ProjectAuthorityBundle>, String> {
+    read_flat_invoke_args!(args;
+        known_epoch: u64 => "knownEpoch",
+        known_revision: u64 => "knownRevision",
+        known_checkpoint_hash: String => "knownCheckpointHash",
+        known_path_generation: Option<u64> => "knownPathGeneration",
+        known_history_generation: Option<u64> => "knownHistoryGeneration",
+        known_mapping_replacement_generation: Option<u64> => "knownMappingReplacementGeneration",
+        known_authority_disposition_generation: Option<u64> => "knownAuthorityDispositionGeneration",
+        known_recovery_authority_serial: Option<u64> => "knownRecoveryAuthoritySerial",
+        known_project_input_runtime_generation: Option<u64> => "knownProjectInputRuntimeGeneration",
+        known_mapping_input_runtime_generation: Option<u64> => "knownMappingInputRuntimeGeneration",
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         poll_project_authority_bundle_seqlock(
             &state,
-            known_epoch,
-            known_revision,
-            &known_checkpoint_hash,
-            known_path_generation,
-            known_history_generation,
-            known_mapping_replacement_generation,
-            known_authority_disposition_generation,
-            known_recovery_authority_serial,
-            known_project_input_runtime_generation,
-            known_mapping_input_runtime_generation,
+            (
+                known_epoch,
+                known_revision,
+                known_checkpoint_hash,
+                known_path_generation,
+                known_history_generation,
+                known_mapping_replacement_generation,
+                known_authority_disposition_generation,
+                known_recovery_authority_serial,
+                known_project_input_runtime_generation,
+                known_mapping_input_runtime_generation,
+            ),
         )
     })
     .await
@@ -43098,6 +44918,37 @@ fn get_project_history_status(state: State<'_, AppState>) -> Result<ProjectHisto
 fn begin_project_transaction(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<ProjectTransactionTicket, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        coalesce_key: String => "coalesceKey",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        owner_id: String => "ownerId",
+        client_operation_id: String => "clientOperationId",
+        shape_fingerprint: String => "shapeFingerprint",
+        command_name: String => "commandName",
+        schema_version: u16 => "schemaVersion",
+    );
+    begin_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        BeginProjectTransactionRequest {
+            label,
+            coalesce_key,
+            expected_epoch,
+            expected_revision,
+            owner_id,
+            client_operation_id,
+            shape_fingerprint,
+            command_name,
+            schema_version,
+        },
+    )
+}
+
+struct BeginProjectTransactionRequest {
     label: String,
     coalesce_key: String,
     expected_epoch: u64,
@@ -43107,10 +44958,31 @@ fn begin_project_transaction(
     shape_fingerprint: String,
     command_name: String,
     schema_version: u16,
+}
+
+#[cfg(test)]
+macro_rules! begin_project_transaction_request {
+    ($label:expr, $coalesce_key:expr, $expected_epoch:expr, $expected_revision:expr, $owner_id:expr, $client_operation_id:expr, $shape_fingerprint:expr, $command_name:expr, $schema_version:expr) => {
+        BeginProjectTransactionRequest {
+            label: $label.to_string(),
+            coalesce_key: $coalesce_key.to_string(),
+            expected_epoch: $expected_epoch,
+            expected_revision: $expected_revision,
+            owner_id: $owner_id.to_string(),
+            client_operation_id: $client_operation_id.to_string(),
+            shape_fingerprint: $shape_fingerprint.to_string(),
+            command_name: $command_name.to_string(),
+            schema_version: $schema_version,
+        }
+    };
+}
+
+fn begin_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    request: BeginProjectTransactionRequest,
 ) -> Result<ProjectTransactionTicket, String> {
-    begin_project_transaction_for_window_label(
-        &state,
-        window.label(),
+    let BeginProjectTransactionRequest {
         label,
         coalesce_key,
         expected_epoch,
@@ -43120,22 +44992,7 @@ fn begin_project_transaction(
         shape_fingerprint,
         command_name,
         schema_version,
-    )
-}
-
-fn begin_project_transaction_for_window_label(
-    state: &AppState,
-    window_label: &str,
-    label: String,
-    coalesce_key: String,
-    expected_epoch: u64,
-    expected_revision: u64,
-    owner_id: String,
-    client_operation_id: String,
-    shape_fingerprint: String,
-    command_name: String,
-    schema_version: u16,
-) -> Result<ProjectTransactionTicket, String> {
+    } = request;
     validate_project_transaction_schema_version(schema_version)?;
     let client_operation_id =
         validate_project_transaction_client_operation_id(&client_operation_id)?;
@@ -43155,13 +45012,30 @@ fn begin_project_transaction_for_window_label(
         );
     }
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    let owner_incarnation =
+    let initial_owner_incarnation =
         project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
     // A reply-lost duplicate Begin must reach the receipt lookup even while
     // the original reservation is active. New IDs still fail at the pending
     // check below, so this does not open a second live transaction.
+    //
+    // Retire/register transitions take owner rotation before this operation
+    // gate. Holding the same guard here makes the binding captured below a
+    // linearization point: a Destroyed callback either starts first and the
+    // revalidation rejects this Begin, or this Begin owns the window before
+    // retirement can install its temporary fence.
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
     let _external_admission =
         lock_project_transaction_operation_admission(state, &client_operation_id)?;
+    let owner_incarnation =
+        project_transaction_owner_binding_for_window(state, window_label, &owner_id)?;
+    if owner_incarnation != initial_owner_incarnation {
+        return Err(
+            "Project transaction owner incarnation changed before Begin admission".to_string(),
+        );
+    }
     let mut coordinator = lock_project_coordinator(state)?;
     let mut receipts = state
         .project_transaction_receipts
@@ -43171,13 +45045,15 @@ fn begin_project_transaction_for_window_label(
     if let Some(receipt) = receipts.get(&client_operation_id) {
         project_transaction_receipt_matches_request(
             receipt,
-            &client_operation_id,
-            &shape_fingerprint,
-            schema_version,
-            &command_name,
-            &owner_id,
-            window_label,
-            owner_incarnation,
+            ProjectTransactionReceiptRequest {
+                client_operation_id: &client_operation_id,
+                shape_fingerprint: &shape_fingerprint,
+                schema_version,
+                command_name: &command_name,
+                owner_id: &owner_id,
+                window_label,
+                owner_incarnation,
+            },
         )?;
         return Ok(match &receipt.state {
             ProjectTransactionReceiptState::Pending => ProjectTransactionTicket {
@@ -43211,6 +45087,12 @@ fn begin_project_transaction_for_window_label(
             },
         });
     }
+
+    // The exact receipt retry above is intentionally allowed to recover a
+    // reply-lost operation under Operator Lock. A new operation must pass the
+    // authoritative lock check before any high-water, reconcile, or arm side
+    // effect can occur.
+    ensure_project_operator_authoritative_mutation_allowed(state, &coordinator, &owner_id)?;
 
     reject_project_transaction_replayed_sequence(
         state,
@@ -43326,6 +45208,33 @@ fn begin_project_transaction_for_window_label(
 fn commit_project_transaction(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    read_flat_invoke_args!(args;
+        transaction_id: u64 => "transactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        client_operation_id: String => "clientOperationId",
+        shape_fingerprint: String => "shapeFingerprint",
+        command_name: String => "commandName",
+        schema_version: u16 => "schemaVersion",
+        owner_id: String => "ownerId",
+    );
+    commit_project_transaction_for_window_label(
+        &state,
+        window.label(),
+        CommitProjectTransactionRequest {
+            transaction_id,
+            expected_epoch,
+            client_operation_id,
+            shape_fingerprint,
+            command_name,
+            schema_version,
+            owner_id,
+        },
+    )
+}
+
+struct CommitProjectTransactionRequest {
     transaction_id: u64,
     expected_epoch: u64,
     client_operation_id: String,
@@ -43333,10 +45242,29 @@ fn commit_project_transaction(
     command_name: String,
     schema_version: u16,
     owner_id: String,
+}
+
+#[cfg(test)]
+macro_rules! commit_project_transaction_request {
+    ($transaction_id:expr, $expected_epoch:expr, $client_operation_id:expr, $shape_fingerprint:expr, $command_name:expr, $schema_version:expr, $owner_id:expr) => {
+        CommitProjectTransactionRequest {
+            transaction_id: $transaction_id,
+            expected_epoch: $expected_epoch,
+            client_operation_id: $client_operation_id.to_string(),
+            shape_fingerprint: $shape_fingerprint.to_string(),
+            command_name: $command_name.to_string(),
+            schema_version: $schema_version,
+            owner_id: $owner_id.to_string(),
+        }
+    };
+}
+
+fn commit_project_transaction_for_window_label(
+    state: &AppState,
+    window_label: &str,
+    request: CommitProjectTransactionRequest,
 ) -> Result<ProjectHistoryMutationResult, String> {
-    commit_project_transaction_for_window_label(
-        &state,
-        window.label(),
+    let CommitProjectTransactionRequest {
         transaction_id,
         expected_epoch,
         client_operation_id,
@@ -43344,20 +45272,7 @@ fn commit_project_transaction(
         command_name,
         schema_version,
         owner_id,
-    )
-}
-
-fn commit_project_transaction_for_window_label(
-    state: &AppState,
-    window_label: &str,
-    transaction_id: u64,
-    expected_epoch: u64,
-    client_operation_id: String,
-    shape_fingerprint: String,
-    command_name: String,
-    schema_version: u16,
-    owner_id: String,
-) -> Result<ProjectHistoryMutationResult, String> {
+    } = request;
     validate_project_transaction_schema_version(schema_version)?;
     let client_operation_id =
         validate_project_transaction_client_operation_id(&client_operation_id)?;
@@ -43378,13 +45293,15 @@ fn commit_project_transaction_for_window_label(
     })?;
     project_transaction_receipt_matches_request(
         receipt,
-        &client_operation_id,
-        &shape_fingerprint,
-        schema_version,
-        &command_name,
-        &owner_id,
-        window_label,
-        owner_incarnation,
+        ProjectTransactionReceiptRequest {
+            client_operation_id: &client_operation_id,
+            shape_fingerprint: &shape_fingerprint,
+            schema_version,
+            command_name: &command_name,
+            owner_id: &owner_id,
+            window_label,
+            owner_incarnation,
+        },
     )?;
     if receipt.transaction_id != transaction_id || receipt.project_epoch != expected_epoch {
         return Err(
@@ -43492,13 +45409,15 @@ fn query_project_transaction_for_window_label(
     };
     project_transaction_receipt_matches_request(
         receipt,
-        &client_operation_id,
-        &shape_fingerprint,
-        schema_version,
-        &command_name,
-        &owner_id,
-        window_label,
-        owner_incarnation,
+        ProjectTransactionReceiptRequest {
+            client_operation_id: &client_operation_id,
+            shape_fingerprint: &shape_fingerprint,
+            schema_version,
+            command_name: &command_name,
+            owner_id: &owner_id,
+            window_label,
+            owner_incarnation,
+        },
     )?;
     let command_in_flight = state
         .project_transaction_lanes
@@ -43596,13 +45515,15 @@ fn acknowledge_project_transaction_for_window_label(
     })?;
     project_transaction_receipt_matches_request(
         receipt,
-        &client_operation_id,
-        &shape_fingerprint,
-        schema_version,
-        &command_name,
-        &owner_id,
-        window_label,
-        owner_incarnation,
+        ProjectTransactionReceiptRequest {
+            client_operation_id: &client_operation_id,
+            shape_fingerprint: &shape_fingerprint,
+            schema_version,
+            command_name: &command_name,
+            owner_id: &owner_id,
+            window_label,
+            owner_incarnation,
+        },
     )?;
     if matches!(&receipt.state, ProjectTransactionReceiptState::Pending) {
         return Err(
@@ -44264,16 +46185,29 @@ fn project_transaction_recovery_from_receipt(
     }
 }
 
+struct ProjectTransactionReceiptRequest<'a> {
+    client_operation_id: &'a str,
+    shape_fingerprint: &'a str,
+    schema_version: u16,
+    command_name: &'a str,
+    owner_id: &'a str,
+    window_label: &'a str,
+    owner_incarnation: u64,
+}
+
 fn project_transaction_receipt_matches_request(
     receipt: &ProjectTransactionReceipt,
-    client_operation_id: &str,
-    shape_fingerprint: &str,
-    schema_version: u16,
-    command_name: &str,
-    owner_id: &str,
-    window_label: &str,
-    owner_incarnation: u64,
+    request: ProjectTransactionReceiptRequest<'_>,
 ) -> Result<(), String> {
+    let ProjectTransactionReceiptRequest {
+        client_operation_id,
+        shape_fingerprint,
+        schema_version,
+        command_name,
+        owner_id,
+        window_label,
+        owner_incarnation,
+    } = request;
     if receipt.client_operation_id != client_operation_id
         || receipt.shape_fingerprint != shape_fingerprint
         || receipt.schema_version != schema_version
@@ -45184,7 +47118,8 @@ fn legacy_media_asset_compatibility_owner_for_window_label(
 /// Check the old IPC operation against the exact WebView label that created
 /// it. A bare owner-ID registration check is insufficient: owner X can be
 /// retired by window A and later registered by window B, at which point a
-/// stale A operation would otherwise inherit B's Operator session.
+/// stale A operation would otherwise inherit B's Operator session. Production
+/// callers additionally compare the concrete backend owner incarnation.
 fn ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
     owners: &HashMap<String, String>,
     operation: &LegacyMediaAssetCompatibilityOperation,
@@ -45212,6 +47147,7 @@ fn ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
     let Some(operation) = operation else {
         return Ok(());
     };
+    state.ensure_window_authority_not_blocked(&operation.window_label)?;
     if operation.owner_id != owner_id {
         return Err(
             "Legacy media compatibility operation owner does not match its reservation".to_string(),
@@ -45221,7 +47157,20 @@ fn ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-    ensure_legacy_media_asset_compatibility_operation_binding_in_owners(&owners, operation)
+    ensure_legacy_media_asset_compatibility_operation_binding_in_owners(&owners, operation)?;
+    let incarnations = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?;
+    if incarnations.get(&operation.window_label) != Some(&operation.owner_incarnation) {
+        return Err(
+            "Legacy media compatibility renderer incarnation changed; retry the operation"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Reject a stale compatibility operation before terminal receipt lookup. The
@@ -45263,7 +47212,7 @@ fn commit_project_history_entry(
     committed_at_unix_ms: u64,
 ) -> Result<ProjectHistoryStatus, String> {
     if pending.before.project == after.project && pending.before.mappings == after.mappings {
-        return Ok(project_history_status(&history));
+        return Ok(project_history_status(history));
     }
     let can_coalesce = history.undo.last().is_some_and(|entry| {
         !pending.coalesce_key.is_empty()
@@ -45295,13 +47244,41 @@ fn commit_project_history_entry(
         }
     }
     history.redo.clear();
-    Ok(project_history_status(&history))
+    Ok(project_history_status(history))
 }
 
 #[tauri::command]
 fn cancel_project_transaction(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    read_flat_invoke_args!(args;
+        transaction_id: u64 => "transactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        client_operation_id: String => "clientOperationId",
+        shape_fingerprint: String => "shapeFingerprint",
+        command_name: String => "commandName",
+        schema_version: u16 => "schemaVersion",
+        owner_id: String => "ownerId",
+    );
+    cancel_project_transaction_for_window_label(
+        &state,
+        ProjectTransactionCancelRequest {
+            window_label: window.label().to_string(),
+            transaction_id,
+            expected_epoch,
+            client_operation_id,
+            shape_fingerprint,
+            command_name,
+            schema_version,
+            owner_id,
+        },
+    )
+}
+
+struct ProjectTransactionCancelRequest {
+    window_label: String,
     transaction_id: u64,
     expected_epoch: u64,
     client_operation_id: String,
@@ -45309,10 +47286,30 @@ fn cancel_project_transaction(
     command_name: String,
     schema_version: u16,
     owner_id: String,
+}
+
+#[cfg(test)]
+macro_rules! project_transaction_cancel_request {
+    ($window_label:expr, $transaction_id:expr, $expected_epoch:expr, $client_operation_id:expr, $shape_fingerprint:expr, $command_name:expr, $schema_version:expr, $owner_id:expr) => {
+        ProjectTransactionCancelRequest {
+            window_label: $window_label.to_string(),
+            transaction_id: $transaction_id,
+            expected_epoch: $expected_epoch,
+            client_operation_id: $client_operation_id.to_string(),
+            shape_fingerprint: $shape_fingerprint.to_string(),
+            command_name: $command_name.to_string(),
+            schema_version: $schema_version,
+            owner_id: $owner_id.to_string(),
+        }
+    };
+}
+
+fn cancel_project_transaction_for_window_label(
+    state: &AppState,
+    request: ProjectTransactionCancelRequest,
 ) -> Result<ProjectHistoryMutationResult, String> {
-    cancel_project_transaction_for_window_label(
-        &state,
-        window.label(),
+    let ProjectTransactionCancelRequest {
+        window_label,
         transaction_id,
         expected_epoch,
         client_operation_id,
@@ -45320,20 +47317,8 @@ fn cancel_project_transaction(
         command_name,
         schema_version,
         owner_id,
-    )
-}
-
-fn cancel_project_transaction_for_window_label(
-    state: &AppState,
-    window_label: &str,
-    transaction_id: u64,
-    expected_epoch: u64,
-    client_operation_id: String,
-    shape_fingerprint: String,
-    command_name: String,
-    schema_version: u16,
-    owner_id: String,
-) -> Result<ProjectHistoryMutationResult, String> {
+    } = request;
+    let window_label = window_label.as_str();
     validate_project_transaction_schema_version(schema_version)?;
     let client_operation_id =
         validate_project_transaction_client_operation_id(&client_operation_id)?;
@@ -45354,13 +47339,15 @@ fn cancel_project_transaction_for_window_label(
     })?;
     project_transaction_receipt_matches_request(
         receipt,
-        &client_operation_id,
-        &shape_fingerprint,
-        schema_version,
-        &command_name,
-        &owner_id,
-        window_label,
-        owner_incarnation,
+        ProjectTransactionReceiptRequest {
+            client_operation_id: &client_operation_id,
+            shape_fingerprint: &shape_fingerprint,
+            schema_version,
+            command_name: &command_name,
+            owner_id: &owner_id,
+            window_label,
+            owner_incarnation,
+        },
     )?;
     if receipt.transaction_id != transaction_id || receipt.project_epoch != expected_epoch {
         return Err(
@@ -45433,8 +47420,8 @@ fn register_project_transaction_owner_for_window_label(
         .lock()
         .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
     state.ensure_window_authority_not_blocked(window_label)?;
-    let _external_admission = lock_project_transaction_owner_lifecycle_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
+    let _external_admission = lock_project_transaction_owner_lifecycle_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
     if state.project_transaction_active.load(Ordering::Acquire)
         && coordinator.history.pending.is_empty()
     {
@@ -45461,7 +47448,7 @@ fn register_project_transaction_owner_for_window_label(
             "Registered project owner is missing its backend incarnation".to_string()
         })?
     } else {
-        allocate_project_transaction_owner_incarnation(&state)?
+        allocate_project_transaction_owner_incarnation(state)?
     };
     // Hold both registries through recovery and the owner/session handoff. The
     // external-admission and coordinator locks already exclude concurrent
@@ -45522,7 +47509,7 @@ fn register_project_transaction_owner_for_window_label(
                             .to_string()
                     })?;
                 preflight_output_lease_owner_retirement(
-                    &state,
+                    state,
                     &output_lease_registry,
                     window_label,
                     retired_owner,
@@ -45557,7 +47544,7 @@ fn register_project_transaction_owner_for_window_label(
                     })
                     .transpose()?;
                 let result = finalize_retired_project_transaction_locked(
-                    &state,
+                    state,
                     coordinator,
                     pending,
                     operation_lane,
@@ -45653,6 +47640,7 @@ fn project_transaction_for_retired_owner(
         .cloned())
 }
 
+#[cfg(test)]
 fn retire_project_transaction_owner_for_window_incarnation(
     state: &AppState,
     window_label: &str,
@@ -45662,6 +47650,18 @@ fn retire_project_transaction_owner_for_window_incarnation(
         .project_transaction_owner_rotation
         .lock()
         .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    retire_project_transaction_owner_for_window_incarnation_under_rotation(
+        state,
+        window_label,
+        expected_retired_incarnation,
+    )
+}
+
+fn retire_project_transaction_owner_for_window_incarnation_under_rotation(
+    state: &AppState,
+    window_label: &str,
+    expected_retired_incarnation: Option<u64>,
+) -> Result<Option<ProjectHistoryMutationResult>, String> {
     let _external_admission = lock_project_transaction_owner_lifecycle_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
     if state.project_transaction_active.load(Ordering::Acquire)
@@ -45823,6 +47823,7 @@ fn retire_project_transaction_owner_for_window_incarnation(
     Ok(recovered)
 }
 
+#[cfg(test)]
 fn retire_project_transaction_owner_for_window(
     state: &AppState,
     window_label: &str,
@@ -45831,22 +47832,30 @@ fn retire_project_transaction_owner_for_window(
 }
 
 /// Retire one destroyed renderer's AppState and query authority as one
-/// fail-closed lifecycle boundary. Owner/lease retirement is attempted first,
-/// then query retirement is always attempted as a best-effort fence even when
-/// the AppState transition fails. This removes already-issued query/output
-/// fences; a blocked-label record prevents any new authority from being
-/// issued. A query retirement failure is likewise permanently blocked for the
-/// remainder of this process; only restart can recover a dead label.
+/// fail-closed lifecycle boundary. The AppState owner incarnation is the
+/// stale-callback guard; query binding is lazy and therefore is not a second
+/// required generation. Owner/lease retirement is attempted first, then query
+/// retirement is always attempted as a best-effort fence even when the
+/// AppState transition fails. A blocked-label record prevents any new
+/// authority from being issued; only restart can recover a dead label.
 fn handle_destroyed_window_authority_retirement(
     state: &AppState,
     query: &ControlPlaneQueryState,
     window_label: &str,
 ) -> Result<(), String> {
-    let expected_retired_incarnation = state
-        .project_transaction_owner_incarnations
-        .lock()
-        .ok()
-        .and_then(|incarnations| incarnations.get(window_label).copied());
+    let expected_retired_incarnation = match state.project_transaction_owner_incarnations.lock() {
+        Ok(incarnations) => incarnations.get(window_label).copied(),
+        Err(error) => {
+            return fail_closed_destroyed_window_authority_owner_capture(
+                state,
+                query,
+                window_label,
+                format!(
+                    "Project transaction owner incarnation registry lock was poisoned: {error}"
+                ),
+            );
+        }
+    };
     handle_destroyed_window_authority_retirement_for_incarnation(
         state,
         query,
@@ -45855,28 +47864,107 @@ fn handle_destroyed_window_authority_retirement(
     )
 }
 
+fn fail_closed_destroyed_window_authority_owner_capture(
+    state: &AppState,
+    query: &ControlPlaneQueryState,
+    window_label: &str,
+    capture_error: String,
+) -> Result<(), String> {
+    let mut errors = vec![format!("owner incarnation capture failed: {capture_error}")];
+    if let Err(error) = state.begin_window_authority_retirement(window_label) {
+        errors.push(format!("retirement fence installation failed: {error}"));
+    }
+    if let Err(error) = query.retire_window(window_label) {
+        errors.push(format!("query retirement failed: {error}"));
+    }
+    match state.record_window_authority_retirement_failure(window_label) {
+        Ok(()) => errors.push("window authority was permanently blocked".to_string()),
+        Err(error) => errors.push(format!("fail-closed block registry unavailable: {error}")),
+    }
+    Err(format!(
+        "Destroyed window '{window_label}' authority retirement failed; {}",
+        errors.join("; ")
+    ))
+}
+
 fn handle_destroyed_window_authority_retirement_for_incarnation(
     state: &AppState,
     query: &ControlPlaneQueryState,
     window_label: &str,
     expected_retired_incarnation: Option<u64>,
 ) -> Result<(), String> {
-    let owner_error = match validate_project_transaction_window_label(window_label) {
-        Ok(()) => match expected_retired_incarnation {
-            Some(expected) => retire_project_transaction_owner_for_window_incarnation(
+    // A callback without the concrete AppState owner generation is not
+    // authorized to retire a label. Query binding is lazy, so a missing query
+    // generation only skips query cleanup; owner/lease retirement is still
+    // required for a registered renderer.
+    let Some(expected_retired_incarnation) = expected_retired_incarnation else {
+        return Ok(());
+    };
+    handle_destroyed_window_authority_retirement_for_incarnation_with_hook(
+        state,
+        query,
+        window_label,
+        expected_retired_incarnation,
+        || {},
+    )
+}
+
+/// Destroyed retirement's linearization seam. The production callback passes
+/// an empty hook; tests use it to attempt a new Begin and an authored command
+/// after owner/lease retirement has failed but before query retirement. The
+/// temporary label fence must reject both operations during that interval.
+fn handle_destroyed_window_authority_retirement_for_incarnation_with_hook(
+    state: &AppState,
+    query: &ControlPlaneQueryState,
+    window_label: &str,
+    expected_retired_incarnation: u64,
+    after_owner_retirement: impl FnOnce(),
+) -> Result<(), String> {
+    // Keep the same rotation guard from marker installation through owner,
+    // query, and final promotion. A Begin which acquired its operation gate
+    // before this guard is therefore linearized before retirement; one which
+    // arrives after the marker is rejected by the post-gate revalidation.
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+    let owner_matches = state
+        .project_transaction_owner_incarnations
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner incarnation registry lock was poisoned".to_string()
+        })?
+        .get(window_label)
+        .copied()
+        == Some(expected_retired_incarnation);
+    if !owner_matches {
+        // A stale callback is a strict no-op. It must not install a temporary
+        // fence, retire a replacement owner, or touch the query generation.
+        return Ok(());
+    }
+    let mut owner_error = match validate_project_transaction_window_label(window_label) {
+        Ok(()) => match state.begin_window_authority_retirement(window_label) {
+            Ok(()) => retire_project_transaction_owner_for_window_incarnation_under_rotation(
                 state,
                 window_label,
-                Some(expected),
+                Some(expected_retired_incarnation),
             )
             .err(),
-            None => retire_project_transaction_owner_for_window(state, window_label).err(),
+            Err(error) => Some(format!("retirement fence installation failed: {error}")),
         },
         Err(error) => Some(format!("window label validation failed: {error}")),
     };
+    after_owner_retirement();
     let query_error = query.retire_window(window_label).err();
     if owner_error.is_none() && query_error.is_none() {
-        return Ok(());
+        if let Err(error) = state.complete_window_authority_retirement(window_label) {
+            owner_error = Some(format!("retirement fence release failed: {error}"));
+        } else {
+            return Ok(());
+        }
     }
+    // Failure promotion removes the temporary marker only in the same
+    // authority-barrier critical section that inserts the permanent block.
     let block_error = state
         .record_window_authority_retirement_failure(window_label)
         .err();
@@ -46195,11 +48283,24 @@ fn prepare_cancelled_project_transaction_history(
 
 #[tauri::command]
 fn clear_project_history(
+    window: WebviewWindow,
     state: State<'_, AppState>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_history_generation: u64,
 ) -> Result<ProjectHistoryMutationResult, String> {
     let _external_admission = lock_project_external_command_admission(&state)?;
     let mut coordinator = lock_project_coordinator(&state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
+    project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
+    ensure_project_operator_authoritative_mutation_allowed(&state, &coordinator, &owner_id)?;
+    ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    if coordinator.history_generation != expected_history_generation {
+        return Err(format!(
+            "Project history changed before clear (expected generation {expected_history_generation}, current generation {})",
+            coordinator.history_generation
+        ));
+    }
     let history_changed = !coordinator.history.undo.is_empty()
         || !coordinator.history.redo.is_empty()
         || !coordinator.history.pending.is_empty();
@@ -46271,17 +48372,22 @@ fn validate_history_navigation_cas(
 
 fn navigate_project_history(
     state: &AppState,
+    window_label: &str,
+    owner_id: &str,
     undo: bool,
     expected_epoch: Option<u64>,
     expected_entry_id: Option<u64>,
     expected_checkpoint_hash: Option<String>,
 ) -> Result<ProjectHistoryNavigationResult, String> {
+    project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
     // Match all external replacement paths: lifecycle -> stop/join ->
     // coordinator.  The polling worker never takes lifecycle.
     let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
     stop_standby_sync_for_project_swap(state)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
+    ensure_project_operator_authoritative_mutation_allowed(state, &coordinator, owner_id)?;
     navigate_project_history_with_coordinator(
         state,
         &mut coordinator,
@@ -46294,11 +48400,13 @@ fn navigate_project_history(
                 state,
                 prepared,
                 coordinator,
-                ProjectReplacementCoordinatorEffect::RevisionMutation,
-                false,
-                |_, _, _| Ok(()),
-                |_, _, _| (),
-                None,
+                project_replacement_plan!(
+                    ProjectReplacementCoordinatorEffect::RevisionMutation,
+                    false,
+                    no_project_replacement_validation,
+                    no_project_replacement_capture,
+                    None
+                ),
             )
             .map(|(result, (), _)| result)
         },
@@ -46330,7 +48438,7 @@ where
 {
     // Undo/Redo is an identity-adjacent publication. It may not consume or
     // silently discard a Begin→Commit reservation from an in-flight edit.
-    ensure_no_pending_project_transaction(&coordinator)?;
+    ensure_no_pending_project_transaction(coordinator)?;
     let current = reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
     let top = if undo {
         coordinator.history.undo.last()
@@ -46338,7 +48446,7 @@ where
         coordinator.history.redo.last()
     };
     validate_history_navigation_cas(
-        &coordinator,
+        coordinator,
         &current,
         top,
         expected_epoch,
@@ -46381,7 +48489,7 @@ where
         coordinator.history.redo.last()
     };
     validate_history_navigation_cas(
-        &coordinator,
+        coordinator,
         &current,
         top,
         expected_epoch,
@@ -46400,15 +48508,15 @@ where
     // post-ACK coordinator mutation is assignment-only.
     let next_history_generation = top
         .is_some()
-        .then(|| checked_project_history_generation_after_change(&coordinator))
+        .then(|| checked_project_history_generation_after_change(coordinator))
         .transpose()?;
     let next_publication_generation = top
         .is_some()
-        .then(|| checked_project_authority_publication_generation_after_change(&coordinator))
+        .then(|| checked_project_authority_publication_generation_after_change(coordinator))
         .transpose()?;
     let next_mapping_replacement_generation = top
         .is_some()
-        .then(|| checked_project_mapping_replacement_generation_after_change(&coordinator))
+        .then(|| checked_project_mapping_replacement_generation_after_change(coordinator))
         .transpose()?;
     let entry = if undo {
         coordinator.history.undo.pop()
@@ -46417,8 +48525,8 @@ where
     };
     let Some(entry) = entry else {
         return Ok(ProjectHistoryNavigationResult {
-            history_status: project_history_status_for_coordinator(&coordinator),
-            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+            history_status: project_history_status_for_coordinator(coordinator),
+            authority: project_authority_bundle_from_coordinator(state, coordinator),
         });
     };
     let target_checkpoint = if undo {
@@ -46472,8 +48580,8 @@ where
     );
     coordinator.mapping_replacement_generation = next_mapping_replacement_generation
         .expect("a moved history entry preflights its mapping replacement generation");
-    let history_status = project_history_status_for_coordinator(&coordinator);
-    let authority = project_authority_bundle_from_coordinator(state, &coordinator);
+    let history_status = project_history_status_for_coordinator(coordinator);
+    let authority = project_authority_bundle_from_coordinator(state, coordinator);
     // The replacement helper intentionally suppressed its normal event: the
     // moved history entry is only complete after it has been rewritten and
     // pushed to the opposite stack. Emit exactly that final paired image.
@@ -46513,33 +48621,41 @@ fn rewrite_navigated_project_history_entry(
 
 #[tauri::command]
 fn undo_project_transaction(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    expected_epoch: Option<u64>,
-    expected_entry_id: Option<u64>,
-    expected_checkpoint_hash: Option<String>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_entry_id: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<ProjectHistoryNavigationResult, String> {
     navigate_project_history(
         &state,
+        window.label(),
+        &owner_id,
         true,
-        expected_epoch,
-        expected_entry_id,
-        expected_checkpoint_hash,
+        Some(expected_epoch),
+        Some(expected_entry_id),
+        Some(expected_checkpoint_hash),
     )
 }
 
 #[tauri::command]
 fn redo_project_transaction(
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    expected_epoch: Option<u64>,
-    expected_entry_id: Option<u64>,
-    expected_checkpoint_hash: Option<String>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_entry_id: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<ProjectHistoryNavigationResult, String> {
     navigate_project_history(
         &state,
+        window.label(),
+        &owner_id,
         false,
-        expected_epoch,
-        expected_entry_id,
-        expected_checkpoint_hash,
+        Some(expected_epoch),
+        Some(expected_entry_id),
+        Some(expected_checkpoint_hash),
     )
 }
 
@@ -47732,23 +49848,23 @@ fn rollback_indeterminate_clean_save(
 ///   3. Replace the target.
 ///      - Ok  -> durably commit S+1 CleanSave (clears pending) and report it.
 ///      - Err -> do NOT blindly roll back.  A spurious or post-rename replace
-///               error can still leave the exact prepared bytes on the target, so
-///               immediately re-hash the target and compare it to the pending
-///               digest:
-///                 * exact match  -> the bytes DID land, so durably commit S+1
-///                   CleanSave (never roll a landed save back) and return the
-///                   committed outcome so the live coordinator advances with the
-///                   journal. The low-level replace anomaly is logged truthfully.
-///                 * mismatch/missing -> the bytes did not land, so durably clear
-///                   pending, retain committed S (dirty-A recovery stays
-///                   eligible), and return the original replace error.
-///                 * target unreadable -> keep pending intact and return a
-///                   compound error so startup reconciliation retries.
-///               If the final commit compaction fails after exact bytes landed,
-///               pending is left on disk and the live S+1 outcome is still
-///               returned; startup reconciles to that same serial. A rollback
-///               write failure remains a compound error because bytes did not
-///               land and the live authority must stay at S.
+///        error can still leave the exact prepared bytes on the target, so
+///        immediately re-hash the target and compare it to the pending
+///        digest:
+///       * exact match  -> the bytes DID land, so durably commit S+1
+///         CleanSave (never roll a landed save back) and return the
+///         committed outcome so the live coordinator advances with the
+///         journal. The low-level replace anomaly is logged truthfully.
+///       * mismatch/missing -> the bytes did not land, so durably clear
+///         pending, retain committed S (dirty-A recovery stays
+///         eligible), and return the original replace error.
+///       * target unreadable -> keep pending intact and return a
+///         compound error so startup reconciliation retries.
+///         If the final commit compaction fails after exact bytes landed,
+///         pending is left on disk and the live S+1 outcome is still
+///         returned; startup reconciles to that same serial. A rollback
+///         write failure remains a compound error because bytes did not
+///         land and the live authority must stay at S.
 fn run_project_clean_save_journal(
     journal_path: &Path,
     committed_serial: u64,
@@ -48706,7 +50822,7 @@ fn list_project_backups_in(directory: &Path) -> Result<Vec<ProjectBackupSummary>
             bytes,
         });
     }
-    backups.sort_by(|left, right| right.id.cmp(&left.id));
+    backups.sort_by_key(|backup| std::cmp::Reverse(backup.id));
     Ok(backups)
 }
 
@@ -48964,9 +51080,9 @@ fn save_project_backup_v1(
         ProjectPublicationSurfaceV1::Backup,
     )?;
     let (ticket, pending) = match begin {
-        BeginProjectPublicationV1::Existing(status) => return Ok(status),
+        BeginProjectPublicationV1::Existing(status) => return Ok(*status),
         BeginProjectPublicationV1::New { ticket, pending }
-        | BeginProjectPublicationV1::Resume { ticket, pending } => (ticket, pending),
+        | BeginProjectPublicationV1::Resume { ticket, pending } => (*ticket, pending),
     };
     let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
     fs::create_dir_all(&directory)
@@ -49139,9 +51255,19 @@ fn list_project_backups(app: tauri::AppHandle) -> Result<Vec<ProjectBackupSummar
 #[tauri::command]
 fn load_project_backup(
     app: tauri::AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
-    backup_id: u64,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<ProjectLoadResult, String> {
+    read_flat_invoke_args!(args;
+        backup_id: u64 => "backupId",
+        owner_id: String => "ownerId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+    );
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
     let backup = read_project_backup(&project_backup_path(&directory, backup_id))?;
     let current_path = backup
@@ -49149,19 +51275,33 @@ fn load_project_backup(
         .as_deref()
         .map(Path::new)
         .filter(|path| is_syndocal_project_path(path));
-    load_project_from_file_with_control_mappings_and_disposition(
+    with_project_replacement_invocation(
         &state,
-        backup.project,
-        ProjectControlMappings {
-            midi_mappings: backup.midi_mappings,
-            osc_mappings: backup.osc_mappings,
-            dmx_mappings: backup.dmx_mappings,
-            dj_track_triggers: backup.dj_track_triggers,
-            legacy_dj_transition_discarded: false,
+        window.label(),
+        "load_project_backup",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || {
+            load_project_from_file_with_control_mappings_and_disposition(
+                &state,
+                backup.project,
+                ProjectControlMappings {
+                    midi_mappings: backup.midi_mappings,
+                    osc_mappings: backup.osc_mappings,
+                    dmx_mappings: backup.dmx_mappings,
+                    dj_track_triggers: backup.dj_track_triggers,
+                    legacy_dj_transition_discarded: false,
+                },
+                format!("Backup {}", backup.created_at_unix_ms),
+                current_path,
+                ProjectAuthorityDisposition::UnsavedReplacement,
+            )
         },
-        format!("Backup {}", backup.created_at_unix_ms),
-        current_path,
-        ProjectAuthorityDisposition::UnsavedReplacement,
     )
 }
 
@@ -49542,7 +51682,7 @@ fn read_standby_checkpoint_for_session(
     let mut manifests = list_standby_manifests(directory)?;
     if let Some(session_id) = session_id {
         manifests.retain(|manifest| manifest.session_id == session_id);
-        manifests.sort_by(|left, right| right.generation.cmp(&left.generation));
+        manifests.sort_by_key(|manifest| std::cmp::Reverse(manifest.generation));
     }
     let mut last_error = None;
     for manifest in manifests {
@@ -49785,10 +51925,7 @@ fn start_standby_sync(
                     (|| {
                         let _external_admission = lock_project_external_command_admission(&state)?;
                         let mut coordinator = lock_project_coordinator(&state)?;
-                        Ok(project_save_ticket_for_coordinator(
-                            &state,
-                            &mut coordinator,
-                        )?)
+                        project_save_ticket_for_coordinator(&state, &mut coordinator)
                     })()
                     .and_then(|ticket| {
                         while worker_directory
@@ -49874,9 +52011,8 @@ fn start_standby_sync(
                             checkpoint.manifest.session_id.clone(),
                             checkpoint.manifest.generation,
                         );
-                        let generation_changed = observed_checkpoint
-                            .as_ref()
-                            .map_or(true, |observed| observed != &checkpoint_identity);
+                        let generation_changed =
+                            observed_checkpoint.as_ref() != Some(&checkpoint_identity);
                         if generation_changed {
                             observed_checkpoint = Some(checkpoint_identity.clone());
                             last_progress_at = Instant::now();
@@ -49909,14 +52045,16 @@ fn start_standby_sync(
                                     if let Err(error) =
                                         load_project_from_file_with_control_mappings_in_scope(
                                             &state,
-                                            checkpoint.project.clone(),
-                                            checkpoint.mappings.clone(),
-                                            format!(
-                                                "Warm standby generation {}",
-                                                checkpoint.manifest.generation
-                                            ),
-                                            None,
-                                            ProjectSnapshotReplacementScope::StandbyPollingWorker,
+                                            ProjectLoadInput {
+                                                project: checkpoint.project.clone(),
+                                                mappings: checkpoint.mappings.clone(),
+                                                path_label: format!(
+                                                    "Warm standby generation {}",
+                                                    checkpoint.manifest.generation
+                                                ),
+                                                current_path: None,
+                                                scope: ProjectSnapshotReplacementScope::StandbyPollingWorker,
+                                            },
                                             Some(stop.as_ref()),
                                         )
                                     {
@@ -50211,17 +52349,22 @@ fn take_over_standby_core_with_optional_lease(
     );
     let result = load_project_from_file_with_control_mappings_in_scope_and_expected_output_fence(
         state,
-        checkpoint.project,
-        checkpoint.mappings,
-        path_label,
-        None,
-        ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
-        expected_output_fence,
-        &standby_stop,
-        &standby_status,
-        &selector,
-        force,
-        lease_authorization,
+        ProjectLoadInput {
+            project: checkpoint.project,
+            mappings: checkpoint.mappings,
+            path_label,
+            current_path: None,
+            scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+        },
+        ProjectTakeoverReplacementContext {
+            scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+            expected_output_fence,
+            standby_stop: &standby_stop,
+            standby_status: &standby_status,
+            selector: &selector,
+            force,
+            lease_authorization,
+        },
     )?;
     let mut runtime = state
         .standby_sync
@@ -50482,14 +52625,33 @@ fn clear_runtime_programmer_state(snapshot: &mut EngineSnapshot) {
 fn load_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<Option<ProjectLoadResult>, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Project", &["sdc"])
         .pick_file()
     else {
         return Ok(None);
     };
-    load_project_from_path(&state, &path).map(Some)
+    with_project_replacement_invocation(
+        &state,
+        window.label(),
+        "load_project",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || load_project_from_path(&state, &path),
+    )
+    .map(Some)
 }
 
 #[tauri::command]
@@ -50497,7 +52659,13 @@ fn import_daslight_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
     path: Option<String>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<Option<dvc_import::DvcImportReport>, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let path = match path {
         Some(path) => PathBuf::from(path),
         None => {
@@ -50510,7 +52678,20 @@ fn import_daslight_project(
             path
         }
     };
-    import_daslight_project_from_path(&state, path).map(|loaded| Some(loaded.report))
+    with_project_replacement_invocation(
+        &state,
+        window.label(),
+        "import_daslight_project",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || import_daslight_project_from_path(&state, path),
+    )
+    .map(|loaded| Some(loaded.report))
 }
 
 /// Current frontend callers use this paired reply. The legacy report-only
@@ -50520,7 +52701,13 @@ fn import_daslight_project_with_result(
     window: WebviewWindow,
     state: State<'_, AppState>,
     path: Option<String>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<Option<DvcImportProjectLoadResult>, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let path = match path {
         Some(path) => PathBuf::from(path),
         None => {
@@ -50533,7 +52720,20 @@ fn import_daslight_project_with_result(
             path
         }
     };
-    import_daslight_project_from_path(&state, path).map(Some)
+    with_project_replacement_invocation(
+        &state,
+        window.label(),
+        "import_daslight_project_with_result",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || import_daslight_project_from_path(&state, path),
+    )
+    .map(Some)
 }
 
 fn import_daslight_project_from_path(
@@ -50577,21 +52777,62 @@ fn project_control_mappings_from_daslight_import_report(
 
 #[tauri::command]
 fn load_project_path(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     path: String,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
 ) -> Result<ProjectLoadResult, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let path = PathBuf::from(path);
     validate_project_open_path(&path)?;
-    load_project_from_path(&state, &path)
+    with_project_replacement_invocation(
+        &state,
+        window.label(),
+        "load_project_path",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || load_project_from_path(&state, &path),
+    )
 }
 
 #[tauri::command]
-fn load_startup_project(state: State<'_, AppState>) -> Result<Option<ProjectLoadResult>, String> {
+fn load_startup_project(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    owner_id: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+) -> Result<Option<ProjectLoadResult>, String> {
+    let entry_owner_incarnation =
+        project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let Some(path) = startup_project_path_from_args(env::args_os()) else {
         return Ok(None);
     };
     validate_project_open_path(&path)?;
-    load_project_from_path(&state, &path).map(Some)
+    with_project_replacement_invocation(
+        &state,
+        window.label(),
+        "load_startup_project",
+        owner_id,
+        (
+            Some(entry_owner_incarnation),
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+        ),
+        || load_project_from_path(&state, &path),
+    )
+    .map(Some)
 }
 
 #[tauri::command]
@@ -50766,7 +53007,7 @@ fn load_project_from_path(
             "Project file is {file_size} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes"
         ));
     }
-    let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
     load_project_from_json(state, &json, path.to_string_lossy().to_string(), Some(path))
 }
 
@@ -50979,11 +53220,13 @@ fn pause_e3_native_acceptance_after_durable_authority(
         phase,
         std::process::id(),
         incarnation,
-        request_id,
-        source_serial,
-        target_serial,
-        target_checkpoint_hash,
-        journal.serial,
+        e3_native_acceptance::E3NativeAcceptanceTraceInput {
+            request_id,
+            source_serial,
+            target_serial,
+            target_checkpoint_hash,
+            journal_serial: journal.serial,
+        },
     )?;
     e3_native_acceptance::pause_with_config(Some(&config), trace)
 }
@@ -50991,19 +53234,24 @@ fn pause_e3_native_acceptance_after_durable_authority(
 #[tauri::command]
 fn acknowledge_project_recovery_applied(
     state: State<'_, AppState>,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    expected_authority_disposition_generation: u64,
-    recovery_request_id: String,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<ProjectAuthorityBundle, String> {
+    read_flat_invoke_args!(args;
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        expected_authority_disposition_generation: u64 => "expectedAuthorityDispositionGeneration",
+        recovery_request_id: String => "recoveryRequestId",
+    );
     acknowledge_project_recovery_applied_service_with_acceptance(
         &state,
-        expected_epoch,
-        expected_revision,
-        expected_checkpoint_hash,
-        expected_authority_disposition_generation,
-        recovery_request_id,
+        (
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            expected_authority_disposition_generation,
+            recovery_request_id,
+        ),
         advance_project_recovery_authority_serial_before_publication,
         |authority| {
             if let Err(error) = pause_e3_native_acceptance_after_durable_authority(
@@ -51019,13 +53267,11 @@ fn acknowledge_project_recovery_applied(
     )
 }
 
+type ProjectRecoveryAcknowledgementRequest = (u64, u64, String, u64, String);
+
 fn acknowledge_project_recovery_applied_service_with_acceptance<Advance, Pause>(
     state: &AppState,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    expected_authority_disposition_generation: u64,
-    recovery_request_id: String,
+    request: ProjectRecoveryAcknowledgementRequest,
     advance: Advance,
     pause_after_durable_ack: Pause,
 ) -> Result<ProjectAuthorityBundle, String>
@@ -51037,13 +53283,22 @@ where
     ) -> Result<u64, String>,
     Pause: FnOnce(&ProjectAuthorityBundle) -> Result<(), String>,
 {
-    let authority = acknowledge_project_recovery_applied_service(
-        state,
+    let (
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         expected_authority_disposition_generation,
         recovery_request_id,
+    ) = request;
+    let authority = acknowledge_project_recovery_applied_service(
+        state,
+        (
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            expected_authority_disposition_generation,
+            recovery_request_id,
+        ),
         advance,
     )?;
     // This is deliberately outside the coordinator/admission guards. The
@@ -51056,11 +53311,7 @@ where
 
 fn acknowledge_project_recovery_applied_service<Advance>(
     state: &AppState,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    expected_authority_disposition_generation: u64,
-    recovery_request_id: String,
+    request: ProjectRecoveryAcknowledgementRequest,
     advance: Advance,
 ) -> Result<ProjectAuthorityBundle, String>
 where
@@ -51070,16 +53321,25 @@ where
         ProjectRecoveryAuthorityTransition,
     ) -> Result<u64, String>,
 {
-    let _external_admission = lock_project_external_command_admission(&state)?;
-    let mut coordinator = lock_project_coordinator(&state)?;
-    acknowledge_project_recovery_applied_core(
-        state,
-        &mut coordinator,
+    let (
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         expected_authority_disposition_generation,
         recovery_request_id,
+    ) = request;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    acknowledge_project_recovery_applied_core(
+        state,
+        &mut coordinator,
+        (
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            expected_authority_disposition_generation,
+            recovery_request_id,
+        ),
         advance,
     )
 }
@@ -51090,11 +53350,7 @@ where
 fn acknowledge_project_recovery_applied_core<Advance>(
     state: &AppState,
     coordinator: &mut ProjectCoordinator,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    expected_authority_disposition_generation: u64,
-    recovery_request_id: String,
+    request: ProjectRecoveryAcknowledgementRequest,
     advance: Advance,
 ) -> Result<ProjectAuthorityBundle, String>
 where
@@ -51104,7 +53360,14 @@ where
         ProjectRecoveryAuthorityTransition,
     ) -> Result<u64, String>,
 {
-    ensure_no_pending_project_transaction(&coordinator)?;
+    let (
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        expected_authority_disposition_generation,
+        recovery_request_id,
+    ) = request;
+    ensure_no_pending_project_transaction(coordinator)?;
     if coordinator.epoch != expected_epoch
         || coordinator.revision != expected_revision
         || coordinator.checkpoint_hash != expected_checkpoint_hash
@@ -51139,7 +53402,7 @@ where
         }
     };
     let next_generation =
-        checked_project_authority_disposition_generation_after_change(&coordinator)?;
+        checked_project_authority_disposition_generation_after_change(coordinator)?;
     let recovery_publication_serial = coordinator.recovery_authority_serial;
     advance(
         state,
@@ -51392,6 +53655,35 @@ fn migrate_legacy_spatial_parameter_models(value: &mut Value) -> Result<(), Stri
 /// Project replacement is shared by Tauri command handlers (which hold
 /// `State<'_, AppState>`) and the authenticated control-plane runtime (which
 /// already owns `&AppState`), so the internal boundary stays at `&AppState`.
+struct ProjectLoadInput<'a> {
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&'a Path>,
+    scope: ProjectSnapshotReplacementScope,
+}
+
+struct ProjectTakeoverReplacementContext<'a> {
+    scope: ProjectSnapshotReplacementScope,
+    expected_output_fence: &'a OutputControlFenceV1,
+    standby_stop: &'a Arc<AtomicBool>,
+    standby_status: &'a Arc<Mutex<StandbySyncStatus>>,
+    selector: &'a StandbyTakeoverCheckpointSelector,
+    force: bool,
+    lease_authorization: Option<(&'a OutputLeaseRequest, u64)>,
+}
+
+struct ProjectTakeoverReplacementRequest<'a> {
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+    expected_output_fence: &'a OutputControlFenceV1,
+    standby_stop: &'a Arc<AtomicBool>,
+    standby_status: &'a Arc<Mutex<StandbySyncStatus>>,
+    selector: &'a StandbyTakeoverCheckpointSelector,
+    force: bool,
+    lease_authorization: Option<(&'a OutputLeaseRequest, u64)>,
+}
+
 fn load_project_from_file(
     state: &AppState,
     project: ProjectFile,
@@ -51400,11 +53692,13 @@ fn load_project_from_file(
 ) -> Result<ProjectLoadResult, String> {
     load_project_from_file_with_control_mappings_in_scope(
         state,
-        project,
-        ProjectControlMappings::default(),
-        path_label,
-        current_path,
-        ProjectSnapshotReplacementScope::ExternalCaller,
+        ProjectLoadInput {
+            project,
+            mappings: ProjectControlMappings::default(),
+            path_label,
+            current_path,
+            scope: ProjectSnapshotReplacementScope::ExternalCaller,
+        },
         None,
     )
 }
@@ -51419,11 +53713,13 @@ fn load_project_from_file_with_control_mappings_and_disposition(
 ) -> Result<ProjectLoadResult, String> {
     load_project_from_file_with_control_mappings_in_scope_and_disposition(
         state,
-        project,
-        mappings,
-        path_label,
-        current_path,
-        ProjectSnapshotReplacementScope::ExternalCaller,
+        ProjectLoadInput {
+            project,
+            mappings,
+            path_label,
+            current_path,
+            scope: ProjectSnapshotReplacementScope::ExternalCaller,
+        },
         disposition,
         None,
     )
@@ -51431,20 +53727,12 @@ fn load_project_from_file_with_control_mappings_and_disposition(
 
 fn load_project_from_file_with_control_mappings_in_scope(
     state: &AppState,
-    project: ProjectFile,
-    mappings: ProjectControlMappings,
-    path_label: String,
-    current_path: Option<&Path>,
-    scope: ProjectSnapshotReplacementScope,
+    input: ProjectLoadInput<'_>,
     abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     load_project_from_file_with_control_mappings_in_scope_and_disposition(
         state,
-        project,
-        mappings,
-        path_label,
-        current_path,
-        scope,
+        input,
         ProjectAuthorityDisposition::CleanAtPath,
         abort_before_publication,
     )
@@ -51456,17 +53744,8 @@ fn load_project_from_file_with_control_mappings_in_scope(
 /// which a project publication could otherwise race the consumed fence.
 fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fence(
     state: &AppState,
-    project: ProjectFile,
-    mappings: ProjectControlMappings,
-    path_label: String,
-    current_path: Option<&Path>,
-    scope: ProjectSnapshotReplacementScope,
-    expected_output_fence: &OutputControlFenceV1,
-    standby_stop: &Arc<AtomicBool>,
-    standby_status: &Arc<Mutex<StandbySyncStatus>>,
-    selector: &StandbyTakeoverCheckpointSelector,
-    force: bool,
-    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+    input: ProjectLoadInput<'_>,
+    takeover: ProjectTakeoverReplacementContext<'_>,
 ) -> Result<
     (
         ProjectLoadResult,
@@ -51475,34 +53754,42 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
     ),
     String,
 > {
-    let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
+    let mut prepared = prepare_project_load(
+        input.project,
+        input.mappings,
+        input.path_label,
+        input.current_path,
+    )?;
     prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
     replace_prepared_project_snapshot_with_expected_output_fence(
         state,
-        prepared,
-        scope,
-        expected_output_fence,
-        standby_stop,
-        standby_status,
-        selector,
-        force,
-        lease_authorization,
+        ProjectTakeoverReplacementRequest {
+            prepared,
+            scope: takeover.scope,
+            expected_output_fence: takeover.expected_output_fence,
+            standby_stop: takeover.standby_stop,
+            standby_status: takeover.standby_status,
+            selector: takeover.selector,
+            force: takeover.force,
+            lease_authorization: takeover.lease_authorization,
+        },
     )
 }
 
 fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
     state: &AppState,
-    project: ProjectFile,
-    mappings: ProjectControlMappings,
-    path_label: String,
-    current_path: Option<&Path>,
-    scope: ProjectSnapshotReplacementScope,
+    input: ProjectLoadInput<'_>,
     disposition: ProjectAuthorityDisposition,
     abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
-    let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
+    let mut prepared = prepare_project_load(
+        input.project,
+        input.mappings,
+        input.path_label,
+        input.current_path,
+    )?;
     prepared.authority_disposition = disposition;
-    replace_prepared_project_snapshot(state, prepared, scope, abort_before_publication)
+    replace_prepared_project_snapshot(state, prepared, input.scope, abort_before_publication)
 }
 
 /// Same-project Standby sanitization reuses the project that is authoritative
@@ -51532,11 +53819,13 @@ fn sanitize_current_project_runtime_under_authority(
         state,
         prepared,
         &mut coordinator,
-        ProjectReplacementCoordinatorEffect::RuntimeSanitize,
-        true,
-        |_, _, _| Ok(()),
-        |_, _, _| (),
-        None,
+        project_replacement_plan!(
+            ProjectReplacementCoordinatorEffect::RuntimeSanitize,
+            true,
+            no_project_replacement_validation,
+            no_project_replacement_capture,
+            None
+        ),
     )
     .map(|(result, (), _)| result)
 }
@@ -51756,6 +54045,7 @@ fn replace_prepared_project_snapshot(
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
         let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
+        preflight_project_replacement_invocation(state)?;
         return run_project_snapshot_replacement_scope(
             scope,
             || stop_standby_sync_for_project_swap(state),
@@ -51795,6 +54085,7 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
         let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
+        preflight_project_replacement_invocation(state)?;
         return run_project_snapshot_replacement_scope(
             scope,
             || stop_standby_sync_for_project_swap(state),
@@ -51822,6 +54113,17 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
             )
         },
     )
+}
+
+fn preflight_project_replacement_invocation(state: &AppState) -> Result<(), String> {
+    // Keep the lifecycle -> external admission -> coordinator order used by
+    // replacement publication. Both locks are released before stop/join, any
+    // filesystem work, or engine publication. The final seam repeats this CAS
+    // so an authority change during stop/join is still rejected.
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    validate_project_replacement_invocation_at_publication(state, &coordinator)
 }
 
 fn run_project_snapshot_replacement_scope<Stop, Replace, T>(
@@ -51894,6 +54196,7 @@ fn replace_prepared_project_snapshot_after_standby_stop_with_platform<
     // baseline. The caller can either finish or cancel the reservation first;
     // importantly this occurs before input/output retirement or engine load.
     ensure_no_pending_project_transaction(&coordinator)?;
+    validate_project_replacement_invocation_at_publication(state, &coordinator)?;
     let effect = if scope == ProjectSnapshotReplacementScope::SameProjectRuntimeSanitize {
         ProjectReplacementCoordinatorEffect::RuntimeSanitize
     } else {
@@ -51903,17 +54206,19 @@ fn replace_prepared_project_snapshot_after_standby_stop_with_platform<
         state,
         prepared,
         &mut coordinator,
-        effect,
-        true,
-        |_, _, _| {
-            if abort_before_publication.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
-                Err("Standby synchronization stopped before project publication".to_string())
-            } else {
-                Ok(())
-            }
-        },
-        |_, _, _| (),
-        None,
+        project_replacement_plan!(
+            effect,
+            true,
+            |_: &AppState, _: &mut ProjectCoordinator, _: &std::sync::MutexGuard<'_, ()>| {
+                if abort_before_publication.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+                    Err("Standby synchronization stopped before project publication".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            no_project_replacement_capture,
+            None
+        ),
         platform,
     )
     .map(|(result, (), _)| result)
@@ -51921,14 +54226,7 @@ fn replace_prepared_project_snapshot_after_standby_stop_with_platform<
 
 fn replace_prepared_project_snapshot_with_expected_output_fence(
     state: &AppState,
-    mut prepared: PreparedProjectLoad,
-    scope: ProjectSnapshotReplacementScope,
-    expected_output_fence: &OutputControlFenceV1,
-    standby_stop: &Arc<AtomicBool>,
-    standby_status: &Arc<Mutex<StandbySyncStatus>>,
-    selector: &StandbyTakeoverCheckpointSelector,
-    force: bool,
-    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+    request: ProjectTakeoverReplacementRequest<'_>,
 ) -> Result<
     (
         ProjectLoadResult,
@@ -51937,6 +54235,16 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
     ),
     String,
 > {
+    let ProjectTakeoverReplacementRequest {
+        mut prepared,
+        scope,
+        expected_output_fence,
+        standby_stop,
+        standby_status,
+        selector,
+        force,
+        lease_authorization,
+    } = request;
     if scope != ProjectSnapshotReplacementScope::LifecycleAlreadyHeld {
         return Err(
             "Output-control Take Over replacement requires the lifecycle guard to be held"
@@ -51974,40 +54282,49 @@ fn replace_prepared_project_snapshot_with_expected_output_fence(
         state,
         prepared,
         &mut coordinator,
-        ProjectReplacementCoordinatorEffect::IdentitySwap,
-        true,
-        |state, coordinator, _transition_guard| {
-            if reconcile_project_checkpoint_for_coordinator(state, coordinator).is_err()
-                || !control_plane_runtime::exact_output_control_fence_matches(
-                    state,
-                    coordinator,
-                    expected_output_fence,
-                )
-                || ensure_no_pending_project_transaction(coordinator).is_err()
-            {
-                return Err(
-                    "Output control fence changed before Standby Take Over publication".to_string(),
-                );
-            }
+        project_replacement_plan!(
+            ProjectReplacementCoordinatorEffect::IdentitySwap,
+            true,
+            |state: &AppState,
+             coordinator: &mut ProjectCoordinator,
+             _transition_guard: &std::sync::MutexGuard<'_, ()>| {
+                if reconcile_project_checkpoint_for_coordinator(state, coordinator).is_err()
+                    || !control_plane_runtime::exact_output_control_fence_matches(
+                        state,
+                        coordinator,
+                        expected_output_fence,
+                    )
+                    || ensure_no_pending_project_transaction(coordinator).is_err()
+                {
+                    return Err(
+                        "Output control fence changed before Standby Take Over publication"
+                            .to_string(),
+                    );
+                }
 
-            lock_and_validate_standby_takeover_status(standby_status, selector, force)
-        },
-        |state, coordinator, _transition_guard| {
-            standby_stop.store(true, Ordering::Relaxed);
-            let safety = state.engine.safety_blackout_authority();
-            control_plane_runtime::committed_output_control_fence(
-                expected_output_fence,
-                coordinator.epoch,
-                coordinator.revision,
-                &coordinator.checkpoint_hash,
-                coordinator.publication_generation,
-                output_epoch_after,
-                output_generation_after,
-                safety.epoch,
-                safety.generation,
-            )
-        },
-        lease_authorization,
+                lock_and_validate_standby_takeover_status(standby_status, selector, force)
+            },
+            |state: &AppState,
+             coordinator: &ProjectCoordinator,
+             _transition_guard: &std::sync::MutexGuard<'_, ()>| {
+                standby_stop.store(true, Ordering::Relaxed);
+                let safety = state.engine.safety_blackout_authority();
+                control_plane_runtime::committed_output_control_fence(
+                    expected_output_fence,
+                    control_plane_runtime::CommittedOutputControlFenceValues {
+                        project_epoch: coordinator.epoch,
+                        project_revision: coordinator.revision,
+                        project_checkpoint_hash: &coordinator.checkpoint_hash,
+                        project_publication_generation: coordinator.publication_generation,
+                        output_epoch: output_epoch_after,
+                        output_generation: output_generation_after,
+                        safety_blackout_epoch: safety.epoch,
+                        safety_blackout_generation: safety.generation,
+                    },
+                )
+            },
+            lease_authorization
+        ),
     )
 }
 
@@ -52126,15 +54443,34 @@ impl ProjectReplacementPlatform for WryProjectReplacementPlatform {
     }
 }
 
-fn replace_prepared_project_snapshot_with_coordinator<Validate, Validation, Capture, Captured>(
-    state: &AppState,
-    prepared: PreparedProjectLoad,
-    coordinator: &mut ProjectCoordinator,
+struct ProjectReplacementCoordinatorPlan<'a, Validate, Capture> {
     coordinator_effect: ProjectReplacementCoordinatorEffect,
     emit_authority_event: bool,
     validate_before_publication: Validate,
     capture_after_commit: Capture,
-    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+    lease_authorization: Option<(&'a OutputLeaseRequest, u64)>,
+}
+
+fn no_project_replacement_validation(
+    _state: &AppState,
+    _coordinator: &mut ProjectCoordinator,
+    _transition_guard: &std::sync::MutexGuard<'_, ()>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+fn no_project_replacement_capture(
+    _state: &AppState,
+    _coordinator: &ProjectCoordinator,
+    _transition_guard: &std::sync::MutexGuard<'_, ()>,
+) {
+}
+
+fn replace_prepared_project_snapshot_with_coordinator<Validate, Validation, Capture, Captured>(
+    state: &AppState,
+    prepared: PreparedProjectLoad,
+    coordinator: &mut ProjectCoordinator,
+    plan: ProjectReplacementCoordinatorPlan<'_, Validate, Capture>,
 ) -> Result<
     (
         ProjectLoadResult,
@@ -52157,11 +54493,7 @@ where
         state,
         prepared,
         coordinator,
-        coordinator_effect,
-        emit_authority_event,
-        validate_before_publication,
-        capture_after_commit,
-        lease_authorization,
+        plan,
         &platform,
     )
 }
@@ -52181,11 +54513,7 @@ fn replace_prepared_project_snapshot_with_coordinator_and_platform<
     state: &AppState,
     mut prepared: PreparedProjectLoad,
     coordinator: &mut ProjectCoordinator,
-    coordinator_effect: ProjectReplacementCoordinatorEffect,
-    emit_authority_event: bool,
-    validate_before_publication: Validate,
-    capture_after_commit: Capture,
-    lease_authorization: Option<(&OutputLeaseRequest, u64)>,
+    plan: ProjectReplacementCoordinatorPlan<'_, Validate, Capture>,
     platform: &Platform,
 ) -> Result<
     (
@@ -52204,6 +54532,13 @@ where
     Capture: FnOnce(&AppState, &ProjectCoordinator, &std::sync::MutexGuard<'_, ()>) -> Captured,
     Platform: ProjectReplacementPlatform,
 {
+    let ProjectReplacementCoordinatorPlan {
+        coordinator_effect,
+        emit_authority_event,
+        validate_before_publication,
+        capture_after_commit,
+        lease_authorization,
+    } = plan;
     let next_project = project_file_from_prepared_load(&prepared);
     let next_checkpoint_hash = project_checkpoint_hash(&next_project, &prepared.mappings)?;
     let recovery_transition =
@@ -52229,8 +54564,6 @@ where
             // Prove every counter changed by the post-ACK identity commit before
             // publishing. Nothing below the engine acknowledgement may fail.
             Some(coordinator.preflight_identity_swap_counters()?)
-        } else if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
-            None
         } else {
             None
         };
@@ -52306,7 +54639,7 @@ where
             .submit_request(lease_request, final_lease_now_ms)
             .map_err(|error| format!("Output lease authorization failed: {error:?}"))?;
         ensure_output_lease_receipt_succeeded_or_commit_expiry(
-            &mut **registry,
+            registry,
             candidate.clone(),
             &authorization_receipt,
             "ordinary Take Over authorization",
@@ -52321,11 +54654,11 @@ where
                     )?;
                 candidate = orphaned_candidate;
                 let authorized_lease_id = match lease_request.action.as_ref() {
-                    Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. }) => *lease_id,
+                    Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. }) => lease_id,
                     _ => return Err("Take Over lease authorization action is invalid".to_string()),
                 };
                 let mut orphan_receipt =
-                    select_output_lease_receipt_change(&orphan_receipt, authorized_lease_id)?;
+                    select_output_lease_receipt_change(&orphan_receipt, *authorized_lease_id)?;
                 orphan_receipt.key = lease_request.key.clone();
                 orphan_receipt.shape_hash = lease_request.shape_hash.clone();
                 orphan_receipt
@@ -52451,7 +54784,7 @@ where
     reset_project_runtime_after_published_snapshot_infallible(state);
     if let Some(candidate) = output_lease_candidate {
         if let Some(registry) = lease_registry_guard.as_mut() {
-            commit_project_replacement_output_lease_after_ack(&mut **registry, candidate);
+            commit_project_replacement_output_lease_after_ack(registry, candidate);
         } else {
             let mut registry = state
                 .output_lease_registry
@@ -57279,15 +59612,18 @@ fn remove_stage_map_preset(state: State<'_, AppState>, label: String) -> Result<
 #[tauri::command]
 fn add_stage_object(
     state: State<'_, AppState>,
-    label: String,
-    kind: StageObjectKind,
-    x: f32,
-    z: f32,
-    width: f32,
-    depth: f32,
-    rotation_deg: f32,
-    color: Option<String>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<StageObjectId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        kind: StageObjectKind => "kind",
+        x: f32 => "x",
+        z: f32 => "z",
+        width: f32 => "width",
+        depth: f32 => "depth",
+        rotation_deg: f32 => "rotationDeg",
+        color: Option<String> => "color",
+    );
     let object_id = state.engine.allocate_stage_object_id();
     let object = normalize_stage_object(StageObjectSummary {
         id: object_id,
@@ -57856,6 +60192,32 @@ fn external_video_transport_status_for(
     })
 }
 
+fn external_video_transport_status_nonblocking_for(
+    transport: &Mutex<video::ExternalVideoTransportRuntime>,
+    engine: &EngineHandle,
+) -> Result<ExternalVideoTransportStatusResponse, String> {
+    let status = match transport.try_lock() {
+        Ok(transport) => transport.status(),
+        Err(TryLockError::WouldBlock) => {
+            return Err("External video transport status is busy; retry".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("External video transport runtime lock was poisoned".to_string())
+        }
+    };
+    let ownership = engine
+        .try_output_ownership_status()
+        .ok_or_else(|| "Output ownership status is busy; retry".to_string())?;
+    Ok(ExternalVideoTransportStatusResponse {
+        active_routes: status.active_routes,
+        active_count: status.active_count,
+        ownership_allowed: ownership.video_allowed,
+        ownership_state: ownership.state,
+        ownership_reason: ownership.video_reason,
+        ownership_error: ownership.error,
+    })
+}
+
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn harvest_spout_output_failures(
     transport: &Mutex<spout_transport::SpoutTransportState>,
@@ -58095,20 +60457,19 @@ fn external_video_transport_direction_label(
     }
 }
 
-fn sync_external_video_transports_from_snapshot(
-    snapshot: &EngineSnapshot,
-    output_ownership_role: MachineOutputRole,
-    transport: &Mutex<video::ExternalVideoTransportRuntime>,
-    event_log: &Mutex<Vec<ExternalVideoTransportDriverEvent>>,
-    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
-    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+struct ExternalVideoTransportSyncContext<'a> {
+    transport: &'a Mutex<video::ExternalVideoTransportRuntime>,
+    event_log: &'a Mutex<Vec<ExternalVideoTransportDriverEvent>>,
+    capture_transport: &'a Mutex<capture_transport::CaptureTransportState>,
+    #[cfg(feature = "ndi")]
+    ndi_transport: &'a Mutex<ndi_transport::NdiTransportState>,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
+    spout_transport: &'a Mutex<spout_transport::SpoutTransportState>,
     #[cfg(any(
         feature = "ndi",
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
     ))]
-    engine: &EngineHandle,
+    engine: &'a EngineHandle,
     #[cfg(any(
         feature = "ndi",
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
@@ -58118,13 +60479,38 @@ fn sync_external_video_transports_from_snapshot(
         feature = "ndi",
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
     ))]
-    maintenance_transition: Option<&mut engine::OutputOwnershipTransition>,
-    #[cfg(not(any(
-        feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-    )))]
-    _maintenance_transition: Option<&mut engine::OutputOwnershipTransition>,
+    maintenance_transition: Option<&'a mut engine::OutputOwnershipTransition>,
+}
+
+fn sync_external_video_transports_from_snapshot(
+    snapshot: &EngineSnapshot,
+    output_ownership_role: MachineOutputRole,
+    context: ExternalVideoTransportSyncContext<'_>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
+    let ExternalVideoTransportSyncContext {
+        transport,
+        event_log,
+        capture_transport,
+        #[cfg(feature = "ndi")]
+        ndi_transport,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout_transport,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        engine,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        activation,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        maintenance_transition,
+    } = context;
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
     let mut transport = transport
@@ -58966,24 +61352,30 @@ fn sync_output_ownership_routes_for_role(
     sync_external_video_transports_from_snapshot(
         &snapshot,
         role,
-        state.external_video_transport.as_ref(),
-        state.external_video_transport_events.as_ref(),
-        state.capture_transport.as_ref(),
-        #[cfg(feature = "ndi")]
-        state.ndi_transport.as_ref(),
-        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-        state.spout_transport.as_ref(),
-        #[cfg(any(
-            feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-        ))]
-        &state.engine,
-        #[cfg(any(
-            feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-        ))]
-        activation,
-        None,
+        ExternalVideoTransportSyncContext {
+            transport: state.external_video_transport.as_ref(),
+            event_log: state.external_video_transport_events.as_ref(),
+            capture_transport: state.capture_transport.as_ref(),
+            #[cfg(feature = "ndi")]
+            ndi_transport: state.ndi_transport.as_ref(),
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_transport: state.spout_transport.as_ref(),
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            engine: &state.engine,
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            activation,
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            maintenance_transition: None,
+        },
     )
 }
 
@@ -59177,9 +61569,9 @@ fn prepare_native_display_output_window(
             "Native video output window creation failed: {error}"
         ))
     })?;
-    if let Err(error) = (|| {
+    if let Err(error) =
         apply_native_video_output_window_shell_with_monitor(&window, output, false, Some(monitor))
-    })() {
+    {
         let close_error = window.close().err().map(|close| close.to_string());
         let retirement = wait_for_native_video_output_window_retirement(app, &label);
         return Err(match (close_error, retirement) {
@@ -59215,20 +61607,32 @@ struct PreparedNativeVideoOutputCandidate {
 /// Both registry locks remain held from the occupancy check through the
 /// infallible insertions and start-gate release, so no observer can see a
 /// worker without its metrics or a released worker outside the registry.
-fn publish_display_native_candidate_registry_state<Candidate, Worker, Metrics, T, Commit, Split>(
-    workers: &Mutex<HashMap<String, Worker>>,
-    metrics: &Mutex<HashMap<VideoOutputId, Metrics>>,
+struct DisplayNativeCandidatePublication<Candidate, Commit, Split> {
     candidate: Candidate,
     label: String,
     output_id: VideoOutputId,
     start_gate: Option<Arc<AtomicBool>>,
     commit: Commit,
     split: Split,
+}
+
+fn publish_display_native_candidate_registry_state<Candidate, Worker, Metrics, T, Commit, Split>(
+    workers: &Mutex<HashMap<String, Worker>>,
+    metrics: &Mutex<HashMap<VideoOutputId, Metrics>>,
+    request: DisplayNativeCandidatePublication<Candidate, Commit, Split>,
 ) -> Result<T, (Candidate, OutputLeaseCandidateCommitFailure)>
 where
     Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
     Split: FnOnce(Candidate) -> (Worker, Metrics),
 {
+    let DisplayNativeCandidatePublication {
+        candidate,
+        label,
+        output_id,
+        start_gate,
+        commit,
+        split,
+    } = request;
     let mut workers = match workers.lock() {
         Ok(workers) => workers,
         Err(_) => {
@@ -59396,12 +61800,16 @@ impl DisplayOutputNativeOperations for TauriDisplayOutputNativeOperations {
         let published = publish_display_native_candidate_registry_state(
             &state.native_video_output_workers,
             &state.native_video_output_metrics,
-            candidate,
-            label,
-            output_id,
-            start_gate,
-            commit,
-            |candidate| (candidate.worker, candidate.metrics),
+            DisplayNativeCandidatePublication {
+                candidate,
+                label,
+                output_id,
+                start_gate,
+                commit,
+                split: |candidate: PreparedNativeVideoOutputCandidate| {
+                    (candidate.worker, candidate.metrics)
+                },
+            },
         );
         if published.is_ok() {
             let incarnation = record_live_video_window_open(&self.app, output_id);
@@ -59486,26 +61894,26 @@ fn prepare_native_video_output_candidate_worker(
     let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
     let worker = (|| {
         apply_native_video_output_window_shell_with_monitor(&window, output, false, Some(monitor))?;
-        start_native_video_live_output(
-            window.clone(),
-            state.engine.clone(),
-            output.id,
-            Arc::clone(&metrics),
+        start_native_video_live_output(NativeVideoLiveOutputRequest {
+            window: window.clone(),
+            engine: state.engine.clone(),
+            output_id: output.id,
+            metrics: Arc::clone(&metrics),
             #[cfg(feature = "ndi")]
-            Arc::clone(&state.ndi_inputs),
+            ndi_inputs: Arc::clone(&state.ndi_inputs),
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-            Arc::clone(&state.spout_inputs),
-            Arc::clone(&state.capture_inputs),
-            Some((output.width, output.height)),
-            output.fullscreen,
-            Some(unpublished_snapshot),
-            true,
-            Some(expected_fence.clone()),
-            Some(phase_cancelled),
-            true,
-            label.clone(),
-            Arc::clone(&teardown_lease),
-        )
+            spout_inputs: Arc::clone(&state.spout_inputs),
+            capture_inputs: Arc::clone(&state.capture_inputs),
+            initial_size_override: Some((output.width, output.height)),
+            fullscreen: output.fullscreen,
+            unpublished_snapshot: Some(unpublished_snapshot),
+            gate_render_loop_until_publication: true,
+            first_frame_fence: Some(expected_fence.clone()),
+            phase_cancelled: Some(phase_cancelled),
+            show_before_first_frame: true,
+            label: label.clone(),
+            teardown_lease: Arc::clone(&teardown_lease),
+        })
     })()
     .map_err(OutputLeaseCandidateCommitFailure::safe)?;
     Ok(PreparedNativeVideoOutputCandidate {
@@ -59592,17 +62000,45 @@ fn display_output_candidate_snapshot(
     snapshot
 }
 
+struct DisplayOutputControlRequest<'a> {
+    spec: &'a DisplayOutputSpecV2,
+    expected_fence: &'a OutputControlFenceV1,
+    lease_request: &'a OutputLeaseRequest,
+    lease_now_ms: u64,
+    expected_owner_principal: &'a str,
+    expected_owner_window_label: &'a str,
+    expected_owner_incarnation: u64,
+}
+
+struct DisplayOutputWindowControlRequest<'a> {
+    expected_fence: &'a OutputControlFenceV1,
+    lease_request: &'a OutputLeaseRequest,
+    lease_now_ms: u64,
+    expected_owner_principal: &'a str,
+    expected_owner_window_label: &'a str,
+    expected_owner_incarnation: u64,
+}
+
+#[cfg(test)]
+macro_rules! display_output_control_request {
+    ($spec:expr, $expected_fence:expr, $lease_request:expr, $lease_now_ms:expr, $expected_owner_principal:expr, $expected_owner_window_label:expr, $expected_owner_incarnation:expr) => {
+        DisplayOutputControlRequest {
+            spec: $spec,
+            expected_fence: $expected_fence,
+            lease_request: $lease_request,
+            lease_now_ms: $lease_now_ms,
+            expected_owner_principal: $expected_owner_principal,
+            expected_owner_window_label: $expected_owner_window_label,
+            expected_owner_incarnation: $expected_owner_incarnation,
+        }
+    };
+}
+
 fn add_display_output_with_output_control_fence(
     app: &tauri::AppHandle,
     editor_window: &WebviewWindow,
     state: &AppState,
-    spec: &DisplayOutputSpecV2,
-    expected_fence: &OutputControlFenceV1,
-    lease_request: &OutputLeaseRequest,
-    _lease_now_ms: u64,
-    expected_owner_principal: &str,
-    expected_owner_window_label: &str,
-    expected_owner_incarnation: u64,
+    request: DisplayOutputControlRequest<'_>,
 ) -> Result<
     (
         bool,
@@ -59613,13 +62049,7 @@ fn add_display_output_with_output_control_fence(
 > {
     add_display_output_with_output_control_fence_core(
         state,
-        spec,
-        expected_fence,
-        lease_request,
-        _lease_now_ms,
-        expected_owner_principal,
-        expected_owner_window_label,
-        expected_owner_incarnation,
+        request,
         TauriDisplayOutputNativeOperations {
             app: app.clone(),
             editor_window: editor_window.clone(),
@@ -59629,13 +62059,7 @@ fn add_display_output_with_output_control_fence(
 
 fn add_display_output_with_output_control_fence_core<NativeOps>(
     state: &AppState,
-    spec: &DisplayOutputSpecV2,
-    expected_fence: &OutputControlFenceV1,
-    lease_request: &OutputLeaseRequest,
-    _lease_now_ms: u64,
-    expected_owner_principal: &str,
-    expected_owner_window_label: &str,
-    expected_owner_incarnation: u64,
+    request: DisplayOutputControlRequest<'_>,
     native_ops: NativeOps,
 ) -> Result<
     (
@@ -59648,6 +62072,15 @@ fn add_display_output_with_output_control_fence_core<NativeOps>(
 where
     NativeOps: DisplayOutputNativeOperations,
 {
+    let DisplayOutputControlRequest {
+        spec,
+        expected_fence,
+        lease_request,
+        lease_now_ms: _lease_now_ms,
+        expected_owner_principal,
+        expected_owner_window_label,
+        expected_owner_incarnation,
+    } = request;
     spec.validate()
         .map_err(|_| "Display output specification is invalid".to_string())?;
     native_ops.validate_editor_monitor()?;
@@ -60334,14 +62767,16 @@ where
             let safety = state.engine.safety_blackout_authority();
             let fence_after = control_plane_runtime::committed_output_control_fence(
                 expected_fence,
-                coordinator.epoch,
-                coordinator.revision,
-                &coordinator.checkpoint_hash,
-                coordinator.publication_generation,
-                output_epoch_after,
-                output_generation_after,
-                safety.epoch,
-                safety.generation,
+                control_plane_runtime::CommittedOutputControlFenceValues {
+                    project_epoch: coordinator.epoch,
+                    project_revision: coordinator.revision,
+                    project_checkpoint_hash: &coordinator.checkpoint_hash,
+                    project_publication_generation: coordinator.publication_generation,
+                    output_epoch: output_epoch_after,
+                    output_generation: output_generation_after,
+                    safety_blackout_epoch: safety.epoch,
+                    safety_blackout_generation: safety.generation,
+                },
             );
             Ok((fence_after, receipt))
         }) {
@@ -60495,14 +62930,16 @@ fn apply_output_ownership_role_with_output_control_fence(
                 let safety = state.engine.safety_blackout_authority();
                 control_plane_runtime::committed_output_control_fence(
                     expected_fence,
-                    project_epoch,
-                    project_revision,
-                    &project_checkpoint_hash,
-                    project_publication_generation,
-                    output_epoch_after,
-                    output_generation_after,
-                    safety.epoch,
-                    safety.generation,
+                    control_plane_runtime::CommittedOutputControlFenceValues {
+                        project_epoch,
+                        project_revision,
+                        project_checkpoint_hash: &project_checkpoint_hash,
+                        project_publication_generation,
+                        output_epoch: output_epoch_after,
+                        output_generation: output_generation_after,
+                        safety_blackout_epoch: safety.epoch,
+                        safety_blackout_generation: safety.generation,
+                    },
                 )
             };
             Ok((applied, fence_after, lease_receipt))
@@ -60639,14 +63076,16 @@ fn release_safety_blackout_with_output_control_fence(
                 applied,
                 control_plane_runtime::committed_output_control_fence(
                     expected_fence,
-                    project_epoch,
-                    project_revision,
-                    &project_checkpoint_hash,
-                    project_publication_generation,
-                    expected_fence.output_epoch,
-                    expected_fence.output_generation,
-                    safety_epoch_after,
-                    safety_generation_after,
+                    control_plane_runtime::CommittedOutputControlFenceValues {
+                        project_epoch,
+                        project_revision,
+                        project_checkpoint_hash: &project_checkpoint_hash,
+                        project_publication_generation,
+                        output_epoch: expected_fence.output_epoch,
+                        output_generation: expected_fence.output_generation,
+                        safety_blackout_epoch: safety_epoch_after,
+                        safety_blackout_generation: safety_generation_after,
+                    },
                 ),
                 lease_receipt,
             ))
@@ -60985,10 +63424,15 @@ fn sync_external_video_transports(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
     let role = state.engine.output_ownership_status().role;
-    let mut transition = state
+    let transition = state
         .engine
         .begin_output_ownership_transition(role)
         .map_err(|error| format!("External video sync admission failed: {error}"))?;
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    let mut transition = transition;
     if let Err(error) = state.engine.fence_output_ownership() {
         transition.fail(error.clone());
         return Err(error);
@@ -60997,24 +63441,30 @@ fn sync_external_video_transports(
     let result = sync_external_video_transports_from_snapshot(
         &snapshot,
         role,
-        state.external_video_transport.as_ref(),
-        state.external_video_transport_events.as_ref(),
-        state.capture_transport.as_ref(),
-        #[cfg(feature = "ndi")]
-        state.ndi_transport.as_ref(),
-        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-        state.spout_transport.as_ref(),
-        #[cfg(any(
-            feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-        ))]
-        &state.engine,
-        #[cfg(any(
-            feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
-        ))]
-        None,
-        Some(&mut transition),
+        ExternalVideoTransportSyncContext {
+            transport: state.external_video_transport.as_ref(),
+            event_log: state.external_video_transport_events.as_ref(),
+            capture_transport: state.capture_transport.as_ref(),
+            #[cfg(feature = "ndi")]
+            ndi_transport: state.ndi_transport.as_ref(),
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_transport: state.spout_transport.as_ref(),
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            engine: &state.engine,
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            activation: None,
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            maintenance_transition: Some(&mut transition),
+        },
     );
     finish_external_video_transport_maintenance_transition(transition, result)
 }
@@ -61116,11 +63566,13 @@ fn video_output_decode_preview_summaries(
             let result = scheduler.push_output_preview(
                 snapshot,
                 output.id,
-                config.preview_width,
-                config.preview_height,
-                prefetch_count,
-                prefetch_interval_ms,
-                bpm,
+                video::VideoPreviewEnqueueOptions {
+                    width: config.preview_width,
+                    height: config.preview_height,
+                    prefetch_count,
+                    prefetch_interval_ms,
+                    bpm,
+                },
             );
             let (report, error) = match result {
                 Ok(report) => (Some(report), None),
@@ -61233,7 +63685,7 @@ fn start_video_output_recording(
     let worker = std::thread::Builder::new()
         .name("syndocal-video-recorder".to_string())
         .spawn(move || {
-            run_video_output_recording(
+            run_video_output_recording(VideoOutputRecordingContext {
                 engine,
                 renderer,
                 output_id,
@@ -61242,9 +63694,9 @@ fn start_video_output_recording(
                 height,
                 frame_rate,
                 audio_inputs,
-                worker_stop,
-                worker_status,
-            );
+                stop: worker_stop,
+                status: worker_status,
+            });
         })
         .map_err(|error| format!("Failed to start video recording worker: {error}"))?;
     runtime.stop = Some(stop);
@@ -61401,7 +63853,7 @@ fn capture_video_output_preview_effect_snapshot(
     }
 }
 
-fn run_video_output_recording(
+struct VideoOutputRecordingContext {
     engine: EngineHandle,
     renderer: Arc<Mutex<AppVideoPreviewRenderer>>,
     output_id: VideoOutputId,
@@ -61412,7 +63864,21 @@ fn run_video_output_recording(
     audio_inputs: Vec<RecordingAudioInput>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<VideoRecordingStatus>>,
-) {
+}
+
+fn run_video_output_recording(context: VideoOutputRecordingContext) {
+    let VideoOutputRecordingContext {
+        engine,
+        renderer,
+        output_id,
+        path,
+        width,
+        height,
+        frame_rate,
+        audio_inputs,
+        stop,
+        status,
+    } = context;
     let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
     let mut command =
         video_recording_ffmpeg_command(ffmpeg, &path, width, height, frame_rate, &audio_inputs);
@@ -61655,6 +64121,8 @@ fn capture_media_asset_preview_asset_for_window(
     window: &WebviewWindow,
     asset_id: MediaAssetId,
 ) -> Result<(String, MediaAssetPrepareAuthority, MediaAssetSummary), String> {
+    let window_label = window.label();
+    state.ensure_window_authority_not_blocked(window_label)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let coordinator = lock_project_coordinator(state)?;
     let owner_id = {
@@ -61662,8 +64130,9 @@ fn capture_media_asset_preview_asset_for_window(
             .project_transaction_owners
             .lock()
             .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-        legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())?
+        legacy_media_asset_compatibility_owner_for_window_label(&owners, window_label)?
     };
+    state.ensure_window_authority_not_blocked(window_label)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
     let (authority, asset) =
@@ -61675,12 +64144,16 @@ fn capture_media_asset_preview_owner_for_window(
     state: &AppState,
     window: &WebviewWindow,
 ) -> Result<String, String> {
+    let window_label = window.label();
+    state.ensure_window_authority_not_blocked(window_label)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let owners = state
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-    legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())
+    let owner_id = legacy_media_asset_compatibility_owner_for_window_label(&owners, window_label)?;
+    state.ensure_window_authority_not_blocked(window_label)?;
+    Ok(owner_id)
 }
 
 /// The Begin linearization point. The verified copy was prepared outside all
@@ -61694,6 +64167,8 @@ fn insert_media_asset_preview_session_if_current(
     expected_asset: &MediaAssetSummary,
     private_copy: PrivateMediaSnapshot,
 ) -> Result<MediaAssetPreviewSessionTicket, String> {
+    let window_label = window.label();
+    state.ensure_window_authority_not_blocked(window_label)?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let coordinator = lock_project_coordinator(state)?;
     let owner_id = {
@@ -61701,8 +64176,9 @@ fn insert_media_asset_preview_session_if_current(
             .project_transaction_owners
             .lock()
             .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-        legacy_media_asset_compatibility_owner_for_window_label(&owners, window.label())?
+        legacy_media_asset_compatibility_owner_for_window_label(&owners, window_label)?
     };
+    state.ensure_window_authority_not_blocked(window_label)?;
     if owner_id != expected_owner {
         return Err("Renderer owner changed while media preview was prepared; retry".to_string());
     }
@@ -61718,7 +64194,7 @@ fn insert_media_asset_preview_session_if_current(
     )?;
     state.media_asset_operations.insert_preview_session(
         owner_id,
-        window.label().to_string(),
+        window_label.to_string(),
         authority,
         asset,
         private_copy,
@@ -62442,14 +64918,17 @@ fn encode_live_video_monitor_jpeg(
 #[tauri::command]
 fn get_live_video_monitor_frame(
     state: State<'_, AppState>,
-    monitor_kind: LiveVideoMonitorKind,
-    output_id: Option<VideoOutputId>,
-    layer_id: Option<VideoLayerId>,
-    width: u32,
-    height: u32,
-    quality: Option<u8>,
-    decode_budget: Option<usize>,
+    args: FlatInvokeArgs<Value>,
 ) -> Result<tauri::ipc::Response, String> {
+    read_flat_invoke_args!(args;
+        monitor_kind: LiveVideoMonitorKind => "monitorKind",
+        output_id: Option<VideoOutputId> => "outputId",
+        layer_id: Option<VideoLayerId> => "layerId",
+        width: u32 => "width",
+        height: u32 => "height",
+        quality: Option<u8> => "quality",
+        decode_budget: Option<usize> => "decodeBudget",
+    );
     let sequence = LIVE_VIDEO_MONITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let (width, height) = live_video_monitor_dimensions(width, height);
     let quality = live_video_monitor_quality(quality);
@@ -62706,10 +65185,12 @@ mod vj_preview_transport_tests {
 
     #[test]
     fn authoritative_preview_stage_rejects_stale_or_partial_authority_before_effect() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.epoch = 4;
-        coordinator.revision = 9;
-        coordinator.checkpoint_hash = "checkpoint-b".to_string();
+        let coordinator = ProjectCoordinator {
+            epoch: 4,
+            revision: 9,
+            checkpoint_hash: "checkpoint-b".to_string(),
+            ..ProjectCoordinator::default()
+        };
         let exact = VjPreviewProjectAuthorityExpectation {
             epoch: 4,
             revision: 9,
@@ -63427,12 +65908,7 @@ fn set_display_output_window_open_with_output_control_fence(
     state: &AppState,
     output_id: VideoOutputId,
     open: bool,
-    expected_fence: &OutputControlFenceV1,
-    lease_request: &OutputLeaseRequest,
-    lease_now_ms: u64,
-    expected_owner_principal: &str,
-    expected_owner_window_label: &str,
-    expected_owner_incarnation: u64,
+    request: DisplayOutputWindowControlRequest<'_>,
 ) -> Result<
     (
         bool,
@@ -63441,6 +65917,15 @@ fn set_display_output_window_open_with_output_control_fence(
     ),
     String,
 > {
+    let DisplayOutputWindowControlRequest {
+        expected_fence,
+        lease_request,
+        lease_now_ms,
+        expected_owner_principal,
+        expected_owner_window_label,
+        expected_owner_incarnation,
+        ..
+    } = request;
     let output = state
         .engine
         .snapshot()
@@ -63595,26 +66080,26 @@ fn set_display_output_window_open_with_output_control_fence(
                     output.height,
                     output.fullscreen,
                 )?;
-                start_native_video_live_output(
-                    window.clone(),
-                    state.engine.clone(),
+                start_native_video_live_output(NativeVideoLiveOutputRequest {
+                    window: window.clone(),
+                    engine: state.engine.clone(),
                     output_id,
-                    Arc::clone(&metrics),
+                    metrics: Arc::clone(&metrics),
                     #[cfg(feature = "ndi")]
-                    Arc::clone(&state.ndi_inputs),
+                    ndi_inputs: Arc::clone(&state.ndi_inputs),
                     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-                    Arc::clone(&state.spout_inputs),
-                    Arc::clone(&state.capture_inputs),
-                    None,
-                    output.fullscreen,
-                    None,
-                    false,
-                    None,
-                    None,
-                    false,
-                    label.clone(),
-                    Arc::clone(&teardown_lease),
-                )
+                    spout_inputs: Arc::clone(&state.spout_inputs),
+                    capture_inputs: Arc::clone(&state.capture_inputs),
+                    initial_size_override: None,
+                    fullscreen: output.fullscreen,
+                    unpublished_snapshot: None,
+                    gate_render_loop_until_publication: false,
+                    first_frame_fence: None,
+                    phase_cancelled: None,
+                    show_before_first_frame: false,
+                    label: label.clone(),
+                    teardown_lease: Arc::clone(&teardown_lease),
+                })
             })();
             let worker = match created {
                 Ok(worker) => worker,
@@ -63781,9 +66266,11 @@ impl NativeVideoOutputMetrics {
     }
 
     fn snapshot(&self) -> NativeVideoOutputPerformance {
-        let average_frame_us = (self.frame_count > 0)
-            .then(|| (self.total_frame_us / u128::from(self.frame_count)) as u64)
-            .unwrap_or(0);
+        let average_frame_us = if self.frame_count > 0 {
+            (self.total_frame_us / u128::from(self.frame_count)) as u64
+        } else {
+            0
+        };
         let frame_budget_pass = (self.frame_count >= 120).then(|| {
             average_frame_us <= 1_000_000 / 60
                 && self.max_frame_us <= 1_000_000 / 30
@@ -64293,7 +66780,7 @@ struct NativeTimelineFollowLastValidFrame {
 
 #[derive(Debug, Clone)]
 enum NativeVideoOutputFrame {
-    Prepared(video::PreparedVideoOutput),
+    Prepared(Box<video::PreparedVideoOutput>),
     Follow {
         frame: video::VideoFrame,
         acknowledgement: TimelineFollowSettlementAck,
@@ -64474,16 +66961,16 @@ fn prepare_native_timeline_follow_video_output(
         })
         .transpose()?;
     let rendered = renderer
-        .render_follow_output_transition_rgba8(
-            &outgoing.frame,
-            &incoming.frame,
-            follow.kind,
-            follow.curve,
-            follow.progress_millis,
-            follow.source_timeline_id,
-            transition_chain.as_ref(),
-            last_valid.as_ref().map(|cached| &cached.frame),
-        )
+        .render_follow_output_transition_rgba8(video::VideoFollowOutputTransitionRequest {
+            outgoing: &outgoing.frame,
+            incoming: &incoming.frame,
+            kind: follow.kind,
+            curve: follow.curve,
+            progress_millis: follow.progress_millis,
+            source_timeline_id: follow.source_timeline_id,
+            transition_chain: transition_chain.as_ref(),
+            last_valid: last_valid.as_ref().map(|cached| &cached.frame),
+        })
         .map_err(|error| format!("Timeline Follow output transition failed: {error:?}"))?;
     let side_error = outgoing.evidence.freshness != video::VideoOutputRenderFreshness::Fresh
         || incoming.evidence.freshness != video::VideoOutputRenderFreshness::Fresh;
@@ -64543,7 +67030,7 @@ fn prepare_native_video_output(
             .set_bpm(Some(snapshot.clock.bpm));
         return renderer
             .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
-            .map(NativeVideoOutputFrame::Prepared)
+            .map(|prepared| NativeVideoOutputFrame::Prepared(Box::new(prepared)))
             .map_err(|error| format!("{error:?}"));
     }
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
@@ -64567,7 +67054,7 @@ fn prepare_native_video_output(
         .set_bpm(Some(snapshot.clock.bpm));
     renderer
         .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
-        .map(NativeVideoOutputFrame::Prepared)
+        .map(|prepared| NativeVideoOutputFrame::Prepared(Box::new(prepared)))
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -64604,12 +67091,13 @@ fn exact_display_first_frame_fence_matches(
         && safety.generation == expected.safety_blackout_generation
 }
 
-fn start_native_video_live_output(
+struct NativeVideoLiveOutputRequest {
     window: tauri::Window,
     engine: EngineHandle,
     output_id: VideoOutputId,
     metrics: Arc<Mutex<NativeVideoOutputMetrics>>,
-    #[cfg(feature = "ndi")] ndi_inputs: ndi_transport::NdiInputRegistry,
+    #[cfg(feature = "ndi")]
+    ndi_inputs: ndi_transport::NdiInputRegistry,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: spout_transport::SpoutInputRegistry,
     capture_inputs: capture_transport::CaptureInputRegistry,
@@ -64622,7 +67110,31 @@ fn start_native_video_live_output(
     show_before_first_frame: bool,
     label: String,
     teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+}
+
+fn start_native_video_live_output(
+    request: NativeVideoLiveOutputRequest,
 ) -> Result<NativeVideoOutputWorker, String> {
+    let NativeVideoLiveOutputRequest {
+        window,
+        engine,
+        output_id,
+        metrics,
+        #[cfg(feature = "ndi")]
+        ndi_inputs,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout_inputs,
+        capture_inputs,
+        initial_size_override,
+        fullscreen,
+        unpublished_snapshot,
+        gate_render_loop_until_publication,
+        first_frame_fence,
+        phase_cancelled,
+        show_before_first_frame,
+        label,
+        teardown_lease,
+    } = request;
     if let Err(error) = ensure_video_output_allowed(&engine) {
         report_native_timeline_follow_video_result(
             &engine,
@@ -65438,9 +67950,6 @@ async fn open_pane_window(
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
-    let emit_pane = pane.clone();
-    let emit_app = app.clone();
-    let retire_owner_label = label.clone();
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
@@ -65461,18 +67970,6 @@ async fn open_pane_window(
     if let Some(placement) = placement.as_ref() {
         apply_pane_window_placement(&app, &window, placement)?;
     }
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            let state = emit_app.state::<AppState>();
-            let query = emit_app.state::<ControlPlaneQueryState>();
-            if let Err(error) =
-                handle_destroyed_window_authority_retirement(&state, &query, &retire_owner_label)
-            {
-                eprintln!("Destroyed window authority was fail-closed: {error}");
-            }
-            let _ = emit_app.emit("syndocal://pane-window-closed", emit_pane.clone());
-        }
-    });
     Ok(())
 }
 
@@ -65750,26 +68247,26 @@ async fn open_video_output_window(
                 if let Ok(mut active_metrics) = native_metrics.lock() {
                     active_metrics.insert(output_id, Arc::clone(&metrics));
                 }
-                start_native_video_live_output(
-                    window.clone(),
-                    state.engine.clone(),
+                start_native_video_live_output(NativeVideoLiveOutputRequest {
+                    window: window.clone(),
+                    engine: state.engine.clone(),
                     output_id,
-                    Arc::clone(&metrics),
+                    metrics: Arc::clone(&metrics),
                     #[cfg(feature = "ndi")]
-                    Arc::clone(&state.ndi_inputs),
+                    ndi_inputs: Arc::clone(&state.ndi_inputs),
                     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-                    Arc::clone(&state.spout_inputs),
-                    Arc::clone(&state.capture_inputs),
-                    None,
-                    output.fullscreen,
-                    None,
-                    false,
-                    None,
-                    None,
-                    false,
-                    label.clone(),
-                    Arc::clone(&teardown_lease),
-                )
+                    spout_inputs: Arc::clone(&state.spout_inputs),
+                    capture_inputs: Arc::clone(&state.capture_inputs),
+                    initial_size_override: None,
+                    fullscreen: output.fullscreen,
+                    unpublished_snapshot: None,
+                    gate_render_loop_until_publication: false,
+                    first_frame_fence: None,
+                    phase_cancelled: None,
+                    show_before_first_frame: false,
+                    label: label.clone(),
+                    teardown_lease: Arc::clone(&teardown_lease),
+                })
             })() {
                 Ok(worker) => worker,
                 Err(error) => {
@@ -66398,7 +68895,7 @@ fn send_dmx_config_test_frame(
         }
     };
     Ok(DmxTestFrameResult {
-        protocol: config.protocol.clone(),
+        protocol: config.protocol,
         universe: config.universe,
         channel,
         width,
@@ -66507,18 +69004,15 @@ fn normalize_fixture_limits(limits: FixtureLimits) -> FixtureLimits {
     }
 }
 
-fn cue_targets_from_snapshot(
-    snapshot: &EngineSnapshot,
-) -> Result<
-    (
-        Vec<CueFixtureTarget>,
-        Vec<VideoLayerTarget>,
-        Vec<VideoOutputTarget>,
-        Vec<CueNodeGraphTarget>,
-        Vec<CueEffectTarget>,
-    ),
-    String,
-> {
+type CueTargetCollections = (
+    Vec<CueFixtureTarget>,
+    Vec<VideoLayerTarget>,
+    Vec<VideoOutputTarget>,
+    Vec<CueNodeGraphTarget>,
+    Vec<CueEffectTarget>,
+);
+
+fn cue_targets_from_snapshot(snapshot: &EngineSnapshot) -> Result<CueTargetCollections, String> {
     let targets = snapshot
         .fixtures
         .iter()
@@ -66745,16 +69239,7 @@ fn validate_cue_effect_target_replacement(
 fn cue_targets_from_snapshot_with_scope(
     snapshot: &EngineSnapshot,
     scope: &CueCaptureScope,
-) -> Result<
-    (
-        Vec<CueFixtureTarget>,
-        Vec<VideoLayerTarget>,
-        Vec<VideoOutputTarget>,
-        Vec<CueNodeGraphTarget>,
-        Vec<CueEffectTarget>,
-    ),
-    String,
-> {
+) -> Result<CueTargetCollections, String> {
     let (targets, video_targets, video_output_targets, node_graph_targets, effect_targets) =
         cue_targets_from_snapshot(snapshot)?;
     match scope {
@@ -66868,24 +69353,9 @@ fn merge_cue_update_targets(
     snapshot: &EngineSnapshot,
     cue_id: CueId,
     scope: &CueCaptureScope,
-    captured: (
-        Vec<CueFixtureTarget>,
-        Vec<VideoLayerTarget>,
-        Vec<VideoOutputTarget>,
-        Vec<CueNodeGraphTarget>,
-        Vec<CueEffectTarget>,
-    ),
+    captured: CueTargetCollections,
     explicit_effect_targets: Option<Vec<CueEffectTarget>>,
-) -> Result<
-    (
-        Vec<CueFixtureTarget>,
-        Vec<VideoLayerTarget>,
-        Vec<VideoOutputTarget>,
-        Vec<CueNodeGraphTarget>,
-        Vec<CueEffectTarget>,
-    ),
-    String,
-> {
+) -> Result<CueTargetCollections, String> {
     let existing = snapshot
         .cues
         .iter()
@@ -67000,10 +69470,7 @@ where
     Id: Eq + std::hash::Hash + Copy,
     F: Fn(&T) -> Id,
 {
-    let captured_ids = captured
-        .iter()
-        .map(|target| id_for(target))
-        .collect::<HashSet<_>>();
+    let captured_ids = captured.iter().map(&id_for).collect::<HashSet<_>>();
     existing
         .into_iter()
         .filter(|target| !captured_ids.contains(&id_for(target)))
@@ -68380,19 +70847,35 @@ fn gdtf_share_filter_matches(fixture: &GdtfShareFixtureSummary, needle: &str) ->
         })
 }
 
-fn filter_gdtf_share_results(
-    mut fixtures: Vec<GdtfShareFixtureSummary>,
-    manufacturer: &str,
-    fixture: &str,
-    query: &str,
-    mode: &str,
+struct GdtfShareFilterOptions<'a> {
+    manufacturer: &'a str,
+    fixture: &'a str,
+    query: &'a str,
+    mode: &'a str,
     min_footprint: Option<u16>,
     max_footprint: Option<u16>,
     release_only: bool,
     tested_in_visualizer: bool,
     tested_in_real_life: bool,
     limit: usize,
+}
+
+fn filter_gdtf_share_results(
+    mut fixtures: Vec<GdtfShareFixtureSummary>,
+    options: GdtfShareFilterOptions<'_>,
 ) -> GdtfShareSearchResponse {
+    let GdtfShareFilterOptions {
+        manufacturer,
+        fixture,
+        query,
+        mode,
+        min_footprint,
+        max_footprint,
+        release_only,
+        tested_in_visualizer,
+        tested_in_real_life,
+        limit,
+    } = options;
     let filter_support = GdtfShareFilterSupport {
         release_status: fixtures
             .iter()
@@ -68526,9 +71009,8 @@ fn download_gdtf_share_file(
         let _ = fs::remove_file(path);
         return Err(error);
     }
-    validate_gdtf_share_download_payload(path).map_err(|error| {
+    validate_gdtf_share_download_payload(path).inspect_err(|_error| {
         let _ = fs::remove_file(path);
-        error
     })?;
     Ok(())
 }
@@ -70040,7 +72522,9 @@ pub(crate) mod tests {
                 midi_feedback_runtime: Mutex::new(None),
                 midi_feedback_last_error: Arc::new(Mutex::new(None)),
                 osc_input: Mutex::new(None),
+                remote_control_lifecycle: Mutex::new(()),
                 remote_control: Mutex::new(None),
+                dj_link_process_fence: new_dj_link_process_fence(),
                 dmx_input: Mutex::new(None),
                 pending_project_open_paths: Mutex::new(Vec::new()),
                 current_project_path: Mutex::new(None),
@@ -70066,6 +72550,8 @@ pub(crate) mod tests {
                 project_transaction_retired_owner_bindings: Mutex::new(HashSet::new()),
                 project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
                 project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
+                project_transaction_owner_authority_barrier: Mutex::new(()),
+                project_transaction_owner_retiring: Mutex::new(HashSet::new()),
                 project_transaction_owner_rotation: Mutex::new(()),
                 project_operator_sessions: Mutex::new(HashMap::new()),
                 video_clip_slot_runtime_generation: AtomicU64::new(0),
@@ -70231,8 +72717,7 @@ pub(crate) mod tests {
                 .expect("reserve injected Media Library import operation");
             let prepared = tauri::async_runtime::block_on(prepare_reserved_media_assets_impl(
                 &self.state,
-                request_id,
-                handle.generation,
+                (request_id, handle.generation),
                 VideoSourceKind::File,
                 vec![path],
                 authority.epoch,
@@ -70701,20 +73186,22 @@ pub(crate) mod tests {
         let terminal_fence = current_takeover_fence(&terminal_harness.state);
         let terminal = replace_prepared_project_snapshot_with_expected_output_fence(
             &terminal_harness.state,
-            prepare_project_load(
-                empty_project_file(),
-                ProjectControlMappings::default(),
-                "durable terminal Take Over".to_string(),
-                None,
-            )
-            .unwrap(),
-            ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
-            &terminal_fence,
-            &terminal_stop,
-            &standby_status,
-            &selector,
-            false,
-            Some((&terminal_request, 2)),
+            ProjectTakeoverReplacementRequest {
+                prepared: prepare_project_load(
+                    empty_project_file(),
+                    ProjectControlMappings::default(),
+                    "durable terminal Take Over".to_string(),
+                    None,
+                )
+                .unwrap(),
+                scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+                expected_output_fence: &terminal_fence,
+                standby_stop: &terminal_stop,
+                standby_status: &standby_status,
+                selector: &selector,
+                force: false,
+                lease_authorization: Some((&terminal_request, 2)),
+            },
         )
         .expect("terminal Take Over retry returns durable evidence");
         assert_eq!(terminal.1, terminal_fence);
@@ -70746,20 +73233,22 @@ pub(crate) mod tests {
         let pending_fence = current_takeover_fence(&pending_harness.state);
         let pending = replace_prepared_project_snapshot_with_expected_output_fence(
             &pending_harness.state,
-            prepare_project_load(
-                empty_project_file(),
-                ProjectControlMappings::default(),
-                "durable pending Take Over".to_string(),
-                None,
-            )
-            .unwrap(),
-            ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
-            &pending_fence,
-            &pending_stop,
-            &standby_status,
-            &selector,
-            false,
-            Some((&pending_request, 2)),
+            ProjectTakeoverReplacementRequest {
+                prepared: prepare_project_load(
+                    empty_project_file(),
+                    ProjectControlMappings::default(),
+                    "durable pending Take Over".to_string(),
+                    None,
+                )
+                .unwrap(),
+                scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+                expected_output_fence: &pending_fence,
+                standby_stop: &pending_stop,
+                standby_status: &standby_status,
+                selector: &selector,
+                force: false,
+                lease_authorization: Some((&pending_request, 2)),
+            },
         );
         assert!(pending.is_err());
         assert!(pending.unwrap_err().contains("RequestCapacity"));
@@ -70906,13 +73395,15 @@ pub(crate) mod tests {
                 .with_terminal_fault(active_parent.clone(), saved_parent.clone());
         let result = add_display_output_with_output_control_fence_core(
             &state,
-            &spec,
-            &request.expected_fence,
-            &lease_request,
-            lease_now,
-            &authority.owner_principal,
-            "main",
-            authority.owner_incarnation,
+            display_output_control_request!(
+                &spec,
+                &request.expected_fence,
+                &lease_request,
+                lease_now,
+                &authority.owner_principal,
+                "main",
+                authority.owner_incarnation
+            ),
             native_ops.clone(),
         );
         let error = result.expect_err("terminal durable record fault must remain in doubt");
@@ -70959,13 +73450,15 @@ pub(crate) mod tests {
         );
         let retry = add_display_output_with_output_control_fence_core(
             &state,
-            &spec,
-            &request.expected_fence,
-            &lease_request,
-            lease_now,
-            &authority.owner_principal,
-            "main",
-            authority.owner_incarnation,
+            display_output_control_request!(
+                &spec,
+                &request.expected_fence,
+                &lease_request,
+                lease_now,
+                &authority.owner_principal,
+                "main",
+                authority.owner_incarnation
+            ),
             native_ops.clone(),
         );
         assert!(retry.is_err());
@@ -72375,13 +74868,15 @@ pub(crate) mod tests {
         let add_worker = std::thread::spawn(move || {
             let result = add_display_output_with_output_control_fence_core(
                 &worker_state,
-                &spec,
-                &worker_fence,
-                &worker_lease,
-                lease_now,
-                &worker_owner,
-                "main",
-                worker_incarnation,
+                display_output_control_request!(
+                    &spec,
+                    &worker_fence,
+                    &worker_lease,
+                    lease_now,
+                    &worker_owner,
+                    "main",
+                    worker_incarnation
+                ),
                 worker_ops,
             );
             result_sender
@@ -72456,18 +74951,21 @@ pub(crate) mod tests {
         let retry_started = Instant::now();
         let retry = add_display_output_with_output_control_fence_core(
             &state,
-            match &request.action {
-                protocol::control_plane_command::OutputControlActionV2::AddDisplay {
-                    spec, ..
-                } => spec,
-                _ => unreachable!(),
-            },
-            &request.expected_fence,
-            &lease_request,
-            lease_now,
-            &authority.owner_principal,
-            "main",
-            authority.owner_incarnation,
+            display_output_control_request!(
+                match &request.action {
+                    protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                        spec,
+                        ..
+                    } => spec,
+                    _ => unreachable!(),
+                },
+                &request.expected_fence,
+                &lease_request,
+                lease_now,
+                &authority.owner_principal,
+                "main",
+                authority.owner_incarnation
+            ),
             native_ops.clone(),
         );
         assert!(retry.is_err());
@@ -72518,13 +75016,15 @@ pub(crate) mod tests {
         let late_add_worker = std::thread::spawn(move || {
             let result = add_display_output_with_output_control_fence_core(
                 &late_worker_state,
-                &late_spec,
-                &late_worker_fence,
-                &late_worker_lease,
-                late_now,
-                &late_worker_owner,
-                "main",
-                late_authority.owner_incarnation,
+                display_output_control_request!(
+                    &late_spec,
+                    &late_worker_fence,
+                    &late_worker_lease,
+                    late_now,
+                    &late_worker_owner,
+                    "main",
+                    late_authority.owner_incarnation
+                ),
                 late_worker_ops,
             );
             late_result_sender
@@ -72579,13 +75079,15 @@ pub(crate) mod tests {
         .with_scenario(FakeDisplayNativeScenario::RotateBeforeAdmission);
         let stale_result = add_display_output_with_output_control_fence_core(
             &stale_state,
-            &stale_spec,
-            &stale_request.expected_fence,
-            &stale_lease,
-            stale_now,
-            &stale_authority.owner_principal,
-            "main",
-            stale_authority.owner_incarnation,
+            display_output_control_request!(
+                &stale_spec,
+                &stale_request.expected_fence,
+                &stale_lease,
+                stale_now,
+                &stale_authority.owner_principal,
+                "main",
+                stale_authority.owner_incarnation
+            ),
             stale_ops.clone(),
         );
         assert!(stale_result.is_err());
@@ -72619,13 +75121,15 @@ pub(crate) mod tests {
         .with_scenario(FakeDisplayNativeScenario::AdvanceSafetyBeforeFirstFrame);
         let reserved_result = add_display_output_with_output_control_fence_core(
             &reserved_state,
-            &reserved_spec,
-            &reserved_request.expected_fence,
-            &reserved_lease,
-            reserved_now,
-            &reserved_authority.owner_principal,
-            "main",
-            reserved_authority.owner_incarnation,
+            display_output_control_request!(
+                &reserved_spec,
+                &reserved_request.expected_fence,
+                &reserved_lease,
+                reserved_now,
+                &reserved_authority.owner_principal,
+                "main",
+                reserved_authority.owner_incarnation
+            ),
             reserved_ops.clone(),
         );
         assert!(reserved_result.is_err());
@@ -72657,13 +75161,15 @@ pub(crate) mod tests {
         .with_scenario(FakeDisplayNativeScenario::AdvanceSafetyBeforeFinalPublication);
         let final_result = add_display_output_with_output_control_fence_core(
             &final_state,
-            &final_spec,
-            &final_request.expected_fence,
-            &final_lease,
-            final_now,
-            &final_authority.owner_principal,
-            "main",
-            final_authority.owner_incarnation,
+            display_output_control_request!(
+                &final_spec,
+                &final_request.expected_fence,
+                &final_lease,
+                final_now,
+                &final_authority.owner_principal,
+                "main",
+                final_authority.owner_incarnation
+            ),
             final_ops.clone(),
         );
         assert!(final_result.is_err());
@@ -72685,7 +75191,6 @@ pub(crate) mod tests {
             "standby_sync_status",
             "get_output_ownership_status",
             "get_engine_telemetry_report",
-            "remote_access_urls",
             "list_show_lan_interfaces",
             "remote_control_status",
             "dmx_input_status",
@@ -72711,6 +75216,431 @@ pub(crate) mod tests {
                 "{command} must dispatch off the event loop"
             );
         }
+    }
+
+    #[test]
+    fn remote_access_urls_does_not_cross_an_async_tauri_invoke_context() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn remote_access_urls(")
+            .expect("remote_access_urls command");
+        let end = source[start..]
+            .find("\n}\n")
+            .map(|offset| start + offset + 3)
+            .expect("remote_access_urls body");
+        let body = &source[start..end];
+        assert!(!body.contains("async fn remote_access_urls"));
+        assert!(!body.contains("spawn_blocking"));
+
+        std::thread::scope(|scope| {
+            for worker in 0..16 {
+                scope.spawn(move || {
+                    for index in 0..64 {
+                        let allow_lan = (worker + index) % 2 == 0;
+                        let config = RemoteControlConfig {
+                            allow_lan,
+                            bind_ip: if allow_lan {
+                                "0.0.0.0".to_string()
+                            } else {
+                                "127.0.0.1".to_string()
+                            },
+                            ..RemoteControlConfig::default()
+                        };
+                        let urls = build_remote_access_urls(
+                            &config,
+                            Some("192.0.2.42".parse().expect("test IPv4 address")),
+                        );
+                        let interfaces = normalize_show_lan_interfaces([
+                            "192.0.2.42".parse().expect("test IPv4 address"),
+                            "127.0.0.1".parse().expect("test IPv4 address"),
+                        ]);
+                        assert!(!urls.is_empty());
+                        assert_eq!(interfaces, ["192.0.2.42"]);
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn renderer_transaction_dispatch_is_exactly_once_sequentially_and_concurrently() {
+        let sequential = Arc::new(ProjectTransactionLane::new());
+        drop(sequential.admit_renderer_dispatch_once().unwrap());
+        assert!(sequential.admit_renderer_dispatch_once().is_err());
+        // The inner authoritative revalidation lane remains available to the
+        // one command which won the outer dispatch seal.
+        drop(sequential.admit().unwrap());
+
+        let concurrent = Arc::new(ProjectTransactionLane::new());
+        let successes = AtomicU64::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..32 {
+                let lane = Arc::clone(&concurrent);
+                let successes = &successes;
+                scope.spawn(move || {
+                    if let Ok(guard) = lane.admit_renderer_dispatch_once() {
+                        successes.fetch_add(1, Ordering::AcqRel);
+                        drop(guard);
+                    }
+                });
+            }
+        });
+        assert_eq!(successes.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn self_admitted_renderer_routes_are_exact_and_preserve_reply_loss_retry() {
+        const ROUTE_ADMISSION_TARGETS: [(&str, &str, &str); 2] = [
+            (
+                "patch_fixtures",
+                "patch_fixtures_in_project_transaction",
+                "patch_fixtures_in_project_transaction_with_resolve_and_publish",
+            ),
+            (
+                "repair_fixture_profile",
+                "repair_fixture_profile_for_window_label_with_resolve_observer",
+                "repair_fixture_profile_for_window_label_with_resolve_and_publish",
+            ),
+        ];
+
+        fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
+            let signature = format!("fn {name}(");
+            let start = source
+                .find(&signature)
+                .unwrap_or_else(|| panic!("missing function {name}"));
+            let end = source[start..]
+                .find("\n}\n")
+                .map(|offset| start + offset + 3)
+                .unwrap_or_else(|| panic!("unterminated function {name}"));
+            &source[start..end]
+        }
+
+        let expected = ROUTE_ADMISSION_TARGETS.map(|(route, _, _)| route);
+        assert_eq!(RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES, expected);
+        for (route, route_delegate, admission_target) in ROUTE_ADMISSION_TARGETS {
+            assert!(is_self_admitted_renderer_ticketed_route(route));
+            assert_eq!(
+                control_plane::tauri_route_admission_class(route),
+                Some(control_plane::TauriRouteAdmissionClass::RendererTicketedProjectMutation)
+            );
+            let route_body = function_body(include_str!("main.rs"), route);
+            if route != route_delegate {
+                assert!(
+                    route_body.contains(route_delegate),
+                    "{route} must delegate to its exact self-admission target"
+                );
+            }
+            assert!(
+                function_body(include_str!("main.rs"), admission_target)
+                    .contains("prepare_project_transaction_command_result_publication("),
+                "{route} must retain a fingerprinted terminal result publication"
+            );
+            assert!(
+                function_body(include_str!("main.rs"), admission_target)
+                    .contains("project_transaction_existing_command_result("),
+                "{route} must return its retained result before republishing"
+            );
+        }
+
+        let self_admitted = Arc::new(ProjectTransactionLane::new());
+        assert!(
+            admit_outer_renderer_dispatch("patch_fixtures", &self_admitted)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            admit_outer_renderer_dispatch("patch_fixtures", &self_admitted)
+                .unwrap()
+                .is_none(),
+            "an exact reply-loss retry must reach the route-owned receipt"
+        );
+
+        let generic = Arc::new(ProjectTransactionLane::new());
+        drop(
+            admit_outer_renderer_dispatch("set_attribute", &generic)
+                .unwrap()
+                .expect("generic renderer mutation owns one outer dispatch"),
+        );
+        assert!(admit_outer_renderer_dispatch("set_attribute", &generic).is_err());
+
+        for route in [
+            "create_fixture_group",
+            "move_cue_between_scene_banks_batch",
+            "update_cue_from_current_batch",
+        ] {
+            let lane = Arc::new(ProjectTransactionLane::new());
+            drop(
+                admit_outer_renderer_dispatch(route, &lane)
+                    .unwrap()
+                    .expect("non-receipted renderer mutations own one outer dispatch"),
+            );
+            assert!(
+                admit_outer_renderer_dispatch(route, &lane).is_err(),
+                "{route} must reject a second payload under the same ticket"
+            );
+        }
+
+        let source = include_str!("main.rs");
+        assert!(source.contains("admit_outer_renderer_dispatch(command, &lane)"));
+    }
+
+    #[test]
+    fn d3_outer_handler_uses_containing_window_and_consumes_rejections() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn admit_tauri_app_invoke")
+            .expect("D3 invoke admission function");
+        let end = source[start..]
+            .find("fn lock_project_external_command_admission_inner")
+            .map(|offset| start + offset)
+            .expect("D3 invoke admission boundary");
+        let admission = &source[start..end];
+        assert!(admission.contains("webview_ref().window()"));
+        assert!(!admission.contains("webview_ref().label()"));
+        assert!(admission.contains("InvokeBody::Raw(_)"));
+
+        let dispatch_start = source
+            .find("fn dispatch_admitted_tauri_app_invoke")
+            .expect("D3 dispatch wrapper");
+        let dispatch = &source[dispatch_start..end];
+        assert!(dispatch.contains("invoke.resolver.reject(error)"));
+        assert!(dispatch.contains("return true"));
+        assert!(dispatch.contains("generated_handler(invoke)"));
+    }
+
+    #[test]
+    fn synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch() {
+        let source = include_str!("main.rs");
+        assert!(OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        for command in OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES {
+            assert_eq!(
+                control_plane::tauri_route_admission_class(command),
+                Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation),
+                "{command} must stay in the exact runtime class"
+            );
+            assert!(source.contains(&format!("fn {command}(")));
+            assert!(
+                !source.contains(&format!("async fn {command}(")),
+                "{command} must not outlive its outer external-admission guard"
+            );
+        }
+        for required in [
+            "set_bpm",
+            "set_programmer_attribute",
+            "trigger_cue",
+            "move_cue_between_scene_banks_batch",
+        ] {
+            if required == "move_cue_between_scene_banks_batch" {
+                assert_eq!(runtime_route_dispatch_policy(required), None);
+            } else {
+                assert_eq!(
+                    runtime_route_dispatch_policy(required),
+                    Some(RuntimeInvokeDispatchPolicy::HoldProjectFenceThroughSyncHandler)
+                );
+            }
+        }
+
+        assert!(PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        let registered = control_plane::registered_tauri_command_names_from_source(source).unwrap();
+        let runtime_routes = registered
+            .iter()
+            .filter(|command| {
+                control_plane::tauri_route_admission_class(command)
+                    == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(runtime_routes.len(), 142);
+        assert_eq!(
+            OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
+                + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
+            runtime_routes.len()
+        );
+        for command in runtime_routes {
+            assert!(
+                runtime_route_dispatch_policy(command).is_some(),
+                "runtime route {command} must have one exact dispatch policy"
+            );
+        }
+
+        let start = source
+            .find("fn dispatch_admitted_tauri_app_invoke")
+            .expect("D3 dispatch wrapper");
+        let end = source[start..]
+            .find("fn lock_project_external_command_admission_inner")
+            .map(|offset| start + offset)
+            .expect("D3 dispatch boundary");
+        let dispatch = &source[start..end];
+        let lock = dispatch
+            .find("let external_admission = match lock_project_external_command_admission")
+            .expect("runtime dispatch external fence");
+        let drop_coordinator = dispatch
+            .find("drop(coordinator);")
+            .expect("runtime dispatch coordinator release");
+        let generated = dispatch
+            .find("let handled = generated_handler(invoke);")
+            .expect("fenced generated dispatch");
+        let drop_external = dispatch
+            .find("drop(external_admission);")
+            .expect("runtime dispatch external release");
+        assert!(lock < drop_coordinator);
+        assert!(drop_coordinator < generated);
+        assert!(generated < drop_external);
+
+        let gate = Mutex::new(());
+        let guard = gate.lock().unwrap();
+        assert!(gate.try_lock().is_err(), "replacement cannot interleave");
+        drop(guard);
+        assert!(
+            gate.try_lock().is_ok(),
+            "replacement proceeds after dispatch"
+        );
+    }
+
+    #[test]
+    fn file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative() {
+        const AUTHORITATIVE_PROJECT_WRITERS: [&str; 4] = [
+            "save_project_as_v1",
+            "save_project_backup_v1",
+            "save_project_v1",
+            "save_user_template_v1",
+        ];
+        const SNAPSHOT_OR_EXTERNAL_FILE_ONLY: [&str; 16] = [
+            "cache_gdtf_from_share",
+            "delete_project_backup",
+            "download_gdtf_from_share",
+            "download_gdtf_from_url",
+            "export_diagnostic_package",
+            "import_video_output_bitmap_mask",
+            "install_application_update",
+            "save_custom_fixture_profile",
+            "save_effect_preset",
+            "save_engine_telemetry_report",
+            "save_fixture_preset",
+            "save_midi_mappings",
+            "save_node_graph_preset_file",
+            "save_osc_mappings",
+            "save_stage_map_preset_file",
+            "save_video_output_mapping_preset_file",
+        ];
+
+        fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
+            let signature = format!("fn {name}(");
+            let start = source
+                .find(&signature)
+                .unwrap_or_else(|| panic!("missing function {name}"));
+            let end = source[start..]
+                .find("\n}\n")
+                .map(|offset| start + offset + 3)
+                .unwrap_or_else(|| panic!("unterminated function {name}"));
+            &source[start..end]
+        }
+
+        let source = include_str!("main.rs");
+        let registered = control_plane::registered_tauri_command_names_from_source(source).unwrap();
+        let file_routes = registered
+            .iter()
+            .filter(|command| {
+                control_plane::tauri_route_admission_class(command)
+                    == Some(control_plane::TauriRouteAdmissionClass::FileExportMutation)
+            })
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let reviewed = AUTHORITATIVE_PROJECT_WRITERS
+            .into_iter()
+            .chain(SNAPSHOT_OR_EXTERNAL_FILE_ONLY)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(file_routes, reviewed);
+
+        let publication_request = source
+            .split("struct ProjectPublicationRequestV1 {")
+            .nth(1)
+            .and_then(|tail| tail.split("\n}").next())
+            .expect("project publication request DTO");
+        for field in [
+            "owner_id: String",
+            "expected_project_epoch: u64",
+            "expected_project_revision: u64",
+            "expected_checkpoint_hash: String",
+        ] {
+            assert!(publication_request.contains(field));
+        }
+        for command in AUTHORITATIVE_PROJECT_WRITERS {
+            let compact = function_body(source, command)
+                .split_whitespace()
+                .collect::<String>();
+            assert!(
+                compact.contains("request:ProjectPublicationRequestV1"),
+                "{command} must carry the authoritative E/R/H publication request"
+            );
+        }
+        for command in SNAPSHOT_OR_EXTERNAL_FILE_ONLY {
+            let compact = function_body(source, command)
+                .split_whitespace()
+                .collect::<String>();
+            for mutation in [
+                "state.engine.send(",
+                "state.engine.upsert_",
+                "state.engine.update_",
+                "state.engine.set_",
+                "state.engine.remove_",
+                "state.engine.replace_",
+                "state.engine.create_",
+            ] {
+                assert!(
+                    !compact.contains(mutation),
+                    "{command} must not mutate the project after its short file preflight"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_outer_ticketed_handler_is_synchronous() {
+        let source = include_str!("main.rs");
+        let names = control_plane::registered_tauri_command_names_from_source(source).unwrap();
+        for command in names.into_iter().filter(|command| {
+            control_plane::tauri_route_admission_class(command)
+                == Some(control_plane::TauriRouteAdmissionClass::RendererTicketedProjectMutation)
+        }) {
+            assert!(
+                source.contains(&format!("fn {command}(")),
+                "ticketed handler {command} must be synchronous so its lane guard covers dispatch"
+            );
+            assert!(
+                !source.contains(&format!("async fn {command}(")),
+                "ticketed handler {command} must not outlive its outer lane guard"
+            );
+        }
+    }
+
+    #[test]
+    fn ticketed_invoke_fields_reject_wrong_case_type_and_fractional_numbers() {
+        let valid = json!({
+            "projectTransactionId": 9,
+            "expectedEpoch": 4,
+            "ownerId": "renderer:test"
+        });
+        assert_eq!(
+            required_tauri_invoke_json_u64(&valid, "projectTransactionId").unwrap(),
+            9
+        );
+        assert_eq!(
+            required_tauri_invoke_json_string(&valid, "ownerId").unwrap(),
+            "renderer:test"
+        );
+        for invalid in [
+            json!({"project_transaction_id": 9}),
+            json!({"projectTransactionId": -1}),
+            json!({"projectTransactionId": 1.5}),
+            json!({"projectTransactionId": "9"}),
+        ] {
+            assert!(required_tauri_invoke_json_u64(&invalid, "projectTransactionId").is_err());
+        }
+        assert!(required_tauri_invoke_json_string(&json!({"ownerId": 7}), "ownerId").is_err());
     }
 
     #[derive(Default)]
@@ -73158,12 +76088,16 @@ pub(crate) mod tests {
             let result = publish_display_native_candidate_registry_state(
                 &self.published_workers,
                 &self.published_metrics,
-                candidate,
-                label,
-                output_id,
-                start_gate,
-                commit,
-                |candidate| (candidate.worker, candidate.metrics),
+                DisplayNativeCandidatePublication {
+                    candidate,
+                    label,
+                    output_id,
+                    start_gate,
+                    commit,
+                    split: |candidate: FakeDisplayNativeCandidate| {
+                        (candidate.worker, candidate.metrics)
+                    },
+                },
             );
             if result.is_ok() {
                 self.published.fetch_add(1, Ordering::AcqRel);
@@ -73178,60 +76112,35 @@ pub(crate) mod tests {
                 0,
                 "DISPLAY1".to_string(),
                 "qa-editor".to_string(),
-                2560,
-                1440,
-                0,
-                0,
-                1.0,
-                true,
+                (2560, 1440, 0, 0, 1.0, true),
             )
             .unwrap(),
             make_video_display_monitor(
                 1,
                 "DISPLAY2".to_string(),
                 "qa-2".to_string(),
-                1920,
-                1080,
-                2560,
-                0,
-                1.0,
-                false,
+                (1920, 1080, 2560, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 2,
                 "DISPLAY3".to_string(),
                 "qa-3".to_string(),
-                3840,
-                2160,
-                4480,
-                0,
-                1.0,
-                false,
+                (3840, 2160, 4480, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 3,
                 "DISPLAY5".to_string(),
                 "qa-5".to_string(),
-                1920,
-                1080,
-                8320,
-                0,
-                1.0,
-                false,
+                (1920, 1080, 8320, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 4,
                 "DISPLAY6".to_string(),
                 "qa-6".to_string(),
-                2560,
-                720,
-                10240,
-                0,
-                1.0,
-                false,
+                (2560, 720, 10240, 0, 1.0, false),
             )
             .unwrap(),
         ];
@@ -73417,7 +76326,7 @@ pub(crate) mod tests {
                 lease_receipt,
             )
             .expect("QA lease receipt must map to v2 response");
-        let response = OutputControlResponseV2::Receipt(
+        let response = OutputControlResponseV2::Receipt(Box::new(
             protocol::control_plane_command::OutputControlReceiptV2 {
                 operation_id: request.operation_id.clone(),
                 request_id: request.request_id,
@@ -73433,7 +76342,7 @@ pub(crate) mod tests {
                 },
                 lease_result: Some(lease_result),
             },
-        );
+        ));
         response.validate().expect("QA v2 response must validate");
         response
     }
@@ -73460,9 +76369,7 @@ pub(crate) mod tests {
             state,
             operation,
             reserved_authority,
-            assets,
-            vec![asset_id],
-            true,
+            (assets, vec![asset_id], true),
             authority.epoch,
             &owner_id,
         ))
@@ -73493,16 +76400,15 @@ pub(crate) mod tests {
         let args = identity.arguments();
         let imported = commit_prepared_media_assets_authoritative_command_impl(
             &state,
-            args.0,
-            args.1,
-            args.2,
-            args.3,
-            args.4,
-            args.5.clone(),
-            args.6.clone(),
+            media_asset_authoritative_request!(
+                args.0, args.1, args.2, args.3, args.4, args.5, args.6
+            ),
         )?;
         let retried = commit_prepared_media_assets_authoritative_command_impl(
-            &state, args.0, args.1, args.2, args.3, args.4, args.5, args.6,
+            &state,
+            media_asset_authoritative_request!(
+                args.0, args.1, args.2, args.3, args.4, args.5, args.6
+            ),
         )?;
         assert_media_asset_a6_same_terminal(&imported, &retried);
         assert_eq!(imported.report.imported, 1);
@@ -73576,7 +76482,7 @@ pub(crate) mod tests {
         let lanes = apply_timeline_advanced_authoritative_command_impl(
             &state,
             TimelineAdvancedMutationRequest::Apply {
-                authoring: lane_authoring,
+                authoring: Box::new(lane_authoring),
             },
             91_202,
             lane_authority.epoch,
@@ -73703,13 +76609,15 @@ pub(crate) mod tests {
             let (applied, fence_after, lease_receipt) =
                 add_display_output_with_output_control_fence_core(
                     &state,
-                    &spec,
-                    &request.expected_fence,
-                    &lease_request,
-                    lease_now,
-                    &output_authority.owner_principal,
-                    "main",
-                    output_authority.owner_incarnation,
+                    display_output_control_request!(
+                        &spec,
+                        &request.expected_fence,
+                        &lease_request,
+                        lease_now,
+                        &output_authority.owner_principal,
+                        "main",
+                        output_authority.owner_incarnation
+                    ),
                     native_ops.clone(),
                 )?;
             let response =
@@ -73846,13 +76754,15 @@ pub(crate) mod tests {
             let (applied, fence_after, lease_receipt) =
                 add_display_output_with_output_control_fence_core(
                     &state,
-                    &spec,
-                    &request.expected_fence,
-                    &lease_request,
-                    lease_now,
-                    &owner_principal,
-                    "main",
-                    owner_incarnation,
+                    display_output_control_request!(
+                        &spec,
+                        &request.expected_fence,
+                        &lease_request,
+                        lease_now,
+                        &owner_principal,
+                        "main",
+                        owner_incarnation
+                    ),
                     native_ops.clone(),
                 )
                 .expect("canonical QA Add production-core commit");
@@ -73925,65 +76835,40 @@ pub(crate) mod tests {
         assert!(!driver.contains("prepare_internal_media_asset_commit("));
         assert!(!driver.contains("submit_output_lease_candidate_with_classified_commit("));
         assert!(!driver.contains("run_unpublished_display_native_transaction("));
-        let mut monitors = vec![
+        let mut monitors = [
             make_video_display_monitor(
                 0,
                 "DISPLAY1".to_string(),
                 "path-editor".to_string(),
-                2560,
-                1440,
-                0,
-                0,
-                1.0,
-                true,
+                (2560, 1440, 0, 0, 1.0, true),
             )
             .unwrap(),
             make_video_display_monitor(
                 1,
                 "DISPLAY2".to_string(),
                 "path-2".to_string(),
-                1920,
-                1080,
-                2560,
-                0,
-                1.0,
-                false,
+                (1920, 1080, 2560, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 2,
                 "DISPLAY3".to_string(),
                 "path-3".to_string(),
-                3840,
-                2160,
-                4480,
-                0,
-                1.0,
-                false,
+                (3840, 2160, 4480, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 3,
                 "DISPLAY5".to_string(),
                 "path-5".to_string(),
-                1920,
-                1080,
-                8320,
-                0,
-                1.0,
-                false,
+                (1920, 1080, 8320, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 4,
                 "DISPLAY6".to_string(),
                 "path-6".to_string(),
-                2560,
-                720,
-                10240,
-                0,
-                1.0,
-                false,
+                (2560, 720, 10240, 0, 1.0, false),
             )
             .unwrap(),
         ];
@@ -74227,13 +77112,15 @@ pub(crate) mod tests {
                 .with_scenario(FakeDisplayNativeScenario::TopologyChangeBeforeAdmission);
         let result = add_display_output_with_output_control_fence_core(
             &state,
-            &spec,
-            &request.expected_fence,
-            &lease_request,
-            lease_now,
-            &authority.owner_principal,
-            "main",
-            authority.owner_incarnation,
+            display_output_control_request!(
+                &spec,
+                &request.expected_fence,
+                &lease_request,
+                lease_now,
+                &authority.owner_principal,
+                "main",
+                authority.owner_incarnation
+            ),
             native_ops.clone(),
         );
         let error = result.expect_err("staged monitor topology change must fail closed");
@@ -74253,36 +77140,21 @@ pub(crate) mod tests {
                 0,
                 "DISPLAY1".to_string(),
                 "path-1".to_string(),
-                2560,
-                1440,
-                -2560,
-                0,
-                1.0,
-                false,
+                (2560, 1440, -2560, 0, 1.0, false),
             )
             .unwrap(),
             make_video_display_monitor(
                 1,
                 "DISPLAY2".to_string(),
                 "path-2".to_string(),
-                1920,
-                1080,
-                0,
-                0,
-                1.0,
-                true,
+                (1920, 1080, 0, 0, 1.0, true),
             )
             .unwrap(),
             make_video_display_monitor(
                 2,
                 "DISPLAY5".to_string(),
                 "path-5".to_string(),
-                1920,
-                1080,
-                1920,
-                0,
-                1.25,
-                false,
+                (1920, 1080, 1920, 0, 1.25, false),
             )
             .unwrap(),
         ];
@@ -74326,12 +77198,7 @@ pub(crate) mod tests {
                 3,
                 "DISPLAY5".to_string(),
                 "path-5-reused".to_string(),
-                1920,
-                1080,
-                1920,
-                0,
-                1.25,
-                false,
+                (1920, 1080, 1920, 0, 1.25, false),
             )
             .unwrap(),
         );
@@ -74384,12 +77251,7 @@ pub(crate) mod tests {
             3,
             r"\\.\DISPLAY5".to_string(),
             r"\\?\DISPLAY#AUTHORITY#DISPLAY5".to_string(),
-            1920,
-            1080,
-            1920,
-            0,
-            1.25,
-            false,
+            (1920, 1080, 1920, 0, 1.25, false),
         )
         .expect("authoritative display descriptor");
         let json = serde_json::to_value(&descriptor).expect("display descriptor JSON");
@@ -74405,12 +77267,7 @@ pub(crate) mod tests {
             3,
             r"\\.\DISPLAY5".to_string(),
             r"\\?\DISPLAY#REPLACED#DISPLAY5".to_string(),
-            1920,
-            1080,
-            1920,
-            0,
-            1.25,
-            false,
+            (1920, 1080, 1920, 0, 1.25, false),
         )
         .expect("changed authoritative display descriptor");
         assert_ne!(descriptor.identity, changed_path.identity);
@@ -74419,12 +77276,7 @@ pub(crate) mod tests {
             1,
             r"\\.\DISPLAY2".to_string(),
             r"\\?\DISPLAY#AUTHORITY#DISPLAY2".to_string(),
-            1920,
-            1080,
-            0,
-            0,
-            1.0,
-            true,
+            (1920, 1080, 0, 0, 1.0, true),
         )
         .expect("primary authoritative display descriptor");
         assert!(primary.primary);
@@ -74448,12 +77300,7 @@ pub(crate) mod tests {
                     index as u32,
                     format!(r"\\.\{name}"),
                     format!(r"\\?\DISPLAY#AUTHORITY#{name}"),
-                    *width,
-                    *height,
-                    index as i32 * 100,
-                    0,
-                    1.0,
-                    index == 1,
+                    (*width, *height, index as i32 * 100, 0, 1.0, index == 1),
                 )
                 .expect("five-display authoritative descriptor")
             })
@@ -74694,6 +77541,259 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn destroyed_owner_without_query_binding_retires_pending_owner() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let (epoch, revision) = {
+            let coordinator = lock_project_coordinator(&state).unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let label = "No-query pending retirement";
+        let coalesce_key = "retiring:no-query";
+        let ticket = begin_project_transaction_for_window_label(
+            &state,
+            "media-asset-a6",
+            begin_project_transaction_request!(
+                label,
+                coalesce_key,
+                epoch,
+                revision,
+                MEDIA_ASSET_A6_OWNER,
+                "project-op:98:e1-no-query-retirement",
+                canonical_project_transaction_shape("no_query_retirement", label, coalesce_key),
+                "no_query_retirement",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
+        )
+        .expect("pending Begin without a query capture");
+        handle_destroyed_window_authority_retirement(&state, &query, "media-asset-a6")
+            .expect("owner retirement must not depend on lazy query binding");
+        assert!(!state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .contains_key("media-asset-a6"));
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert!(
+            state
+                .project_transaction_receipts
+                .lock()
+                .unwrap()
+                .get(&ticket.client_operation_id)
+                .is_none(),
+            "retired owner receipts are compacted after cancellation"
+        );
+    }
+
+    #[test]
+    fn destroyed_owner_incarnation_capture_poison_permanently_blocks_label() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let old_output_fence = query
+            .issue_output_control_fence_for_window("media-asset-a6", &state)
+            .expect("query output fence issues before owner poison");
+        let poison_state = Arc::clone(&state);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poison_state
+                .project_transaction_owner_incarnations
+                .lock()
+                .expect("owner incarnation registry before poison");
+            panic!("poison owner incarnation registry during Destroyed capture");
+        }));
+
+        let error = handle_destroyed_window_authority_retirement(&state, &query, "media-asset-a6")
+            .expect_err("poisoned owner capture must fail closed");
+        assert!(error.contains("owner incarnation capture failed"));
+        assert_eq!(state.blocked_window_authority_count().unwrap(), 1);
+        assert!(state
+            .ensure_window_authority_not_blocked("media-asset-a6")
+            .is_err());
+        assert!(query
+            .validate_output_control_fence_window("media-asset-a6", &old_output_fence, 1)
+            .is_err());
+    }
+
+    #[test]
+    fn runtime_ingress_capture_fails_closed_before_identity_lane_audit_or_engine_on_permanent_block(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let query = ControlPlaneQueryState::new().expect("query state initializes");
+        let window_label = "media-asset-a6";
+        let output_ownership_before = state.engine.output_ownership_status();
+        let safety_authority_before = state.engine.safety_blackout_authority();
+        let persistence_before = project_snapshot_for_save(
+            state
+                .engine
+                .persistence_snapshot()
+                .expect("capture runtime permanent-block persistence baseline"),
+        );
+        let mutation_before = harness.mutation_baseline();
+        let runtime_before =
+            control_plane_runtime::test_state_signature(&state.runtime_control_plane);
+        let leases_before = state
+            .output_lease_registry_snapshot()
+            .expect("capture runtime permanent-block lease baseline");
+
+        state
+            .begin_window_authority_retirement(window_label)
+            .expect("install temporary runtime ingress retirement marker");
+        state
+            .record_window_authority_retirement_failure(window_label)
+            .expect("promote runtime ingress retirement marker to permanent block");
+
+        assert_eq!(
+            control_plane_runtime::capture_binding_for_test(&state, window_label),
+            Err(protocol::control_plane_command::RuntimeCommandErrorCodeV1::Forbidden),
+            "the shared production capture boundary rejects a retained owner before any runtime state reservation"
+        );
+        let safety = control_plane_runtime::engage_safety_blackout_for_test_window(
+            &state,
+            window_label,
+            SafetyBlackoutEngageRequestV1 {
+                operation_id: protocol::control_plane_command::SAFETY_BLACKOUT_ENGAGE_OPERATION_ID
+                    .to_string(),
+                request_id: 98_901,
+            },
+            Instant::now(),
+        );
+        let SafetyBlackoutEngageResponseV1::Rejected(safety_rejection) = safety else {
+            panic!("permanently blocked safety ingress must reject before audit");
+        };
+        assert_eq!(
+            safety_rejection.error.code,
+            protocol::control_plane_command::RuntimeCommandErrorCodeV1::Forbidden
+        );
+
+        let (epoch, revision, checkpoint_hash) = {
+            let coordinator = state
+                .project_coordinator
+                .lock()
+                .expect("capture runtime follow project authority");
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
+        };
+        let project = {
+            let coordinator = state
+                .project_coordinator
+                .lock()
+                .expect("capture runtime follow project baseline");
+            ProjectMutationFenceV1 {
+                process_incarnation: 1,
+                session_incarnation: 1,
+                project_epoch: epoch,
+                project_revision: revision,
+                project_checkpoint_hash: checkpoint_hash,
+                project_publication_generation: coordinator.publication_generation,
+            }
+        };
+        let follow_fence = protocol::control_plane_command::TimelineFollowAbortRuntimeFenceV1 {
+            project,
+            domain: protocol::control_plane_command::TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1
+                .to_string(),
+            output_ownership_epoch: 1,
+            follow_generation: 1,
+        };
+        let follow = control_plane_runtime::abort_timeline_follow_runtime_for_test_window(
+            &state,
+            window_label,
+            TimelineFollowAbortRuntimeRequestV1 {
+                operation_id: protocol::control_plane_command::TIMELINE_FOLLOW_ABORT_OPERATION_ID
+                    .to_string(),
+                authority_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                request_id: 98_902,
+                expected_fence: follow_fence,
+            },
+            Instant::now(),
+        );
+        let protocol::control_plane_command::TimelineFollowAbortRuntimeResponseV1::Rejected(
+            follow_rejection,
+        ) = follow
+        else {
+            panic!("permanently blocked Follow ingress must reject before lane reservation");
+        };
+        assert_eq!(
+            follow_rejection.error.code,
+            protocol::control_plane_command::RuntimeCommandErrorCodeV1::Forbidden
+        );
+
+        assert!(
+            control_plane_runtime::issue_output_control_authority_for_window_label(
+                window_label,
+                &state,
+                &query,
+            )
+            .is_err(),
+            "output-control lifecycle authority must reject the blocked label"
+        );
+        assert!(
+            query_display_add_lease_authority_for_window(window_label, &state, &query).is_err(),
+            "Display Add query must reject the blocked label before lease inspection"
+        );
+
+        assert_eq!(
+            state.engine.output_ownership_status(),
+            output_ownership_before,
+            "runtime capture rejection does not change engine output ownership"
+        );
+        assert_eq!(
+            state.engine.safety_blackout_authority(),
+            safety_authority_before,
+            "runtime capture rejection does not change engine safety authority"
+        );
+        assert_eq!(
+            project_snapshot_for_save(
+                state
+                    .engine
+                    .persistence_snapshot()
+                    .expect("capture runtime permanent-block persistence after-state"),
+            ),
+            persistence_before
+        );
+        let mutation_after = harness.mutation_baseline();
+        assert_eq!(
+            (
+                mutation_after.revision,
+                mutation_after.history_generation,
+                mutation_after.undo_len,
+                mutation_after.next_transaction_id,
+                mutation_after.publication_generation,
+            ),
+            (
+                mutation_before.revision,
+                mutation_before.history_generation,
+                mutation_before.undo_len,
+                mutation_before.next_transaction_id,
+                mutation_before.publication_generation,
+            )
+        );
+        assert_eq!(
+            control_plane_runtime::test_state_signature(&state.runtime_control_plane),
+            runtime_before,
+            "output identity/lane, Follow lane, safety audit, and in-flight runtime state remain untouched"
+        );
+        assert_eq!(
+            state
+                .output_lease_registry_snapshot()
+                .expect("capture runtime permanent-block lease after-state"),
+            leases_before
+        );
+        assert!(state
+            .project_transaction_owners
+            .lock()
+            .expect("retained owner check")
+            .contains_key(window_label));
+        assert!(state
+            .ensure_window_authority_not_blocked(window_label)
+            .is_err());
+    }
+
+    #[test]
     fn destroyed_window_lease_failure_blocks_registration_and_r4_issue() {
         let harness = MediaAssetA6CommandHarness::new();
         let query = ControlPlaneQueryState::new().expect("query state initializes");
@@ -74902,13 +78002,15 @@ pub(crate) mod tests {
             ) = concurrent_identity.arguments();
             commit_prepared_media_assets_authoritative_command_impl(
                 state,
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_eq!(results.len(), 2);
@@ -74925,13 +78027,15 @@ pub(crate) mod tests {
         ) = identity.arguments();
         let third = commit_prepared_media_assets_authoritative_command_impl(
             &harness.state,
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact Import retry returns its canonical terminal result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -74984,13 +78088,15 @@ pub(crate) mod tests {
             ) = concurrent_identity.arguments();
             commit_prepared_media_asset_relink_authoritative_command_impl(
                 state,
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_eq!(results.len(), 2);
@@ -75007,13 +78113,15 @@ pub(crate) mod tests {
         ) = identity.arguments();
         let third = commit_prepared_media_asset_relink_authoritative_command_impl(
             &harness.state,
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact Relink retry returns its canonical terminal result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -75069,13 +78177,15 @@ pub(crate) mod tests {
             commit_prepared_video_file_layer_authoritative_command_impl(
                 state,
                 "A6 video layer".to_string(),
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_media_asset_a6_same_terminal(&results[0], &results[1]);
@@ -75092,13 +78202,15 @@ pub(crate) mod tests {
         let third = commit_prepared_video_file_layer_authoritative_command_impl(
             &harness.state,
             "A6 video layer".to_string(),
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact video layer retry returns its canonical result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -75135,13 +78247,15 @@ pub(crate) mod tests {
             commit_prepared_still_image_layer_authoritative_command_impl(
                 state,
                 "A6 still layer".to_string(),
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_media_asset_a6_same_terminal(&results[0], &results[1]);
@@ -75158,13 +78272,15 @@ pub(crate) mod tests {
         let third = commit_prepared_still_image_layer_authoritative_command_impl(
             &harness.state,
             "A6 still layer".to_string(),
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact still layer retry returns its canonical result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -75208,13 +78324,15 @@ pub(crate) mod tests {
             commit_prepared_local_media_layers_authoritative_command_impl(
                 state,
                 VideoSourceKind::File,
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_media_asset_a6_same_terminal(&results[0], &results[1]);
@@ -75231,13 +78349,15 @@ pub(crate) mod tests {
         let third = commit_prepared_local_media_layers_authoritative_command_impl(
             &harness.state,
             VideoSourceKind::File,
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact local layers retry returns its canonical result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -75282,13 +78402,15 @@ pub(crate) mod tests {
             commit_prepared_bootstrap_vj_show_authoritative_command_impl(
                 state,
                 VideoSourceKind::File,
-                prepared_token,
-                request_id,
-                operation_generation,
-                expected_epoch,
-                expected_revision,
-                expected_checkpoint_hash,
-                owner_id,
+                media_asset_authoritative_request!(
+                    prepared_token,
+                    request_id,
+                    operation_generation,
+                    expected_epoch,
+                    expected_revision,
+                    expected_checkpoint_hash,
+                    owner_id
+                ),
             )
         });
         assert_media_asset_a6_same_terminal(&results[0], &results[1]);
@@ -75305,13 +78427,15 @@ pub(crate) mod tests {
         let third = commit_prepared_bootstrap_vj_show_authoritative_command_impl(
             &harness.state,
             VideoSourceKind::File,
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("third exact Bootstrap retry returns its canonical result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -75358,13 +78482,15 @@ pub(crate) mod tests {
         let canonical = commit_prepared_video_file_layer_authoritative_command_impl(
             &harness.state,
             canonical_label.clone(),
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("canonical command publishes exactly once");
         let layer_id = canonical.layer_ids[0];
@@ -75382,13 +78508,15 @@ pub(crate) mod tests {
         let conflict = commit_prepared_video_file_layer_authoritative_command_impl(
             &harness.state,
             "A6 changed video layer".to_string(),
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect_err("a different shape cannot republish the completed operation");
         assert!(
@@ -75408,13 +78536,15 @@ pub(crate) mod tests {
         ) = identity.arguments();
         let queried = get_media_asset_operation_terminal_result_impl(
             &harness.state,
-            prepared_token,
-            request_id,
-            operation_generation,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-            owner_id,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
         )
         .expect("canonical terminal query succeeds")
         .expect("canonical terminal receipt is retained after a shape conflict");
@@ -76361,7 +79491,7 @@ pub(crate) mod tests {
                     assets: vec![asset],
                     layers: vec![layer],
                 },
-                output: safe_first_run_vj_output(61),
+                output: Box::new(safe_first_run_vj_output(61)),
             },
         )
         .unwrap();
@@ -76511,7 +79641,7 @@ pub(crate) mod tests {
                 assets: vec![asset],
                 layers: vec![layer],
             },
-            output: safe_first_run_vj_output(output_id),
+            output: Box::new(safe_first_run_vj_output(output_id)),
         };
         let candidate = media_asset_transaction_candidate_snapshot(before, &transaction).unwrap();
         let candidate_authored = candidate.authored_video.as_ref().unwrap();
@@ -76584,7 +79714,7 @@ pub(crate) mod tests {
                     default_clip_slot_id: None,
                 }],
             },
-            output: safe_first_run_vj_output(engine.allocate_video_output_id()),
+            output: Box::new(safe_first_run_vj_output(engine.allocate_video_output_id())),
         };
         let error =
             media_asset_transaction_candidate_snapshot(before.clone(), &transaction).unwrap_err();
@@ -76884,9 +80014,11 @@ pub(crate) mod tests {
 
         // A same-epoch coordinator revision/hash mutation between Start and
         // Prepare produces a different current authority B with the same epoch.
-        let mut mutated = ProjectCoordinator::default();
-        mutated.revision = start_authority.revision + 1;
-        mutated.checkpoint_hash = "same-epoch-b".to_string();
+        let mutated = ProjectCoordinator {
+            revision: start_authority.revision + 1,
+            checkpoint_hash: "same-epoch-b".to_string(),
+            ..ProjectCoordinator::default()
+        };
         let current_b = media_asset_prepare_authority(&mutated);
         assert_eq!(current_b.epoch, reserved_authority.epoch, "epoch unchanged");
         assert_ne!(current_b, reserved_authority);
@@ -76926,8 +80058,10 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(reserved_authority, start_authority);
 
-        let mut mutated = ProjectCoordinator::default();
-        mutated.revision = start_authority.revision + 1;
+        let mutated = ProjectCoordinator {
+            revision: start_authority.revision + 1,
+            ..ProjectCoordinator::default()
+        };
         let current_b = media_asset_prepare_authority(&mutated);
         assert_eq!(current_b.epoch, reserved_authority.epoch, "epoch unchanged");
         assert!(
@@ -77397,7 +80531,8 @@ pub(crate) mod tests {
             fingerprint,
         };
         // First finalize takes the exclusive retained handle.
-        let sources = finalize_prepared_local_media_assets(&[prepared.clone()], &cancel).unwrap();
+        let sources =
+            finalize_prepared_local_media_assets(std::slice::from_ref(&prepared), &cancel).unwrap();
         // The idempotent retry path revalidates the retained source instead of
         // reopening/relocking it (a second LockFileEx would self-conflict).
         verify_finalized_local_media_asset_fingerprints(&[prepared], &sources, &cancel).unwrap();
@@ -77472,8 +80607,10 @@ pub(crate) mod tests {
 
     #[test]
     fn media_asset_prepare_authority_reconcile_advances_external_mutation_stamp() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.checkpoint_hash = "checkpoint-a".to_string();
+        let mut coordinator = ProjectCoordinator {
+            checkpoint_hash: "checkpoint-a".to_string(),
+            ..ProjectCoordinator::default()
+        };
         let mut externally_mutated = ProjectCheckpoint {
             project: ProjectFile {
                 version: PROJECT_FILE_VERSION,
@@ -78219,10 +81356,6 @@ pub(crate) mod tests {
 
     #[test]
     fn legacy_media_asset_compatibility_request_namespace_is_disjoint_and_checked() {
-        assert!(
-            RENDERER_MEDIA_ASSET_REQUEST_ID_MAX < LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN,
-            "legacy server requests must stay outside the frontend's exact ID domain"
-        );
         let sequence = AtomicU64::new(LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN);
         let first = allocate_legacy_media_asset_compatibility_request_id_from(&sequence).unwrap();
         let second = allocate_legacy_media_asset_compatibility_request_id_from(&sequence).unwrap();
@@ -78362,6 +81495,165 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn legacy_media_compatibility_final_gate_honors_retiring_marker_without_drift() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let operation = legacy_media_asset_compatibility_test_operation(
+            901,
+            1,
+            "media-asset-a6",
+            MEDIA_ASSET_A6_OWNER,
+        );
+        assert!(ensure_legacy_media_asset_compatibility_operation_current(
+            &state,
+            Some(&operation),
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .is_ok());
+        let engine_audit = || {
+            serde_json::to_vec(&project_snapshot_for_save(
+                state.engine.persistence_snapshot().unwrap(),
+            ))
+            .unwrap()
+        };
+        let coordinator_audit = || {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.publication_generation,
+                coordinator.history_generation,
+            )
+        };
+        let before_engine = engine_audit();
+        let before_coordinator = coordinator_audit();
+        state
+            .begin_window_authority_retirement("media-asset-a6")
+            .expect("install Destroyed retirement marker");
+        let error = ensure_legacy_media_asset_compatibility_operation_current(
+            &state,
+            Some(&operation),
+            MEDIA_ASSET_A6_OWNER,
+        )
+        .expect_err("legacy final gate must reject during Destroyed retirement");
+        assert!(error.contains("retirement") || error.contains("authority"));
+        assert_eq!(engine_audit(), before_engine);
+        assert_eq!(coordinator_audit(), before_coordinator);
+        state
+            .record_window_authority_retirement_failure("media-asset-a6")
+            .expect("promote test retirement marker to permanent block");
+    }
+
+    #[test]
+    fn legacy_media_compatibility_authoritative_mutation_stops_at_marker_and_block() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let identity = harness.stage_import(902, VideoSourceKind::StillImage, &["retiring-layer"]);
+        let operation = LegacyMediaAssetCompatibilityOperation {
+            request_id: identity.request_id,
+            operation_generation: identity.operation_generation,
+            window_label: "media-asset-a6".to_string(),
+            owner_id: MEDIA_ASSET_A6_OWNER.to_string(),
+            owner_incarnation: 1,
+            authority: identity.authority.clone(),
+        };
+        let shape = media_asset_authoritative_shape(
+            MediaAssetAuthoritativeCommitKind::StillImageLayer,
+            &["retiring-layer"],
+        );
+        let engine_audit = || {
+            serde_json::to_vec(&project_snapshot_for_save(
+                state.engine.persistence_snapshot().unwrap(),
+            ))
+            .unwrap()
+        };
+        let coordinator_audit = || {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.publication_generation,
+                coordinator.history_generation,
+            )
+        };
+        let history_audit = || {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (
+                coordinator.history.undo.len(),
+                coordinator.history.redo.len(),
+                coordinator.history.pending.len(),
+            )
+        };
+        let before_engine = engine_audit();
+        let before_coordinator = coordinator_audit();
+        let before_history = history_audit();
+        state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("media-asset-a6".to_string(), 2);
+        let aba_error = commit_prepared_media_asset_layers_authoritative(
+            &state,
+            identity.prepared_token,
+            identity.request_id,
+            identity.operation_generation,
+            identity.authority.epoch,
+            identity.authority.revision,
+            identity.authority.checkpoint_hash.clone(),
+            MEDIA_ASSET_A6_OWNER,
+            shape.clone(),
+            Some(vec!["retiring-layer".to_string()]),
+            VideoSourceKind::StillImage,
+            "Add still image layer",
+            false,
+            Some(&operation),
+        )
+        .expect_err("same owner string with a new incarnation must be rejected");
+        assert!(aba_error.contains("incarnation"));
+        state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .insert("media-asset-a6".to_string(), 1);
+        state
+            .begin_window_authority_retirement("media-asset-a6")
+            .expect("install Destroyed retirement marker");
+        for expected_error in ["retirement", "authority"] {
+            let error = commit_prepared_media_asset_layers_authoritative(
+                &state,
+                identity.prepared_token,
+                identity.request_id,
+                identity.operation_generation,
+                identity.authority.epoch,
+                identity.authority.revision,
+                identity.authority.checkpoint_hash.clone(),
+                MEDIA_ASSET_A6_OWNER,
+                shape.clone(),
+                Some(vec!["retiring-layer".to_string()]),
+                VideoSourceKind::StillImage,
+                "Add still image layer",
+                false,
+                Some(&operation),
+            )
+            .expect_err("legacy authoritative mutation must be fenced");
+            assert!(
+                error.contains(expected_error),
+                "fenced legacy mutation error must identify the authority boundary: {error}"
+            );
+            if expected_error == "retirement" {
+                state
+                    .record_window_authority_retirement_failure("media-asset-a6")
+                    .expect("promote Destroyed marker to permanent block");
+            }
+        }
+        assert_eq!(engine_audit(), before_engine);
+        assert_eq!(coordinator_audit(), before_coordinator);
+        assert_eq!(history_audit(), before_history);
+    }
+
     fn legacy_media_asset_compatibility_test_operation(
         request_id: u64,
         operation_generation: u64,
@@ -78373,6 +81665,7 @@ pub(crate) mod tests {
             operation_generation,
             window_label: window_label.to_string(),
             owner_id: owner_id.to_string(),
+            owner_incarnation: 1,
             authority: media_asset_test_authority(),
         }
     }
@@ -78781,8 +82074,11 @@ pub(crate) mod tests {
             byte_size: Some(42),
         };
         let prepared = media_asset_commit_test_prepared(0, "D:/other-copy.mov", hash, 42);
-        let (candidate, results) =
-            build_media_asset_catalog_import_candidate(&[existing.clone()], &[prepared], || 99);
+        let (candidate, results) = build_media_asset_catalog_import_candidate(
+            std::slice::from_ref(&existing),
+            &[prepared],
+            || 99,
+        );
         assert!(candidate.assets.is_empty());
         assert!(candidate.layers.is_empty());
         assert_eq!(results, vec![(0, MediaAssetImportEntryStatus::Reused, 88)]);
@@ -78867,10 +82163,12 @@ pub(crate) mod tests {
     fn media_asset_availability_reservation_is_purpose_bound_and_authority_read_only() {
         let registry = Arc::new(MediaAssetOperationRegistry::default());
         let owner_id = "renderer:availability";
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.revision = 17;
-        coordinator.checkpoint_hash = "availability-a".to_string();
-        coordinator.history_generation = 9;
+        let coordinator = ProjectCoordinator {
+            revision: 17,
+            checkpoint_hash: "availability-a".to_string(),
+            history_generation: 9,
+            ..ProjectCoordinator::default()
+        };
         let before = (
             coordinator.epoch,
             coordinator.revision,
@@ -79067,10 +82365,12 @@ pub(crate) mod tests {
 
     #[test]
     fn media_asset_availability_inspection_never_changes_checkpoint_hash() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.checkpoint_hash = "checkpoint-a".to_string();
-        coordinator.revision = 7;
-        coordinator.history_generation = 11;
+        let coordinator = ProjectCoordinator {
+            checkpoint_hash: "checkpoint-a".to_string(),
+            revision: 7,
+            history_generation: 11,
+            ..ProjectCoordinator::default()
+        };
         let before = (
             media_asset_prepare_authority(&coordinator),
             coordinator.history_generation,
@@ -81335,7 +84635,7 @@ pub(crate) mod tests {
             )
             .unwrap()
             {
-                BeginProjectPublicationV1::New { ticket, pending } => (ticket, pending),
+                BeginProjectPublicationV1::New { ticket, pending } => (*ticket, pending),
                 _ => panic!("query/finalizer race must begin a new publication"),
             }
         };
@@ -81769,11 +85069,13 @@ pub(crate) mod tests {
         let wrong_request_error = acknowledge_project_recovery_applied_core(
             state,
             &mut coordinator,
-            expected_epoch,
-            expected_revision,
-            target_hash.clone(),
-            expected_disposition_generation,
-            "e3-recovery-request-wrong-0001".to_string(),
+            (
+                expected_epoch,
+                expected_revision,
+                target_hash.clone(),
+                expected_disposition_generation,
+                "e3-recovery-request-wrong-0001".to_string(),
+            ),
             |_, _, _| panic!("wrong request ID must not reach persistence"),
         )
         .unwrap_err();
@@ -81787,11 +85089,13 @@ pub(crate) mod tests {
         let wrong_hash_error = acknowledge_project_recovery_applied_core(
             state,
             &mut coordinator,
-            expected_epoch,
-            expected_revision,
-            "wrong-checkpoint-hash".to_string(),
-            expected_disposition_generation,
-            request_id.clone(),
+            (
+                expected_epoch,
+                expected_revision,
+                "wrong-checkpoint-hash".to_string(),
+                expected_disposition_generation,
+                request_id.clone(),
+            ),
             |_, _, _| panic!("wrong checkpoint hash must not reach persistence"),
         )
         .unwrap_err();
@@ -81819,11 +85123,13 @@ pub(crate) mod tests {
         let c_rejects_b = acknowledge_project_recovery_applied_core(
             state,
             &mut c_before_ack,
-            expected_epoch,
-            expected_revision,
-            target_hash.clone(),
-            expected_disposition_generation,
-            request_id.clone(),
+            (
+                expected_epoch,
+                expected_revision,
+                target_hash.clone(),
+                expected_disposition_generation,
+                request_id.clone(),
+            ),
             |_, _, _| panic!("C must reject delayed B before persistence"),
         )
         .unwrap_err();
@@ -81838,11 +85144,13 @@ pub(crate) mod tests {
         let acknowledgement_order = Mutex::new(Vec::new());
         let acknowledged = acknowledge_project_recovery_applied_service_with_acceptance(
             state,
-            expected_epoch,
-            expected_revision,
-            target_hash.clone(),
-            expected_disposition_generation,
-            request_id.clone(),
+            (
+                expected_epoch,
+                expected_revision,
+                target_hash.clone(),
+                expected_disposition_generation,
+                request_id.clone(),
+            ),
             |_, coordinator, transition| {
                 let serial = advance_project_recovery_authority_serial_with_persist(
                     coordinator,
@@ -81924,11 +85232,13 @@ pub(crate) mod tests {
         let retry_error = acknowledge_project_recovery_applied_core(
             state,
             &mut coordinator,
-            expected_epoch,
-            expected_revision,
-            target_hash.clone(),
-            expected_disposition_generation,
-            request_id,
+            (
+                expected_epoch,
+                expected_revision,
+                target_hash.clone(),
+                expected_disposition_generation,
+                request_id,
+            ),
             |_, _, _| panic!("an acknowledged retry must not reach persistence"),
         )
         .unwrap_err();
@@ -81945,11 +85255,13 @@ pub(crate) mod tests {
         let delayed_b_error = acknowledge_project_recovery_applied_core(
             state,
             &mut coordinator,
-            expected_epoch,
-            expected_revision,
-            target_hash,
-            expected_disposition_generation,
-            "e3-recovery-request-00000001".to_string(),
+            (
+                expected_epoch,
+                expected_revision,
+                target_hash,
+                expected_disposition_generation,
+                "e3-recovery-request-00000001".to_string(),
+            ),
             |_, _, _| panic!("stale B acknowledgement must not reach persistence"),
         )
         .unwrap_err();
@@ -82036,11 +85348,13 @@ pub(crate) mod tests {
         drop(failed_coordinator);
         let failed_ack = acknowledge_project_recovery_applied_service(
             failed_state,
-            failed_ack_epoch,
-            failed_ack_revision,
-            failed_ack_hash,
-            failed_ack_disposition_generation,
-            "e3-recovery-request-rejected-0001".to_string(),
+            (
+                failed_ack_epoch,
+                failed_ack_revision,
+                failed_ack_hash,
+                failed_ack_disposition_generation,
+                "e3-recovery-request-rejected-0001".to_string(),
+            ),
             |_, _, _| panic!("retirement failure must make ACK inadmissible"),
         )
         .unwrap_err();
@@ -82160,11 +85474,13 @@ pub(crate) mod tests {
         let loaded_authority = loaded.authority.unwrap();
         let acknowledged = acknowledge_project_recovery_applied_service(
             state,
-            loaded_authority.project_epoch,
-            loaded_authority.project_revision,
-            loaded_authority.checkpoint_hash,
-            loaded_authority.authority_disposition_generation,
-            request_id,
+            (
+                loaded_authority.project_epoch,
+                loaded_authority.project_revision,
+                loaded_authority.checkpoint_hash,
+                loaded_authority.authority_disposition_generation,
+                request_id,
+            ),
             |_, coordinator, transition| {
                 advance_project_recovery_authority_serial_with_persist(
                     coordinator,
@@ -82204,15 +85520,17 @@ pub(crate) mod tests {
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Create fixture group".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            "project-op:9101:recovered-fixture".to_string(),
-            shape.clone(),
-            "create_fixture_group".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Create fixture group",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                "project-op:9101:recovered-fixture",
+                shape.clone(),
+                "create_fixture_group",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let before_wrong_ticket =
@@ -82300,13 +85618,15 @@ pub(crate) mod tests {
         let committed = commit_project_transaction_for_window_label(
             state,
             window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            ticket.client_operation_id,
-            shape,
-            "create_fixture_group".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                ticket.transaction_id,
+                ticket.project_epoch,
+                ticket.client_operation_id,
+                shape,
+                "create_fixture_group",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(committed.history_status.undo_depth, 1);
@@ -82331,15 +85651,17 @@ pub(crate) mod tests {
             let ticket = begin_project_transaction_for_window_label(
                 state,
                 window_label,
-                label.to_string(),
-                String::new(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                format!("project-op:{sequence}:{command_name}"),
-                shape.clone(),
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                begin_project_transaction_request!(
+                    label,
+                    "",
+                    epoch,
+                    revision,
+                    owner_id,
+                    format!("project-op:{sequence}:{command_name}"),
+                    shape.clone(),
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
             )
             .unwrap();
             (ticket, shape)
@@ -82348,13 +85670,15 @@ pub(crate) mod tests {
             let committed = commit_project_transaction_for_window_label(
                 state,
                 window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                ticket.client_operation_id,
-                shape,
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                commit_project_transaction_request!(
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    ticket.client_operation_id,
+                    shape,
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap();
             assert!(!state.project_transaction_active.load(Ordering::Acquire));
@@ -82503,15 +85827,17 @@ pub(crate) mod tests {
         let set_ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Set operator policy".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            "project-op:9108:recovered-operator-set".to_string(),
-            set_shape.clone(),
-            "set_operator_policy".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Set operator policy",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                "project-op:9108:recovered-operator-set",
+                set_shape.clone(),
+                "set_operator_policy",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         set_operator_policy_for_window_label(
@@ -82526,13 +85852,15 @@ pub(crate) mod tests {
         let set_committed = commit_project_transaction_for_window_label(
             state,
             window_label,
-            set_ticket.transaction_id,
-            set_ticket.project_epoch,
-            set_ticket.client_operation_id,
-            set_shape,
-            "set_operator_policy".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                set_ticket.transaction_id,
+                set_ticket.project_epoch,
+                set_ticket.client_operation_id,
+                set_shape,
+                "set_operator_policy",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(set_committed.history_status.undo_depth, 8);
@@ -82543,7 +85871,22 @@ pub(crate) mod tests {
                 .unwrap()
                 .ancillary
                 .operator_policy,
-            Some(policy)
+            Some(policy.clone())
+        );
+
+        // D3's committed sample policy has lock_on_load=true. Model the
+        // renderer session that completed the policy transaction explicitly
+        // before exercising Clear: a valid unlocked owner is required for
+        // the clear route, while production still creates locked sessions
+        // fail-closed when no such renderer handshake exists.
+        let committed_epoch = state.project_coordinator.lock().unwrap().epoch;
+        state.project_operator_sessions.lock().unwrap().insert(
+            owner_id.to_string(),
+            ProjectOperatorSession {
+                project_epoch: committed_epoch,
+                policy: policy.clone(),
+                unlocked: true,
+            },
         );
 
         let (epoch, revision) = {
@@ -82558,15 +85901,17 @@ pub(crate) mod tests {
         let clear_ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Clear operator policy".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            "project-op:9109:recovered-operator-clear".to_string(),
-            clear_shape.clone(),
-            "clear_operator_policy".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Clear operator policy",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                "project-op:9109:recovered-operator-clear",
+                clear_shape.clone(),
+                "clear_operator_policy",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         clear_operator_policy_for_window_label(
@@ -82580,13 +85925,15 @@ pub(crate) mod tests {
         let clear_committed = commit_project_transaction_for_window_label(
             state,
             window_label,
-            clear_ticket.transaction_id,
-            clear_ticket.project_epoch,
-            clear_ticket.client_operation_id,
-            clear_shape,
-            "clear_operator_policy".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                clear_ticket.transaction_id,
+                clear_ticket.project_epoch,
+                clear_ticket.client_operation_id,
+                clear_shape,
+                "clear_operator_policy",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(clear_committed.history_status.undo_depth, 9);
@@ -83643,7 +86990,7 @@ pub(crate) mod tests {
         )
         .unwrap()
         {
-            BeginProjectPublicationV1::New { ticket, pending } => (ticket, pending),
+            BeginProjectPublicationV1::New { ticket, pending } => (*ticket, pending),
             _ => panic!("first template request must reserve a new publication"),
         };
         let selected_a = persist_project_publication_target_v1(
@@ -84126,15 +87473,17 @@ pub(crate) mod tests {
             publish_display_native_candidate_registry_state(
                 &workers,
                 &metrics,
-                99_u64,
-                label.clone(),
-                42,
-                Some(Arc::clone(&start_gate)),
-                || {
-                    commit_calls.set(commit_calls.get() + 1);
-                    Ok(())
+                DisplayNativeCandidatePublication {
+                    candidate: 99_u64,
+                    label: label.clone(),
+                    output_id: 42,
+                    start_gate: Some(Arc::clone(&start_gate)),
+                    commit: || {
+                        commit_calls.set(commit_calls.get() + 1);
+                        Ok(())
+                    },
+                    split: |candidate| (candidate, candidate),
                 },
-                |candidate| (candidate, candidate),
             )
             .expect_err("occupied native identity must reject before commit/publication");
         assert_eq!(losing_candidate, 99);
@@ -84988,9 +88337,11 @@ pub(crate) mod tests {
             let mut project = empty_project_file();
             project.snapshot.video.media_assets.push(asset.clone());
             let checkpoint = test_project_checkpoint(project, 7);
-            let mut coordinator = ProjectCoordinator::default();
-            coordinator.revision = 7;
-            coordinator.checkpoint_hash = checkpoint.hash.clone();
+            let coordinator = ProjectCoordinator {
+                revision: 7,
+                checkpoint_hash: checkpoint.hash.clone(),
+                ..ProjectCoordinator::default()
+            };
             let history_before = coordinator.history.clone();
 
             let (authority, captured) =
@@ -85032,8 +88383,10 @@ pub(crate) mod tests {
         let mut project = empty_project_file();
         project.snapshot.video.media_assets = vec![live, legacy];
         let checkpoint = test_project_checkpoint(project, 0);
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.checkpoint_hash = checkpoint.hash.clone();
+        let coordinator = ProjectCoordinator {
+            checkpoint_hash: checkpoint.hash.clone(),
+            ..ProjectCoordinator::default()
+        };
 
         assert!(
             media_asset_thumbnail_asset_for_checkpoint(&coordinator, &checkpoint, 999)
@@ -85599,9 +88952,11 @@ pub(crate) mod tests {
     #[test]
     fn reconcile_external_persistence_fails_closed_on_revision_exhaustion() {
         let project = empty_project_file();
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.revision = u64::MAX;
-        coordinator.checkpoint_hash = "before".to_string();
+        let mut coordinator = ProjectCoordinator {
+            revision: u64::MAX,
+            checkpoint_hash: "before".to_string(),
+            ..ProjectCoordinator::default()
+        };
         let mut changed = test_project_checkpoint(project, u64::MAX);
         changed.hash = "after".to_string();
 
@@ -85639,8 +88994,10 @@ pub(crate) mod tests {
 
     #[test]
     fn direct_ancillary_preflight_rejects_exhausted_revision_without_mutation() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.revision = u64::MAX;
+        let coordinator = ProjectCoordinator {
+            revision: u64::MAX,
+            ..ProjectCoordinator::default()
+        };
         let before = coordinator.ancillary.clone();
         let result = prepare_direct_project_ancillary_commit(
             &coordinator,
@@ -85661,8 +89018,10 @@ pub(crate) mod tests {
 
     #[test]
     fn direct_ancillary_preflight_blocks_engine_publish_before_revision_or_hash_failure() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.revision = u64::MAX;
+        let coordinator = ProjectCoordinator {
+            revision: u64::MAX,
+            ..ProjectCoordinator::default()
+        };
         let before = coordinator.ancillary.clone();
         let publishes = AtomicU64::new(0);
         let result = publish_after_direct_project_ancillary_preflight(
@@ -85892,19 +89251,21 @@ pub(crate) mod tests {
             begin_project_transaction_for_window_label(
                 &state,
                 window_label,
-                label.to_string(),
-                coalesce_key.to_string(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.to_string(),
-                canonical_project_transaction_shape(
-                    "test_project_transaction",
+                begin_project_transaction_request!(
                     label,
                     coalesce_key,
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id,
+                    canonical_project_transaction_shape(
+                        "test_project_transaction",
+                        label,
+                        coalesce_key,
+                    ),
+                    "test_project_transaction",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
                 ),
-                "test_project_transaction".to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
             )
         };
 
@@ -85949,41 +89310,47 @@ pub(crate) mod tests {
         assert!(begin_project_transaction_for_window_label(
             &state,
             window_label,
-            "E1 different".to_string(),
-            "fixture:e1".to_string(),
-            ticket.project_epoch,
-            ticket.project_revision,
-            owner_id.to_string(),
-            ticket.client_operation_id.clone(),
-            conflicting_shape,
-            "test_project_transaction".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "E1 different",
+                "fixture:e1",
+                ticket.project_epoch,
+                ticket.project_revision,
+                owner_id,
+                ticket.client_operation_id,
+                conflicting_shape,
+                "test_project_transaction",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .is_err());
 
         let cancellation = cancel_project_transaction_for_window_label(
             &state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            ticket.client_operation_id.clone(),
-            ticket.shape_fingerprint.clone(),
-            "test_project_transaction".to_string(),
-            ticket.schema_version,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                ticket.client_operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                "test_project_transaction",
+                ticket.schema_version,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(cancellation.history_status.undo_depth, 0);
         let cancellation_retry = cancel_project_transaction_for_window_label(
             &state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            ticket.client_operation_id.clone(),
-            ticket.shape_fingerprint.clone(),
-            "test_project_transaction".to_string(),
-            ticket.schema_version,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                ticket.client_operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                "test_project_transaction",
+                ticket.schema_version,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -86028,14 +89395,16 @@ pub(crate) mod tests {
             let ticket = begin(&operation_id, "E1 capacity", "fixture:capacity").unwrap();
             cancel_project_transaction_for_window_label(
                 &state,
-                window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id.clone(),
-                ticket.shape_fingerprint.clone(),
-                "test_project_transaction".to_string(),
-                ticket.schema_version,
-                owner_id.to_string(),
+                project_transaction_cancel_request!(
+                    window_label,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id.clone(),
+                    ticket.shape_fingerprint.clone(),
+                    "test_project_transaction",
+                    ticket.schema_version,
+                    owner_id
+                ),
             )
             .unwrap();
             acknowledge_project_transaction_for_window_label(
@@ -86050,6 +89419,177 @@ pub(crate) mod tests {
             .unwrap();
         }
         assert!(begin("project-op:2:e1-lifecycle-1", "E1 no-op", "fixture:e1").is_err());
+    }
+
+    #[test]
+    fn project_transaction_begin_new_operation_respects_full_and_partial_lock_without_drift() {
+        for (lock_mode, mode_name) in [
+            (OperatorLockMode::Full, "Full"),
+            (OperatorLockMode::Partial, "Partial"),
+        ] {
+            let harness = MediaAssetA6CommandHarness::new();
+            let state = Arc::clone(&harness.state);
+            let window_label = "media-asset-a6";
+            let owner_id = MEDIA_ASSET_A6_OWNER;
+            {
+                let mut coordinator = state.project_coordinator.lock().unwrap();
+                let mut policy = sample_operator_policy();
+                policy.lock_on_load = false;
+                policy.lock_mode = lock_mode;
+                coordinator.ancillary.operator_policy = Some(policy);
+            }
+            harness.authority();
+            let (epoch, revision) = {
+                let coordinator = state.project_coordinator.lock().unwrap();
+                (coordinator.epoch, coordinator.revision)
+            };
+            let retry_label = "Operator lock retry";
+            let retry_coalesce = "operator:retry";
+            let retry_operation = format!("project-op:101:lock-retry-{mode_name}");
+            let retry_shape = canonical_project_transaction_shape(
+                "operator_lock_retry",
+                retry_label,
+                retry_coalesce,
+            );
+            let retry_ticket = begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                begin_project_transaction_request!(
+                    retry_label,
+                    retry_coalesce,
+                    epoch,
+                    revision,
+                    owner_id,
+                    retry_operation.clone(),
+                    retry_shape.clone(),
+                    "operator_lock_retry",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
+            )
+            .expect("unlocked session may create the receipt");
+            state
+                .project_operator_sessions
+                .lock()
+                .unwrap()
+                .get_mut(owner_id)
+                .expect("Begin creates the operator session")
+                .unlocked = false;
+            let retry = begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                begin_project_transaction_request!(
+                    retry_label,
+                    retry_coalesce,
+                    epoch,
+                    revision,
+                    owner_id,
+                    retry_operation.clone(),
+                    retry_shape.clone(),
+                    "operator_lock_retry",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
+            )
+            .expect("exact receipt retry remains available under Operator Lock");
+            assert_eq!(retry.transaction_id, retry_ticket.transaction_id);
+            cancel_project_transaction_for_window_label(
+                &state,
+                project_transaction_cancel_request!(
+                    window_label,
+                    retry_ticket.transaction_id,
+                    retry_ticket.project_epoch,
+                    retry_operation,
+                    retry_shape,
+                    "operator_lock_retry",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
+            )
+            .expect("pre-lock pending cancellation remains available");
+
+            let before_engine = serde_json::to_vec(&project_snapshot_for_save(
+                state.engine.persistence_snapshot().unwrap(),
+            ))
+            .unwrap();
+            let before_coordinator = format!("{:?}", *state.project_coordinator.lock().unwrap());
+            let before_receipts =
+                format!("{:?}", *state.project_transaction_receipts.lock().unwrap());
+            let before_lanes = state
+                .project_transaction_lanes
+                .lock()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>();
+            let before_highwaters = state
+                .project_transaction_operation_highwaters
+                .lock()
+                .unwrap()
+                .clone();
+            let before_sessions = format!("{:?}", *state.project_operator_sessions.lock().unwrap());
+            let before_active = state.project_transaction_active.load(Ordering::Acquire);
+            let new_label = format!("Operator lock new {mode_name}");
+            let new_coalesce = format!("operator:new:{mode_name}");
+            let new_operation = format!("project-op:102:lock-new-{mode_name}");
+            let new_shape =
+                canonical_project_transaction_shape("operator_lock_new", &new_label, &new_coalesce);
+            let error = begin_project_transaction_for_window_label(
+                &state,
+                window_label,
+                begin_project_transaction_request!(
+                    new_label,
+                    new_coalesce,
+                    epoch,
+                    revision,
+                    owner_id,
+                    new_operation,
+                    new_shape,
+                    "operator_lock_new",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
+            )
+            .expect_err("new Begin must be blocked by the active Operator Lock");
+            assert!(error.contains(&format!("{mode_name} Lock")), "{error}");
+            assert_eq!(
+                serde_json::to_vec(&project_snapshot_for_save(
+                    state.engine.persistence_snapshot().unwrap(),
+                ))
+                .unwrap(),
+                before_engine
+            );
+            assert_eq!(
+                format!("{:?}", *state.project_coordinator.lock().unwrap()),
+                before_coordinator
+            );
+            assert_eq!(
+                format!("{:?}", *state.project_transaction_receipts.lock().unwrap()),
+                before_receipts
+            );
+            assert_eq!(
+                state
+                    .project_transaction_lanes
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                before_lanes
+            );
+            assert_eq!(
+                *state
+                    .project_transaction_operation_highwaters
+                    .lock()
+                    .unwrap(),
+                before_highwaters
+            );
+            assert_eq!(
+                format!("{:?}", *state.project_operator_sessions.lock().unwrap()),
+                before_sessions
+            );
+            assert_eq!(
+                state.project_transaction_active.load(Ordering::Acquire),
+                before_active
+            );
+        }
     }
 
     #[test]
@@ -86068,15 +89608,21 @@ pub(crate) mod tests {
             begin_project_transaction_for_window_label(
                 &state,
                 window_label,
-                label.to_string(),
-                coalesce.to_string(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.to_string(),
-                canonical_project_transaction_shape("test_project_transaction", label, coalesce),
-                "test_project_transaction".to_string(),
-                schema_version,
+                begin_project_transaction_request!(
+                    label,
+                    coalesce,
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id,
+                    canonical_project_transaction_shape(
+                        "test_project_transaction",
+                        label,
+                        coalesce
+                    ),
+                    "test_project_transaction",
+                    schema_version
+                ),
             )
         };
 
@@ -86093,25 +89639,29 @@ pub(crate) mod tests {
         let committed = commit_project_transaction_for_window_label(
             &state,
             window_label,
-            committed_ticket.transaction_id,
-            committed_ticket.project_epoch,
-            committed_ticket.client_operation_id.clone(),
-            committed_ticket.shape_fingerprint.clone(),
-            "test_project_transaction".to_string(),
-            committed_ticket.schema_version,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                committed_ticket.transaction_id,
+                committed_ticket.project_epoch,
+                committed_ticket.client_operation_id,
+                committed_ticket.shape_fingerprint,
+                "test_project_transaction",
+                committed_ticket.schema_version,
+                owner_id
+            ),
         )
         .unwrap();
         let replay = commit_project_transaction_for_window_label(
             &state,
             window_label,
-            committed_ticket.transaction_id,
-            committed_ticket.project_epoch,
-            committed_ticket.client_operation_id.clone(),
-            committed_ticket.shape_fingerprint.clone(),
-            "test_project_transaction".to_string(),
-            committed_ticket.schema_version,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                committed_ticket.transaction_id,
+                committed_ticket.project_epoch,
+                committed_ticket.client_operation_id,
+                committed_ticket.shape_fingerprint,
+                "test_project_transaction",
+                committed_ticket.schema_version,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -86188,13 +89738,15 @@ pub(crate) mod tests {
         assert!(commit_project_transaction_for_window_label(
             &state,
             window_label,
-            inflight_ticket.transaction_id,
-            inflight_ticket.project_epoch,
-            inflight_ticket.client_operation_id,
-            inflight_ticket.shape_fingerprint,
-            "test_project_transaction".to_string(),
-            inflight_ticket.schema_version,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                inflight_ticket.transaction_id,
+                inflight_ticket.project_epoch,
+                inflight_ticket.client_operation_id,
+                inflight_ticket.shape_fingerprint,
+                "test_project_transaction",
+                inflight_ticket.schema_version,
+                owner_id
+            ),
         )
         .is_err());
         assert!(
@@ -86255,15 +89807,17 @@ pub(crate) mod tests {
             begin_project_transaction_for_window_label(
                 &state,
                 window_label,
-                label.clone(),
-                coalesce.clone(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.to_string(),
-                canonical_project_transaction_shape("retirement_test", &label, &coalesce),
-                "retirement_test".to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                begin_project_transaction_request!(
+                    label,
+                    coalesce,
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id,
+                    canonical_project_transaction_shape("retirement_test", &label, &coalesce),
+                    "retirement_test",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
             )
         };
 
@@ -86287,14 +89841,16 @@ pub(crate) mod tests {
             .contains_key(&pane_ticket.client_operation_id));
         cancel_project_transaction_for_window_label(
             &state,
-            "pane-video",
-            pane_ticket.transaction_id,
-            pane_ticket.project_epoch,
-            pane_ticket.client_operation_id.clone(),
-            pane_ticket.shape_fingerprint.clone(),
-            "retirement_test".to_string(),
-            pane_ticket.schema_version,
-            "renderer:pane-video".to_string(),
+            project_transaction_cancel_request!(
+                "pane-video",
+                pane_ticket.transaction_id,
+                pane_ticket.project_epoch,
+                pane_ticket.client_operation_id.clone(),
+                pane_ticket.shape_fingerprint.clone(),
+                "retirement_test",
+                pane_ticket.schema_version,
+                "renderer:pane-video"
+            ),
         )
         .unwrap();
 
@@ -86405,10 +89961,7 @@ pub(crate) mod tests {
         // This is the pure transport decision used by the polling worker:
         // generation may advance, but canonical project+mappings content does
         // not justify another retirement/identity replacement.
-        assert_eq!(
-            hash == same_hash && mappings == ProjectControlMappings::default(),
-            true
-        );
+        assert!(hash == same_hash && mappings == ProjectControlMappings::default());
         assert!(!project_checkpoint_content_requires_identity_apply(
             &current, &mappings, &same_hash,
         ));
@@ -87231,8 +90784,10 @@ pub(crate) mod tests {
 
     #[test]
     fn stale_expected_epoch_rejects_before_transaction_reservation() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.epoch = 9;
+        let coordinator = ProjectCoordinator {
+            epoch: 9,
+            ..ProjectCoordinator::default()
+        };
         let error = ensure_project_epoch_matches(&coordinator, 8).unwrap_err();
         assert!(error.contains("expected epoch 8"));
         assert!(coordinator.history.pending.is_empty());
@@ -87593,8 +91148,10 @@ pub(crate) mod tests {
 
     #[test]
     fn project_coordinator_identity_swap_resets_history_and_advances_generation() {
-        let mut coordinator = ProjectCoordinator::default();
-        coordinator.revision = 7;
+        let mut coordinator = ProjectCoordinator {
+            revision: 7,
+            ..ProjectCoordinator::default()
+        };
         let checkpoint = test_project_checkpoint(empty_project_file(), 7);
         coordinator.history.undo.push(ProjectHistoryEntry {
             entry_id: 1,
@@ -87943,13 +91500,15 @@ pub(crate) mod tests {
 
     #[test]
     fn engine_snapshot_delta_reports_grouped_cue_activation_and_release() {
-        let mut project_snapshot = EngineSnapshot::default();
-        project_snapshot.cues = vec![protocol::CueSummary {
-            id: 4,
-            label: "Grouped cue".to_string(),
-            group_id: Some("Bar".to_string()),
-            ..protocol::CueSummary::default()
-        }];
+        let project_snapshot = EngineSnapshot {
+            cues: vec![protocol::CueSummary {
+                id: 4,
+                label: "Grouped cue".to_string(),
+                group_id: Some("Bar".to_string()),
+                ..protocol::CueSummary::default()
+            }],
+            ..EngineSnapshot::default()
+        };
 
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -88032,16 +91591,18 @@ pub(crate) mod tests {
 
         let filtered = filter_gdtf_share_results(
             fixtures,
-            "Robe",
-            "Mega",
-            "Mode",
-            "Mode 1",
-            Some(30),
-            Some(36),
-            true,
-            true,
-            true,
-            10,
+            GdtfShareFilterOptions {
+                manufacturer: "Robe",
+                fixture: "Mega",
+                query: "Mode",
+                mode: "Mode 1",
+                min_footprint: Some(30),
+                max_footprint: Some(36),
+                release_only: true,
+                tested_in_visualizer: true,
+                tested_in_real_life: true,
+                limit: 10,
+            },
         );
         assert_eq!(filtered.fixtures.len(), 1);
         assert_eq!(filtered.fixtures[0].fixture, "MegaPointe");
@@ -88069,16 +91630,18 @@ pub(crate) mod tests {
         }));
         let all = filter_gdtf_share_results(
             official_list_shape.clone(),
-            "",
-            "",
-            "",
-            "",
-            None,
-            None,
-            false,
-            false,
-            false,
-            10,
+            GdtfShareFilterOptions {
+                manufacturer: "",
+                fixture: "",
+                query: "",
+                mode: "",
+                min_footprint: None,
+                max_footprint: None,
+                release_only: false,
+                tested_in_visualizer: false,
+                tested_in_real_life: false,
+                limit: 10,
+            },
         );
         assert_eq!(all.fixtures.len(), 1);
         assert_eq!(
@@ -88091,16 +91654,18 @@ pub(crate) mod tests {
         );
         let strict_release = filter_gdtf_share_results(
             official_list_shape,
-            "",
-            "",
-            "",
-            "",
-            None,
-            None,
-            true,
-            false,
-            false,
-            10,
+            GdtfShareFilterOptions {
+                manufacturer: "",
+                fixture: "",
+                query: "",
+                mode: "",
+                min_footprint: None,
+                max_footprint: None,
+                release_only: true,
+                tested_in_visualizer: false,
+                tested_in_real_life: false,
+                limit: 10,
+            },
         );
         assert!(strict_release.fixtures.is_empty());
     }
@@ -88654,7 +92219,7 @@ f 1 2 3
     }
 
     fn glb_chunk(chunk_type: u32, mut data: Vec<u8>, padding: u8) -> Vec<u8> {
-        while data.len() % 4 != 0 {
+        while !data.len().is_multiple_of(4) {
             data.push(padding);
         }
         let mut chunk = Vec::with_capacity(data.len() + 8);
@@ -89161,7 +92726,7 @@ f 1 2 3
         let mut snapshot = engine.snapshot();
         for _ in 0..30 {
             if snapshot.active_cue_id == Some(cue_id)
-                && snapshot.dmx_preview.get(0) == Some(&255)
+                && snapshot.dmx_preview.first() == Some(&255)
                 && snapshot.dmx_preview.get(1) == Some(&255)
                 && snapshot.dmx_preview.get(2) == Some(&255)
                 && snapshot.dmx_preview.get(3) == Some(&255)
@@ -89238,7 +92803,7 @@ f 1 2 3
         let mut snapshot = engine.snapshot();
         for _ in 0..30 {
             if snapshot.active_cue_id == Some(cue_id)
-                && snapshot.dmx_preview.get(0) == Some(&255)
+                && snapshot.dmx_preview.first() == Some(&255)
                 && snapshot
                     .video
                     .layers
@@ -89294,7 +92859,7 @@ f 1 2 3
             if snapshot.timeline.position_ms == 2000
                 && snapshot.timeline.automations.len() == 1
                 && snapshot.timeline.video_automations.len() == 1
-                && snapshot.dmx_preview.get(0) == Some(&128)
+                && snapshot.dmx_preview.first() == Some(&128)
                 && snapshot
                     .video
                     .layers
@@ -89349,7 +92914,7 @@ f 1 2 3
             let (received, _) = receiver.recv_from(&mut buffer).unwrap();
             let packet = io::artnet::parse_art_dmx_packet(&buffer[..received]).unwrap();
             if packet.universe == 0
-                && packet.data.get(0) == Some(&255)
+                && packet.data.first() == Some(&255)
                 && packet.data.get(1) == Some(&255)
                 && packet.data.get(2) == Some(&255)
                 && packet.data.get(3) == Some(&255)
@@ -90295,20 +93860,22 @@ f 1 2 3
 
     #[test]
     fn engine_telemetry_budget_report_flags_latency_and_output_failures() {
-        let mut telemetry = EngineTelemetry::default();
-        telemetry.tick_jitter_samples = 10;
-        telemetry.tick_jitter_p99_us = TELEMETRY_TICK_JITTER_P99_TARGET_US + 1;
-        telemetry.command_queue_latency_samples = 1;
-        telemetry.command_queue_latency_p99_us = TELEMETRY_COMMAND_QUEUE_P99_TARGET_US;
-        telemetry.command_to_dmx_tick_latency_samples = 1;
-        telemetry.command_to_dmx_tick_latency_p99_us = TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US + 1;
-        telemetry.last_dmx_output_count = 1;
-        telemetry.last_dmx_send_success_count = 0;
-        telemetry.last_dmx_send_failure_count = 1;
-        telemetry.total_dmx_send_failure_count = 1;
-        telemetry.dmx_send_interval_samples = 1;
-        telemetry.last_dmx_send_interval_us = TELEMETRY_DMX_TARGET_TICK_INTERVAL_US;
-        telemetry.dmx_send_interval_min_us = TELEMETRY_DMX_TARGET_TICK_INTERVAL_US;
+        let telemetry = EngineTelemetry {
+            tick_jitter_samples: 10,
+            tick_jitter_p99_us: TELEMETRY_TICK_JITTER_P99_TARGET_US + 1,
+            command_queue_latency_samples: 1,
+            command_queue_latency_p99_us: TELEMETRY_COMMAND_QUEUE_P99_TARGET_US,
+            command_to_dmx_tick_latency_samples: 1,
+            command_to_dmx_tick_latency_p99_us: TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US + 1,
+            last_dmx_output_count: 1,
+            last_dmx_send_success_count: 0,
+            last_dmx_send_failure_count: 1,
+            total_dmx_send_failure_count: 1,
+            dmx_send_interval_samples: 1,
+            last_dmx_send_interval_us: TELEMETRY_DMX_TARGET_TICK_INTERVAL_US,
+            dmx_send_interval_min_us: TELEMETRY_DMX_TARGET_TICK_INTERVAL_US,
+            ..EngineTelemetry::default()
+        };
 
         let budget = engine_telemetry_budget_report(&telemetry, 1);
 
@@ -90323,19 +93890,22 @@ f 1 2 3
 
     #[test]
     fn engine_telemetry_budget_report_warns_on_slow_dmx_interval() {
-        let mut telemetry = EngineTelemetry::default();
-        telemetry.tick_jitter_samples = 10;
-        telemetry.tick_jitter_p99_us = TELEMETRY_TICK_JITTER_P99_TARGET_US;
-        telemetry.command_queue_latency_samples = 1;
-        telemetry.command_queue_latency_p99_us = TELEMETRY_COMMAND_QUEUE_P99_TARGET_US;
-        telemetry.command_to_dmx_tick_latency_samples = 1;
-        telemetry.command_to_dmx_tick_latency_p99_us = TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US;
-        telemetry.last_dmx_output_count = 1;
-        telemetry.last_dmx_send_success_count = 1;
-        telemetry.dmx_send_interval_samples = 3;
-        telemetry.dmx_send_interval_min_us = TELEMETRY_DMX_TARGET_TICK_INTERVAL_US;
-        telemetry.last_dmx_send_interval_us =
-            TELEMETRY_DMX_TARGET_TICK_INTERVAL_US + TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US + 1;
+        let telemetry = EngineTelemetry {
+            tick_jitter_samples: 10,
+            tick_jitter_p99_us: TELEMETRY_TICK_JITTER_P99_TARGET_US,
+            command_queue_latency_samples: 1,
+            command_queue_latency_p99_us: TELEMETRY_COMMAND_QUEUE_P99_TARGET_US,
+            command_to_dmx_tick_latency_samples: 1,
+            command_to_dmx_tick_latency_p99_us: TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US,
+            last_dmx_output_count: 1,
+            last_dmx_send_success_count: 1,
+            dmx_send_interval_samples: 3,
+            dmx_send_interval_min_us: TELEMETRY_DMX_TARGET_TICK_INTERVAL_US,
+            last_dmx_send_interval_us: TELEMETRY_DMX_TARGET_TICK_INTERVAL_US
+                + TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US
+                + 1,
+            ..EngineTelemetry::default()
+        };
 
         let budget = engine_telemetry_budget_report(&telemetry, 1);
 
@@ -91063,8 +94633,10 @@ f 1 2 3
             libav_cache_len: 2,
             ..video::VideoDecoderDiagnostics::default()
         };
-        let mut metrics = NativeVideoOutputMetrics::default();
-        metrics.warmup_remaining = 0;
+        let mut metrics = NativeVideoOutputMetrics {
+            warmup_remaining: 0,
+            ..NativeVideoOutputMetrics::default()
+        };
         metrics.record(
             1920,
             1080,
@@ -91126,8 +94698,10 @@ f 1 2 3
     fn native_video_output_metrics_gate_1080p60_after_120_samples() {
         let buffer_stats = video::GpuSurfaceBufferStats::default();
         let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
-        let mut passing = NativeVideoOutputMetrics::default();
-        passing.warmup_remaining = 0;
+        let mut passing = NativeVideoOutputMetrics {
+            warmup_remaining: 0,
+            ..NativeVideoOutputMetrics::default()
+        };
         for _ in 0..120 {
             passing.record(
                 1920,
@@ -91140,8 +94714,10 @@ f 1 2 3
         }
         assert_eq!(passing.snapshot().frame_budget_pass, Some(true));
 
-        let mut failing = NativeVideoOutputMetrics::default();
-        failing.warmup_remaining = 0;
+        let mut failing = NativeVideoOutputMetrics {
+            warmup_remaining: 0,
+            ..NativeVideoOutputMetrics::default()
+        };
         for _ in 0..120 {
             failing.record(
                 1920,
@@ -92275,14 +95851,16 @@ f 1 2 3
 
     #[test]
     fn project_snapshot_for_save_drops_volatile_runtime_state() {
-        let mut snapshot = EngineSnapshot::default();
-        snapshot.active_cue_id = Some(7);
-        snapshot.active_fade = Some(protocol::ActiveFadeSummary {
-            cue_id: 7,
-            progress: 0.5,
-            remaining_ms: 1_200,
-            paused: true,
-        });
+        let mut snapshot = EngineSnapshot {
+            active_cue_id: Some(7),
+            active_fade: Some(protocol::ActiveFadeSummary {
+                cue_id: 7,
+                progress: 0.5,
+                remaining_ms: 1_200,
+                paused: true,
+            }),
+            ..EngineSnapshot::default()
+        };
         snapshot.timeline.playing = true;
         snapshot.timeline.position_ms = 12_345;
         snapshot.video.master_opacity = 0.5;
@@ -95993,28 +99571,14 @@ f 1 2 3
             snapshot,
             "Timeline scene block",
             7,
-            12_000,
-            None,
-            1_000,
-            None,
-            false,
-            false,
-            2,
-            Some(20),
+            (12_000, None, 1_000, None, false, false, 2, Some(20)),
         )
         .unwrap();
         assert!(validate_timeline_scene_block_request(
             snapshot,
             "Timeline scene block",
             7,
-            12_000,
-            None,
-            0,
-            None,
-            false,
-            false,
-            1,
-            None,
+            (12_000, None, 0, None, false, false, 1, None),
         )
         .unwrap_err()
         .contains("duration must be greater than zero"));
@@ -96022,14 +99586,7 @@ f 1 2 3
             snapshot,
             "Timeline scene block",
             99,
-            12_000,
-            None,
-            1_000,
-            None,
-            false,
-            false,
-            1,
-            None,
+            (12_000, None, 1_000, None, false, false, 1, None),
         )
         .unwrap_err()
         .contains("Cue 99 was not found"));
@@ -96713,21 +100270,19 @@ f 1 2 3
         assert_eq!(video_output_targets[0].output_id, 7);
         assert!(node_graph_targets.is_empty());
         assert_eq!(effect_targets.len(), 2);
-        assert_eq!(
-            effect_targets
+        assert!(
+            !effect_targets
                 .iter()
                 .find(|target| target.effect_id == 11)
                 .unwrap()
-                .enabled,
-            false
+                .enabled
         );
-        assert_eq!(
-            effect_targets
+        assert!(
+            !effect_targets
                 .iter()
                 .find(|target| target.effect_id == 12)
                 .unwrap()
-                .enabled,
-            false
+                .enabled
         );
     }
 
@@ -97119,7 +100674,7 @@ f 1 2 3
             rotation_deg: 0.0,
             color: Some("#55ccff".to_string()),
         };
-        validate_project_stage_objects(&[valid.clone()]).unwrap();
+        validate_project_stage_objects(std::slice::from_ref(&valid)).unwrap();
 
         let duplicate_error =
             validate_project_stage_objects(&[valid.clone(), valid.clone()]).unwrap_err();
@@ -97239,15 +100794,17 @@ f 1 2 3
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "PATCH fixture batch".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "PATCH fixture batch",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let profile = sample_patch_profile();
@@ -97257,13 +100814,15 @@ f 1 2 3
         let profiles = vec![profile.clone(), profile];
         let result = patch_fixtures_in_project_transaction_with_resolve_observer(
             state,
-            requests.clone(),
-            Some(profiles.clone()),
-            ticket.transaction_id,
-            ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
-            "patch_fixtures",
+            patch_fixtures_transaction_request!(
+                requests.clone(),
+                Some(profiles.clone()),
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id,
+                window_label,
+                "patch_fixtures"
+            ),
             || {
                 assert!(state
                     .project_external_command_admission
@@ -97309,13 +100868,15 @@ f 1 2 3
 
         let replay = patch_fixtures_in_project_transaction_with_resolve_observer(
             state,
-            requests.clone(),
-            Some(profiles.clone()),
-            ticket.transaction_id,
-            ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
-            "patch_fixtures",
+            patch_fixtures_transaction_request!(
+                requests.clone(),
+                Some(profiles.clone()),
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id,
+                window_label,
+                "patch_fixtures"
+            ),
             || panic!("an exact reply-loss retry must not resolve profiles again"),
         )
         .unwrap();
@@ -97329,13 +100890,15 @@ f 1 2 3
         changed_requests[0].label = "Changed replay".to_string();
         let changed = patch_fixtures_in_project_transaction_with_resolve_observer(
             state,
-            changed_requests,
-            Some(profiles),
-            ticket.transaction_id,
-            ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
-            "patch_fixtures",
+            patch_fixtures_transaction_request!(
+                changed_requests,
+                Some(profiles),
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id,
+                window_label,
+                "patch_fixtures"
+            ),
             || panic!("a changed replay must reject before profile I/O"),
         )
         .unwrap_err();
@@ -97348,13 +100911,15 @@ f 1 2 3
         let committed = commit_project_transaction_for_window_label(
             state,
             window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(committed.history_status.undo_depth, 1);
@@ -97398,15 +100963,17 @@ f 1 2 3
         let repair_ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Repair fixture profile".to_string(),
-            String::new(),
-            repair_epoch,
-            repair_revision,
-            owner_id.to_string(),
-            repair_operation_id.clone(),
-            repair_shape.clone(),
-            "repair_fixture_profile".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Repair fixture profile",
+                "",
+                repair_epoch,
+                repair_revision,
+                owner_id,
+                repair_operation_id.clone(),
+                repair_shape.clone(),
+                "repair_fixture_profile",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let mut repaired_profile = sample_patch_profile();
@@ -97421,14 +100988,16 @@ f 1 2 3
         let expected_repaired_profile = repaired_profile.clone();
         let repair_result = repair_fixture_profile_for_window_label_with_resolve_observer(
             state,
-            fixture_ids[0],
-            repaired_profile.source_path.clone(),
-            Some("Default".to_string()),
-            repaired_profile.clone(),
-            repair_ticket.transaction_id,
-            repair_ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
+            FixtureProfileRepairRequest {
+                fixture_id: fixture_ids[0],
+                profile_path: repaired_profile.source_path.clone(),
+                mode_name: Some("Default".to_string()),
+                profile: repaired_profile.clone(),
+                project_transaction_id: repair_ticket.transaction_id,
+                expected_epoch: repair_ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+            },
             || {
                 assert!(state
                     .project_external_command_admission
@@ -97455,14 +101024,16 @@ f 1 2 3
         assert_eq!(repaired_fixture.profile_name, "oVeRlAp tEsT");
         let repair_replay = repair_fixture_profile_for_window_label_with_resolve_observer(
             state,
-            fixture_ids[0],
-            repaired_profile.source_path.clone(),
-            Some("Default".to_string()),
-            repaired_profile.clone(),
-            repair_ticket.transaction_id,
-            repair_ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
+            FixtureProfileRepairRequest {
+                fixture_id: fixture_ids[0],
+                profile_path: repaired_profile.source_path.clone(),
+                mode_name: Some("Default".to_string()),
+                profile: repaired_profile.clone(),
+                project_transaction_id: repair_ticket.transaction_id,
+                expected_epoch: repair_ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+            },
             || panic!("an exact Repair retry must not resolve the profile again"),
         )
         .unwrap();
@@ -97470,14 +101041,16 @@ f 1 2 3
         repaired_profile.source_path.push_str("-changed");
         let changed_repair = repair_fixture_profile_for_window_label_with_resolve_observer(
             state,
-            fixture_ids[0],
-            repaired_profile.source_path.clone(),
-            Some("Default".to_string()),
-            repaired_profile,
-            repair_ticket.transaction_id,
-            repair_ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
+            FixtureProfileRepairRequest {
+                fixture_id: fixture_ids[0],
+                profile_path: repaired_profile.source_path.clone(),
+                mode_name: Some("Default".to_string()),
+                profile: repaired_profile,
+                project_transaction_id: repair_ticket.transaction_id,
+                expected_epoch: repair_ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+            },
             || panic!("a changed Repair replay must reject before profile I/O"),
         )
         .unwrap_err();
@@ -97485,13 +101058,15 @@ f 1 2 3
         let repair_commit = commit_project_transaction_for_window_label(
             state,
             window_label,
-            repair_ticket.transaction_id,
-            repair_ticket.project_epoch,
-            repair_operation_id,
-            repair_shape,
-            "repair_fixture_profile".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                repair_ticket.transaction_id,
+                repair_ticket.project_epoch,
+                repair_operation_id,
+                repair_shape,
+                "repair_fixture_profile",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(repair_commit.history_status.undo_depth, 2);
@@ -97557,11 +101132,13 @@ f 1 2 3
                         state,
                         prepared,
                         coordinator,
-                        ProjectReplacementCoordinatorEffect::RevisionMutation,
-                        false,
-                        |_, _, _| Ok(()),
-                        |_, _, _| (),
-                        None,
+                        project_replacement_plan!(
+                            ProjectReplacementCoordinatorEffect::RevisionMutation,
+                            false,
+                            no_project_replacement_validation,
+                            no_project_replacement_capture,
+                            None
+                        ),
                         &D2HistoryPlatform,
                     )
                     .map(|(result, (), _)| result)
@@ -97608,11 +101185,13 @@ f 1 2 3
                         state,
                         prepared,
                         coordinator,
-                        ProjectReplacementCoordinatorEffect::RevisionMutation,
-                        false,
-                        |_, _, _| Ok(()),
-                        |_, _, _| (),
-                        None,
+                        project_replacement_plan!(
+                            ProjectReplacementCoordinatorEffect::RevisionMutation,
+                            false,
+                            no_project_replacement_validation,
+                            no_project_replacement_capture,
+                            None
+                        ),
                         &D2HistoryPlatform,
                     )
                     .map(|(result, (), _)| result);
@@ -97718,27 +101297,31 @@ f 1 2 3
                 let ticket = begin_project_transaction_for_window_label(
                     state,
                     window_label,
-                    label.clone(),
-                    String::new(),
-                    epoch,
-                    revision,
-                    owner_id.to_string(),
-                    operation_id.clone(),
-                    shape.clone(),
-                    command_name.to_string(),
-                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    begin_project_transaction_request!(
+                        label,
+                        "",
+                        epoch,
+                        revision,
+                        owner_id,
+                        operation_id.clone(),
+                        shape.clone(),
+                        command_name,
+                        PROJECT_TRANSACTION_SCHEMA_VERSION
+                    ),
                 )
                 .unwrap();
                 let result = if command_name == "patch_fixtures" {
                     patch_fixtures_in_project_transaction_with_resolve_observer(
                         state,
-                        vec![sample_patch_request(0, 10)],
-                        Some(vec![sample_patch_profile()]),
-                        ticket.transaction_id,
-                        ticket.project_epoch,
-                        owner_id.to_string(),
-                        window_label,
-                        command_name,
+                        patch_fixtures_transaction_request!(
+                            vec![sample_patch_request(0, 10)],
+                            Some(vec![sample_patch_profile()]),
+                            ticket.transaction_id,
+                            ticket.project_epoch,
+                            owner_id,
+                            window_label,
+                            command_name
+                        ),
                         || {},
                     )
                     .unwrap()
@@ -97746,14 +101329,16 @@ f 1 2 3
                     repair_profile.geometries.last_mut().unwrap().beam_angle_deg = Some(19.0);
                     repair_fixture_profile_for_window_label_with_resolve_observer(
                         state,
-                        1,
-                        repair_profile.source_path.clone(),
-                        Some("Default".to_string()),
-                        repair_profile,
-                        ticket.transaction_id,
-                        ticket.project_epoch,
-                        owner_id.to_string(),
-                        window_label,
+                        FixtureProfileRepairRequest {
+                            fixture_id: 1,
+                            profile_path: repair_profile.source_path.clone(),
+                            mode_name: Some("Default".to_string()),
+                            profile: repair_profile,
+                            project_transaction_id: ticket.transaction_id,
+                            expected_epoch: ticket.project_epoch,
+                            owner_id: owner_id.to_string(),
+                            window_label: window_label.to_string(),
+                        },
                         || {},
                     )
                     .unwrap()
@@ -97854,15 +101439,17 @@ f 1 2 3
             let ticket = begin_project_transaction_for_window_label(
                 state,
                 window_label,
-                label,
-                String::new(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.clone(),
-                shape.clone(),
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                begin_project_transaction_request!(
+                    label,
+                    "",
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id.clone(),
+                    shape.clone(),
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
             )
             .unwrap();
             let before_project =
@@ -97870,13 +101457,15 @@ f 1 2 3
             let error = commit_project_transaction_for_window_label(
                 state,
                 window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id.clone(),
-                shape.clone(),
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                commit_project_transaction_request!(
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id.clone(),
+                    shape.clone(),
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap_err();
             assert!(
@@ -97900,14 +101489,16 @@ f 1 2 3
             assert!(state.project_transaction_active.load(Ordering::Acquire));
             cancel_project_transaction_for_window_label(
                 state,
-                window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id,
-                shape,
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                project_transaction_cancel_request!(
+                    window_label,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id,
+                    shape,
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap();
         }
@@ -97944,15 +101535,17 @@ f 1 2 3
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Rejected PATCH batch".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Rejected PATCH batch",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let profile = sample_patch_profile();
@@ -97987,13 +101580,15 @@ f 1 2 3
             }
             let error = patch_fixtures_in_project_transaction(
                 state,
-                requests.clone(),
-                profiles.clone(),
-                ticket.transaction_id,
-                ticket.project_epoch,
-                owner_id.to_string(),
-                window_label,
-                "patch_fixtures",
+                patch_fixtures_transaction_request!(
+                    requests.clone(),
+                    profiles.clone(),
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    owner_id,
+                    window_label,
+                    "patch_fixtures"
+                ),
             )
             .unwrap_err();
             assert!(error.contains(expected_error), "{error}");
@@ -98038,25 +101633,29 @@ f 1 2 3
         ] {
             assert!(patch_fixtures_in_project_transaction(
                 state,
-                requests.clone(),
-                profiles.clone(),
-                ticket.transaction_id,
-                wrong_epoch,
-                wrong_owner.to_string(),
-                wrong_window,
-                wrong_command,
+                patch_fixtures_transaction_request!(
+                    requests.clone(),
+                    profiles.clone(),
+                    ticket.transaction_id,
+                    wrong_epoch,
+                    wrong_owner,
+                    wrong_window,
+                    wrong_command
+                ),
             )
             .is_err());
         }
         let conflict = patch_fixtures_in_project_transaction(
             state,
-            requests,
-            profiles,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
-            "patch_fixtures",
+            patch_fixtures_transaction_request!(
+                requests,
+                profiles,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                owner_id,
+                window_label,
+                "patch_fixtures"
+            ),
         )
         .unwrap_err();
         assert!(conflict.contains("conflict") || conflict.contains("overlap"));
@@ -98094,14 +101693,16 @@ f 1 2 3
         ));
         let cancelled = cancel_project_transaction_for_window_label(
             state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id,
-            shape,
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -98164,15 +101765,17 @@ f 1 2 3
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Reject changed Repair identity".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            operation_id.clone(),
-            shape.clone(),
-            "repair_fixture_profile".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Reject changed Repair identity",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                operation_id.clone(),
+                shape.clone(),
+                "repair_fixture_profile",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let mut changed_identity = profile;
@@ -98180,14 +101783,16 @@ f 1 2 3
         changed_identity.manufacturer = "Different Manufacturer".to_string();
         let error = repair_fixture_profile_for_window_label_with_resolve_observer(
             state,
-            1,
-            changed_identity.source_path.clone(),
-            Some("Default".to_string()),
-            changed_identity,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            owner_id.to_string(),
-            window_label,
+            FixtureProfileRepairRequest {
+                fixture_id: 1,
+                profile_path: changed_identity.source_path.clone(),
+                mode_name: Some("Default".to_string()),
+                profile: changed_identity,
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+            },
             || {},
         )
         .unwrap_err();
@@ -98227,14 +101832,16 @@ f 1 2 3
         ));
         let cancelled = cancel_project_transaction_for_window_label(
             state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id,
-            shape,
-            "repair_fixture_profile".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                "repair_fixture_profile",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -98274,15 +101881,17 @@ f 1 2 3
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Slow PATCH".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Slow PATCH",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let profile = sample_patch_profile();
@@ -98295,13 +101904,15 @@ f 1 2 3
             let worker = scope.spawn(move || {
                 patch_fixtures_in_project_transaction_with_resolve_observer(
                     state,
-                    vec![sample_patch_request(0, 1)],
-                    Some(vec![profile]),
-                    worker_transaction_id,
-                    worker_epoch,
-                    worker_owner_id,
-                    window_label,
-                    "patch_fixtures",
+                    patch_fixtures_transaction_request!(
+                        vec![sample_patch_request(0, 1)],
+                        Some(vec![profile]),
+                        worker_transaction_id,
+                        worker_epoch,
+                        worker_owner_id,
+                        window_label,
+                        "patch_fixtures"
+                    ),
                     || {
                         ready_tx.send(()).unwrap();
                         resume_rx.recv().unwrap();
@@ -98333,27 +101944,31 @@ f 1 2 3
         });
         let cancel = cancel_project_transaction_for_window_label(
             state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap_err();
         assert!(cancel.contains("must be committed"));
         commit_project_transaction_for_window_label(
             state,
             window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id,
-            shape,
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            commit_project_transaction_request!(
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -98396,15 +102011,17 @@ f 1 2 3
         let ticket = begin_project_transaction_for_window_label(
             state,
             window_label,
-            "Cancel in-flight PATCH".to_string(),
-            String::new(),
-            epoch,
-            revision,
-            owner_id.to_string(),
-            operation_id.clone(),
-            shape.clone(),
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
+            begin_project_transaction_request!(
+                "Cancel in-flight PATCH",
+                "",
+                epoch,
+                revision,
+                owner_id,
+                operation_id.clone(),
+                shape.clone(),
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
         )
         .unwrap();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -98414,13 +102031,15 @@ f 1 2 3
             let worker = scope.spawn(move || {
                 patch_fixtures_in_project_transaction_with_resolve_observer(
                     state,
-                    vec![sample_patch_request(0, 1)],
-                    Some(vec![sample_patch_profile()]),
-                    ticket.transaction_id,
-                    ticket.project_epoch,
-                    worker_owner_id,
-                    window_label,
-                    "patch_fixtures",
+                    patch_fixtures_transaction_request!(
+                        vec![sample_patch_request(0, 1)],
+                        Some(vec![sample_patch_profile()]),
+                        ticket.transaction_id,
+                        ticket.project_epoch,
+                        worker_owner_id,
+                        window_label,
+                        "patch_fixtures"
+                    ),
                     || {
                         ready_tx.send(()).unwrap();
                         resume_rx.recv().unwrap();
@@ -98430,14 +102049,16 @@ f 1 2 3
             ready_rx.recv().unwrap();
             let first_cancel = cancel_project_transaction_for_window_label(
                 state,
-                window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id.clone(),
-                shape.clone(),
-                "patch_fixtures".to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                project_transaction_cancel_request!(
+                    window_label,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id.clone(),
+                    shape.clone(),
+                    "patch_fixtures",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap_err();
             assert!(state.project_transaction_active.load(Ordering::Acquire));
@@ -98475,14 +102096,16 @@ f 1 2 3
         ));
         let cancelled = cancel_project_transaction_for_window_label(
             state,
-            window_label,
-            ticket.transaction_id,
-            ticket.project_epoch,
-            operation_id,
-            shape,
-            "patch_fixtures".to_string(),
-            PROJECT_TRANSACTION_SCHEMA_VERSION,
-            owner_id.to_string(),
+            project_transaction_cancel_request!(
+                window_label,
+                ticket.transaction_id,
+                ticket.project_epoch,
+                operation_id,
+                shape,
+                "patch_fixtures",
+                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                owner_id
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -98551,15 +102174,17 @@ f 1 2 3
             let ticket = begin_project_transaction_for_window_label(
                 state,
                 window_label,
-                label,
-                String::new(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.clone(),
-                shape.clone(),
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                begin_project_transaction_request!(
+                    label,
+                    "",
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id.clone(),
+                    shape.clone(),
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
             )
             .unwrap();
             let error = "injected admitted ACK disconnect".to_string();
@@ -98568,14 +102193,16 @@ f 1 2 3
             let route_error = if let Some(profile) = repair_profile {
                 repair_fixture_profile_for_window_label_with_resolve_and_publish(
                     state,
-                    1,
-                    profile.source_path.clone(),
-                    Some("Default".to_string()),
-                    profile,
-                    ticket.transaction_id,
-                    ticket.project_epoch,
-                    owner_id.to_string(),
-                    window_label,
+                    FixtureProfileRepairRequest {
+                        fixture_id: 1,
+                        profile_path: profile.source_path.clone(),
+                        mode_name: Some("Default".to_string()),
+                        profile,
+                        project_transaction_id: ticket.transaction_id,
+                        expected_epoch: ticket.project_epoch,
+                        owner_id: owner_id.to_string(),
+                        window_label: window_label.to_string(),
+                    },
                     || {},
                     |_, _, _, _| Err(FixturePatchPublicationFailure::Indeterminate(error.clone())),
                 )
@@ -98583,13 +102210,15 @@ f 1 2 3
             } else {
                 patch_fixtures_in_project_transaction_with_resolve_and_publish(
                     state,
-                    vec![sample_patch_request(0, 1)],
-                    Some(vec![sample_patch_profile()]),
-                    ticket.transaction_id,
-                    ticket.project_epoch,
-                    owner_id.to_string(),
-                    window_label,
-                    command_name,
+                    patch_fixtures_transaction_request!(
+                        vec![sample_patch_request(0, 1)],
+                        Some(vec![sample_patch_profile()]),
+                        ticket.transaction_id,
+                        ticket.project_epoch,
+                        owner_id,
+                        window_label,
+                        command_name
+                    ),
                     || {},
                     |_, patches| {
                         assert_eq!(patches.len(), 1);
@@ -98643,13 +102272,15 @@ f 1 2 3
             let commit_error = commit_project_transaction_for_window_label(
                 state,
                 window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id.clone(),
-                shape.clone(),
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                commit_project_transaction_request!(
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id.clone(),
+                    shape.clone(),
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap_err();
             assert!(commit_error.contains("indeterminate"), "{commit_error}");
@@ -98674,14 +102305,16 @@ f 1 2 3
             );
             let cancel_error = cancel_project_transaction_for_window_label(
                 state,
-                window_label,
-                ticket.transaction_id,
-                ticket.project_epoch,
-                operation_id,
-                shape,
-                command_name.to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
-                owner_id.to_string(),
+                project_transaction_cancel_request!(
+                    window_label,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    operation_id,
+                    shape,
+                    command_name,
+                    PROJECT_TRANSACTION_SCHEMA_VERSION,
+                    owner_id
+                ),
             )
             .unwrap_err();
             assert!(cancel_error.contains("indeterminate"), "{cancel_error}");
@@ -98722,26 +102355,30 @@ f 1 2 3
             let ticket = begin_project_transaction_for_window_label(
                 state,
                 window_label,
-                label,
-                String::new(),
-                epoch,
-                revision,
-                owner_id.to_string(),
-                operation_id.clone(),
-                shape,
-                "patch_fixtures".to_string(),
-                PROJECT_TRANSACTION_SCHEMA_VERSION,
+                begin_project_transaction_request!(
+                    label,
+                    "",
+                    epoch,
+                    revision,
+                    owner_id,
+                    operation_id.clone(),
+                    shape,
+                    "patch_fixtures",
+                    PROJECT_TRANSACTION_SCHEMA_VERSION
+                ),
             )
             .unwrap();
             let error = patch_fixtures_in_project_transaction_with_resolve_observer(
                 state,
-                vec![sample_patch_request(0, 1)],
-                Some(vec![sample_patch_profile()]),
-                ticket.transaction_id,
-                ticket.project_epoch,
-                owner_id.to_string(),
-                window_label,
-                "patch_fixtures",
+                patch_fixtures_transaction_request!(
+                    vec![sample_patch_request(0, 1)],
+                    Some(vec![sample_patch_profile()]),
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    owner_id,
+                    window_label,
+                    "patch_fixtures"
+                ),
                 || match scenario {
                     "stale_checkpoint" => {
                         let mut request = sample_patch_request(0, 100);
@@ -101853,6 +105490,303 @@ f 1 2 3
         }
     }
 
+    /// Minimal RFC 6455 client for the app-level production-loopback proof.
+    /// `tungstenite` is intentionally not a direct app dependency; this
+    /// client implements only the masked, unfragmented text frames needed by
+    /// the authenticated `/dj-link` contract.
+    struct DjLinkLoopbackClient {
+        stream: std::net::TcpStream,
+    }
+
+    impl DjLinkLoopbackClient {
+        fn connect(port: u16) -> Self {
+            Self::connect_path(port, "/dj-link")
+        }
+
+        fn connect_path(port: u16, path: &str) -> Self {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+                .expect("connect actual Remote listener");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            stream.set_nodelay(true).unwrap();
+            let request = format!(
+                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).unwrap();
+            let mut response = Vec::new();
+            while !response.ends_with(b"\r\n\r\n") {
+                assert!(response.len() < 8 * 1024, "WebSocket upgrade was oversized");
+                let mut byte = [0_u8; 1];
+                stream.read_exact(&mut byte).unwrap();
+                response.push(byte[0]);
+            }
+            let response = String::from_utf8(response).unwrap();
+            assert!(
+                response.starts_with("HTTP/1.1 101"),
+                "Remote WebSocket upgrade failed: {response:?}"
+            );
+            Self { stream }
+        }
+
+        fn send_json(&mut self, value: &Value) {
+            let payload = value.to_string().into_bytes();
+            let mut frame = Vec::with_capacity(payload.len() + 14);
+            frame.push(0x81);
+            match payload.len() {
+                len @ 0..=125 => frame.push(0x80 | len as u8),
+                len @ 126..=65_535 => {
+                    frame.push(0x80 | 126);
+                    frame.extend_from_slice(&(len as u16).to_be_bytes());
+                }
+                len => {
+                    frame.push(0x80 | 127);
+                    frame.extend_from_slice(&(len as u64).to_be_bytes());
+                }
+            }
+            let mask = [0x12, 0x34, 0x56, 0x78];
+            frame.extend_from_slice(&mask);
+            frame.extend(
+                payload
+                    .iter()
+                    .enumerate()
+                    .map(|(index, byte)| byte ^ mask[index % mask.len()]),
+            );
+            self.stream.write_all(&frame).unwrap();
+        }
+
+        fn read_json(&mut self) -> Value {
+            let mut header = [0_u8; 2];
+            self.stream.read_exact(&mut header).unwrap();
+            assert_eq!(header[0] & 0x0f, 0x1, "expected a WebSocket text frame");
+            assert_eq!(header[1] & 0x80, 0, "server frames must not be masked");
+            let mut len = u64::from(header[1] & 0x7f);
+            if len == 126 {
+                let mut extended = [0_u8; 2];
+                self.stream.read_exact(&mut extended).unwrap();
+                len = u64::from(u16::from_be_bytes(extended));
+            } else if len == 127 {
+                let mut extended = [0_u8; 8];
+                self.stream.read_exact(&mut extended).unwrap();
+                len = u64::from_be_bytes(extended);
+            }
+            assert!(len <= 1024 * 1024, "DJ Link reply exceeded test bound");
+            let mut payload = vec![0_u8; len as usize];
+            self.stream.read_exact(&mut payload).unwrap();
+            serde_json::from_slice(&payload).unwrap()
+        }
+
+        fn read_ack(&mut self) -> protocol::DjLinkAck {
+            serde_json::from_value(self.read_json()).unwrap()
+        }
+    }
+
+    fn dj_link_socket_hello(token: &str, session_id: &str, event_id: &str) -> Value {
+        json!({
+            "v": 1,
+            "type": "DJ_AGENT_HELLO",
+            "agentId": "production-stop-agent",
+            "sessionId": session_id,
+            "sequence": 1,
+            "eventId": event_id,
+            "payload": {"authToken": token, "version": 1, "capabilities": []}
+        })
+    }
+
+    fn dj_link_socket_release(session_id: &str) -> Value {
+        json!({
+            "v": 1,
+            "type": "DJ_RELEASE",
+            "agentId": "production-stop-agent",
+            "sessionId": session_id,
+            "sequence": 2,
+            "eventId": "production-stop-physical-release",
+            "payload": {}
+        })
+    }
+
+    #[test]
+    fn dj_link_production_remote_stop_is_bounded_and_replacement_rejects_replay() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        *state.dj_link_token.lock().unwrap() = Some(token.to_string());
+        let config = RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            pairing_pin: "123456".to_string(),
+            max_connections: 2,
+            max_messages_per_second: 1_000,
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            ..RemoteControlConfig::default()
+        };
+        start_remote_control_for_state(&state, config.clone()).unwrap();
+
+        let mut old_client = DjLinkLoopbackClient::connect(port);
+        old_client.send_json(&dj_link_socket_hello(
+            token,
+            "production-stop-old",
+            "production-stop-old-hello",
+        ));
+        assert_eq!(
+            old_client.read_ack().outcome,
+            protocol::DjLinkAckOutcome::Accepted
+        );
+
+        // Generic workers are retained by the same server join. Prove the
+        // status provider fails closed instead of waiting behind an app-owned
+        // transport mutex, and keep that actual socket open through stop.
+        let transport_status_guard = state.external_video_transport.lock().unwrap();
+        let mut remote_client = DjLinkLoopbackClient::connect_path(port, "/ws?token=123456");
+        let status_started = Instant::now();
+        remote_client.send_json(&json!({"type":"getExternalVideoTransportStatus"}));
+        let status_response = remote_client.read_json();
+        assert!(
+            status_started.elapsed() < Duration::from_secs(1),
+            "busy external transport status provider did not fail closed"
+        );
+        assert_eq!(status_response["type"], "externalVideoTransportStatus");
+        assert!(status_response["external_video_transport_status"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("busy") && error.contains("retry")));
+
+        // Enqueue the real production project-load command before the fence,
+        // then wait for its exact worker admission and pending-publication
+        // barrier. The nondefault engine test-support seam pauses the worker
+        // only after LoadProjectSnapshotPublished has validated B and queued
+        // its real ACK; it does not replace the shared publication lock.
+        let fence_engine = state.engine.clone();
+        let audio = fence_engine.video_audio_runtime_snapshot().timeline_audio;
+        let load_snapshot = fence_engine.snapshot();
+        let submission = fence_engine
+            .submit_project_snapshot_load_for_test(load_snapshot)
+            .expect("enqueue production project snapshot load");
+        assert!(
+            submission.wait_until_admitted(Duration::from_secs(1)),
+            "production project snapshot load did not enter Admitted"
+        );
+        assert!(
+            submission.wait_until_pending_publication(Duration::from_secs(1)),
+            "production project snapshot load did not reach its pending publication barrier"
+        );
+
+        let (fence_entered_tx, fence_entered_rx) = mpsc::sync_channel(1);
+        let (release_fence_tx, release_fence_rx) = mpsc::sync_channel(1);
+        let fence_thread = std::thread::spawn(move || {
+            fence_engine.with_timeline_audio_projection_fence(
+                audio.source_projection_authority,
+                audio.publication_generation,
+                || {
+                    fence_entered_tx.send(()).unwrap();
+                    release_fence_rx.recv().unwrap();
+                },
+            )
+        });
+        fence_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("snapshot/audio fence did not enter");
+        submission.release_publication_barrier();
+
+        old_client.send_json(&dj_link_socket_release("production-stop-old"));
+        let inflight_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let inflight = state
+                .remote_control
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(RemoteWsServer::dj_link_inflight_dispatch_count)
+                .unwrap_or_default();
+            if inflight == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < inflight_deadline,
+                "actual DJ Link RELEASE never entered the production handler"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let stop_started = Instant::now();
+        let stop_result = stop_remote_control_for_state(&state);
+        let stop_elapsed = stop_started.elapsed();
+
+        // Always release the real snapshot fence and wait for the definitive
+        // project ACK before making assertions, so a failed lifecycle
+        // expectation cannot strand either the publication or retained worker.
+        release_fence_tx.send(()).unwrap();
+        let fence_result = fence_thread.join().expect("audio fence thread panicked");
+        let submission_result = submission.wait_result();
+        stop_result.unwrap();
+        fence_result.unwrap();
+        submission_result.unwrap();
+        assert!(
+            stop_elapsed < DJ_LINK_SHUTDOWN_DEADLINE,
+            "production remote stop took {stop_elapsed:?}"
+        );
+        assert!(
+            stop_elapsed >= Duration::from_secs(2),
+            "stop did not actually join the in-flight three-second Engine receipt: {stop_elapsed:?}"
+        );
+        assert!(state.remote_control.lock().unwrap().is_none());
+        drop(transport_status_guard);
+        drop(remote_client);
+
+        let after_cancel = state.engine.snapshot();
+        let after_cancel_audio = state.engine.video_audio_runtime_snapshot().timeline_audio;
+        std::thread::sleep(Duration::from_millis(100));
+        let after_late_window = state.engine.snapshot();
+        let after_late_audio = state.engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(after_late_window.timeline, after_cancel.timeline);
+        assert_eq!(after_late_window.timeline_bank, after_cancel.timeline_bank);
+        assert_eq!(after_late_audio.playing, after_cancel_audio.playing);
+        assert_eq!(after_late_audio.position_ms, after_cancel_audio.position_ms);
+        assert_eq!(after_late_audio.muted, after_cancel_audio.muted);
+        assert_eq!(
+            after_late_audio.transport_revision,
+            after_cancel_audio.transport_revision
+        );
+        assert_eq!(
+            after_late_audio.source_projection_authority,
+            after_cancel_audio.source_projection_authority
+        );
+        assert_eq!(
+            after_late_audio.publication_generation,
+            after_cancel_audio.publication_generation
+        );
+        assert!(after_late_audio.clips.is_empty());
+        assert!(after_late_audio.child_clips.is_empty());
+
+        // The production replacement call cannot bind until the old listener
+        // and all retained socket workers have joined. It shares the same
+        // process fence, so replaying the retired physical identity never
+        // invokes the Engine handler or publishes a late B.
+        start_remote_control_for_state(&state, config).unwrap();
+        let mut replacement = DjLinkLoopbackClient::connect(port);
+        replacement.send_json(&dj_link_socket_hello(
+            token,
+            "production-stop-replacement",
+            "production-stop-replacement-hello",
+        ));
+        assert_eq!(
+            replacement.read_ack().outcome,
+            protocol::DjLinkAckOutcome::Accepted
+        );
+        replacement.send_json(&dj_link_socket_release("production-stop-replacement"));
+        let replay = replacement.read_ack();
+        assert_eq!(replay.outcome, protocol::DjLinkAckOutcome::Rejected);
+        assert_eq!(replay.code.as_deref(), Some("event_id_not_retained"));
+        stop_remote_control_for_state(&state).unwrap();
+        assert_eq!(state.engine.snapshot().timeline, after_late_window.timeline);
+    }
+
     #[test]
     fn dj_link_selector_content_id_priority_and_nfc_title_artist_fallback() {
         let mappings = vec![
@@ -101919,7 +105853,20 @@ f 1 2 3
             enabled: false,
             ..DmxOutputConfig::default()
         });
-        let initial_snapshot = engine.snapshot();
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
         engine
             .apply_timeline_bank_published(
                 vec![initial_snapshot.timeline.clone()],
@@ -101969,7 +105916,8 @@ f 1 2 3
                 "playSessionId": "play-1",
                 "isPlaying": true,
                 "master": true,
-                "deck": "A"
+                "deck": "A",
+                "trackBpm": 60.0
             }),
         );
         let active_outcome = dispatch_dj_link_event(
@@ -102047,11 +105995,68 @@ f 1 2 3
             "non-master track input must not reach the engine"
         );
 
-        let engine_before_sync = engine.snapshot();
-        let sync = dj_link_test_envelope(
+        let sync_loop = dj_link_test_envelope(
             protocol::DjLinkMessageType::StateSync,
             5,
-            "sync-1",
+            "sync-loop",
+            json!({
+                "loopDivision": 2,
+                "released": false,
+                "masterDeck": "A",
+                "masterTrack": {"contentId":"content-1","isPlaying":true}
+            }),
+        );
+        let engine_before_sync_loop = engine.snapshot();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                sync_loop,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_ne!(
+            engine.snapshot().timeline.loop_runtime,
+            engine_before_sync_loop.timeline.loop_runtime
+        );
+        let generation_after_sync_loop = runtime.lock().unwrap().state_generation;
+        let loop_generation_before_retry = engine.snapshot().timeline.loop_runtime.generation;
+        let loop_retry = dj_link_test_envelope(
+            protocol::DjLinkMessageType::LoopState,
+            6,
+            "loop-retry",
+            json!({"division":2,"enabled":true}),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                loop_retry,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot().timeline.loop_runtime.generation,
+            loop_generation_before_retry,
+            "canonical engine loop convergence is idempotent"
+        );
+        assert_eq!(
+            runtime.lock().unwrap().state_generation,
+            generation_after_sync_loop + 1,
+            "same LoopState still traverses the canonical engine API"
+        );
+
+        let engine_before_released_sync = engine.snapshot();
+        let sync_released = dj_link_test_envelope(
+            protocol::DjLinkMessageType::StateSync,
+            7,
+            "sync-released",
             json!({
                 "loopDivision": 2,
                 "released": true,
@@ -102061,7 +106066,7 @@ f 1 2 3
         );
         assert!(matches!(
             dispatch_dj_link_event(
-                sync,
+                sync_released,
                 &engine,
                 &coordinator,
                 &runtime,
@@ -102070,16 +106075,88 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::Accepted { .. }
         ));
-        let runtime_after_sync = runtime.lock().unwrap();
-        assert_eq!(runtime_after_sync.seen_play_sessions.len(), 1);
-        assert!(runtime_after_sync.released);
-        assert_eq!(runtime_after_sync.loop_division, Some(2));
-        drop(runtime_after_sync);
-        assert_eq!(engine.snapshot(), engine_before_sync);
+        assert_eq!(engine.snapshot(), engine_before_released_sync);
+        assert!(runtime.lock().unwrap().released);
+
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let transport_before_release = engine.snapshot().timeline.transport_generation;
+        let release = dj_link_test_envelope(
+            protocol::DjLinkMessageType::Release,
+            8,
+            "release-after-sync",
+            json!({}),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                release,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert!(
+            engine.snapshot().timeline.transport_generation > transport_before_release,
+            "StateSync(released=true) must not consume the later canonical RELEASE"
+        );
+        assert!(!runtime.lock().unwrap().released);
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        engine.send(EngineCommand::SeekTimeline(0)).unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+
+        let beat_forward = dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            9,
+            "beat-forward",
+            json!({"timelineId": mapping_timeline_id.to_string(), "bars": 4}),
+        );
+        let forward = match dispatch_dj_link_event(
+            beat_forward,
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => state,
+            other => panic!("beat jump must return canonical timeline state: {other:?}"),
+        };
+        assert_eq!(forward.position_bars, 4);
+        assert_eq!(forward.timeline_id, mapping_timeline_id.to_string());
+        let beat_backward = dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            10,
+            "beat-backward",
+            json!({"timelineId": mapping_timeline_id.to_string(), "bars": -4}),
+        );
+        let backward = match dispatch_dj_link_event(
+            beat_backward,
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => state,
+            other => panic!("reverse beat jump must return canonical timeline state: {other:?}"),
+        };
+        assert_eq!(backward.position_bars, 0);
+        assert_eq!(
+            engine.snapshot().timeline.position_ms,
+            0,
+            "the reverse jump returns to the engine-authored grid origin"
+        );
 
         let missing = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
-            6,
+            11,
             "missing",
             json!({
                 "contentId": "unknown",
@@ -102175,13 +106252,15 @@ mod video_clip_state_tests {
 
     #[test]
     fn clip_launch_rewinds_to_in_point_and_prepares_cut_or_fade() {
-        let mut current = VideoLayerState::default();
-        current.enabled = false;
-        current.playing = false;
-        current.position_ms = 9_000;
-        current.loop_enabled = true;
-        current.loop_start_ms = 1_250;
-        current.opacity = 0.4;
+        let current = VideoLayerState {
+            enabled: false,
+            playing: false,
+            position_ms: 9_000,
+            loop_enabled: true,
+            loop_start_ms: 1_250,
+            opacity: 0.4,
+            ..VideoLayerState::default()
+        };
 
         let cut = launched_video_clip_state(&current, 0);
         assert!(cut.enabled);
@@ -102196,9 +106275,11 @@ mod video_clip_state_tests {
 
     #[test]
     fn clip_stop_holds_frame_for_fade_but_cut_goes_immediately_to_black() {
-        let mut current = VideoLayerState::default();
-        current.playing = true;
-        current.opacity = 0.8;
+        let current = VideoLayerState {
+            playing: true,
+            opacity: 0.8,
+            ..VideoLayerState::default()
+        };
 
         let fade = stopped_video_clip_state(&current, 500);
         assert!(!fade.playing);
@@ -104987,11 +109068,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(3)),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &worker_wake,
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &worker_wake,
+            ),
             |value| value,
         );
         let mut first = ready_capture_chunks.pop().unwrap();
@@ -105006,11 +109089,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &worker_wake,
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &worker_wake,
+            ),
             |value| value,
         );
         let second = ready_capture_chunks.pop().unwrap();
@@ -105065,11 +109150,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &worker_wake,
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &worker_wake,
+            ),
             |value| value,
         );
         queue_live_audio_samples(
@@ -105078,11 +109165,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &worker_wake,
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &worker_wake,
+            ),
             |value| value,
         );
 
@@ -105114,11 +109203,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(100)),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &std::thread::current(),
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &std::thread::current(),
+            ),
             |value| value,
         );
 
@@ -105164,11 +109255,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::from_millis(200)),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &std::thread::current(),
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &std::thread::current(),
+            ),
             |value| {
                 converted.set(converted.get() + 1);
                 value
@@ -105198,11 +109291,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &std::thread::current(),
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &std::thread::current(),
+            ),
             |value| value,
         );
         let mut invalid = ready_capture_chunks.pop().unwrap();
@@ -105216,11 +109311,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &std::thread::current(),
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &std::thread::current(),
+            ),
             |value| value,
         );
         let recovered = ready_capture_chunks.pop().unwrap();
@@ -105446,12 +109543,9 @@ mod live_audio_input_tests {
                 duplicate_errors.defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 1);
             callback_returned_tx.send(latched).unwrap();
         });
-        assert_eq!(
-            callback_returned_rx
-                .recv_timeout(Duration::from_millis(250))
-                .expect("callback-side atomic defer must not wait for the blocked engine clear"),
-            false
-        );
+        assert!(!callback_returned_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("callback-side atomic defer must not wait for the blocked engine clear"));
         release_clear_tx.send(()).unwrap();
         callback.join().unwrap();
         assert!(worker.join().unwrap());
@@ -105610,11 +109704,13 @@ mod live_audio_input_tests {
             48_000,
             LiveAudioChannelMix::AverageAll,
             &callback_info(Duration::ZERO),
-            &free_capture_slots,
-            &ready_capture_chunks,
-            &capture_telemetry,
-            &safety,
-            &std::thread::current(),
+            (
+                &free_capture_slots,
+                &ready_capture_chunks,
+                &capture_telemetry,
+                &safety,
+                &std::thread::current(),
+            ),
             |value| value,
         );
         assert!(ready_capture_chunks.is_empty());
@@ -106968,45 +111064,47 @@ mod live_audio_input_tests {
 
     #[test]
     fn timeline_delete_items_expands_group_across_every_authored_domain_and_is_fail_closed() {
-        let mut timeline = TimelineSnapshot::default();
-        timeline.events = vec![
-            protocol::TimelineCueEventSummary {
-                id: 20,
-                cue_id: 7,
-                time_ms: 0,
-                time_beats: None,
-                track: TimelineTrackKind::Lighting,
-                layer_id: None,
-                duration_ms: 1_000,
-                duration_beats: None,
-                conform_to_tempo: false,
-                loop_fill: false,
-                source_offset_ms: 0,
-                fade_in_ms: 0,
-                fade_out_ms: 0,
-                rate: None,
-                loop_count: 1,
-                jump_to_event_id: None,
-            },
-            protocol::TimelineCueEventSummary {
-                id: 21,
-                cue_id: 7,
-                time_ms: 1_000,
-                time_beats: None,
-                track: TimelineTrackKind::Lighting,
-                layer_id: None,
-                duration_ms: 1_000,
-                duration_beats: None,
-                conform_to_tempo: false,
-                loop_fill: false,
-                source_offset_ms: 0,
-                fade_in_ms: 0,
-                fade_out_ms: 0,
-                rate: None,
-                loop_count: 1,
-                jump_to_event_id: Some(20),
-            },
-        ];
+        let mut timeline = TimelineSnapshot {
+            events: vec![
+                protocol::TimelineCueEventSummary {
+                    id: 20,
+                    cue_id: 7,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    duration_ms: 1_000,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
+                    source_offset_ms: 0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                    rate: None,
+                    loop_count: 1,
+                    jump_to_event_id: None,
+                },
+                protocol::TimelineCueEventSummary {
+                    id: 21,
+                    cue_id: 7,
+                    time_ms: 1_000,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    duration_ms: 1_000,
+                    duration_beats: None,
+                    conform_to_tempo: false,
+                    loop_fill: false,
+                    source_offset_ms: 0,
+                    fade_in_ms: 0,
+                    fade_out_ms: 0,
+                    rate: None,
+                    loop_count: 1,
+                    jump_to_event_id: Some(20),
+                },
+            ],
+            ..TimelineSnapshot::default()
+        };
         timeline.audio_clips.push(TimelineAudioClipSummary {
             id: 31,
             layer_id: 3,
@@ -107503,8 +111601,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingEvent { event_id: 20 },
             TimelineTrimEdge::Start,
             1_250,
-            false,
-            120.0,
+            (false, 120.0),
         )
         .expect("trim one member as the complete mixed group");
         assert_eq!(
@@ -107554,8 +111651,7 @@ mod live_audio_input_tests {
             TimelineItemRef::AudioClip { clip_id: 22 },
             TimelineTrimEdge::Start,
             1_450,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("Alt isolates exactly one trim without dissolving its group");
         assert_eq!(isolated_selection.len(), 5);
@@ -107574,8 +111670,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingEvent { event_id: 20 },
             TimelineTrimEdge::Start,
             1_250,
-            false,
-            120.0,
+            (false, 120.0),
         )
         .unwrap_err()
         .contains("complete span"));
@@ -107595,8 +111690,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 23 },
             TimelineTrimEdge::Start,
             1_550,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("existing keyframe"));
@@ -107614,8 +111708,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingEvent { event_id: 20 },
             TimelineTrimEdge::End,
             2_251,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("whole-loop"));
@@ -107631,8 +111724,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingEvent { event_id: 20 },
             TimelineTrimEdge::End,
             1_750,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("Loop-fill trim keeps millisecond and beat-domain spans coherent");
         assert_eq!(loop_fill.events[0].duration_ms, 500);
@@ -107821,8 +111913,7 @@ mod live_audio_input_tests {
                 clip_id: protocol::TimelineVideoClipId(22),
             },
             1_500,
-            false,
-            120.0,
+            (false, 120.0),
         )
         .expect("split one grouped member as the complete mixed group");
         assert_eq!(selected.len(), 6);
@@ -107980,8 +112071,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::AudioClip { clip_id: 23 }],
             TimelineItemRef::AudioClip { clip_id: 23 },
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("isolate splits only the primary without dissolving its group");
         assert_eq!(isolated_selected.len(), 1);
@@ -108009,8 +112099,7 @@ mod live_audio_input_tests {
                 clip_id: protocol::TimelineVideoClipId(22),
             },
             1_500,
-            false,
-            120.0,
+            (false, 120.0),
         )
         .unwrap_err()
         .contains("locked lane"));
@@ -108027,8 +112116,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::LightingAutomation { automation_id: 24 }],
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("existing keyframe"));
@@ -108047,8 +112135,7 @@ mod live_audio_input_tests {
                 clip_id: protocol::TimelineVideoClipId(22),
             },
             1_100,
-            false,
-            120.0,
+            (false, 120.0),
         )
         .unwrap_err()
         .contains("strictly inside"));
@@ -108067,8 +112154,7 @@ mod live_audio_input_tests {
                 clip_id: protocol::TimelineVideoClipId(22),
             },
             1_150,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("fade envelope"));
@@ -108083,8 +112169,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::AudioClip { clip_id: 23 }],
             TimelineItemRef::AudioClip { clip_id: 23 },
             2_100,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("fade envelope"));
@@ -108099,8 +112184,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::LightingEvent { event_id: 20 }],
             TimelineItemRef::LightingEvent { event_id: 20 },
             1_050,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("fade envelope"));
@@ -108118,8 +112202,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::LightingEvent { event_id: 20 }],
             TimelineItemRef::LightingEvent { event_id: 20 },
             1_400,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("loop playback is ambiguous"));
@@ -108173,8 +112256,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             TimelineTrimEdge::Start,
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("an explicit unlocked Lighting automation lane may be trimmed");
 
@@ -108191,8 +112273,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
             TimelineItemRef::VideoAutomation { automation_id: 25 },
             1_700,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("an explicit unlocked Video automation lane may be split");
 
@@ -108219,8 +112300,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             TimelineTrimEdge::Start,
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("locked lane"));
@@ -108247,8 +112327,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
             TimelineItemRef::VideoAutomation { automation_id: 25 },
             1_700,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("locked lane"));
@@ -108266,8 +112345,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             TimelineTrimEdge::Start,
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("missing Timeline lane"));
@@ -108283,8 +112361,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
             TimelineItemRef::VideoAutomation { automation_id: 25 },
             1_700,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("missing Timeline lane"));
@@ -108321,8 +112398,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             TimelineTrimEdge::Start,
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("legacy implicit Lighting automation may be trimmed");
         split_timeline_items(
@@ -108332,8 +112408,7 @@ mod live_audio_input_tests {
             &[TimelineItemRef::VideoAutomation { automation_id: 25 }],
             TimelineItemRef::VideoAutomation { automation_id: 25 },
             1_700,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .expect("legacy implicit Video automation may be split");
 
@@ -108362,8 +112437,7 @@ mod live_audio_input_tests {
             TimelineItemRef::LightingAutomation { automation_id: 24 },
             TimelineTrimEdge::Start,
             1_600,
-            true,
-            120.0,
+            (true, 120.0),
         )
         .unwrap_err()
         .contains("missing Timeline lane"));
@@ -109563,7 +113637,9 @@ mod live_audio_input_tests {
         let (epoch, revision, hash) = b3_authority_arguments(&harness);
         apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
-            TimelineAdvancedMutationRequest::Apply { authoring },
+            TimelineAdvancedMutationRequest::Apply {
+                authoring: Box::new(authoring),
+            },
             85_100,
             epoch,
             revision,
@@ -109997,7 +114073,9 @@ mod live_audio_input_tests {
         let (epoch, revision, hash) = b3_authority_arguments(&harness);
         apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
-            TimelineAdvancedMutationRequest::Apply { authoring },
+            TimelineAdvancedMutationRequest::Apply {
+                authoring: Box::new(authoring),
+            },
             85_001,
             epoch,
             revision,
@@ -110192,7 +114270,9 @@ mod live_audio_input_tests {
         let (epoch, revision, hash) = b3_authority_arguments(&harness);
         apply_timeline_advanced_authoritative_command_impl(
             &harness.state,
-            TimelineAdvancedMutationRequest::Apply { authoring },
+            TimelineAdvancedMutationRequest::Apply {
+                authoring: Box::new(authoring),
+            },
             84_680,
             epoch,
             revision,
@@ -110558,7 +114638,8 @@ mod live_audio_input_tests {
         )
         .expect("trim from a non-first primary as the complete linked group");
         assert_eq!(trimmed.selected_items, pasted.selected_items);
-        for clip_id in [pasted_audio_clip_id] {
+        {
+            let clip_id = pasted_audio_clip_id;
             let clip = trimmed
                 .authoring
                 .audio_clips
@@ -111573,15 +115654,17 @@ mod live_audio_input_tests {
         let error = normalize_video_effect_catalog_ids_with_allocator(
             &authored_video,
             &request,
-            || {
-                allocated_chain.set(true);
-                Ok(protocol::VideoEffectChainId(700_001))
-            },
-            || Err("synthetic Video effect stage allocator exhausted".to_string()),
-            || Ok(protocol::VideoEffectId(700_001)),
-            || Ok(protocol::VideoEffectPresetId(700_001)),
-            || Ok(protocol::VideoLayerGroupId(700_001)),
-            || Ok(protocol::VideoTransitionBusId(700_001)),
+            (
+                || {
+                    allocated_chain.set(true);
+                    Ok(protocol::VideoEffectChainId(700_001))
+                },
+                || Err("synthetic Video effect stage allocator exhausted".to_string()),
+                || Ok(protocol::VideoEffectId(700_001)),
+                || Ok(protocol::VideoEffectPresetId(700_001)),
+                || Ok(protocol::VideoLayerGroupId(700_001)),
+                || Ok(protocol::VideoTransitionBusId(700_001)),
+            ),
         )
         .expect_err("allocation overflow after a prior domain allocation fails closed");
         assert!(allocated_chain.get());
@@ -113417,8 +117500,10 @@ mod live_audio_input_tests {
         .expect("B3 direct terminal receipt exists");
         assert_eq!(
             serde_json::to_value(receipt.terminal).expect("serialize receipt terminal"),
-            serde_json::to_value(VideoClipSlotAuthoritativeTerminalResult::Authored(imported))
-                .expect("serialize direct terminal"),
+            serde_json::to_value(VideoClipSlotAuthoritativeTerminalResult::Authored(
+                Box::new(imported)
+            ))
+            .expect("serialize direct terminal"),
             "terminal query recovers the allocated ordered IDs and result"
         );
 
@@ -114000,7 +118085,8 @@ fn main() {
     let crash_directory = Arc::new(Mutex::new(None));
     install_crash_report_hook(Arc::clone(&crash_directory));
     let engine = EngineHandle::start(DmxOutputConfig::default());
-    let initial_project_coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let initial_snapshot = engine.snapshot();
+    let initial_project_coordinator = project_coordinator_for_initial_snapshot(initial_snapshot);
     let dj_link_runtime = Arc::new(Mutex::new(DjLinkRuntime::from_coordinator(
         &initial_project_coordinator,
     )));
@@ -114307,7 +118393,9 @@ fn main() {
             midi_feedback_runtime: Mutex::new(None),
             midi_feedback_last_error: Arc::new(Mutex::new(None)),
             osc_input: Mutex::new(None),
+            remote_control_lifecycle: Mutex::new(()),
             remote_control: Mutex::new(None),
+            dj_link_process_fence: new_dj_link_process_fence(),
             dmx_input: Mutex::new(None),
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
@@ -114327,6 +118415,8 @@ fn main() {
             project_transaction_retired_owner_bindings: Mutex::new(HashSet::new()),
             project_transaction_owner_retirement_failures: Mutex::new(HashSet::new()),
             project_transaction_owner_retirement_failure_overflow: AtomicBool::new(false),
+            project_transaction_owner_authority_barrier: Mutex::new(()),
+            project_transaction_owner_retiring: Mutex::new(HashSet::new()),
             project_transaction_owner_rotation: Mutex::new(()),
             project_operator_sessions: Mutex::new(HashMap::new()),
             video_clip_slot_runtime_generation: AtomicU64::new(0),
@@ -114355,6 +118445,13 @@ fn main() {
                 ) {
                     eprintln!("Destroyed window authority was fail-closed: {error}");
                 }
+                if let Some(pane) = window
+                    .label()
+                    .strip_prefix("pane-")
+                    .filter(|pane| PANE_WINDOW_KINDS.contains(pane))
+                {
+                    let _ = window.emit("syndocal://pane-window-closed", pane);
+                }
             }
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -114378,7 +118475,10 @@ fn main() {
                 }
             },
         ))
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke| {
+            dispatch_admitted_tauri_app_invoke(
+                invoke,
+                tauri::generate_handler![
             get_control_plane_operation_registry,
             get_control_plane_canonical_registry,
             get_control_plane_query_schema_catalog,
@@ -114535,6 +118635,7 @@ fn main() {
             trigger_cue_list_next,
             trigger_cue_list_previous,
             update_cue_from_current,
+            update_cue_from_current_batch,
             set_cue_effect_targets,
             add_cue_owned_effect,
             set_cue_metadata,
@@ -114549,6 +118650,7 @@ fn main() {
             close_pane_window,
             capture_pane_window_placements,
             move_cue,
+            move_cue_between_scene_banks_batch,
             duplicate_cue,
             trigger_cue,
             release_cue,
@@ -114855,7 +118957,9 @@ fn main() {
             close_open_video_output_windows,
             sync_video_output_window,
             open_video_output_window
-        ])
+            ],
+            )
+        })
         .build(tauri::generate_context!())
         .expect("error while building Syndocal")
         .run(|app_handle, event| {

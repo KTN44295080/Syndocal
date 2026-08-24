@@ -3323,15 +3323,21 @@ impl<'de> Deserialize<'de> for OutputControlRejectionV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputControlResponseV2 {
-    Receipt(OutputControlReceiptV2),
+    /// A terminal receipt is boxed so the response enum stays a small
+    /// discriminated handle while preserving the exact JSON wire shape.
+    Receipt(Box<OutputControlReceiptV2>),
     Rejected(OutputControlRejectionV2),
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum OutputControlResponseV2Wire {
-    Receipt { receipt: OutputControlReceiptV2 },
-    Rejected { rejection: OutputControlRejectionV2 },
+    Receipt {
+        receipt: Box<OutputControlReceiptV2>,
+    },
+    Rejected {
+        rejection: OutputControlRejectionV2,
+    },
 }
 
 impl OutputControlResponseV2 {
@@ -3512,7 +3518,7 @@ mod tests {
             request.canonical_shape_bytes().unwrap()
         );
 
-        let unknown = format!("{encoded}").replacen('}', ",\"secret\":true}", 1);
+        let unknown = encoded.to_string().replacen('}', ",\"secret\":true}", 1);
         assert!(
             serde_json::from_str::<AuthoredRequestV1<SetEffectEnabledPayload>>(&unknown).is_err()
         );
@@ -4094,7 +4100,7 @@ mod tests {
         let fence_before = output_fence();
         let mut fence_after = fence_before.clone();
         fence_after.safety_blackout_generation += 1;
-        let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
+        let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
             operation_id: OUTPUT_BLACKOUT_RELEASE_OPERATION_ID.to_string(),
             request_id: 24,
             shape_sha256: hash('d'),
@@ -4128,7 +4134,7 @@ mod tests {
                     after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
                 }],
             }),
-        });
+        }));
         let response_json = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serde_json::from_value::<OutputControlResponseV2>(response_json.clone()).unwrap(),

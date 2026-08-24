@@ -19,7 +19,6 @@ import type {
   ExternalVideoTransportDriverEvent,
   ExternalVideoTransportStatus,
   ExternalVideoTransportSyncReport,
-  ExternalVideoTransportSyncResponse,
   MediaAssetId,
   MediaAssetPreviewSessionTicket,
   MediaAssetImportReport,
@@ -1538,23 +1537,9 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     } catch (error) { options.setMessage(String(error)); }
   };
   const syncExternalVideoTransports = async () => {
-    try {
-      const [plans, status, sync] = await Promise.all([
-        options.invoke<ExternalVideoIoPlans>("get_external_video_io_plans"),
-        options.invoke<VideoRuntimeStatus>("get_video_runtime_status"),
-        options.invoke<ExternalVideoTransportSyncResponse>("sync_external_video_transports"),
-      ]);
-      const transportStatus = await options.invoke<ExternalVideoTransportStatus>("get_external_video_transport_status");
-      options.setExternalVideoIoPlans(plans);
-      options.setVideoRuntimeStatus(status);
-      options.setExternalVideoTransportStatus(transportStatus);
-      options.setExternalVideoTransportReport(sync.report);
-      options.setExternalVideoTransportEvents(sync.events);
-      const failedRoutes = sync.report.start_failed.length + sync.report.stop_failed.length;
-      options.setMessage(
-        `External video routes: ${sync.report.active_count} active, ${sync.report.started.length} started, ${sync.report.stopped.length} stopped, ${sync.report.blocked.length} blocked, ${failedRoutes} failed, ${sync.events.length} driver event(s).`,
-      );
-    } catch (error) { options.setMessage(String(error)); }
+    options.setMessage(
+      "External video transport sync is unavailable until a lease-bound OutputControl action is reviewed; no routes changed.",
+    );
   };
   const renderDebugVideoOutputPreview = async (outputId: number, testPattern = false) => {
     try {
@@ -1621,27 +1606,16 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     } catch (error) { options.setMessage(String(error)); }
   };
   const setVideoMasterOpacity = async (opacity: number) => {
-    try {
-      await options.invoke("set_video_master_opacity", { opacity });
-      await options.refreshSnapshot();
-    } catch (error) { options.setMessage(String(error)); }
+    void opacity;
+    options.setMessage(
+      "Video master opacity is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
+    );
   };
   const setVideoBlackout = async (enabled: boolean) => {
-    try {
-      if (enabled) {
-        await options.invoke("set_video_blackout", { enabled: true });
-      } else {
-        // The current R4 release schema is scoped to the safety blackout
-        // latch. It cannot truthfully clear authored video blackout state,
-        // so this direction stays fail-closed until a target-aware action is
-        // reviewed.
-        options.setMessage(
-          "Video blackout release is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
-        );
-        return;
-      }
-      await options.refreshSnapshot();
-    } catch (error) { options.setMessage(String(error)); }
+    void enabled;
+    options.setMessage(
+      "Video-only blackout is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
+    );
   };
 
   return {

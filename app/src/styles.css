@@ -37440,6 +37440,142 @@ a[href]:focus-visible,
   }
 }
 
+/* Lighting keeps its authoring desk in the lower workspace while Matrix/Cue
+   Pads and the existing Scene Settings/status representation share the upper
+   workspace. The right rail is local to Lighting and scrolls internally. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel.lightingStatusVisible {
+  grid-template-columns: minmax(0, 1fr) 248px;
+  gap: 3px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel.lightingSceneSettingsVisible {
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 28vw, 420px);
+  gap: 3px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .sceneMatrixPanel,
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveCuePadSurface {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .sceneMatrixPanel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveCuePadSurface {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 2px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--ui-border);
+  background: #111416;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid:not(.sceneSettingsVisible) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(42px, auto);
+  align-content: start;
+  overflow: hidden auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid
+  > .liveStatusItem {
+  min-height: 42px;
+  gap: 1px;
+  border: 0;
+  border-right: 1px solid #2d3338;
+  border-bottom: 1px solid #2d3338;
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 7px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid:not(.sceneSettingsVisible)
+  > .liveStatusItem:nth-child(2n) {
+  border-right: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid.sceneSettingsVisible {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 42px minmax(0, 1fr);
+  grid-auto-rows: auto;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid.sceneSettingsVisible
+  > .liveStatusItem:nth-child(2) {
+  border-right: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  > .liveStatusGrid.sceneSettingsVisible
+  > .sceneSettingsPane {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The legacy Control/Edit cascade hides standalone Cue panels. Cue Details is
+   not a standalone desk here; it is the existing Scene Settings representation
+   and must remain laid out inside the Lighting inspector. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel
+  .sceneDetailsSurface
+  > .cuePanelSceneSettings {
+  display: block;
+}
+
 /* Timeline is portaled from the persistent lower workspace into the upper
    arranger host. Keep this contract at the end of the cascade: the generic
    Live Deck rules above still target the same .liveControlPanel and otherwise
@@ -37509,7 +37645,15 @@ a[href]:focus-visible,
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive
   > .liveControlPanel
   > .timelineArrangerUpperHost
-  .faders.timelineDesk-show {
+  .faders.timelineDesk-show,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-automation,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-playback {
   display: grid;
   grid-column: 1;
   grid-row: 1;
@@ -37523,6 +37667,41 @@ a[href]:focus-visible,
   overflow: hidden;
   border: 0;
   padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-playback
+  > .playbackDeskSurface,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-automation
+  > .timelinePanel,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-automation
+  .timelineAutomationSurface {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-playback
+  > .playbackDeskSurface,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerUpperHost
+  .faders.timelineDesk-automation
+  .timelineAutomationSurface {
+  overflow: hidden auto;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive
@@ -37675,12 +37854,45 @@ a[href]:focus-visible,
   > .liveControlPanel
   > .timelineArrangerHeader
   .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor) {
+  display: flex;
   top: calc(100% + 3px);
   bottom: auto;
   width: min(356px, calc(100vw - 24px));
   max-width: min(356px, calc(100vw - 24px));
   max-height: min(680px, calc(100vh - 160px));
   overflow: hidden auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor)
+  > .timelinePerformanceEditor {
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor)
+  .timelineBankList > li {
+  grid-template-columns: minmax(130px, 1fr) repeat(2, minmax(44px, auto));
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor)
+  .timelineBankList > li > button:nth-of-type(4),
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .liveControlPanel
+  > .timelineArrangerHeader
+  .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor)
+  .timelineBankList > li > button:nth-of-type(5) {
+  grid-row: 2;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive

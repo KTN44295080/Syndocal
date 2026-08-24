@@ -1346,8 +1346,9 @@ pub enum VideoOutputKind {
     SyphonServer,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum VideoOutputAspectMode {
+    #[default]
     Stretch,
     Fit,
     Fill,
@@ -1362,12 +1363,6 @@ pub struct VideoMaskPoint {
 pub const VIDEO_OUTPUT_MASK_POINT_CAPACITY: usize = 8;
 pub const VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY: usize = 32;
 pub const VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION: u8 = 16;
-
-impl Default for VideoOutputAspectMode {
-    fn default() -> Self {
-        Self::Stretch
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct VideoOutputMapping {
@@ -2952,19 +2947,18 @@ fn validate_clip_override_effect_ids(
 /// Translate the authored portion of the old layer transport into a default
 /// slot. The layer state itself remains untouched because `position_ms` and
 /// `playing` are legacy runtime truth, not new persisted slot state.
+type LegacyVideoLayerClipSlot = (
+    u64,
+    Option<u64>,
+    VideoClipLoopMode,
+    f32,
+    Vec<VideoClipCuePointSummary>,
+);
+
 fn legacy_video_layer_transport_to_clip_slot(
     state: &VideoLayerState,
     layer_id: VideoLayerId,
-) -> Result<
-    (
-        u64,
-        Option<u64>,
-        VideoClipLoopMode,
-        f32,
-        Vec<VideoClipCuePointSummary>,
-    ),
-    String,
-> {
+) -> Result<LegacyVideoLayerClipSlot, String> {
     if !state.speed.is_finite() || !(-4.0..=4.0).contains(&state.speed) {
         return Err(format!(
             "Video layer {layer_id} has legacy speed outside finite -4.0..=4.0"
@@ -3936,7 +3930,7 @@ pub struct TimelineLayerSummary {
     pub kind: TimelineLayerKind,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TimelinePhaseRole {
     Intro,
@@ -3947,13 +3941,8 @@ pub enum TimelinePhaseRole {
     Bridge,
     Breakdown,
     Outro,
+    #[default]
     Custom,
-}
-
-impl Default for TimelinePhaseRole {
-    fn default() -> Self {
-        Self::Custom
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4011,31 +4000,21 @@ pub struct TimelineLoopRegionSummary {
     pub musical_length_beats: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TimelineFollowLightingPolicy {
+    #[default]
     HoldThenCut,
     LinearMerge,
 }
 
-impl Default for TimelineFollowLightingPolicy {
-    fn default() -> Self {
-        Self::HoldThenCut
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TimelineFollowFaultPolicy {
+    #[default]
     Hold,
     Cut,
     Fault,
-}
-
-impl Default for TimelineFollowFaultPolicy {
-    fn default() -> Self {
-        Self::Hold
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4096,16 +4075,11 @@ pub struct TimelineAudioClipSummary {
 /// The interpolation used between two authored Timeline tempo points.  The
 /// default is deliberately step/hold so a legacy or partially authored map
 /// cannot introduce an implicit tempo slew.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TimelineTempoInterpolation {
+    #[default]
     Step,
     Linear,
-}
-
-impl Default for TimelineTempoInterpolation {
-    fn default() -> Self {
-        Self::Step
-    }
 }
 
 /// One exact Timeline tempo/meter change point.  The authored transport
@@ -7126,19 +7100,14 @@ pub struct EffectPreset {
     pub color_mapping: Option<ColorMappingEffectRequest>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum DmxOutputProtocol {
+    #[default]
     ArtNet,
     Sacn,
     EnttecUsbPro,
     DmxKingUltraDmx,
     EnttecOpenDmx,
-}
-
-impl Default for DmxOutputProtocol {
-    fn default() -> Self {
-        Self::ArtNet
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -7220,18 +7189,13 @@ impl Default for DmxOutputConfig {
 
 /// Runtime-only ownership for this machine's physical and external outputs.
 /// This type is intentionally not part of `EngineSnapshot` or `ProjectFile`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MachineOutputRole {
     Lighting,
     Video,
+    #[default]
     Both,
     Standby,
-}
-
-impl Default for MachineOutputRole {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 impl MachineOutputRole {
@@ -7254,18 +7218,13 @@ pub enum OutputOwnershipReason {
     StartupDenied,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum OutputOwnershipState {
+    #[default]
     Ready,
     Transitioning,
     Activating,
     Failed,
-}
-
-impl Default for OutputOwnershipState {
-    fn default() -> Self {
-        Self::Ready
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -7855,20 +7814,15 @@ pub struct LearnedMidiControl {
     pub value: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ClockSource {
+    #[default]
     Manual,
     Tap,
     MidiClock,
     MidiTimecode,
     Ltc,
     AbletonLink,
-}
-
-impl Default for ClockSource {
-    fn default() -> Self {
-        Self::Manual
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -9234,32 +9188,34 @@ mod tests {
         let decoded_legacy: super::CueSummary = serde_json::from_value(legacy_json).unwrap();
         assert!(decoded_legacy.steps.is_empty());
 
-        let mut cue = super::CueSummary::default();
-        cue.id = 21;
-        cue.steps = vec![
-            super::CueStepSummary {
-                values: vec![super::CueFixtureTarget {
-                    fixture_id: 7,
-                    values: vec![super::AttributeValueSummary {
-                        attribute: "Dimmer".to_string(),
-                        value: 12_345,
+        let cue = super::CueSummary {
+            id: 21,
+            steps: vec![
+                super::CueStepSummary {
+                    values: vec![super::CueFixtureTarget {
+                        fixture_id: 7,
+                        values: vec![super::AttributeValueSummary {
+                            attribute: "Dimmer".to_string(),
+                            value: 12_345,
+                        }],
                     }],
-                }],
-                fade_ms: 250,
-                hold_ms: 750,
-            },
-            super::CueStepSummary {
-                values: vec![super::CueFixtureTarget {
-                    fixture_id: 7,
-                    values: vec![super::AttributeValueSummary {
-                        attribute: "Dimmer".to_string(),
-                        value: 54_321,
+                    fade_ms: 250,
+                    hold_ms: 750,
+                },
+                super::CueStepSummary {
+                    values: vec![super::CueFixtureTarget {
+                        fixture_id: 7,
+                        values: vec![super::AttributeValueSummary {
+                            attribute: "Dimmer".to_string(),
+                            value: 54_321,
+                        }],
                     }],
-                }],
-                fade_ms: 500,
-                hold_ms: 500,
-            },
-        ];
+                    fade_ms: 500,
+                    hold_ms: 500,
+                },
+            ],
+            ..Default::default()
+        };
 
         let encoded = serde_json::to_vec(&cue).unwrap();
         let decoded: super::CueSummary = serde_json::from_slice(&encoded).unwrap();
@@ -9268,10 +9224,12 @@ mod tests {
 
     #[test]
     fn cue_scene_matrix_fields_roundtrip_and_default_for_legacy_json() {
-        let mut cue = super::CueSummary::default();
-        cue.id = 18;
-        cue.group_id = Some("Front/Wash".to_string());
-        cue.recall_mode = super::RecallMode::ReplaceGroup;
+        let cue = super::CueSummary {
+            id: 18,
+            group_id: Some("Front/Wash".to_string()),
+            recall_mode: super::RecallMode::ReplaceGroup,
+            ..Default::default()
+        };
 
         let encoded = serde_json::to_value(&cue).unwrap();
         assert_eq!(encoded["group_id"], "Front/Wash");
@@ -9289,9 +9247,11 @@ mod tests {
 
     #[test]
     fn cue_authored_beats_roundtrip() {
-        let mut cue = super::CueSummary::default();
-        cue.id = 17;
-        cue.authored_beats = Some(4.0);
+        let cue = super::CueSummary {
+            id: 17,
+            authored_beats: Some(4.0),
+            ..Default::default()
+        };
 
         let encoded = serde_json::to_string(&cue).unwrap();
         let decoded: super::CueSummary = serde_json::from_str(&encoded).unwrap();
@@ -9642,9 +9602,11 @@ mod tests {
         assert_eq!(snapshot.timeline_bank[0].position_ms, 0);
         assert!(snapshot.timeline_bank[0].guide_cues.is_empty());
 
-        let mut second = super::TimelineSnapshot::default();
-        second.id = super::TimelineId(42);
-        second.label = "Verse".to_string();
+        let second = super::TimelineSnapshot {
+            id: super::TimelineId(42),
+            label: "Verse".to_string(),
+            ..Default::default()
+        };
         snapshot.timeline_bank.push(second);
         snapshot.timeline_bank[0].follow = Some(super::TimelineFollowSummary {
             enabled: true,
@@ -9688,62 +9650,65 @@ mod tests {
 
     #[test]
     fn timeline_follow_ltl5_runtime_contract_is_omitted_from_authored_json_and_epoch_fenced() {
-        let mut timeline = super::TimelineSnapshot::default();
-        timeline.id = super::TimelineId(91);
-        timeline.label = "Runtime-free Follow".to_string();
-        timeline.follow_runtime = super::TimelineFollowRuntimeSummary {
-            generation: 17,
-            status: super::TimelineFollowRuntimeStatus::Aborting,
-            admission_reason: Some(
-                super::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
-            ),
-            outcome: Some(super::TimelineFollowOutcome::Aborted {
-                reason: super::TimelineFollowAbortReason::ManualSeek,
-            }),
-            source_timeline_id: Some(super::TimelineId(91)),
-            target_timeline_id: Some(super::TimelineId(92)),
-            elapsed_ms: 250,
-            duration_ms: 1_000,
-            progress_millis: 250,
-            fault: None,
-            settlement: Some(super::TimelineFollowSettlementSummary {
-                started_at_ms: 9_000,
-                deadline_ms: 11_000,
-                state: super::TimelineFollowSettlementState::Pending,
-                progress_millis: 333,
-                fault_policy: super::TimelineFollowFaultPolicy::Hold,
+        let timeline = super::TimelineSnapshot {
+            id: super::TimelineId(91),
+            label: "Runtime-free Follow".to_string(),
+            follow_runtime: super::TimelineFollowRuntimeSummary {
+                generation: 17,
+                status: super::TimelineFollowRuntimeStatus::Aborting,
+                admission_reason: Some(
+                    super::TimelineFollowAdmissionReason::PrerollBeforeNaturalPlaybackBoundary,
+                ),
+                outcome: Some(super::TimelineFollowOutcome::Aborted {
+                    reason: super::TimelineFollowAbortReason::ManualSeek,
+                }),
+                source_timeline_id: Some(super::TimelineId(91)),
+                target_timeline_id: Some(super::TimelineId(92)),
+                elapsed_ms: 250,
+                duration_ms: 1_000,
+                progress_millis: 250,
                 fault: None,
-                domains: vec![
-                    super::TimelineFollowSettlementDomainSummary {
-                        domain: super::TimelineFollowSettlementDomain::Audio,
-                        state: super::TimelineFollowSettlementState::Applied,
-                        fault: None,
-                        consumers: vec![super::TimelineFollowSettlementConsumerSummary {
-                            consumer_id: super::TimelineFollowSettlementConsumerId::Audio,
+                settlement: Some(super::TimelineFollowSettlementSummary {
+                    started_at_ms: 9_000,
+                    deadline_ms: 11_000,
+                    state: super::TimelineFollowSettlementState::Pending,
+                    progress_millis: 333,
+                    fault_policy: super::TimelineFollowFaultPolicy::Hold,
+                    fault: None,
+                    domains: vec![
+                        super::TimelineFollowSettlementDomainSummary {
+                            domain: super::TimelineFollowSettlementDomain::Audio,
                             state: super::TimelineFollowSettlementState::Applied,
                             fault: None,
-                        }],
-                    },
-                    super::TimelineFollowSettlementDomainSummary {
-                        domain: super::TimelineFollowSettlementDomain::Video,
-                        state: super::TimelineFollowSettlementState::Pending,
-                        fault: None,
-                        consumers: vec![super::TimelineFollowSettlementConsumerSummary {
-                            consumer_id: super::TimelineFollowSettlementConsumerId::VideoOutput {
-                                output_id: 41,
-                            },
+                            consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                                consumer_id: super::TimelineFollowSettlementConsumerId::Audio,
+                                state: super::TimelineFollowSettlementState::Applied,
+                                fault: None,
+                            }],
+                        },
+                        super::TimelineFollowSettlementDomainSummary {
+                            domain: super::TimelineFollowSettlementDomain::Video,
                             state: super::TimelineFollowSettlementState::Pending,
                             fault: None,
-                        }],
-                    },
-                    super::TimelineFollowSettlementDomainSummary {
-                        domain: super::TimelineFollowSettlementDomain::Lighting,
-                        state: super::TimelineFollowSettlementState::NotApplicable,
-                        fault: None,
-                        consumers: Vec::new(),
-                    },
-                ],
-            }),
+                            consumers: vec![super::TimelineFollowSettlementConsumerSummary {
+                                consumer_id:
+                                    super::TimelineFollowSettlementConsumerId::VideoOutput {
+                                        output_id: 41,
+                                    },
+                                state: super::TimelineFollowSettlementState::Pending,
+                                fault: None,
+                            }],
+                        },
+                        super::TimelineFollowSettlementDomainSummary {
+                            domain: super::TimelineFollowSettlementDomain::Lighting,
+                            state: super::TimelineFollowSettlementState::NotApplicable,
+                            fault: None,
+                            consumers: Vec::new(),
+                        },
+                    ],
+                }),
+            },
+            ..Default::default()
         };
 
         let authored_json = serde_json::to_value(&timeline).unwrap();
@@ -10319,26 +10284,28 @@ mod tests {
 
     #[test]
     fn timeline_follow_ltl5_validation_bounds_and_legacy_defaults_are_fail_closed() {
-        let mut timeline = super::TimelineSnapshot::default();
-        timeline.id = super::TimelineId(101);
-        timeline.label = "Follow bounds".to_string();
-        timeline.duration_ms = super::TIMELINE_FOLLOW_MAX_PREROLL_MS;
-        timeline.follow = Some(super::TimelineFollowSummary {
-            enabled: true,
-            next_timeline_id: super::TimelineId(102),
-            duration: super::VideoClipTakeDuration {
-                unit: super::VideoClipTakeDurationUnit::Beats,
-                value_milliunits: super::TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS,
-            },
-            curve: super::VideoLayerTransitionCurve::EaseInOut,
-            video_kind: super::VideoClipTakeKind::Crossfade,
-            lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
-            destination_bpm: Some(20.0),
-            preroll_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
-            trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
-            trans_target_measures: Vec::new(),
-            fault_policy: super::TimelineFollowFaultPolicy::Cut,
-        });
+        let mut timeline = super::TimelineSnapshot {
+            id: super::TimelineId(101),
+            label: "Follow bounds".to_string(),
+            duration_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
+            follow: Some(super::TimelineFollowSummary {
+                enabled: true,
+                next_timeline_id: super::TimelineId(102),
+                duration: super::VideoClipTakeDuration {
+                    unit: super::VideoClipTakeDurationUnit::Beats,
+                    value_milliunits: super::TIMELINE_FOLLOW_MAX_DURATION_BEAT_MILLIUNITS,
+                },
+                curve: super::VideoLayerTransitionCurve::EaseInOut,
+                video_kind: super::VideoClipTakeKind::Crossfade,
+                lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+                destination_bpm: Some(20.0),
+                preroll_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
+                trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
+                trans_target_measures: Vec::new(),
+                fault_policy: super::TimelineFollowFaultPolicy::Cut,
+            }),
+            ..Default::default()
+        };
         super::validate_timeline_authoring(&timeline, &[]).unwrap();
 
         timeline.follow.as_mut().unwrap().duration.value_milliunits += 1;
@@ -10389,40 +10356,42 @@ mod tests {
 
     #[test]
     fn timeline_follow_exact_trans_targets_require_sorted_in_range_measure_anchors() {
-        let mut timeline = super::TimelineSnapshot::default();
-        timeline.id = super::TimelineId(101);
-        timeline.label = "Exact Trans targets".to_string();
-        timeline.tempo_meter_map = vec![
-            super::TimelineTempoMeterPoint {
-                position_sixteenth_steps: 0,
-                measure_number: Some(148),
-                bpm: 170.0,
-                interpolation: super::TimelineTempoInterpolation::Linear,
-                ..super::TimelineTempoMeterPoint::default()
-            },
-            super::TimelineTempoMeterPoint {
-                position_sixteenth_steps: 144,
-                measure_number: Some(157),
-                bpm: 194.0,
-                ..super::TimelineTempoMeterPoint::default()
-            },
-        ];
-        timeline.follow = Some(super::TimelineFollowSummary {
-            enabled: true,
-            next_timeline_id: super::TimelineId(102),
-            duration: super::VideoClipTakeDuration {
-                unit: super::VideoClipTakeDurationUnit::Beats,
-                value_milliunits: 4_000,
-            },
-            curve: super::VideoLayerTransitionCurve::EaseInOut,
-            video_kind: super::VideoClipTakeKind::Crossfade,
-            lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
-            destination_bpm: Some(194.0),
-            preroll_ms: 0,
-            trans_cadence_bars: 4,
-            trans_target_measures: vec![149, 151, 153, 155],
-            fault_policy: super::TimelineFollowFaultPolicy::Hold,
-        });
+        let mut timeline = super::TimelineSnapshot {
+            id: super::TimelineId(101),
+            label: "Exact Trans targets".to_string(),
+            tempo_meter_map: vec![
+                super::TimelineTempoMeterPoint {
+                    position_sixteenth_steps: 0,
+                    measure_number: Some(148),
+                    bpm: 170.0,
+                    interpolation: super::TimelineTempoInterpolation::Linear,
+                    ..super::TimelineTempoMeterPoint::default()
+                },
+                super::TimelineTempoMeterPoint {
+                    position_sixteenth_steps: 144,
+                    measure_number: Some(157),
+                    bpm: 194.0,
+                    ..super::TimelineTempoMeterPoint::default()
+                },
+            ],
+            follow: Some(super::TimelineFollowSummary {
+                enabled: true,
+                next_timeline_id: super::TimelineId(102),
+                duration: super::VideoClipTakeDuration {
+                    unit: super::VideoClipTakeDurationUnit::Beats,
+                    value_milliunits: 4_000,
+                },
+                curve: super::VideoLayerTransitionCurve::EaseInOut,
+                video_kind: super::VideoClipTakeKind::Crossfade,
+                lighting_policy: super::TimelineFollowLightingPolicy::LinearMerge,
+                destination_bpm: Some(194.0),
+                preroll_ms: 0,
+                trans_cadence_bars: 4,
+                trans_target_measures: vec![149, 151, 153, 155],
+                fault_policy: super::TimelineFollowFaultPolicy::Hold,
+            }),
+            ..Default::default()
+        };
         super::validate_timeline_authoring(&timeline, &[]).unwrap();
 
         for (targets, expected) in [
@@ -10455,30 +10424,32 @@ mod tests {
 
     #[test]
     fn active_child_transport_runtime_is_never_serialized() {
-        let mut snapshot = super::TimelineSnapshot::default();
-        snapshot.active_child_transports = vec![
-            super::ChildTimelineTransportRuntimeSummary {
-                owner_cue_id: 7,
-                root: super::ChildTimelineTransportRootSummary::Timeline {
-                    parent_event_id: 100,
-                    parent_iteration: 2,
+        let snapshot = super::TimelineSnapshot {
+            active_child_transports: vec![
+                super::ChildTimelineTransportRuntimeSummary {
+                    owner_cue_id: 7,
+                    root: super::ChildTimelineTransportRootSummary::Timeline {
+                        parent_event_id: 100,
+                        parent_iteration: 2,
+                    },
+                    path: vec![super::ChildTimelineTransportPathSegment {
+                        event_id: 200,
+                        iteration: 3,
+                    }],
+                    position_ms: 450,
                 },
-                path: vec![super::ChildTimelineTransportPathSegment {
-                    event_id: 200,
-                    iteration: 3,
-                }],
-                position_ms: 450,
-            },
-            super::ChildTimelineTransportRuntimeSummary {
-                owner_cue_id: 8,
-                root: super::ChildTimelineTransportRootSummary::Follow {
-                    source_timeline_id: super::TimelineId(91),
-                    generation: 17,
+                super::ChildTimelineTransportRuntimeSummary {
+                    owner_cue_id: 8,
+                    root: super::ChildTimelineTransportRootSummary::Follow {
+                        source_timeline_id: super::TimelineId(91),
+                        generation: 17,
+                    },
+                    path: Vec::new(),
+                    position_ms: 1_000,
                 },
-                path: Vec::new(),
-                position_ms: 1_000,
-            },
-        ];
+            ],
+            ..Default::default()
+        };
 
         let follow_root = snapshot.active_child_transports[1].root.clone();
         let follow_root_json = serde_json::to_value(&follow_root).unwrap();
@@ -10650,22 +10621,24 @@ mod tests {
 
     #[test]
     fn cue_effect_targets_roundtrip() {
-        let mut cue = super::CueSummary::default();
-        cue.id = 17;
-        cue.effect_targets = vec![
-            super::CueEffectTarget {
-                effect_id: 3,
-                enabled: true,
-                params: None,
-                transition_ms: None,
-            },
-            super::CueEffectTarget {
-                effect_id: 8,
-                enabled: false,
-                params: None,
-                transition_ms: None,
-            },
-        ];
+        let cue = super::CueSummary {
+            id: 17,
+            effect_targets: vec![
+                super::CueEffectTarget {
+                    effect_id: 3,
+                    enabled: true,
+                    params: None,
+                    transition_ms: None,
+                },
+                super::CueEffectTarget {
+                    effect_id: 8,
+                    enabled: false,
+                    params: None,
+                    transition_ms: None,
+                },
+            ],
+            ..Default::default()
+        };
 
         let encoded = serde_json::to_string(&cue).unwrap();
         let decoded: super::CueSummary = serde_json::from_str(&encoded).unwrap();
@@ -11045,15 +11018,14 @@ mod tests {
 
         let invalid_cases = [
             {
-                let value = super::VideoSnapshot {
+                super::VideoSnapshot {
                     layers: vec![media_asset_test_layer(1, "Legacy", "C:/show/a.mp4")],
                     media_assets: vec![
                         media_asset_test_asset(3, "A", "C:/show/a.mp4"),
                         media_asset_test_asset(3, "B", "C:/show/b.mp4"),
                     ],
                     ..super::VideoSnapshot::default()
-                };
-                value
+                }
             },
             {
                 let mut value = super::VideoSnapshot {
@@ -11207,8 +11179,10 @@ mod tests {
         }
 
         let authored_json = serde_json::to_value(clip_slot_runtime_test_video()).unwrap();
-        let mut engine = super::EngineSnapshot::default();
-        engine.video_clip_runtime = runtime.clone();
+        let engine = super::EngineSnapshot {
+            video_clip_runtime: runtime.clone(),
+            ..Default::default()
+        };
         let engine_clone = engine.clone();
         assert_eq!(engine_clone.video_clip_runtime, runtime);
         let engine_json = serde_json::to_value(&engine).unwrap();
@@ -13251,9 +13225,11 @@ mod tests {
         let parsed: super::CueSummary = serde_json::from_value(legacy).unwrap();
         assert!(parsed.color.is_none());
 
-        let mut cue = super::CueSummary::default();
-        cue.id = 12;
-        cue.color = Some("#ff3366".to_string());
+        let cue = super::CueSummary {
+            id: 12,
+            color: Some("#ff3366".to_string()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&cue).unwrap();
         let back: super::CueSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(back.color.as_deref(), Some("#ff3366"));
@@ -13548,34 +13524,36 @@ mod tests {
 
     #[test]
     fn child_timeline_roundtrip_includes_f7_audio_clips() {
-        let mut cue = super::CueSummary::default();
-        cue.id = 9;
-        cue.child_timeline = Some(super::ChildTimelineSummary {
-            layers: vec![super::TimelineLayerSummary {
-                id: 4,
-                label: "Child Audio".to_string(),
-                order: 0,
-                muted: false,
-                locked: false,
-                solo: false,
-                expanded: false,
-                kind: super::TimelineLayerKind::Audio,
-            }],
-            audio_clips: vec![super::TimelineAudioClipSummary {
-                id: 7,
-                layer_id: 4,
-                media_asset_id: None,
-                path: "child.wav".to_string(),
-                start_ms: 100,
-                offset_ms: 20,
-                duration_ms: 900,
-                gain: 0.75,
-                fade_in_ms: 50,
-                fade_out_ms: 80,
-            }],
-            duration_ms: 1_000,
-            ..super::ChildTimelineSummary::default()
-        });
+        let cue = super::CueSummary {
+            id: 9,
+            child_timeline: Some(super::ChildTimelineSummary {
+                layers: vec![super::TimelineLayerSummary {
+                    id: 4,
+                    label: "Child Audio".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: super::TimelineLayerKind::Audio,
+                }],
+                audio_clips: vec![super::TimelineAudioClipSummary {
+                    id: 7,
+                    layer_id: 4,
+                    media_asset_id: None,
+                    path: "child.wav".to_string(),
+                    start_ms: 100,
+                    offset_ms: 20,
+                    duration_ms: 900,
+                    gain: 0.75,
+                    fade_in_ms: 50,
+                    fade_out_ms: 80,
+                }],
+                duration_ms: 1_000,
+                ..super::ChildTimelineSummary::default()
+            }),
+            ..Default::default()
+        };
         let json = serde_json::to_vec(&cue).unwrap();
         let parsed: super::CueSummary = serde_json::from_slice(&json).unwrap();
         assert_eq!(parsed, cue);
@@ -14031,8 +14009,10 @@ mod tests {
         .unwrap_err()
         .contains("conflict"));
 
-        let mut engine = super::EngineSnapshot::default();
-        engine.video_transition_runtime = runtime.clone();
+        let engine = super::EngineSnapshot {
+            video_transition_runtime: runtime.clone(),
+            ..Default::default()
+        };
         assert!(serde_json::to_value(engine)
             .unwrap()
             .get("video_transition_runtime")

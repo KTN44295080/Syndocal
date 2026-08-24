@@ -664,8 +664,7 @@ impl ControlPlaneQueryState {
     fn issue_cursor(
         &self,
         owner: &WindowOwner,
-        resource: &str,
-        schema: &str,
+        (resource, schema): (&str, &str),
         fence: &QueryFence,
         next_index: u64,
         kind: CursorKind,
@@ -712,8 +711,7 @@ impl ControlPlaneQueryState {
         &self,
         owner: &WindowOwner,
         token: &OpaqueCursorToken,
-        resource: &str,
-        schema: &str,
+        (resource, schema): (&str, &str),
         kind: CursorKind,
         expected_fence: Option<&QueryFence>,
         now: Instant,
@@ -1160,14 +1158,11 @@ fn reconcile_observations(
         )?;
     }
     for candidate in &source.runtime {
-        let changed = inner
-            .runtime
-            .get(&candidate.domain)
-            .map_or(true, |current| {
-                current.source_epoch != candidate.source_epoch
-                    || current.source_generation != candidate.source_generation
-                    || current.payload.active != candidate.active
-            });
+        let changed = inner.runtime.get(&candidate.domain).is_none_or(|current| {
+            current.source_epoch != candidate.source_epoch
+                || current.source_generation != candidate.source_generation
+                || current.payload.active != candidate.active
+        });
         if !changed {
             continue;
         }
@@ -1384,8 +1379,7 @@ fn page_from_items<T: protocol::control_plane_query::ControlPlaneQueryPayload + 
             let entry = state.consume_cursor(
                 &view.owner,
                 &cursor,
-                resource,
-                schema,
+                (resource, schema),
                 CursorKind::Snapshot,
                 Some(&view.fence),
                 Instant::now(),
@@ -1404,8 +1398,7 @@ fn page_from_items<T: protocol::control_plane_query::ControlPlaneQueryPayload + 
     let next_cursor = if end < items.len() {
         Some(state.issue_cursor(
             &view.owner,
-            resource,
-            schema,
+            (resource, schema),
             &view.fence,
             end as u64,
             CursorKind::Snapshot,
@@ -1440,8 +1433,7 @@ fn observation_page(
             let entry = state.consume_cursor(
                 &view.owner,
                 &cursor,
-                RESOURCE_EVENTS,
-                SCHEMA_EVENT_PAGE,
+                (RESOURCE_EVENTS, SCHEMA_EVENT_PAGE),
                 CursorKind::Event,
                 None,
                 Instant::now(),
@@ -1515,8 +1507,7 @@ fn observation_page(
             }
             let next_cursor = Some(state.issue_cursor(
                 &view.owner,
-                RESOURCE_EVENTS,
-                SCHEMA_EVENT_PAGE,
+                (RESOURCE_EVENTS, SCHEMA_EVENT_PAGE),
                 &continuation_fence,
                 last_generation,
                 CursorKind::Event,
@@ -2079,8 +2070,7 @@ mod tests {
         let token = state
             .issue_cursor(
                 &view_a.owner,
-                RESOURCE_RUNTIME,
-                SCHEMA_RUNTIME_PAGE,
+                (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                 &view_a.fence,
                 1,
                 CursorKind::Snapshot,
@@ -2092,8 +2082,7 @@ mod tests {
                 .consume_cursor(
                     &view_b.owner,
                     &token,
-                    RESOURCE_RUNTIME,
-                    SCHEMA_RUNTIME_PAGE,
+                    (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                     CursorKind::Snapshot,
                     Some(&view_a.fence),
                     Instant::now(),
@@ -2107,8 +2096,7 @@ mod tests {
                 .consume_cursor(
                     &view_a.owner,
                     &token,
-                    RESOURCE_PROJECT,
-                    SCHEMA_PROJECT_PAGE,
+                    (RESOURCE_PROJECT, SCHEMA_PROJECT_PAGE),
                     CursorKind::Snapshot,
                     Some(&view_a.fence),
                     Instant::now(),
@@ -2121,8 +2109,7 @@ mod tests {
             .consume_cursor(
                 &view_a.owner,
                 &token,
-                RESOURCE_RUNTIME,
-                SCHEMA_RUNTIME_PAGE,
+                (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                 CursorKind::Snapshot,
                 Some(&view_a.fence),
                 Instant::now(),
@@ -2134,8 +2121,7 @@ mod tests {
                 .consume_cursor(
                     &view_a.owner,
                     &token,
-                    RESOURCE_RUNTIME,
-                    SCHEMA_RUNTIME_PAGE,
+                    (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                     CursorKind::Snapshot,
                     Some(&view_a.fence),
                     Instant::now(),
@@ -2150,8 +2136,7 @@ mod tests {
                 .consume_cursor(
                     &view_a.owner,
                     &tampered,
-                    RESOURCE_RUNTIME,
-                    SCHEMA_RUNTIME_PAGE,
+                    (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                     CursorKind::Snapshot,
                     Some(&view_a.fence),
                     Instant::now(),
@@ -2170,8 +2155,7 @@ mod tests {
         let expired = state
             .issue_cursor(
                 &view.owner,
-                RESOURCE_RUNTIME,
-                SCHEMA_RUNTIME_PAGE,
+                (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                 &view.fence,
                 0,
                 CursorKind::Snapshot,
@@ -2183,8 +2167,7 @@ mod tests {
                 .consume_cursor(
                     &view.owner,
                     &expired,
-                    RESOURCE_RUNTIME,
-                    SCHEMA_RUNTIME_PAGE,
+                    (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                     CursorKind::Snapshot,
                     Some(&view.fence),
                     now + CURSOR_TTL,
@@ -2199,8 +2182,7 @@ mod tests {
                 state
                     .issue_cursor(
                         &view.owner,
-                        RESOURCE_RUNTIME,
-                        SCHEMA_RUNTIME_PAGE,
+                        (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                         &view.fence,
                         index as u64,
                         CursorKind::Snapshot,
@@ -2218,8 +2200,7 @@ mod tests {
             .consume_cursor(
                 &view.owner,
                 &newest,
-                RESOURCE_RUNTIME,
-                SCHEMA_RUNTIME_PAGE,
+                (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                 CursorKind::Snapshot,
                 Some(&view.fence),
                 now,
@@ -2230,8 +2211,7 @@ mod tests {
                 .consume_cursor(
                     &view.owner,
                     &newest,
-                    RESOURCE_RUNTIME,
-                    SCHEMA_RUNTIME_PAGE,
+                    (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                     CursorKind::Snapshot,
                     Some(&view.fence),
                     now,
@@ -2254,8 +2234,7 @@ mod tests {
                 state
                     .issue_cursor(
                         &view.owner,
-                        RESOURCE_RUNTIME,
-                        SCHEMA_RUNTIME_PAGE,
+                        (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                         &view.fence,
                         index as u64,
                         CursorKind::Snapshot,
@@ -2314,8 +2293,7 @@ mod tests {
             .consume_cursor(
                 &view.owner,
                 &cursor,
-                RESOURCE_RUNTIME,
-                SCHEMA_RUNTIME_PAGE,
+                (RESOURCE_RUNTIME, SCHEMA_RUNTIME_PAGE),
                 CursorKind::Snapshot,
                 Some(&view.fence),
                 Instant::now(),

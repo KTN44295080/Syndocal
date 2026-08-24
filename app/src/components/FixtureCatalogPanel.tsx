@@ -1,4 +1,3 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import {
   fixtureCatalogCacheMegabytes,
@@ -23,9 +22,11 @@ import {
   type VerifiedFixtureProfileSummary,
 } from "../fixtureCatalog";
 import type { FixtureProfileSummary } from "../types";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 
 interface FixtureCatalogPanelProps {
   backendAvailable: boolean;
+  invokeCommand: FrontendTauriInvoke;
   shareUser: string;
   sharePassword: string;
   selectedFixtureId: number | null;
@@ -99,8 +100,8 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     setBusy("local");
     try {
       const [cache, health] = await Promise.all([
-        tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache"),
-        tauriInvoke<FixtureProfileHealthSummary[]>("get_fixture_profile_health"),
+        props.invokeCommand<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache"),
+        props.invokeCommand<FixtureProfileHealthSummary[]>("get_fixture_profile_health"),
       ]);
       setCacheEntries(cache);
       setProjectHealth(health);
@@ -136,7 +137,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     };
     setBusy("search");
     try {
-      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      const response = await props.invokeCommand<GdtfShareSearchResponse>("search_gdtf_share", { request });
       setSearchResponse(response);
       props.onMessage(`GDTF Share: showing ${response.fixtures.length} of ${response.total_matches} matching revisions.`);
     } catch (error) {
@@ -153,7 +154,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     }
     setBusy("load");
     try {
-      const profile = await tauriInvoke<FixtureProfileSummary>("import_gdtf", { path: entry.path });
+      const profile = await props.invokeCommand<FixtureProfileSummary>("import_gdtf", { path: entry.path });
       props.onProfileLoaded(profile, `Loaded cached ${entry.manufacturer} ${entry.fixture}`, openPatch);
     } catch (error) {
       props.onMessage(String(error));
@@ -180,7 +181,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     };
     setBusy("cache");
     try {
-      const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
+      const entry = await props.invokeCommand<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
       await refreshLocalCatalog();
       await loadCachedProfile(entry, true);
     } catch (error) {
@@ -199,7 +200,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     try {
       const request = verifiedFixtureProfileRequest(entry.id);
       if (!request) throw new Error(`Verified fixture profile '${entry.id}' was not found`);
-      const profile = await tauriInvoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
+      const profile = await props.invokeCommand<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
       props.onProfileLoaded(profile, `Loaded verified ${entry.name}`, true);
     } catch (error) {
       props.onMessage(String(error));

@@ -361,10 +361,10 @@ const japaneseText: Record<string, string> = {
     "キューは同じシーンマトリクス列の中でのみ並べ替えできます。",
   "Cues must share a Cue List before they can be reordered.":
     "並べ替えるキューは同じCue Listに所属している必要があります。",
-  "Drop the Cue on another cell in this column or on a Timeline lane.":
-    "キューをこの列の別セルまたはタイムラインレーンへドロップしてください。",
-  "Drop the Cue on a scene cell, bank column, or Timeline lane.":
-    "キューをシーンセル、バンク列、またはタイムラインレーンへドロップしてください。",
+  "Drop the Cue on another cell in this column.":
+    "キューをこの列の別セルへドロップしてください。",
+  "Drop the Cue on a scene cell or bank column.":
+    "キューをシーンセルまたはバンク列へドロップしてください。",
   "Browse Scene Blocks": "Scene Blockを一覧表示",
   "Show selected Block Properties": "選択中のBlock Propertiesを表示",
   "Show timeline lane details": "タイムラインレーンの詳細を表示",
@@ -434,7 +434,6 @@ const japaneseText: Record<string, string> = {
   "Drop the Cue inside the timeline canvas.": "キューをタイムラインキャンバス内へドロップしてください。",
   "Drag media to a Video lane": "メディアを映像レーンへドラッグ",
   "Drag media to an Audio lane": "メディアを音声レーンへドラッグ",
-  "Drag scene to a Lighting Timeline lane": "シーンを照明タイムラインレーンへドラッグ",
   Sources: "ソース",
   "Timeline sources": "タイムラインソース",
   "Drag a Scene, Video, or Audio source onto its matching lane.":
@@ -443,8 +442,6 @@ const japaneseText: Record<string, string> = {
   "Media source filter": "メディアソースフィルター",
   "No Scenes are available yet.": "利用可能なシーンはまだありません。",
   "No matching Media Library sources.": "一致するメディアライブラリソースはありません。",
-  "Drag this scene to a Lighting Timeline lane; click to select":
-    "このシーンを照明タイムラインレーンへドラッグ。クリックで選択",
   "Drag to a Lighting Timeline lane; click to place at the playhead":
     "照明タイムラインレーンへドラッグ。クリックでプレイヘッド位置へ配置",
   "Drag to a Video Timeline lane; click to place at the playhead":

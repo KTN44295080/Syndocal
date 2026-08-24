@@ -1,13 +1,14 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.7",
+  "version": "1.2.0-alpha.8",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check:frontend-invokes": "node scripts/check-frontend-tauri-invokes.mjs",
+    "check:frontend-command-routing": "node scripts/check-frontend-command-routing.mjs",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",
     "check:clock-display": "node scripts/check-clock-display.mjs",
     "check:chaser-draft": "node scripts/check-chaser-draft.mjs",

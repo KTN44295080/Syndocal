@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fs,
     io::Read,
     path::Path,
@@ -60,6 +60,14 @@ pub(crate) struct DvcImportOutcome {
     pub(crate) project: ProjectFile,
     pub(crate) report: DvcImportReport,
 }
+
+type ParsedDvcPatch = (
+    Vec<ParsedProfile>,
+    Vec<PatchedFixtureSummary>,
+    HashMap<String, FixtureImportRef>,
+    Vec<f32>,
+);
+type ParsedDvcScenes = (Vec<CueSummary>, HashMap<String, usize>, Vec<CueListSummary>);
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub(crate) struct DvcImportCategory {
@@ -289,10 +297,12 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
         parse_patch(patch_root, root, &mut report)?;
     let stage_map = scale_fixture_layout(&mut fixtures, &fixture_sizes);
 
-    let mut snapshot = EngineSnapshot::default();
+    let mut snapshot = EngineSnapshot {
+        group_colors: BTreeMap::new(),
+        ..EngineSnapshot::default()
+    };
     snapshot.fixtures = fixtures;
     snapshot.stage_map = stage_map;
-    snapshot.group_colors = BTreeMap::new();
     let (mut cues, scene_indices, cue_lists) = parse_scenes(
         root,
         &profiles,
@@ -445,15 +455,7 @@ fn parse_patch(
     patch_root: Node<'_, '_>,
     dvc_root: Node<'_, '_>,
     report: &mut DvcImportReport,
-) -> Result<
-    (
-        Vec<ParsedProfile>,
-        Vec<PatchedFixtureSummary>,
-        HashMap<String, FixtureImportRef>,
-        Vec<f32>,
-    ),
-    String,
-> {
+) -> Result<ParsedDvcPatch, String> {
     let fixture_groups = fixture_group_memberships(dvc_root);
     let mut profiles = Vec::new();
     let mut fixtures = Vec::new();
@@ -1908,7 +1910,7 @@ fn parse_scenes(
     fixtures: &mut [PatchedFixtureSummary],
     group_colors: &mut BTreeMap<String, String>,
     report: &mut DvcImportReport,
-) -> Result<(Vec<CueSummary>, HashMap<String, usize>, Vec<CueListSummary>), String> {
+) -> Result<ParsedDvcScenes, String> {
     let Some(scenes_section) = direct_child(root, "SCENES") else {
         return Ok((Vec::new(), HashMap::new(), Vec::new()));
     };
@@ -1977,16 +1979,20 @@ fn parse_scenes(
             };
             let cue_index = cues.len();
             cues.push(cue);
-            if scene_indices.contains_key(&scene_uid) {
-                report.approximate.add(
-                    1,
-                    format!("Scene: {}", cues[cue_index].label),
-                    format!(
-                        "duplicate DASUID {scene_uid} imported as a separate Cue; timeline UUID references resolve to its first occurrence"
-                    ),
-                );
-            } else {
-                scene_indices.insert(scene_uid, cue_index);
+            let duplicate_scene_uid = scene_uid.clone();
+            match scene_indices.entry(scene_uid) {
+                Entry::Occupied(_) => {
+                    report.approximate.add(
+                        1,
+                        format!("Scene: {}", cues[cue_index].label),
+                        format!(
+                            "duplicate DASUID {duplicate_scene_uid} imported as a separate Cue; timeline UUID references resolve to its first occurrence"
+                        ),
+                    );
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(cue_index);
+                }
             }
         }
     }
@@ -2335,15 +2341,14 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (3, 6, 321 | 322 | 323 | 324 | 325) => convert_dvc_chaser_effect(
+        (3, 6, 321..=325) => convert_dvc_chaser_effect(
             scene,
             scene_name,
             rack,
             effect,
             generator_id,
             effect_id,
-            profiles,
-            fixture_refs,
+            (profiles, fixture_refs),
         ),
         (8, 5, 3) => convert_dvc_inverse_ramp_effect(
             scene,
@@ -2411,8 +2416,7 @@ fn convert_dvc_effect(
             effect,
             generator_id,
             effect_id,
-            profiles,
-            fixture_refs,
+            (profiles, fixture_refs),
         ),
         (5, 3, 45) => convert_dvc_text_source_noop(rack, effect, fixture_refs),
         (5, 3, 21 | 22 | 23 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
@@ -3236,9 +3240,9 @@ fn convert_dvc_value_effect(
     effect: Node<'_, '_>,
     generator_id: u16,
     effect_id: u64,
-    profiles: &[ParsedProfile],
-    fixture_refs: &HashMap<String, FixtureImportRef>,
+    sources: (&[ParsedProfile], &HashMap<String, FixtureImportRef>),
 ) -> Result<ConvertedDvcEffect, String> {
+    let (profiles, fixture_refs) = sources;
     let (params, palette) = dvc_color_palette_and_params(effect)?;
     let (generator, expected_ids, expected_types) = match generator_id {
         621 => (
@@ -4268,7 +4272,7 @@ fn convert_dvc_color_spatial_effect(
                     "COLOR FX Knight Rider Gradient",
                     0,
                     100,
-                )? as f32,
+                )?,
             }
         }
         128 => {
@@ -5398,9 +5402,9 @@ fn convert_dvc_chaser_effect(
     effect: Node<'_, '_>,
     generator_id: u16,
     effect_id: u64,
-    profiles: &[ParsedProfile],
-    fixture_refs: &HashMap<String, FixtureImportRef>,
+    sources: (&[ParsedProfile], &HashMap<String, FixtureImportRef>),
 ) -> Result<ConvertedDvcEffect, String> {
+    let (profiles, fixture_refs) = sources;
     let generator = match generator_id {
         321 => "Chaser #1",
         322 => "Chaser #2",
@@ -7109,8 +7113,8 @@ fn dvc_unit_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f3
 
 fn dvc_binary_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<bool, String> {
     match dvc_param(params, id, label)? {
-        value if value == 0.0 => Ok(false),
-        value if value == 1.0 => Ok(true),
+        0.0 => Ok(false),
+        1.0 => Ok(true),
         value => Err(format!("{label} PARAM {id} must be 0 or 1, found {value}")),
     }
 }
@@ -7842,7 +7846,7 @@ fn parse_super_scenes(
         let mut events = Vec::new();
         let mut duration_ms = 0_u64;
 
-        for timeline in timeline_nodes.iter().copied() {
+        for timeline in timeline_nodes.iter() {
             let layer_id = *layer_ids
                 .get(&timeline.id())
                 .ok_or_else(|| "Daslight timeline layer mapping is missing".to_string())?;
@@ -8074,11 +8078,10 @@ fn configure_disabled_dmx_routes(snapshot: &mut EngineSnapshot) {
     snapshot.dmx_outputs = universes
         .iter()
         .copied()
-        .map(|universe| {
-            let mut output = DmxOutputConfig::default();
-            output.enabled = false;
-            output.universe = universe;
-            output
+        .map(|universe| DmxOutputConfig {
+            enabled: false,
+            universe,
+            ..DmxOutputConfig::default()
         })
         .collect();
     snapshot.output = snapshot.dmx_outputs[0].clone();
@@ -16222,7 +16225,7 @@ mod tests {
             "/../../qa/specimens/ColorMappings-Remaining7.dvc"
         ));
         let source = fs::read_to_string(path).unwrap();
-        assert_eq!(source.as_bytes().len(), 88_780);
+        assert_eq!(source.len(), 88_780);
         let document = Document::parse(&source).unwrap();
         let rack = document
             .descendants()
@@ -18093,7 +18096,7 @@ mod tests {
         let mut snapshot = engine.snapshot();
         for _ in 0..40 {
             snapshot = engine.snapshot();
-            if snapshot.telemetry.queue_depth == 0 && snapshot.dmx_preview.get(0) == Some(&255) {
+            if snapshot.telemetry.queue_depth == 0 && snapshot.dmx_preview.first() == Some(&255) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));

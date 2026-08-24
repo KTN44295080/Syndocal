@@ -481,7 +481,6 @@ assert.match(ownershipStatusBody, /async fn get_output_ownership_status\(/);
 assert.match(ownershipStatusBody, /spawn_blocking/, "output ownership disclosure status must run off the event loop");
 for (const queryName of [
   "get_engine_telemetry_report",
-  "remote_access_urls",
   "list_show_lan_interfaces",
   "remote_control_status",
   "dmx_input_status",
@@ -492,6 +491,17 @@ for (const queryName of [
     `${queryName} must be an async Tauri query`);
   assert.match(body, /spawn_blocking/, `${queryName} must run off the event loop`);
 }
+const remoteAccessUrlsBody = commandBody(mainSource, "remote_access_urls");
+assert.match(
+  remoteAccessUrlsBody,
+  /fn remote_access_urls\(/,
+  "remote_access_urls must remain a short synchronous read-only query",
+);
+assert.doesNotMatch(
+  remoteAccessUrlsBody,
+  /async fn remote_access_urls|spawn_blocking/,
+  "remote_access_urls must not carry a Tauri invoke context across a worker completion",
+);
 for (const queryName of [
   "query_control_plane_project_authority",
   "query_control_plane_runtime_generations",

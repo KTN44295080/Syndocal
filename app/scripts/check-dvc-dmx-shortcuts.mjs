@@ -13,6 +13,25 @@ const workspace = await readFile(new URL("../src/components/WorkspaceChrome.tsx"
 const learn = await readFile(new URL("../src/controlMappingLearn.ts", import.meta.url), "utf8");
 const viewport = await readFile(new URL("./check-viewport-containment.mjs", import.meta.url), "utf8");
 
+function sectionBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return "";
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) return "";
+  return source.slice(start, end);
+}
+
+const externalControlDispatcher = sectionBetween(
+  backend,
+  "type ExternalControlDispatchState<'a>",
+  "fn start_osc_input(",
+);
+const dmxInputCommand = sectionBetween(
+  backend,
+  "fn start_dmx_input(",
+  "fn learn_dmx_control(",
+);
+
 const checks = [
   [protocol.includes("pub merge_enabled: bool") && protocol.includes('serde(default = "default_true")'), "legacy DMX input remains raw-merge compatible"],
   [protocol.includes("pub struct DmxControlMapping") && protocol.includes("pub type DmxControlAction = OscControlAction"), "DMX mappings persist the shared typed action surface"],
@@ -27,7 +46,15 @@ const checks = [
   [importer.includes("dvc_local_panel_restores_verified_dmx_rgb_mappings_when_present"), "real Panel.dvc nine-mapping golden is retained"],
   [importer.includes("dvc_dmx_shortcuts_import_verified_feature_mapping_and_skip_unproven_variants"), "synthetic no-guess regression is retained"],
   [backend.includes("fn validate_dmx_control_mappings") && backend.includes("validate_mapping_required_fields_for_osc"), "DMX mappings reuse the complete OSC action validation surface"],
-  [backend.includes("fn dispatch_external_control_event") && backend.includes('dispatch_external_control_event(&engine, &operator_selection, event, "DMX")'), "DMX controls reach the shared backend command dispatcher"],
+  [externalControlDispatcher.includes("fn dispatch_external_control_event(")
+    && /type ExternalControlDispatchState<'a>\s*=\s*\(\s*&'a Arc<AtomicU64>,\s*&'a Arc<AtomicBool>,\s*&'a Arc<ProjectExternalCommandAdmission>,\s*&'a Arc<AtomicBool>,\s*u64,\s*\);/.test(externalControlDispatcher)
+    && /dispatch_state:\s*ExternalControlDispatchState<'_>/.test(externalControlDispatcher)
+    && /let \(\s*callback_epoch,\s*project_transaction_active,\s*project_external_command_admission,\s*callback_installed,\s*captured_callback_epoch,\s*\) = dispatch_state;/.test(externalControlDispatcher),
+  "the shared external-control dispatcher carries and names every callback epoch and external-admission fence"],
+  [/send_engine_command_if_callback_epoch\(\s*engine,\s*callback_epoch,\s*project_transaction_active,\s*project_external_command_admission,\s*callback_installed,\s*captured_callback_epoch,\s*command,\s*\);/.test(externalControlDispatcher),
+  "the shared external-control dispatcher applies every captured fence to its final engine send"],
+  [/dispatch_external_control_event\(\s*&engine,\s*&operator_selection,\s*\(\s*&callback_epoch_for_worker,\s*&project_transaction_active_for_worker,\s*&project_external_command_admission_for_worker,\s*&callback_installed_for_worker,\s*captured_callback_epoch,\s*\),\s*event,\s*"DMX",\s*\);/.test(dmxInputCommand),
+  "DMX controls pass the complete captured fence state into the shared backend command dispatcher"],
   [backend.includes("if merge_enabled {") && backend.includes("} else {\n                let previous = previous_control_frames"), "raw merge and control mapping modes are mutually exclusive"],
   [backend.includes("control_events_from_changed_frame") && backend.includes("previous_control_frames"), "streaming DMX dispatch is edge-aware"],
   [backend.includes("fn learn_dmx_control") && backend.includes("learn_dmx_control,"), "DMX Learn is exposed through the desktop backend"],
@@ -37,12 +64,24 @@ const checks = [
   [dmxInput.includes("crate::osc::event_from_control_value") && osc.includes("pub(crate) fn event_from_control_value"), "DMX and OSC share value-to-action semantics"],
   [dmxInput.includes("fn update_dmx_learning") && dmxInput.includes("max_by_key"), "DMX Learn selects the strongest changed channel after a baseline"],
   [backend.includes("dmx_mappings: Vec<DmxControlMapping>") && backend.includes("project_control_mappings_roundtrip_and_legacy_absence_stays_empty"), "project persistence and legacy absence are regression tested"],
-  [backend.includes("project_backup_preserves_control_mappings") && backend.includes("user_templates_round_trip_shared_mappings_and_open_with_outputs_disarmed"), "backup and template persistence retain DMX mappings"],
-  [app.includes("dmx: dmxMappings()") && app.includes("dmxMappings: dmxMappings()"), "dirty tracking and save boundaries include DMX mappings"],
-  [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])") && app.includes("if (nextDmxMappings.length > 0)") && app.includes("merge_enabled: false"), "every project restore with DMX mappings activates control semantics without raw merge"],
+  [backend.includes("project_backup_preserves_control_mappings") && backend.includes("user_templates_round_trip_shared_mappings_without_rewriting_authored_outputs"), "backup and template persistence retain DMX mappings without rewriting authored output state"],
+  [app.includes("dmx: dmxMappings()")
+    && app.includes("projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx, prepared.dj)")
+    && app.includes("dmxMappings: sentMappings.dmx"),
+  "dirty tracking and the authority-fenced persistence boundary include DMX mappings"],
+  [backend.includes("let mappings = project_control_mappings_from_daslight_import_report(&report);")
+    && app.includes("applyLoadedProjectResult(imported.load, null)")
+    && app.includes("if (prepared.dmx.length > 0)")
+    && app.includes("setDmxInputConfig((current) => ({ ...current, merge_enabled: false }))"),
+  "the paired DVC project result hydrates DMX mappings and activates control semantics without raw merge"],
   [learn.includes("dmxMappingsFromLearnedControl") && learn.includes("sameDmxSource"), "visual Learn creates mappings and replaces a conflicting DMX source"],
-  [workspace.includes('data-control-learn-toggle="dmx"') && app.includes('invoke<LearnedDmxControl | null>("learn_dmx_control")'), "global DMX Learn uses the same direct visual workflow as MIDI and OSC"],
-  [app.includes('await invoke("stop_dmx_input")') && app.includes('await invoke("start_dmx_input", { config: controlConfig, mappings: nextMappings })'), "learned mappings are applied to the active input immediately"],
+  [workspace.includes('data-control-learn-toggle="dmx"')
+    && app.includes('invoke<LearnedDmxControl | null>("learn_dmx_control", {')
+    && app.includes("expectedEpoch: authority.project_epoch"),
+  "global DMX Learn uses the same direct visual workflow as MIDI and OSC under the captured project authority"],
+  [app.includes('await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch })')
+    && /await invoke\("start_dmx_input", \{\s*config: controlConfig,\s*mappings: dmxMappings\(\),\s*expectedEpoch: authority\.project_epoch,\s*\}\);/.test(app),
+  "learned mappings are persisted and applied to the active input under one captured project authority"],
   [panel.includes('data-io-control="dmx-input-use"') && panel.includes('value="control">Control mappings'), "Setup I/O exposes an explicit Control mappings mode"],
   [panel.includes("props.mappings.map") && panel.includes("onRemoveMapping(index)"), "operators can inspect and remove imported or learned mappings"],
   [viewport.includes("command === 'learn_dmx_control'") && viewport.includes("dmxSelected.controlLearnMockCalls"), "real browser pointer flow covers DMX Learn"],

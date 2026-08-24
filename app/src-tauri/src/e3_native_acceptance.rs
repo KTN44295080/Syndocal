@@ -408,17 +408,28 @@ pub(crate) struct E3NativeAcceptanceTrace {
     pub(crate) journal_serial: u64,
 }
 
+pub(crate) struct E3NativeAcceptanceTraceInput {
+    pub(crate) request_id: String,
+    pub(crate) source_serial: u64,
+    pub(crate) target_serial: u64,
+    pub(crate) target_checkpoint_hash: String,
+    pub(crate) journal_serial: u64,
+}
+
 impl E3NativeAcceptanceTrace {
     pub(crate) fn new(
         phase: E3NativeAcceptancePhase,
         pid: u32,
         incarnation: u64,
-        request_id: String,
-        source_serial: u64,
-        target_serial: u64,
-        target_checkpoint_hash: String,
-        journal_serial: u64,
+        input: E3NativeAcceptanceTraceInput,
     ) -> Result<Self, String> {
+        let E3NativeAcceptanceTraceInput {
+            request_id,
+            source_serial,
+            target_serial,
+            target_checkpoint_hash,
+            journal_serial,
+        } = input;
         if incarnation == 0 {
             return Err("E3 acceptance process incarnation must be nonzero".to_string());
         }
@@ -619,11 +630,13 @@ mod tests {
             phase,
             std::process::id(),
             77,
-            request_id.to_string(),
-            41,
-            42,
-            "checkpoint-b".to_string(),
-            42,
+            E3NativeAcceptanceTraceInput {
+                request_id: request_id.to_string(),
+                source_serial: 41,
+                target_serial: 42,
+                target_checkpoint_hash: "checkpoint-b".to_string(),
+                journal_serial: 42,
+            },
         )
         .unwrap()
     }

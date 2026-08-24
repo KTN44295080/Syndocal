@@ -77,10 +77,22 @@ assert.match(
   /cancelProjectTransactionWithRecovery\(/,
   "frontend Cancel must query terminal state after a lost reply",
 );
+const centralCommitStart = app.indexOf(
+  'mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction"',
+);
+const centralCommitEnd = app.indexOf(
+  "window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent",
+  centralCommitStart,
+);
+assert.ok(
+  centralCommitStart >= 0 && centralCommitEnd > centralCommitStart,
+  "the central renderer mutation facade must contain Commit and history publication",
+);
+const centralCommitRecovery = app.slice(centralCommitStart, centralCommitEnd);
 assert.match(
-  app,
-  /commitProjectTransactionWithRecovery\(/,
-  "frontend Commit must query terminal state after a lost reply",
+  centralCommitRecovery,
+  /catch \(commitError\)[\s\S]*?queryProjectTransactionTerminal\(transactionIdentity\)[\s\S]*?terminal\.status !== "committed"[\s\S]*?mutation = terminal\.mutation/s,
+  "frontend Commit reply loss must recover only the exact committed terminal mutation before history publication",
 );
 assert.match(
   app,

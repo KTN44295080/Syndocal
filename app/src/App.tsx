@@ -599,11 +599,10 @@ import {
   type WaveStageDragMode,
 } from "./mappingRuntime";
 import { stageObjectDefaultColor } from "./stageObjects";
-import { cueIdentityCss, type CueIdentitySource } from "./identityColor";
+import { cueIdentityCss, groupIdentityCss, type CueIdentitySource } from "./identityColor";
 import {
   applySceneMatrixCueMove,
   applySceneMatrixCueListMove,
-  sceneMatrixCueMetadataArgs,
 } from "./sceneMatrixBankMove";
 import {
   defaultVideoOutputMapping,
@@ -900,7 +899,6 @@ const projectMutationCommands = new Set([
   "repair_fixture_profile",
   "set_fixture_patch",
   "set_fixture_limits",
-  "set_group_fixture_limits",
   "set_fixture_groups",
   "create_fixture_group",
   "rename_fixture_group",
@@ -928,6 +926,7 @@ const projectMutationCommands = new Set([
   "update_playback_executor",
   "remove_playback_executor",
   "update_cue_from_current",
+  "update_cue_from_current_batch",
   "set_cue_effect_targets",
   "add_cue_owned_effect",
   "set_cue_metadata",
@@ -937,9 +936,9 @@ const projectMutationCommands = new Set([
   "set_cue_live_modifier_defaults",
   "set_group_color",
   "move_cue",
+  "move_cue_between_scene_banks_batch",
   "duplicate_cue",
   "remove_cue",
-  "add_timeline_cue_event",
   "set_timeline_cue_event",
   "add_timeline_scene_block",
   "set_timeline_scene_block",
@@ -957,19 +956,12 @@ const projectMutationCommands = new Set([
   "set_timeline_video_automation",
   "set_timeline_automation_enabled",
   "remove_timeline_automation",
-  "commit_prepared_media_assets",
-  "commit_prepared_video_file_layer",
-  "commit_prepared_still_image_layer",
-  "commit_prepared_local_media_layers",
-  "commit_prepared_bootstrap_vj_show",
-  "commit_prepared_media_asset_relink",
   "add_video_input_layer",
   "duplicate_video_layer",
   "remove_video_layer",
   "set_video_layer_order",
   "set_video_layer_label",
   "set_video_layer_state",
-  "fade_video_layer_opacity",
   "launch_video_clip",
   "take_video_clip",
   "set_auto_vj_config",
@@ -977,7 +969,6 @@ const projectMutationCommands = new Set([
   "stop_video_clip",
   "add_video_cue_point",
   "remove_video_cue_point",
-  "set_video_cue_point",
   "set_video_layer_blend_mode",
   "add_video_composition",
   "remove_video_composition",
@@ -990,11 +981,8 @@ const projectMutationCommands = new Set([
   "set_video_output_opacity",
   "fade_video_output_opacity",
   "set_video_output_mapping",
-  "set_video_output_mapping_field",
   "save_video_output_mapping_preset",
-  "apply_video_output_mapping_preset",
   "remove_video_output_mapping_preset",
-  "reorder_cue_lists",
   "load_video_output_mapping_preset_file",
   "add_lfo_effect",
   "add_position_wave_effect",
@@ -1014,18 +1002,11 @@ const projectMutationCommands = new Set([
   "update_curve_effect",
   "update_mapping_effect",
   "update_color_mapping_effect",
-  "save_node_graph",
   "set_node_graph_enabled",
-  "remove_node_graph",
-  "load_node_graph_preset_file",
   "set_effect_video_target_position",
   "move_effect",
   "duplicate_effect",
   "remove_effect",
-  "load_effect_preset",
-  "load_effect_preset_for_target",
-  "load_sample_effect_preset",
-  "load_sample_effect_bundle",
   "load_fixture_preset",
   "load_fixture_preset_for_group",
   "load_fixture_preset_for_all_matching",
@@ -1069,8 +1050,8 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "import_and_assign_video_clip_slots_authoritative",
   "apply_video_effect_catalog_authoritative",
   "apply_timeline_advanced_authoritative",
+  "set_project_control_mappings",
   "set_video_layer_isf_effect",
-  "apply_builtin_video_isf_effect",
   "add_video_layer_isf_effect",
   "add_builtin_video_isf_effect",
   "move_video_layer_isf_effect",
@@ -1383,6 +1364,11 @@ const invoke = async <T,>(
   // owner ID or generic Begin/Commit ticket around that strict envelope.
   const authoredEffectFencePrepared = command === "set_effect_enabled"
     && args?.__authoredEffectFencePrepared === true;
+  // Mapping persistence is itself the barrier that publishes the current
+  // mapping generation. Re-entering the generic mapping flush here would
+  // recursively dispatch the same command. Its exact CAS epoch/revision are
+  // already captured by persistProjectControlMappings below.
+  const projectMappingsFencePrepared = command === "set_project_control_mappings";
   const commandArgs = { ...(args ?? {}) };
   delete commandArgs.__expectedProjectEpoch;
   delete commandArgs.__expectedProjectRevision;
@@ -1399,7 +1385,7 @@ const invoke = async <T,>(
   // older mapping generation into a later engine mutation.
   // Capture the identity before the async mapping barrier. A replacement
   // during that await must not let this old click reserve a B transaction.
-  const currentEpoch = authoredEffectFencePrepared
+  const currentEpoch = authoredEffectFencePrepared || projectMappingsFencePrepared
     ? requestedExpectedEpoch ?? 0
     : await flushProjectControlMappingsBeforeProjectMutation?.() ?? 0;
   if (requestedExpectedEpoch !== null && requestedExpectedEpoch !== currentEpoch) {
@@ -2523,6 +2509,25 @@ export default function App() {
   // Coherent authority publication invalidates all older independent reads
   // before the new token is visible to individual Solid signals.
   let projectReadGeneration = 0;
+  const captureProjectAuthorityIdentity = (): ProjectAuthorityToken => ({
+    ...projectMappingsAuthority(),
+  });
+  const isProjectAuthorityIdentityCurrent = (captured: ProjectAuthorityToken): boolean =>
+    projectAuthorityTokenIsCurrent(captured, projectMappingsAuthority());
+  const beginProjectReadGeneration = () => {
+    if (!Number.isSafeInteger(projectReadGeneration) || projectReadGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Project read generation is exhausted; reload Syndocal before continuing.");
+    }
+    projectReadGeneration += 1;
+    return projectReadGeneration;
+  };
+  const captureProjectReadGuard = () => ({
+    generation: projectReadGeneration,
+    authority: captureProjectAuthorityIdentity(),
+  });
+  const projectReadGuardIsCurrent = (guard: ReturnType<typeof captureProjectReadGuard>) =>
+    guard.generation === projectReadGeneration
+    && projectAuthorityTokenIsCurrent(guard.authority, projectMappingsAuthority());
   // Coordinator status may observe B before the B replacement result arrives.
   // Track the stronger identity application separately so an event/reply
   // duplicate is a real no-op, not another mapping invalidation.
@@ -3264,6 +3269,7 @@ export default function App() {
     setSelectedSceneCueId(cueId);
     setSelectedSceneEffectId(effectId);
     setSceneSettingsSurface(controlMode() === "edit" ? "fx" : "contents");
+    setLiveStatusExpanded(false);
     setSceneFxStagePreview(null);
     if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
     if (cue.child_timeline) setEffectChooserFamily("SUPER SCENE");
@@ -3671,6 +3677,7 @@ export default function App() {
     viewportFixture === "timeline"
     || viewportFixture === "patch"
     || viewportFixture === "timeline-layered"
+    || viewportFixture === "timeline-production-capture"
     || viewportFixture === "scene-block-large"
     || viewportFixture === "scene-block-hour"
     || viewportFixture === "cue-recall"
@@ -3688,7 +3695,8 @@ export default function App() {
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
-    const timelineLayeredFixture = viewportFixture === "timeline-layered";
+    const timelineLayeredFixture = viewportFixture === "timeline-layered"
+      || viewportFixture === "timeline-production-capture";
     const controlStageEditFixture = viewportFixture === "control-stage-edit";
     const timelineFixture =
       viewportFixture === "timeline"
@@ -3700,8 +3708,8 @@ export default function App() {
     const cueRecallFixture = viewportFixture === "cue-recall";
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
     const fxVisualFixture = viewportFixture === "fx-visual";
-    const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
+    const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture || cueNodeGraphFixture;
     const editLiveFixture = viewportFixture === "edit-live";
     const blindFixture = viewportFixture === "blind";
     const sceneMatrixFixture =
@@ -4582,6 +4590,7 @@ export default function App() {
     __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
     __syndocalReadControlStageEditFixtureSnapshot?: () => EngineSnapshot;
+    __syndocalReadTimelineProductionCaptureSnapshot?: () => EngineSnapshot;
     __syndocalSelectMappingViewportStageObject?: () => void;
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
@@ -4617,6 +4626,10 @@ export default function App() {
   }
   if (viewportFixture === "control-stage-edit" || viewportFixture === "mapping-viewport-conformance") {
     sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot = () => snapshot();
+  }
+  if (viewportFixture === "timeline-production-capture") {
+    sceneBlockFixtureWindow.__syndocalReadTimelineProductionCaptureSnapshot = () =>
+      JSON.parse(JSON.stringify(snapshot())) as EngineSnapshot;
   }
   if (viewportFixture === "mapping-viewport-conformance") {
     sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject = () => setSelectedStageObjectId(1);
@@ -4703,6 +4716,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
     delete sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalReadTimelineProductionCaptureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
@@ -8704,7 +8718,10 @@ export default function App() {
   });
   const liveDeskViewActions = () => (
     <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
-      <nav class="liveDeskViewToggle" aria-label="Live desk view">
+      <nav
+        class="liveDeskViewToggle"
+        aria-label={controlMode() === "edit" ? "Lighting edit view" : "Live desk view"}
+      >
         <button
           type="button"
           class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "matrix" ? " active" : ""}`}
@@ -8737,11 +8754,24 @@ export default function App() {
         class="liveDeskIconButton liveDeskViewIconButton liveStatusToggle"
         data-live-status-toggle
         data-live-desk-view-action="status"
-        aria-controls="live-status-inspector"
+        aria-controls={liveStatusExpanded()
+          ? controlMode() === "edit" ? "lighting-status-inspector" : "live-status-inspector"
+          : undefined}
         aria-expanded={liveStatusExpanded()}
-        aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
-        title={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
-        onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
+        aria-label={controlMode() === "edit"
+          ? liveStatusExpanded() ? "Hide lighting status details" : "Show lighting status details"
+          : liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+        title={controlMode() === "edit"
+          ? liveStatusExpanded() ? "Hide lighting status details" : "Show lighting status details"
+          : liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+        onClick={() => {
+          if (controlMode() === "edit" && selectedSceneCue()) {
+            closeSceneSettings();
+            setLiveStatusExpanded(true);
+            return;
+          }
+          setLiveStatusExpanded((expanded) => !expanded);
+        }}
       >
         <svg viewBox="0 0 20 20" aria-hidden="true">
           <path d="M3.5 3.5h13v13h-13zM7 6v8M9.5 6.5H14M9.5 10H14M9.5 13.5H14" />
@@ -9537,9 +9567,7 @@ export default function App() {
 
   const openSceneFxFromMapping = () => {
     setWorkspaceTab("control");
-    selectControlMode("live");
-    setTimelineDeskSurface("show");
-    setTimelineContextDrawer("none");
+    if (!selectControlMode("edit")) return;
     setSceneSettingsSurface("fx");
     setMessage(
       selectedSceneCue()
@@ -10130,12 +10158,22 @@ export default function App() {
     getCueAuthoredBeats: (cueId) => snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null,
     setNextStartMs: setTimelineEventTimeMs,
     setMessage,
-    refreshSnapshot: () => viewportFixture === "timeline-layered"
-      || viewportFixture === "scene-block-large"
-      || viewportFixture === "scene-block-hour"
-      || viewportFixture === "scene-matrix"
-      ? Promise.resolve(snapshot())
-      : refreshSnapshot(),
+    refreshSnapshot: () => viewportFixture === "timeline-production-capture"
+      ? invoke<EngineSnapshot>("get_snapshot").then((next) => {
+          // This browser-only fixture still crosses the registered snapshot
+          // IPC boundary, but applies its captured response without starting
+          // unrelated operator-policy/background refresh work. Native Tauri
+          // cannot select browserViewportFixture, so production remains on the
+          // full refreshSnapshot path below.
+          setSnapshot(next);
+          return next;
+        })
+      : viewportFixture === "timeline-layered"
+        || viewportFixture === "scene-block-large"
+        || viewportFixture === "scene-block-hour"
+        || viewportFixture === "scene-matrix"
+        ? Promise.resolve(snapshot())
+        : refreshSnapshot(),
   });
 
   const invokeTimelineLayerCommand = async <T,>(
@@ -10592,8 +10630,14 @@ export default function App() {
       return;
     }
     const guard = captureProjectReadGuard();
+    const authority = captureProjectAuthorityIdentity();
+    const history = projectHistoryStatus();
     try {
-      const mutation = await invoke<ProjectHistoryMutationResult>("clear_project_history");
+      const mutation = await invoke<ProjectHistoryMutationResult>("clear_project_history", {
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedHistoryGeneration: history.history_generation,
+      });
       if (!projectReadGuardIsCurrent(guard)) return;
       applyProjectHistoryMutationResult(mutation);
     } catch (error) {
@@ -10671,12 +10715,27 @@ export default function App() {
       setMessage("Undid Update Cue From Current.");
       return;
     }
+    const undoAuthority = captureProjectAuthorityIdentity();
+    const undoHistory = projectHistoryStatus();
+    const undoEntryId = undoHistory.undo_entry_id;
+    const undoCheckpointHash = undoHistory.undo_checkpoint_hash;
+    if (
+      typeof undoEntryId !== "number"
+      || !Number.isSafeInteger(undoEntryId)
+      || undoEntryId < 0
+      || typeof undoCheckpointHash !== "string"
+      || undoCheckpointHash.length === 0
+    ) {
+      setMessage("Undo history authority is incomplete; refreshing before any change.");
+      void refreshProjectHistoryStatus();
+      return;
+    }
     try {
-      const history = projectHistoryStatus();
       const navigation = await invoke<ProjectHistoryNavigationResult>("undo_project_transaction", {
-        expectedEpoch: history.project_epoch,
-        expectedEntryId: history.undo_entry_id,
-        expectedCheckpointHash: history.undo_checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: undoAuthority.project_epoch,
+        expectedEntryId: undoEntryId,
+        expectedCheckpointHash: undoCheckpointHash,
       });
       const applied = applyAuthorityBundleAsReplacement(navigation.authority);
       if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
@@ -10757,12 +10816,27 @@ export default function App() {
       setMessage("Redid Update Cue From Current.");
       return;
     }
+    const redoAuthority = captureProjectAuthorityIdentity();
+    const redoHistory = projectHistoryStatus();
+    const redoEntryId = redoHistory.redo_entry_id;
+    const redoCheckpointHash = redoHistory.redo_checkpoint_hash;
+    if (
+      typeof redoEntryId !== "number"
+      || !Number.isSafeInteger(redoEntryId)
+      || redoEntryId < 0
+      || typeof redoCheckpointHash !== "string"
+      || redoCheckpointHash.length === 0
+    ) {
+      setMessage("Redo history authority is incomplete; refreshing before any change.");
+      void refreshProjectHistoryStatus();
+      return;
+    }
     try {
-      const history = projectHistoryStatus();
       const navigation = await invoke<ProjectHistoryNavigationResult>("redo_project_transaction", {
-        expectedEpoch: history.project_epoch,
-        expectedEntryId: history.redo_entry_id,
-        expectedCheckpointHash: history.redo_checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: redoAuthority.project_epoch,
+        expectedEntryId: redoEntryId,
+        expectedCheckpointHash: redoCheckpointHash,
       });
       const applied = applyAuthorityBundleAsReplacement(navigation.authority);
       if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
@@ -12166,59 +12240,14 @@ export default function App() {
       return;
     }
     if (!isTauriRuntime()) return;
-    if (!operatorCommandAllowed(activeOperatorLockMode, "update_cue_from_current", true)) {
-      throw new Error(
-        activeOperatorLockMode === "Full"
-          ? "Operator Full Lock allows only status reads and emergency blackout controls."
-          : "Operator Partial Lock blocks programming and project replacement commands.",
-      );
-    }
-    const scopeSignature = captureTargets
-      .map(controlEditTargetKey)
-      .sort((left, right) => left.localeCompare(right))
-      .join(",");
-    const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
-    const expectedRevision = projectMappingsAuthority().project_revision;
-    const transactionLabel = projectMutationLabel("update_cue_from_current");
-    const transactionCoalesceKey = `update_cue_from_current:cue:${cue.id}:${scopeSignature}`;
-    const transactionIdentity = {
-      clientOperationId: projectTransactionOperationId(),
-      shapeFingerprint: projectTransactionShapeFingerprint(
-        "update_cue_from_current",
-        transactionLabel,
-        transactionCoalesceKey,
-      ),
-      commandName: "update_cue_from_current",
-      schemaVersion: PROJECT_TRANSACTION_SCHEMA_VERSION,
-      ownerId: projectTransactionOwnerId,
-    };
-    const transaction = await beginProjectTransactionWithRecovery({
-      label: transactionLabel,
-      coalesceKey: transactionCoalesceKey,
-      expectedEpoch,
-      expectedRevision,
-      ...transactionIdentity,
-    }, transactionIdentity);
-    try {
-      for (const captureScope of captureTargets) {
-        await tauriInvoke("update_cue_from_current", {
-          cueId: cue.id,
-          label: cue.label,
-          fadeMs: cue.fade_ms,
-          captureScope,
-        });
-      }
-      const mutation = await commitProjectTransactionWithRecovery(transaction, transactionIdentity);
-      window.dispatchEvent(
-        new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
-      );
-      await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
-      setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
-      await refreshSnapshot();
-    } catch (error) {
-      await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
-      throw error;
-    }
+    await invoke("update_cue_from_current_batch", {
+      cueId: cue.id,
+      label: cue.label,
+      fadeMs: cue.fade_ms,
+      captureScopes: captureTargets,
+    });
+    setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
+    await refreshSnapshot();
   };
   const flushControlEditLookUpdates = () => {
     if (controlEditWriteTimer !== null) {
@@ -13410,31 +13439,11 @@ export default function App() {
   const consumePendingProjectRecoveryIntent = (bundle: ProjectAuthorityBundle): Promise<void> =>
     projectRecoveryIntentConsumer.consume(bundle);
 
-  const captureProjectAuthorityIdentity = (): ProjectAuthorityToken => ({
-    ...projectMappingsAuthority(),
-  });
-  const isProjectAuthorityIdentityCurrent = (captured: ProjectAuthorityToken): boolean =>
-    projectAuthorityTokenIsCurrent(captured, projectMappingsAuthority());
   const abortMediaAssetOperationsForAuthorityChange = (next: ProjectAuthorityToken) => {
     if (!projectAuthorityTokenIsCurrent(next, projectMappingsAuthority())) {
       abortActiveMediaAssetOperations();
     }
   };
-
-  const beginProjectReadGeneration = () => {
-    if (!Number.isSafeInteger(projectReadGeneration) || projectReadGeneration >= Number.MAX_SAFE_INTEGER) {
-      throw new Error("Project read generation is exhausted; reload Syndocal before continuing.");
-    }
-    projectReadGeneration += 1;
-    return projectReadGeneration;
-  };
-  const captureProjectReadGuard = () => ({
-    generation: projectReadGeneration,
-    authority: captureProjectAuthorityIdentity(),
-  });
-  const projectReadGuardIsCurrent = (guard: ReturnType<typeof captureProjectReadGuard>) =>
-    guard.generation === projectReadGeneration
-    && projectAuthorityTokenIsCurrent(guard.authority, projectMappingsAuthority());
 
   const adoptProjectMappingsAuthority = (authority: Partial<ProjectControlMappingsAuthority>) => {
     const next = authorityToken(authority);
@@ -13608,7 +13617,9 @@ export default function App() {
     mappingSyncInFlight = true;
     const request = (async (): Promise<ProjectControlMappingsPersistResult> => {
       try {
-        const next = await tauriInvoke<ProjectControlMappingsAuthority>("set_project_control_mappings", {
+        const next = await invoke<ProjectControlMappingsAuthority>("set_project_control_mappings", {
+          __expectedProjectEpoch: authority.project_epoch,
+          ownerId: projectTransactionOwnerId,
           expectedEpoch: authority.project_epoch,
           expectedRevision: authority.project_revision,
           midiMappings: sentMappings.midi,
@@ -14445,12 +14456,18 @@ export default function App() {
   };
 
   const newProject = async () => {
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("create a new project")) {
       setMessage("New project canceled.");
       return;
     }
     try {
-      const result = await invoke<ProjectLoadResult>("new_project");
+      const result = await invoke<ProjectLoadResult>("new_project", {
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       const applied = await applyLoadedProjectResult(result, null);
       if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setWorkspaceTab("setup");
@@ -14703,12 +14720,18 @@ export default function App() {
   };
 
   const loadUserTemplate = async () => {
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("create a project from a user template")) {
       setMessage("Template load canceled.");
       return;
     }
     try {
-      const result = await invoke<UserTemplateLoadResult | null>("load_user_template");
+      const result = await invoke<UserTemplateLoadResult | null>("load_user_template", {
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       if (!result) {
         setMessage("Template load canceled.");
         return;
@@ -15106,12 +15129,18 @@ export default function App() {
     applyLoadedProjectResult(result, result.current_project_path);
 
   const loadProject = async () => {
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("load another project")) {
       setMessage("Project load canceled.");
       return;
     }
     try {
-      const result = await invoke<ProjectLoadResult | null>("load_project");
+      const result = await invoke<ProjectLoadResult | null>("load_project", {
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       if (!result) {
         setMessage("Project load canceled.");
         return;
@@ -15126,6 +15155,7 @@ export default function App() {
     if (daslightProjectImportBusy()) {
       return;
     }
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
       setMessage("Daslight Project import canceled.");
       return;
@@ -15133,7 +15163,13 @@ export default function App() {
     setDaslightProjectImportBusy(true);
     setMessage("Importing Daslight Project...", "daslight-project-import-busy");
     try {
-      const imported = await invoke<DvcImportProjectLoadResult | null>("import_daslight_project_with_result", { path: null });
+      const imported = await invoke<DvcImportProjectLoadResult | null>("import_daslight_project_with_result", {
+        path: null,
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       if (!imported) {
         setMessage("Daslight Project import canceled.");
         return;
@@ -15159,12 +15195,19 @@ export default function App() {
   };
 
   const loadProjectPath = async (path: string) => {
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges(`open ${path}`)) {
       setMessage("Project open canceled.");
       return;
     }
     try {
-      const result = await invoke<ProjectLoadResult>("load_project_path", { path });
+      const result = await invoke<ProjectLoadResult>("load_project_path", {
+        path,
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       await applyLoadedProjectResult(result, result.path);
     } catch (error) {
       setMessage(String(error));
@@ -15295,12 +15338,19 @@ export default function App() {
   });
 
   const loadProjectBackup = async (backup: ProjectBackupSummary) => {
+    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("restore a project backup")) {
       setMessage("Project backup restore canceled.");
       return;
     }
     try {
-      const result = await invoke<ProjectLoadResult>("load_project_backup", { backupId: backup.id });
+      const result = await invoke<ProjectLoadResult>("load_project_backup", {
+        backupId: backup.id,
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       const applied = await applyLoadedProjectResult(result, backup.source_path ?? null);
       if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setMessage(
@@ -15339,8 +15389,14 @@ export default function App() {
   };
 
   const loadStartupProject = async () => {
+    const authority = captureProjectAuthorityIdentity();
     try {
-      const result = await invoke<ProjectLoadResult | null>("load_startup_project");
+      const result = await invoke<ProjectLoadResult | null>("load_startup_project", {
+        ownerId: projectTransactionOwnerId,
+        expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+      });
       if (result) {
         await applyLoadedProjectResult(result, result.path);
       }
@@ -16422,9 +16478,6 @@ export default function App() {
     try {
       if (enabled) {
         await safetyBlackoutRuntime.engage();
-        // The legacy all-output command remains permitted only in the safer
-        // direction; its release branch is rejected by the backend.
-        await invoke("set_all_blackout", { enabled: true });
       } else {
         // The current R4 release schema is scoped to the safety blackout
         // latch. It cannot truthfully clear authored all-output blackout
@@ -16443,21 +16496,18 @@ export default function App() {
   };
 
   const setLightingMaster = async (master: number) => {
-    try {
-      await invoke("set_lighting_master", { master });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    void master;
+    setMessage(
+      "Lighting master is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
+    );
   };
 
   const setGroupSubmaster = async (groupId: string, level: number) => {
-    try {
-      await invoke("set_group_submaster", { groupId, level });
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
+    void groupId;
+    void level;
+    setMessage(
+      "Group submaster output is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
+    );
   };
 
   const applyBpm = async () => {
@@ -17051,17 +17101,19 @@ export default function App() {
     clearControlLearnSelection();
   });
 
+  let remoteAccessUrlRequestGeneration = 0;
   const refreshRemoteAccessUrls = async (config: RemoteControlConfig = remoteConfig()) => {
+    const requestGeneration = ++remoteAccessUrlRequestGeneration;
     if (!isTauriRuntime()) {
-      setRemoteAccessUrls([]);
+      if (requestGeneration === remoteAccessUrlRequestGeneration) setRemoteAccessUrls([]);
       return [];
     }
     try {
       const urls = await invoke<string[]>("remote_access_urls", { config });
-      setRemoteAccessUrls(urls);
+      if (requestGeneration === remoteAccessUrlRequestGeneration) setRemoteAccessUrls(urls);
       return urls;
     } catch {
-      setRemoteAccessUrls([]);
+      if (requestGeneration === remoteAccessUrlRequestGeneration) setRemoteAccessUrls([]);
       return [];
     }
   };
@@ -17119,9 +17171,11 @@ export default function App() {
     }
   };
 
+  let djLinkLanInterfaceRequestGeneration = 0;
   const refreshDjLinkLanInterfaces = async () => {
+    const requestGeneration = ++djLinkLanInterfaceRequestGeneration;
     if (!isTauriRuntime()) {
-      setDjLinkLanInterfaces([]);
+      if (requestGeneration === djLinkLanInterfaceRequestGeneration) setDjLinkLanInterfaces([]);
       return [];
     }
     try {
@@ -17133,11 +17187,13 @@ export default function App() {
           && address !== "::"
           && address !== "127.0.0.1"
           && address !== "::1"))];
-      setDjLinkLanInterfaces(next);
-      if (djLinkBindIp() !== null && !next.includes(djLinkBindIp()!)) setDjLinkBindIp(null);
+      if (requestGeneration === djLinkLanInterfaceRequestGeneration) {
+        setDjLinkLanInterfaces(next);
+        if (djLinkBindIp() !== null && !next.includes(djLinkBindIp()!)) setDjLinkBindIp(null);
+      }
       return next;
     } catch {
-      setDjLinkLanInterfaces([]);
+      if (requestGeneration === djLinkLanInterfaceRequestGeneration) setDjLinkLanInterfaces([]);
       return [];
     }
   };
@@ -17246,7 +17302,14 @@ export default function App() {
     void refreshRemoteAccessUrls(config);
   });
   createEffect(() => {
-    if (djLinkEnabled()) void refreshDjLinkLanInterfaces();
+    if (djLinkEnabled()) {
+      void refreshDjLinkLanInterfaces();
+    } else {
+      // Disabling DJ Link is a newer state than any in-flight enumeration.
+      // Retire its write authority even though no replacement IPC is needed.
+      djLinkLanInterfaceRequestGeneration += 1;
+      setDjLinkLanInterfaces([]);
+    }
   });
 
   const startRemoteControl = async () => {
@@ -18026,57 +18089,17 @@ export default function App() {
     cue: CueSummary,
     cueListId: number,
     groupId: string | null,
-    delta: -1 | 1,
-    stepCount: number,
+    targetCueId: number | null,
+    position: "before" | "after",
   ) => {
     if (!isTauriRuntime()) return null;
-    if (!operatorCommandAllowed(activeOperatorLockMode, "set_cue_metadata", true)) {
-      throw new Error(
-        activeOperatorLockMode === "Full"
-          ? "Operator Full Lock allows only status reads and emergency blackout controls."
-          : "Operator Partial Lock blocks programming and project replacement commands.",
-      );
-    }
-    const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
-    const expectedRevision = projectMappingsAuthority().project_revision;
-    const transactionLabel = "Move Cue Between Scene Banks";
-    const transactionCoalesceKey = `scene_matrix_bank_move:cue:${cue.id}`;
-    const transactionIdentity = {
-      clientOperationId: projectTransactionOperationId(),
-      shapeFingerprint: projectTransactionShapeFingerprint(
-        "scene_matrix_bank_move",
-        transactionLabel,
-        transactionCoalesceKey,
-      ),
-      commandName: "scene_matrix_bank_move",
-      schemaVersion: PROJECT_TRANSACTION_SCHEMA_VERSION,
-      ownerId: projectTransactionOwnerId,
-    };
-    const transaction = await beginProjectTransactionWithRecovery({
-      label: transactionLabel,
-      coalesceKey: transactionCoalesceKey,
-      expectedEpoch,
-      expectedRevision,
-      ...transactionIdentity,
-    }, transactionIdentity);
-    try {
-      if (cue.cue_list_id !== cueListId) {
-        await tauriInvoke("set_cue_list", { cueId: cue.id, cueListId });
-      }
-      await tauriInvoke("set_cue_metadata", sceneMatrixCueMetadataArgs(cue, groupId));
-      for (let step = 0; step < stepCount; step += 1) {
-        await tauriInvoke("move_cue", { cueId: cue.id, delta });
-      }
-      const mutation = await commitProjectTransactionWithRecovery(transaction, transactionIdentity);
-      window.dispatchEvent(
-        new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
-      );
-      await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
-      return mutation.history_status;
-    } catch (error) {
-      await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
-      throw error;
-    }
+    await invoke("move_cue_between_scene_banks_batch", {
+      cueId: cue.id,
+      targetCueListId: cueListId,
+      targetGroupId: groupId,
+      targetCueId,
+      position,
+    });
   };
 
   const reorderSceneMatrixCue = async (
@@ -18086,13 +18109,14 @@ export default function App() {
     targetCueListId: number,
   ) => {
     if (sourceCueId === targetCueId) return;
+    const resolvedPosition = targetCueId === null ? "after" : position;
     const cues = snapshot().cues;
     const sourceCue = cues.find((cue) => cue.id === sourceCueId);
     const targetCue = targetCueId === null
       ? null
       : cues.find((cue) => cue.id === targetCueId) ?? null;
     if (!sourceCue || (targetCueId !== null && !targetCue)) {
-      setMessage("Drop the Cue on a scene cell, bank column, or Timeline lane.");
+      setMessage("Drop the Cue on a scene cell or bank column.");
       return;
     }
     const normalizedTargetGroupId = targetCue
@@ -18100,7 +18124,7 @@ export default function App() {
       : sourceCue.group_id?.trim() || null;
     const crossesBank = sourceCue.cue_list_id !== targetCueListId;
     if (!crossesBank && !targetCue) {
-      setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
+      setMessage("Drop the Cue on another cell in this column.");
       return;
     }
     if (targetCue && targetCue.cue_list_id !== targetCueListId) {
@@ -18120,7 +18144,7 @@ export default function App() {
         : -1;
       if (targetCue && targetIndex < 0) return;
       const insertionIndex = targetCue
-        ? targetIndex + (position === "after" ? 1 : 0)
+        ? targetIndex + (resolvedPosition === "after" ? 1 : 0)
         : sourceIndex;
       const moveCount = insertionIndex - sourceIndex;
       if (moveCount === 0) return;
@@ -18136,7 +18160,7 @@ export default function App() {
       // to the requested target; the local fixture uses the exact target
       // insertion instead of depending on backend ordering details.
       delta = -1;
-      stepCount = Math.max(0, targetList.length - targetIndex - (position === "after" ? 1 : 0));
+      stepCount = Math.max(0, targetList.length - targetIndex - (resolvedPosition === "after" ? 1 : 0));
     }
 
     try {
@@ -18145,8 +18169,8 @@ export default function App() {
           sourceCue,
           targetCueListId,
           normalizedTargetGroupId,
-          delta,
-          stepCount,
+          targetCueId,
+          resolvedPosition,
         );
       } else if (viewportFixture !== "scene-matrix" && viewportFixture !== "workspace-operator") {
         for (let step = 0; step < stepCount; step += 1) {
@@ -18163,7 +18187,7 @@ export default function App() {
             targetCueId,
             targetCueListId,
             normalizedTargetGroupId,
-            position,
+            resolvedPosition,
           )
           : applySceneMatrixCueMove(
             cues,
@@ -18289,7 +18313,7 @@ export default function App() {
       return;
     }
     setWorkspaceTab("control");
-    selectControlMode("live");
+    if (!selectControlMode("edit")) return;
     setSelectedCueListId(cue.cue_list_id);
     selectSceneCue(cue.id);
     setSceneSettingsSurface("details");
@@ -22818,10 +22842,10 @@ export default function App() {
   };
 
   const selectControlMode = (mode: ControlMode) => {
-    if (paneWindow === "timeline" && mode !== "live") return;
+    if (paneWindow === "timeline" && mode !== "live") return false;
     if (operatorLockMode() === "Partial" && mode === "edit") {
       setMessage("Lighting editing is locked for this operator.");
-      return;
+      return false;
     }
     if (mode === "mixer") authorizeVideoThumbnailAccess();
     setControlMode(mode);
@@ -22836,7 +22860,45 @@ export default function App() {
     // Domain panels unmount while switching. Return focus to the persistent tab
     // after the new panel/Portal host has been published.
     requestAnimationFrame(() => document.getElementById(`edit-domain-tab-${mode}`)?.focus());
+    return true;
   };
+
+  const operatorRouteFixtureWindow = window as typeof window & {
+    __syndocalTryLockedMappingSceneFxRoute?: () => void;
+    __syndocalTryLockedTimelineSourceRoute?: () => boolean;
+    __syndocalReadLockedProgrammingRouteState?: () => {
+      workspace: WorkspaceTab;
+      controlMode: ControlMode;
+      selectedSceneCueId: number | null;
+      selectedCueListId: number;
+      sceneSettingsSurface: SceneSettingsSurface;
+      timelineContextDrawer: TimelineContextDrawer;
+      message: string;
+    };
+  };
+  if (viewportFixture === "workspace-operator") {
+    operatorRouteFixtureWindow.__syndocalTryLockedMappingSceneFxRoute = openSceneFxFromMapping;
+    operatorRouteFixtureWindow.__syndocalTryLockedTimelineSourceRoute = () => {
+      const cueId = snapshot().cues[0]?.id;
+      if (cueId === undefined) return false;
+      openTimelineSourceCue(cueId);
+      return true;
+    };
+    operatorRouteFixtureWindow.__syndocalReadLockedProgrammingRouteState = () => ({
+      workspace: workspaceTab(),
+      controlMode: controlMode(),
+      selectedSceneCueId: selectedSceneCueId(),
+      selectedCueListId: selectedCueListId(),
+      sceneSettingsSurface: sceneSettingsSurface(),
+      timelineContextDrawer: timelineContextDrawer(),
+      message: message(),
+    });
+    onCleanup(() => {
+      delete operatorRouteFixtureWindow.__syndocalTryLockedMappingSceneFxRoute;
+      delete operatorRouteFixtureWindow.__syndocalTryLockedTimelineSourceRoute;
+      delete operatorRouteFixtureWindow.__syndocalReadLockedProgrammingRouteState;
+    });
+  }
 
   const selectWorkspaceTab = (tab: WorkspaceTab) => {
     if (tab === "control" && controlMode() === "mixer") authorizeVideoThumbnailAccess();
@@ -22956,6 +23018,310 @@ export default function App() {
         </details>
       </Show>
     </>
+  );
+
+  // The scene settings surface is shared by Timeline's legacy live inspector and
+  // Lighting's upper inspector. Keeping one render path preserves the same
+  // draft, persistence, and effect handlers in both entry points.
+  const renderSceneSettingsPane = (cue: () => CueSummary) => (
+    <SceneSettingsPane
+      cue={cue()}
+      groupColors={groupColors()}
+      draft={cueMetadataDraft(cue())}
+      effects={selectedSceneEffects()}
+      selectedEffectId={selectedSceneEffectId()}
+      activeFamily={effectChooserFamily()}
+      activeSurface={sceneSettingsSurface()}
+      moveFxEnabled={sceneMoveFxEnabled()}
+      running={selectedSceneIsRunning()}
+      liveStates={snapshot().cue_live_modifiers}
+      editor={sceneEffectEditor()}
+      details={
+        <CueManagementPanel
+          mode="scene-settings"
+          onSetCueColor={setCueColor}
+          groupColors={groupColors()}
+          onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
+          cues={[cue()]}
+          allCues={snapshot().cues}
+          cueLists={snapshot().cue_lists}
+          groupIds={fixtureGroupRows().map((row) => row.groupId)}
+          palettes={referencePalettes()}
+          effects={snapshot().effects}
+          cueCaptureEffects={cueCaptureEligibleEffects()}
+          selectedCueListId={selectedCueList().id}
+          cueListLabel={cueListLabel()}
+          activeCueId={snapshot().active_cue_id}
+          revealCueId={cue().id}
+          revealCueRevision={revealedSourceCueRevision()}
+          activeFade={snapshot().active_fade}
+          timelinePositionMs={snapshot().timeline.position_ms}
+          bpm={snapshot().clock.bpm}
+          timelineTrack={timelineTrack()}
+          cueLabel={cueLabel()}
+          cueFadeMs={cueFadeMs()}
+          cueAuthoredBeats={cueAuthoredBeats()}
+          cueAuthoredBeatsSeeded={cueAuthoredBeatsSeeded()}
+          cueAuthoredBeatsError={cueAuthoredBeatsError()}
+          cueCaptureScope={cueCaptureScope()}
+          cueCaptureScopeError={cueCaptureScopeError()}
+          hasCueSources={hasCueSources()}
+          cueEffectCaptureTargets={cueEffectCaptureTargets()}
+          cueCapturePreview={cueCapturePreview()}
+          stageViewBoxSize={stageViewBoxSize}
+          stageOrigin={stageOrigin2d()}
+          selectedFixtureId={selectedFixtureId()}
+          timelinePlacementNudgeMs={timelinePlacementNudgeMs()}
+          cueMetadataDraft={cueMetadataDraft}
+          cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
+          onCueLabel={setCueLabel}
+          onCueFadeMs={setCueFadeMs}
+          onCueAuthoredBeats={updateCueAuthoredBeats}
+          onCueCaptureScope={setCueCaptureScope}
+          onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
+          onSelectCueList={setSelectedCueListId}
+          onCueListLabel={setCueListLabel}
+          onCreateCueList={createCueList}
+          onRenameCueList={renameCueList}
+          onRemoveCueList={removeCueList}
+          onSetCueList={setCueList}
+          onSetCuePalette={setCuePalette}
+          onTriggerCueList={triggerCueList}
+          onCreateCue={createCue}
+          onSelectFixture={setSelectedFixtureId}
+          onTriggerPreviousCue={triggerPreviousCue}
+          onTriggerNextCue={triggerNextCue}
+          onSetCueFadePaused={setCueFadePaused}
+          onUpdateCueMetadataDraft={updateCueMetadataDraft}
+          onMoveCue={moveCue}
+          onSetCueMetadata={setCueMetadata}
+          onSetCueEffectTargets={setCueEffectTargets}
+          onSetCueSteps={setCueSteps}
+          onDuplicateCue={duplicateCue}
+          onUpdateCue={updateCue}
+          onTriggerCue={triggerCue}
+          onAddTimelineCueEventAt={addTimelineCueEventAt}
+          onRemoveCue={removeCue}
+          onSeekTimeline={seekTimeline}
+          onOpenTimeline={() => selectTimelineDeskSurface("show")}
+          onMoveTimelineCueEvent={moveTimelineCueEvent}
+          onRemoveTimelineEvent={removeTimelineEvent}
+          onBeginTimelineCueDrag={beginTimelineCueDrag}
+          onMoveTimelineCueDrag={moveTimelineCueDrag}
+          onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
+        />
+      }
+      onSurface={setSceneSettingsSurface}
+      onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
+      onSaveMetadata={() => setCueMetadata(cue())}
+      onSetColor={(color) => setCueColor(cue().id, color)}
+      onSetLiveModifier={setCueLiveModifierLive}
+      onClearLiveModifier={clearCueLiveModifierLive}
+      onSetLiveModifierDefaults={setCueLiveModifierDefaults}
+      onClose={closeSceneSettings}
+      onEditSource={() => {
+        setSelectedCueListId(cue().cue_list_id);
+        setSceneSettingsSurface("details");
+      }}
+      onSelectEffect={selectSceneEffect}
+      onSelectFamily={createSceneEffect}
+      onSetEffectEnabled={setSceneEffectEnabled}
+      onDuplicateEffect={duplicateSceneEffect}
+      onMoveEffect={moveSceneEffect}
+      onRemoveEffect={removeSceneEffect}
+    />
+  );
+
+  const renderLightingStatusInspector = () => (
+    <div
+      id="lighting-status-inspector"
+      class="liveStatusGrid"
+      classList={{ sceneSettingsVisible: Boolean(selectedSceneCue()) }}
+      role="region"
+      aria-label={selectedSceneCue() ? "Scene settings" : "Lighting status details"}
+      data-scene-settings-visible={selectedSceneCue() ? "true" : "false"}
+    >
+      <div class="liveStatusItem liveCueStatusCell">
+        <span class="uiMicroLabel">Active cue</span>
+        <strong data-no-localize>
+          <Show when={activeCue()}>
+            <i
+              class="liveCueIdentityChip"
+              aria-hidden="true"
+              style={{
+                background: cueIdentityCss(
+                  activeCue()!.id,
+                  activeCue()!.color,
+                  "band",
+                  activeCue()!.group_id,
+                  activeCue()!.group_id ? groupColors()[activeCue()!.group_id!] : null,
+                ),
+              }}
+            />
+          </Show>
+          {activeCue()?.label ?? "None"}
+        </strong>
+      </div>
+      <div class="liveStatusItem liveCueStatusCell">
+        <span class="uiMicroLabel">Next cue</span>
+        <strong data-no-localize>
+          <Show when={nextCue()}>
+            <i
+              class="liveCueIdentityChip"
+              aria-hidden="true"
+              style={{
+                background: cueIdentityCss(
+                  nextCue()!.id,
+                  nextCue()!.color,
+                  "band",
+                  nextCue()!.group_id,
+                  nextCue()!.group_id ? groupColors()[nextCue()!.group_id!] : null,
+                ),
+              }}
+            />
+          </Show>
+          {nextCue()?.label ?? "None"}
+        </strong>
+      </div>
+      <Show when={selectedSceneCue()} fallback={<>
+        <div class="liveStatusItem liveDeskSceneStatus">
+          <span>Show scenes</span>
+          <strong data-live-desk-scene-readout>{timelineTrack()} · {snapshot().cues.length} scenes</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Fixtures</span>
+          <strong>{snapshot().fixtures.length}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Effects</span>
+          <strong>{activeEffectCount()} / {snapshot().effects.length}</strong>
+        </div>
+        <Show when={authoredEffectEnableControlEffect()}>
+          {(effect) => (
+            <div class="liveStatusItem" data-authored-effect-enable-control>
+              <span>Global FX</span>
+              <label>
+                <select
+                  data-authored-effect-enable-select
+                  aria-label="Global effect to enable or bypass"
+                  value={String(effect().id)}
+                  onChange={(event) => setAuthoredEffectEnableControlId(Number(event.currentTarget.value))}
+                >
+                  <For each={snapshot().effects}>
+                    {(candidate) => <option value={candidate.id}>{candidate.label}</option>}
+                  </For>
+                </select>
+              </label>
+              <label data-authored-effect-enable-toggle={effect().id}>
+                <input
+                  type="checkbox"
+                  checked={effect().enabled}
+                  aria-label={`${effect().enabled ? "Bypass" : "Enable"} global effect ${effect().id}`}
+                  onChange={(event) => void setEffectEnabled(effect().id, event.currentTarget.checked)}
+                />
+                <span>{effect().enabled ? "Enabled" : "Disabled"}</span>
+              </label>
+            </div>
+          )}
+        </Show>
+        <div class="liveStatusItem">
+          <span>DMX routes</span>
+          <strong>{enabledDmxOutputCount()} / {snapshot().dmx_outputs.length}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Video outs</span>
+          <strong>{enabledVideoOutputCount()} / {snapshot().video.outputs.length}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Timeline</span>
+          <strong>{snapshot().timeline.playing ? "Playing" : "Stopped"}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>BPM</span>
+          <strong>{snapshot().clock.bpm.toFixed(1)}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Clock</span>
+          <strong>{clockSourceLabel(snapshot().clock.source)}</strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Sync</span>
+          <strong class={`clockSyncLabel ${snapshot().clock.external_sync_locked ? "locked" : ""}`}>
+            {clockSyncStatusLabel(snapshot().clock)}
+          </strong>
+        </div>
+        <div class="liveStatusItem">
+          <span>Timecode</span>
+          <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
+        </div>
+      </>}>
+        {(cue) => renderSceneSettingsPane(cue)}
+      </Show>
+    </div>
+  );
+
+  const renderLightingCuePads = () => (
+    <div class="liveCuePadSurface">
+      <div class="liveCuePadHeader">
+        <h3>Cue Pads</h3>
+        <span>{cuePadRangeLabel()}</span>
+        <label class="checkbox compactCheckbox">
+          <input
+            type="checkbox"
+            checked={cuePadFollowActive()}
+            onChange={(event) => setCuePadFollowActive(event.currentTarget.checked)}
+          />
+          Follow
+        </label>
+        <button
+          onClick={() => {
+            setCuePadFollowActive(false);
+            setCuePadBank(Math.max(0, cuePadBank() - 1));
+          }}
+          disabled={cuePadBank() === 0}
+        >
+          Prev
+        </button>
+        <button
+          onClick={() => {
+            setCuePadFollowActive(false);
+            setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
+          }}
+          disabled={cuePadBank() >= cuePadBankCount() - 1}
+        >
+          Next
+        </button>
+        {liveDeskViewActions()}
+      </div>
+      <div class="liveCuePadGrid">
+        <For each={liveCuePads()}>
+          {(pad) => (
+            <button
+              class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
+                pad.cue?.id === nextCue()?.id ? "next" : ""
+              }`}
+              style={pad.cue ? {
+                "--identity": cueIdentityCss(
+                  pad.cue.id,
+                  pad.cue.color,
+                  "text",
+                  pad.cue.group_id,
+                  pad.cue.group_id ? groupColors()[pad.cue.group_id] : null,
+                ),
+              } : undefined}
+              disabled={!pad.cue}
+              onClick={() => {
+                if (pad.cue) void triggerCue(pad.cue.id);
+              }}
+            >
+              <span>{pad.slot}</span>
+              <strong>{pad.cue?.label ?? "Empty"}</strong>
+              <small>{pad.cue ? `#${pad.index + 1} / ${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
+            </button>
+          )}
+        </For>
+      </div>
+    </div>
   );
 
   const { handleControlKeyDown } = createAppKeyboardController({
@@ -23739,8 +24105,17 @@ export default function App() {
           <section id="edit-domain-panel-live" role="tabpanel" aria-labelledby="edit-domain-tab-live" hidden />
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
-          <section id="edit-domain-panel-edit" role="tabpanel" aria-labelledby="edit-domain-tab-edit" class="panel editDomainUpperPanel controlPanel" data-workspace-pane="upper" aria-label="Lighting Banks and Scenes">
-            <SceneMatrixPanel
+          <section
+            id="edit-domain-panel-edit"
+            role="tabpanel"
+            aria-labelledby="edit-domain-tab-edit"
+            class={`panel editDomainUpperPanel controlPanel${selectedSceneCue() ? " lightingSceneSettingsVisible" : liveStatusExpanded() ? " lightingStatusVisible" : ""}`}
+            data-workspace-pane="upper"
+            data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
+            aria-label="Lighting Banks and Scenes"
+          >
+            <Show when={controlLiveView() === "matrix"}>
+              <SceneMatrixPanel
               toolbar={liveDeskViewActions()}
               cues={snapshot().cues}
               cueLists={snapshot().cue_lists}
@@ -23771,7 +24146,14 @@ export default function App() {
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-            />
+              />
+            </Show>
+            <Show when={controlLiveView() === "pads"}>
+              {renderLightingCuePads()}
+            </Show>
+            <Show when={Boolean(selectedSceneCue()) || liveStatusExpanded()}>
+              {renderLightingStatusInspector()}
+            </Show>
           </section>
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "live"}>
@@ -23935,114 +24317,7 @@ export default function App() {
               <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
             </div>
             </>}>
-              {(cue) => (
-                <SceneSettingsPane
-                  cue={cue()}
-                  groupColors={groupColors()}
-                  draft={cueMetadataDraft(cue())}
-                  effects={selectedSceneEffects()}
-                  selectedEffectId={selectedSceneEffectId()}
-                  activeFamily={effectChooserFamily()}
-                  activeSurface={sceneSettingsSurface()}
-                  moveFxEnabled={sceneMoveFxEnabled()}
-                  running={selectedSceneIsRunning()}
-                  liveStates={snapshot().cue_live_modifiers}
-                  editor={sceneEffectEditor()}
-                  details={
-                    <CueManagementPanel
-                      mode="scene-settings"
-                      onSetCueColor={setCueColor}
-                      groupColors={groupColors()}
-                      onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
-                      cues={[cue()]}
-                      allCues={snapshot().cues}
-                      cueLists={snapshot().cue_lists}
-                      groupIds={fixtureGroupRows().map((row) => row.groupId)}
-                      palettes={referencePalettes()}
-                      effects={snapshot().effects}
-                      cueCaptureEffects={cueCaptureEligibleEffects()}
-                      selectedCueListId={selectedCueList().id}
-                      cueListLabel={cueListLabel()}
-                      activeCueId={snapshot().active_cue_id}
-                      revealCueId={cue().id}
-                      revealCueRevision={revealedSourceCueRevision()}
-                      activeFade={snapshot().active_fade}
-                      timelinePositionMs={snapshot().timeline.position_ms}
-                      bpm={snapshot().clock.bpm}
-                      timelineTrack={timelineTrack()}
-                      cueLabel={cueLabel()}
-                      cueFadeMs={cueFadeMs()}
-                      cueAuthoredBeats={cueAuthoredBeats()}
-                      cueAuthoredBeatsSeeded={cueAuthoredBeatsSeeded()}
-                      cueAuthoredBeatsError={cueAuthoredBeatsError()}
-                      cueCaptureScope={cueCaptureScope()}
-                      cueCaptureScopeError={cueCaptureScopeError()}
-                      hasCueSources={hasCueSources()}
-                      cueEffectCaptureTargets={cueEffectCaptureTargets()}
-                      cueCapturePreview={cueCapturePreview()}
-                      stageViewBoxSize={stageViewBoxSize}
-                      stageOrigin={stageOrigin2d()}
-                      selectedFixtureId={selectedFixtureId()}
-                      timelinePlacementNudgeMs={timelinePlacementNudgeMs()}
-                      cueMetadataDraft={cueMetadataDraft}
-                      cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
-                      onCueLabel={setCueLabel}
-                      onCueFadeMs={setCueFadeMs}
-                      onCueAuthoredBeats={updateCueAuthoredBeats}
-                      onCueCaptureScope={setCueCaptureScope}
-                      onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
-                      onSelectCueList={setSelectedCueListId}
-                      onCueListLabel={setCueListLabel}
-                      onCreateCueList={createCueList}
-                      onRenameCueList={renameCueList}
-                      onRemoveCueList={removeCueList}
-                      onSetCueList={setCueList}
-                      onSetCuePalette={setCuePalette}
-                      onTriggerCueList={triggerCueList}
-                      onCreateCue={createCue}
-                      onSelectFixture={setSelectedFixtureId}
-                      onTriggerPreviousCue={triggerPreviousCue}
-                      onTriggerNextCue={triggerNextCue}
-                      onSetCueFadePaused={setCueFadePaused}
-                      onUpdateCueMetadataDraft={updateCueMetadataDraft}
-                      onMoveCue={moveCue}
-                      onSetCueMetadata={setCueMetadata}
-                      onSetCueEffectTargets={setCueEffectTargets}
-                      onSetCueSteps={setCueSteps}
-                      onDuplicateCue={duplicateCue}
-                      onUpdateCue={updateCue}
-                      onTriggerCue={triggerCue}
-                      onAddTimelineCueEventAt={addTimelineCueEventAt}
-                      onRemoveCue={removeCue}
-                      onSeekTimeline={seekTimeline}
-                      onOpenTimeline={() => selectTimelineDeskSurface("show")}
-                      onMoveTimelineCueEvent={moveTimelineCueEvent}
-                      onRemoveTimelineEvent={removeTimelineEvent}
-                      onBeginTimelineCueDrag={beginTimelineCueDrag}
-                      onMoveTimelineCueDrag={moveTimelineCueDrag}
-                      onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-                    />
-                  }
-                  onSurface={setSceneSettingsSurface}
-                  onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
-                  onSaveMetadata={() => setCueMetadata(cue())}
-                  onSetColor={(color) => setCueColor(cue().id, color)}
-                  onSetLiveModifier={setCueLiveModifierLive}
-                  onClearLiveModifier={clearCueLiveModifierLive}
-                  onSetLiveModifierDefaults={setCueLiveModifierDefaults}
-                  onClose={closeSceneSettings}
-                  onEditSource={() => {
-                    setSelectedCueListId(cue().cue_list_id);
-                    setSceneSettingsSurface("details");
-                  }}
-                  onSelectEffect={selectSceneEffect}
-                  onSelectFamily={createSceneEffect}
-                  onSetEffectEnabled={setSceneEffectEnabled}
-                  onDuplicateEffect={duplicateSceneEffect}
-                  onMoveEffect={moveSceneEffect}
-                  onRemoveEffect={removeSceneEffect}
-                />
-              )}
+              {(cue) => renderSceneSettingsPane(cue)}
             </Show>
           </div>
           <Show when={controlLiveView() === "matrix"}>
@@ -24506,6 +24781,7 @@ export default function App() {
           <Show when={!customWorkbenchOpen()}>
             <PatchProfileBrowserPanel
               backendAvailable={isTauriRuntime()}
+              invokeCommand={invoke}
               shareUser={gdtfShareUser()}
               sharePassword={gdtfSharePassword()}
               selectedProfile={profile()}
@@ -25243,24 +25519,12 @@ export default function App() {
                 editingSceneLabel={selectedSceneCue()?.label ?? null}
                 editingSceneIdentity={
                   selectedSceneCue()
-                    ? cueIdentityCss(
-                        selectedSceneCue()!.id,
-                        selectedSceneCue()!.color,
-                        "fill",
-                        selectedSceneCue()!.group_id,
-                        selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                      )
+                    ? groupIdentityCss(`bank:${selectedSceneCue()!.cue_list_id}`, undefined, "fill")
                     : null
                 }
                 editingSceneIdentityText={
                   selectedSceneCue()
-                    ? cueIdentityCss(
-                        selectedSceneCue()!.id,
-                        selectedSceneCue()!.color,
-                        "text",
-                        selectedSceneCue()!.group_id,
-                        selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                      )
+                    ? groupIdentityCss(`bank:${selectedSceneCue()!.cue_list_id}`, undefined, "text")
                     : null
                 }
                 blindActive={snapshot().programmer.blind}
@@ -25550,6 +25814,9 @@ export default function App() {
             onClearFixtureFlags={() => clearFixtureFlags("all")}
             onSetFixtureTransform={setFixtureTransform}
           />
+          <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "playback"}>
+          <Portal mount={timelineUpperHost()!}>
+          <section class="panel faders controlPanel timelineDesk-playback">
           <div class="playbackDeskSurface">
             <ProgrammerPanel
               programmer={snapshot().programmer}
@@ -25580,6 +25847,9 @@ export default function App() {
               onTrigger={triggerPlaybackExecutor}
             />
           </div>
+          </section>
+          </Portal>
+          </Show>
           <FaderAttributeEditorPanel
             categories={controlCategoryRows().filter((category) =>
               editDeskSurface() === "attributes" ? category.id !== "fader" : category.id === "fader"
@@ -25832,7 +26102,7 @@ export default function App() {
           </aside>
           </Show>
           <div class="timelinePanel">
-        <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected}>
+        <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "show"}>
             <Portal mount={timelineUpperHost()!}>
             <section class="panel faders controlPanel timelineDesk-show">
             <div class="timelinePanel">
@@ -26020,6 +26290,10 @@ export default function App() {
             </section>
             </Portal>
             </Show>
+            <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "automation"}>
+            <Portal mount={timelineUpperHost()!}>
+            <section class="panel faders controlPanel timelineDesk-automation">
+            <div class="timelinePanel">
             <div class="timelineAutomationSurface">
             <TimelineLightingAutomationPanel
               activeControls={timelineAutomationControls()}
@@ -26063,6 +26337,10 @@ export default function App() {
               onRemoveAutomation={removeTimelineAutomation}
             />
             </div>
+            </div>
+            </section>
+            </Portal>
+            </Show>
           </div>
         </section>
         </Show>
@@ -26364,8 +26642,7 @@ export default function App() {
             onMaxMessagesPerSecond={setRemoteMaxMessagesPerSecond}
             onDjLinkEnabled={(value) => {
               setDjLinkEnabled(value);
-              if (value) void refreshDjLinkLanInterfaces();
-              else setDjLinkBindIp(null);
+              if (!value) setDjLinkBindIp(null);
             }}
             onDjLinkBindIp={(value) => {
               setDjLinkBindIp(value);

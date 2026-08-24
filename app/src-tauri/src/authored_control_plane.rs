@@ -106,13 +106,13 @@ impl Default for AuthoredControlPlaneState {
 }
 
 enum ReceiptReservation {
-    Terminal(SetEffectEnabledTerminalReceiptV1),
+    Terminal(Box<SetEffectEnabledTerminalReceiptV1>),
     Rejected(AuthoredCommandErrorCodeV1),
     Lane(Arc<Mutex<()>>),
 }
 
 enum RetainedReceiptLookup {
-    Terminal(SetEffectEnabledTerminalReceiptV1),
+    Terminal(Box<SetEffectEnabledTerminalReceiptV1>),
     Rejected(AuthoredCommandErrorCodeV1),
     Missing,
 }
@@ -133,7 +133,7 @@ impl AuthoredControlPlaneState {
         if let Some(record) = inner.receipts.get_mut(key) {
             record.last_used = last_used;
             return if record.shape_sha256 == shape_sha256 {
-                ReceiptReservation::Terminal(record.receipt.clone())
+                ReceiptReservation::Terminal(Box::new(record.receipt.clone()))
             } else {
                 ReceiptReservation::Rejected(AuthoredCommandErrorCodeV1::Conflict)
             };
@@ -172,7 +172,7 @@ impl AuthoredControlPlaneState {
         if let Some(record) = inner.receipts.get_mut(key) {
             record.last_used = last_used;
             return if record.shape_sha256 == shape_sha256 {
-                RetainedReceiptLookup::Terminal(record.receipt.clone())
+                RetainedReceiptLookup::Terminal(Box::new(record.receipt.clone()))
             } else {
                 RetainedReceiptLookup::Rejected(AuthoredCommandErrorCodeV1::Conflict)
             };
@@ -205,7 +205,7 @@ impl AuthoredControlPlaneState {
     ) -> SetEffectEnabledResponseV1 {
         let lane = match self.reserve_at(&key, &shape_sha256, now) {
             ReceiptReservation::Terminal(receipt) => {
-                return SetEffectEnabledResponseV1::TerminalReceipt(receipt)
+                return SetEffectEnabledResponseV1::TerminalReceipt(*receipt)
             }
             ReceiptReservation::Rejected(code) => return rejection(request, code),
             ReceiptReservation::Lane(lane) => lane,
@@ -404,7 +404,7 @@ fn set_effect_enabled_authoritative_for_window_label_at(
         .lookup_retained_at(&key, &shape_sha256, now)
     {
         RetainedReceiptLookup::Terminal(receipt) => {
-            return SetEffectEnabledResponseV1::TerminalReceipt(receipt)
+            return SetEffectEnabledResponseV1::TerminalReceipt(*receipt)
         }
         RetainedReceiptLookup::Rejected(code) => return rejection(&request, code),
         RetainedReceiptLookup::Missing => {}
@@ -438,6 +438,13 @@ fn capture_caller_binding(
     state: &AppState,
     window_label: &str,
 ) -> Result<AuthoredCallerBinding, ()> {
+    // A valid owner/incarnation and issued fence are insufficient while a
+    // Destroyed callback is between owner retirement and query retirement.
+    // The process-local authority fence is checked before any binding is
+    // captured, so delayed raw authored IPC fails closed in that interval.
+    state
+        .ensure_window_authority_not_blocked(window_label)
+        .map_err(|_| ())?;
     let owners = state.project_transaction_owners.lock().map_err(|_| ())?;
     let principal = owners.get(window_label).cloned().ok_or(())?;
     let incarnations = state
@@ -751,7 +758,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::tests::{MediaAssetA6CommandHarness, MEDIA_ASSET_A6_OWNER};
+    use crate::{
+        tests::{MediaAssetA6CommandHarness, MEDIA_ASSET_A6_OWNER},
+        BeginProjectTransactionRequest,
+    };
 
     const PRIMARY_WINDOW: &str = "media-asset-a6";
 
@@ -955,7 +965,7 @@ mod tests {
     }
 
     fn coordinator_audit(state: &AppState) -> String {
-        format!("{:#?}", &*state.project_coordinator.lock().unwrap())
+        format!("{:#?}", *state.project_coordinator.lock().unwrap())
     }
 
     fn history_depths(state: &AppState) -> (usize, usize, usize, u64, u64, u64) {
@@ -1717,6 +1727,140 @@ mod tests {
             terminal_outcome(&applied),
             SetEffectEnabledOutcomeV1::Applied(_)
         ));
+    }
+
+    #[test]
+    fn destroyed_retirement_marker_fences_begin_and_authored_gap_without_drift() {
+        let _serial = serialized_authored_test_guard();
+        let (harness, query, effect_id) = seeded_real_handler(false);
+        let state = Arc::clone(&harness.state);
+        let query = Arc::new(query);
+        let request = issued_request(&state, &query, PRIMARY_WINDOW, effect_id, true, 112);
+        let owner_incarnation = *state
+            .project_transaction_owner_incarnations
+            .lock()
+            .unwrap()
+            .get(PRIMARY_WINDOW)
+            .expect("seeded owner incarnation");
+        let (expected_epoch, expected_revision) = {
+            let coordinator = state.project_coordinator.lock().unwrap();
+            (coordinator.epoch, coordinator.revision)
+        };
+        let begin_label = "Retiring Begin".to_string();
+        let begin_coalesce_key = "retiring:begin".to_string();
+        let begin_shape = crate::canonical_project_transaction_shape(
+            "retiring_begin",
+            &begin_label,
+            &begin_coalesce_key,
+        );
+        let before_engine = engine_persistence_bytes(&state);
+        let before_coordinator = coordinator_audit(&state);
+        let before_history = history_depths(&state);
+        let before_publish = state
+            .authored_effect_enabled_publish_attempts
+            .load(Ordering::Acquire);
+
+        let poison_state = Arc::clone(&state);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poison_state
+                .output_lease_registry
+                .lock()
+                .expect("output lease registry before gap poison");
+            panic!("poison output lease registry between owner and query retirement");
+        }));
+
+        let mut begin_thread = None;
+        let mut authored_thread = None;
+        let retirement =
+            crate::handle_destroyed_window_authority_retirement_for_incarnation_with_hook(
+                &state,
+                &query,
+                PRIMARY_WINDOW,
+                owner_incarnation,
+                || {
+                    assert!(
+                        state
+                            .ensure_window_authority_not_blocked(PRIMARY_WINDOW)
+                            .is_err(),
+                        "temporary Destroyed-retirement marker must reject the interleaving"
+                    );
+
+                    let begin_state = Arc::clone(&state);
+                    let begin_owner = MEDIA_ASSET_A6_OWNER.to_string();
+                    let begin_label_for_thread = begin_label.clone();
+                    let begin_coalesce_for_thread = begin_coalesce_key.clone();
+                    let begin_shape_for_thread = begin_shape.clone();
+                    begin_thread = Some(thread::spawn(move || {
+                        crate::begin_project_transaction_for_window_label(
+                            &begin_state,
+                            PRIMARY_WINDOW,
+                            BeginProjectTransactionRequest {
+                                label: begin_label_for_thread,
+                                coalesce_key: begin_coalesce_for_thread,
+                                expected_epoch,
+                                expected_revision,
+                                owner_id: begin_owner,
+                                client_operation_id: "project-op:99:e1-retiring-gap".to_string(),
+                                shape_fingerprint: begin_shape_for_thread,
+                                command_name: "retiring_begin".to_string(),
+                                schema_version: crate::PROJECT_TRANSACTION_SCHEMA_VERSION,
+                            },
+                        )
+                    }));
+
+                    let authored_state = Arc::clone(&state);
+                    let authored_query = Arc::clone(&query);
+                    authored_thread = Some(thread::spawn(move || {
+                        set_effect_enabled_authoritative_for_window_label(
+                            &authored_state,
+                            &authored_query,
+                            PRIMARY_WINDOW,
+                            request,
+                        )
+                    }));
+                },
+            );
+        assert!(
+            retirement.is_err(),
+            "poisoned owner retirement must block the label"
+        );
+
+        let begin_error = begin_thread
+            .expect("interleaved Begin thread")
+            .join()
+            .expect("interleaved Begin thread joins")
+            .expect_err("new Begin must be rejected during Destroyed retirement");
+        assert!(begin_error.contains("authority") || begin_error.contains("retirement"));
+        let authored_response = authored_thread
+            .expect("interleaved authored thread")
+            .join()
+            .expect("interleaved authored thread joins");
+        assert!(matches!(
+            authored_response,
+            SetEffectEnabledResponseV1::Rejected(AuthoredCommandRejectionV1 {
+                error: AuthoredCommandErrorV1 {
+                    code: AuthoredCommandErrorCodeV1::Forbidden
+                },
+                ..
+            })
+        ));
+        assert_eq!(engine_persistence_bytes(&state), before_engine);
+        assert_eq!(coordinator_audit(&state), before_coordinator);
+        assert_eq!(history_depths(&state), before_history);
+        assert_eq!(
+            state
+                .authored_effect_enabled_publish_attempts
+                .load(Ordering::Acquire),
+            before_publish
+        );
+        assert!(state
+            .ensure_window_authority_not_blocked(PRIMARY_WINDOW)
+            .is_err());
+        assert!(state
+            .project_transaction_owners
+            .lock()
+            .unwrap()
+            .contains_key(PRIMARY_WINDOW));
     }
 
     #[test]

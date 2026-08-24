@@ -324,16 +324,16 @@ fn render_timeline_follow_output<P: video::VideoFrameProvider>(
         })
         .transpose()?;
     let combined = renderer
-        .render_follow_output_transition_rgba8(
-            &outgoing.frame,
-            &incoming.frame,
-            follow.kind,
-            follow.curve,
-            follow.progress_millis,
-            follow.source_timeline_id,
-            transition_chain.as_ref(),
-            state.last_valid(key),
-        )
+        .render_follow_output_transition_rgba8(video::VideoFollowOutputTransitionRequest {
+            outgoing: &outgoing.frame,
+            incoming: &incoming.frame,
+            kind: follow.kind,
+            curve: follow.curve,
+            progress_millis: follow.progress_millis,
+            source_timeline_id: follow.source_timeline_id,
+            transition_chain: transition_chain.as_ref(),
+            last_valid: state.last_valid(key),
+        })
         .map_err(|error| format!("Timeline Follow output combine failed: {error:?}"))?;
     let mut faults = Vec::new();
     if let Some(error) = timeline_follow_render_fault("outgoing", &outgoing.evidence) {
@@ -1208,8 +1208,7 @@ impl SpoutRouteWorker {
                 engine,
                 worker_stop,
                 sender,
-                worker_teardown_lease,
-                worker_render_failure_lease,
+                (worker_teardown_lease, worker_render_failure_lease),
                 move |follow_output_state| {
                     let project_render_epoch = render_engine.output_ownership_status().epoch;
                     let snapshot = render_engine.snapshot();
@@ -1542,20 +1541,25 @@ fn finish_spout_output_worker<S: SpoutOutputSender>(
     }
 }
 
+type SpoutLeaseSlots = (
+    Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
+    Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
+);
+
 fn run_spout_output_worker<S, R>(
     output_id: u64,
     sender_name: &str,
     engine: EngineHandle,
     worker_stop: Arc<AtomicBool>,
     mut sender: S,
-    teardown_lease_slot: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
-    render_failure_lease: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
+    lease_slots: SpoutLeaseSlots,
     mut render: R,
 ) -> Result<(), SpoutOutputWorkerStopError>
 where
     S: SpoutOutputSender,
     R: FnMut(&mut TimelineFollowOutputState) -> Result<TimelineFollowOutputRenderDecision, String>,
 {
+    let (teardown_lease_slot, render_failure_lease) = lease_slots;
     let target_interval = Duration::from_nanos(1_000_000_000 / 60);
     let mut worker_error = None;
     let mut failure_lease = None;
@@ -2440,8 +2444,7 @@ mod tests {
                 worker_engine,
                 worker_stop_for_thread,
                 sender,
-                worker_teardown_lease_slot,
-                render_failure_lease,
+                (worker_teardown_lease_slot, render_failure_lease),
                 move |_| match &render_error {
                     Some(error) => Err(error.clone()),
                     None => Ok(injected_spout_render_decision()),
@@ -2528,8 +2531,7 @@ mod tests {
                     worker_engine,
                     worker_stop,
                     sender,
-                    teardown_lease_slot,
-                    render_failure_lease.clone(),
+                    (teardown_lease_slot, render_failure_lease.clone()),
                     move |follow_output_state| {
                         let fault = "Spout output route 705 render failed: injected inner failure"
                             .to_string();
@@ -2694,8 +2696,7 @@ mod tests {
             engine.clone(),
             worker_stop,
             sender,
-            Arc::clone(&teardown_lease_slot),
-            Arc::new(Mutex::new(None)),
+            (Arc::clone(&teardown_lease_slot), Arc::new(Mutex::new(None))),
             |_| Ok(injected_spout_render_decision()),
         );
 
@@ -2739,8 +2740,7 @@ mod tests {
                 worker_engine,
                 worker_stop_for_thread,
                 sender,
-                worker_teardown_lease,
-                Arc::new(Mutex::new(None)),
+                (worker_teardown_lease, Arc::new(Mutex::new(None))),
                 |_| Ok(injected_spout_render_decision()),
             );
             if let Err(error) = &result {

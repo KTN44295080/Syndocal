@@ -243,3 +243,39 @@ show reuse while Art-Net/sACN traffic shares the wired network.
 Until the separately developed DJ-Link peer exposes the fixed contract and both builds
 pass the wired-LAN hardware matrix, this feature remains `Required / Peer and hardware
 pending`; Syndocal-side automated completion is not an end-to-end completion claim.
+
+## 2026-08-24 software/package checkpoint
+
+The separately developed DJ-Link peer package `1.1.0` is now committed and pushed
+on `Beta` at `6c4f4328a6866d9d48022bd8ee20a7887c9de851`. Its package/runtime checks passed:
+54 tests, 16 Node syntax checks, and zero warnings. The packaged
+`C:\Users\kouty\Desktop\rb-output\dist\server.exe` is SHA-256
+`339ECF6E82EB463F55977F63A137CB0CB52886CD7E2874E87F5AD4724234377B`. This
+closes only the peer software/package checkpoint; it does not promote any
+hardware or wired-LAN row.
+
+On the current Windows machine, rekordbox was not running and the Stream Deck
+Pedal was not detected during this checkpoint. The old peer process remained on
+UDP 22346/HTTP 8787; no production cutover was claimed, and the known Daslight
+and Ableton processes were left untouched. Syndocal's current alpha.8 native
+build/reload and completed five-display pane-route evidence are recorded
+separately in
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-display-route-current-source.json`
+(SHA-256 `41F1D6E2528E7439657F8879F753255221E25F2DF0474139B56C1570E2C32C41`);
+neither substitutes for the DJ/rekordbox/State Sync/Pedal matrix.
+
+The alpha.8 staged-source authority is
+`qa/artifacts/source-freeze/2026-08-24-alpha8-current-source-freeze.sha256`, with
+103 payload records and its own manifest envelope excluded to avoid recursive
+self-hashing. The alpha.7 pre-alpha.8 manifest is historical only. The display
+route accepts placement/maximize/containment only: all five pane captures still
+show the owner-registration status at six seconds, so transactional pane
+operation, warning-clean pane startup, and completed owner registration remain
+unaccepted alpha.9 work.
+
+Therefore the authoritative status remains `Required / Peer and hardware
+pending`. Still-open evidence includes wired-LAN HELLO/auth/session replacement,
+real Master playback and switch, absolute Loop divisions, Release, disconnect
+and reconnect State Sync, Pedal/global-hotkey input, app restart/next-show reuse,
+and concurrent Art-Net/sACN traffic. No DJ/Pedal completion claim is made and the
+KDMX accepted denominator remains 19/71 (26.8%).

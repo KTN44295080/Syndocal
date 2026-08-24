@@ -553,7 +553,7 @@ impl DecodedGuideAsset {
                 "Timeline Guide asset {key:?} has an invalid audio format"
             ));
         }
-        if samples.is_empty() || samples.len() % usize::from(channels) != 0 {
+        if samples.is_empty() || !samples.len().is_multiple_of(usize::from(channels)) {
             return Err(format!(
                 "Timeline Guide asset {key:?} has invalid interleaved PCM"
             ));
@@ -1469,10 +1469,9 @@ impl TimelineCueAudioControl {
                 authority.clock,
                 self.output_sample_rate,
             )
-            .map_err(|error| {
+            .inspect_err(|_error| {
                 self.shared
                     .record_fault(TimelineCueFaultCode::FrameMappingOverflow, event.sequence);
-                error
             })?;
             if last_output_frame.is_some_and(|last| output_frame < last)
                 || last_sequence.is_some_and(|last| event.sequence <= last)
@@ -1600,10 +1599,7 @@ impl TimelineCueAudioControl {
     }
 
     fn publish_gain_pair(&self, click_gain: f32, guide_gain: f32) -> Result<(), String> {
-        if let Err(error) = validate_mixer_headroom(click_gain, guide_gain, self.assets.peak_abs())
-        {
-            return Err(error);
-        }
+        validate_mixer_headroom(click_gain, guide_gain, self.assets.peak_abs())?;
         let sequence = self.shared.gain_sequence.load(Ordering::Acquire);
         if sequence & 1 != 0 {
             return Err("Timeline cue audio gain authority is being updated".to_string());

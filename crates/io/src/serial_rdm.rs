@@ -343,7 +343,7 @@ impl EnttecUsbProRdmController {
                 return Ok(DiscoveryProbe::Collision);
             }
             let response = &payload[1..];
-            if !response.iter().any(|byte| *byte == 0xaa) {
+            if !response.contains(&0xaa) {
                 continue;
             }
             return Ok(match crate::rdm::decode_discovery_response(response) {
@@ -462,7 +462,7 @@ fn advance_transaction_number(transaction_number: &mut u8) -> u8 {
 }
 
 fn serial_error_to_io(error: serialport::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, error.to_string())
+    io::Error::other(error.to_string())
 }
 
 #[cfg(test)]

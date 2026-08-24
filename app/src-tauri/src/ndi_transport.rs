@@ -222,10 +222,10 @@ enum TimelineFollowOutputRenderDecision {
 }
 
 #[cfg(any(feature = "ndi", test))]
-fn timeline_follow_output_config<'a>(
-    snapshot: &'a protocol::VideoSnapshot,
+fn timeline_follow_output_config(
+    snapshot: &protocol::VideoSnapshot,
     output_id: VideoOutputId,
-) -> Result<&'a protocol::VideoOutputSummary, String> {
+) -> Result<&protocol::VideoOutputSummary, String> {
     snapshot
         .outputs
         .iter()
@@ -355,16 +355,16 @@ fn render_timeline_follow_output<P: video::VideoFrameProvider>(
         .transpose()?;
 
     let combined = renderer
-        .render_follow_output_transition_rgba8(
-            &outgoing.frame,
-            &incoming.frame,
-            follow.kind,
-            follow.curve,
-            follow.progress_millis,
-            follow.source_timeline_id,
-            transition_chain.as_ref(),
-            state.last_valid(key),
-        )
+        .render_follow_output_transition_rgba8(video::VideoFollowOutputTransitionRequest {
+            outgoing: &outgoing.frame,
+            incoming: &incoming.frame,
+            kind: follow.kind,
+            curve: follow.curve,
+            progress_millis: follow.progress_millis,
+            source_timeline_id: follow.source_timeline_id,
+            transition_chain: transition_chain.as_ref(),
+            last_valid: state.last_valid(key),
+        })
         .map_err(|error| format!("Timeline Follow output combine failed: {error:?}"))?;
 
     let mut faults = Vec::new();

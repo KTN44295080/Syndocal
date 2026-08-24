@@ -889,7 +889,7 @@ mod tests {
         };
         assert!((radius(&segments[0]) - radius(&segments[1])).abs() > 1.0e-3);
         let unequal_arc_midpoint = path.sample(0.375);
-        assert!((unequal_arc_midpoint.x - 0.574_851_0).abs() < 2.0e-6);
+        assert!((unequal_arc_midpoint.x - 0.574_851).abs() < 2.0e-6);
         assert!((unequal_arc_midpoint.y - 0.953_897_36).abs() < 2.0e-6);
         for (index, point) in request.points.iter().enumerate() {
             let sampled = path.sample(index as f32 / request.points.len() as f32);
@@ -902,7 +902,7 @@ mod tests {
     fn circle_opposite_signed_curvature_uses_recovered_mirrored_half_arcs() {
         let mut request = request(vec![
             MovePathPoint {
-                x: 0.459_197_01,
+                x: 0.459_197,
                 y: 0.546_359_5,
             },
             MovePathPoint {

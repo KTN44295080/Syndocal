@@ -32,6 +32,54 @@ const nativeAcceptance = await readFile(
   new URL("./check-native-window-acceptance.ps1", import.meta.url),
   "utf8",
 );
+const appSourceFile = ts.createSourceFile(
+  "App.tsx",
+  app,
+  ts.ScriptTarget.ES2022,
+  true,
+  ts.ScriptKind.TSX,
+);
+const projectReadInitializationHelpers = [
+  "captureProjectAuthorityIdentity",
+  "isProjectAuthorityIdentityCurrent",
+  "beginProjectReadGeneration",
+  "captureProjectReadGuard",
+  "projectReadGuardIsCurrent",
+];
+const projectReadHelperDeclarations = new Map(
+  projectReadInitializationHelpers.map((name) => [name, []]),
+);
+const projectReadHelperCalls = new Map(
+  projectReadInitializationHelpers.map((name) => [name, []]),
+);
+const visitProjectReadInitialization = (node) => {
+  if (
+    ts.isVariableDeclaration(node)
+    && ts.isIdentifier(node.name)
+    && projectReadHelperDeclarations.has(node.name.text)
+  ) {
+    projectReadHelperDeclarations.get(node.name.text).push(node.getStart(appSourceFile));
+  }
+  if (
+    ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && projectReadHelperCalls.has(node.expression.text)
+  ) {
+    projectReadHelperCalls.get(node.expression.text).push(node.getStart(appSourceFile));
+  }
+  ts.forEachChild(node, visitProjectReadInitialization);
+};
+visitProjectReadInitialization(appSourceFile);
+for (const helper of projectReadInitializationHelpers) {
+  const declarations = projectReadHelperDeclarations.get(helper);
+  const calls = projectReadHelperCalls.get(helper);
+  assert.equal(declarations.length, 1, `${helper} must have exactly one lexical declaration`);
+  assert.ok(calls.length > 0, `${helper} must remain exercised by App`);
+  assert.ok(
+    declarations[0] < Math.min(...calls),
+    `${helper} must be initialized before every App call to prevent a native-startup TDZ`,
+  );
+}
 const mainRuntimeActiveStart = app.indexOf("  const mainRuntimeActive = (current: EngineSnapshot) => {");
 const protectedCloseRequestStart = app.indexOf(
   "  const protectedCloseRequestForCurrentState = (current: EngineSnapshot = latestEngineSnapshot): ProtectedCloseRequest | null => {",

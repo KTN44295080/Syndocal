@@ -5,7 +5,11 @@
 //! Tauri uses so a newly registered command is fail-closed as R5/Unavailable
 //! until an explicit, reviewed R0 classification is added here.
 
-use std::{collections::BTreeSet, fmt, sync::LazyLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::LazyLock,
+};
 
 use engine::control_plane_engine_command_descriptors;
 use io::{control_plane_midi_osc_dmx_descriptors, control_plane_remote_descriptors};
@@ -34,6 +38,7 @@ use protocol::control_plane_registry_v2::{
     TypedSchemaProjection,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const MAX_REGISTERED_OPERATIONS: usize = 2048;
 const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID: &str =
@@ -53,6 +58,599 @@ static VALIDATED_REGISTRY: LazyLock<Result<OperationRegistry, ControlPlaneRegist
 static VALIDATED_CANONICAL_REGISTRY: LazyLock<
     Result<CanonicalControlPlaneRegistry, ControlPlaneRegistryError>,
 > = LazyLock::new(build_canonical_registry);
+
+/// Server-side admission class for the exact production Tauri inventory.
+/// `None` is the fail-closed answer for every unregistered command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TauriRouteAdmissionClass {
+    ReadOnly,
+    RendererTicketedProjectMutation,
+    BackendAuthoritativeProjectMutation,
+    ProjectReplacement,
+    ProjectHistory,
+    RuntimeMutation,
+    FileExportMutation,
+    SafetyMutation,
+    RecoveryMaintenance,
+    Retired,
+}
+
+static TAURI_ROUTE_ADMISSION_CLASSES: LazyLock<
+    Result<BTreeMap<String, TauriRouteAdmissionClass>, ControlPlaneRegistryError>,
+> = LazyLock::new(|| {
+    let registered = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
+    let inventory_fingerprint = format!("{:x}", Sha256::digest(registered.join("\n").as_bytes()));
+    if registered.len() != 478
+        || inventory_fingerprint
+            != "79104a83edc9dd8608c29f2c99de26102fb0a107c19ea70e2c604a9ef03f7f7c"
+    {
+        return Err(ControlPlaneRegistryError::MissingRegistryDescriptor(
+            format!(
+                "D3 admission inventory changed (count {}, SHA-256 {inventory_fingerprint}); review every route class before admission",
+                registered.len(),
+            ),
+        ));
+    }
+    let mut classes = BTreeMap::new();
+    for command in registered {
+        let class = classify_registered_tauri_route(&command).ok_or_else(|| {
+            ControlPlaneRegistryError::MissingRegistryDescriptor(format!(
+                "D3 admission class is missing for registered Tauri command '{command}'"
+            ))
+        })?;
+        classes.insert(command, class);
+    }
+    Ok(classes)
+});
+
+pub fn tauri_route_admission_class(command: &str) -> Option<TauriRouteAdmissionClass> {
+    TAURI_ROUTE_ADMISSION_CLASSES
+        .as_ref()
+        .ok()?
+        .get(command)
+        .copied()
+}
+
+fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionClass> {
+    use TauriRouteAdmissionClass as Class;
+    let class = if matches!(
+        command,
+        "commit_prepared_media_asset_relink"
+            | "commit_prepared_media_assets"
+            | "commit_prepared_video_file_layer"
+            | "commit_prepared_still_image_layer"
+            | "commit_prepared_local_media_layers"
+            | "commit_prepared_bootstrap_vj_show"
+            | "load_phase1_sample_project"
+            | "run_phase1_smoke"
+            | "set_blackout"
+            | "set_all_blackout"
+            | "set_video_blackout"
+            | "set_video_output_blackout"
+            | "take_over_standby"
+            | "set_output_ownership_role"
+            | "arm_output_ownership_role"
+            | "load_effect_preset"
+            | "load_effect_preset_for_target"
+            | "load_sample_effect_preset"
+            | "load_sample_effect_bundle"
+            | "load_node_graph_preset_file"
+            | "save_node_graph"
+            | "remove_node_graph"
+            | "remove_cue_list"
+            | "add_timeline_cue_event"
+            | "reconform_timeline_to_bpm"
+            | "set_group_fixture_limits"
+            | "set_video_cue_point"
+            | "set_video_output_mapping_field"
+            | "apply_builtin_video_isf_effect"
+            | "apply_video_output_mapping_preset"
+    ) {
+        Class::Retired
+    } else if matches!(
+        command,
+        "new_project"
+            | "load_user_template"
+            | "load_project"
+            | "import_daslight_project"
+            | "import_daslight_project_with_result"
+            | "load_project_path"
+            | "load_project_backup"
+            | "load_startup_project"
+    ) {
+        Class::ProjectReplacement
+    } else if matches!(
+        command,
+        "clear_project_history" | "undo_project_transaction" | "redo_project_transaction"
+    ) {
+        Class::ProjectHistory
+    } else if matches!(command, "safety_blackout_engage_v1") {
+        Class::SafetyMutation
+    } else if matches!(
+        command,
+        "lock_project_operator_session"
+            | "unlock_project_operator_session"
+            | "adopt_project_publication_owner_v1"
+            | "get_project_publication_receipt_v1"
+            | "acknowledge_project_publication_receipt_v1"
+            | "abandon_project_publication_v1"
+            | "acknowledge_project_recovery_applied"
+            | "load_project_checkpoint"
+            | "begin_project_transaction"
+            | "commit_project_transaction"
+            | "cancel_project_transaction"
+            | "query_project_transaction"
+            | "adopt_project_transaction"
+            | "acknowledge_project_transaction"
+            | "register_project_transaction_owner"
+            | "start_media_asset_operation"
+            | "start_media_asset_availability_operation"
+            | "cancel_media_asset_operation"
+            | "get_media_asset_operation_terminal_result"
+            | "get_video_clip_slot_operation_terminal_result"
+            | "get_video_effect_catalog_operation_terminal_result"
+            | "get_timeline_advanced_operation_terminal_result"
+            | "get_timeline_follow_operation_terminal_result"
+            | "get_timeline_follow_runtime"
+            | "abort_timeline_follow"
+            | "abort_timeline_follow_runtime_v1"
+    ) {
+        Class::RecoveryMaintenance
+    } else if is_renderer_ticketed_project_mutation(command) {
+        Class::RendererTicketedProjectMutation
+    } else if is_backend_authoritative_project_mutation(command) {
+        Class::BackendAuthoritativeProjectMutation
+    } else if is_tauri_file_export_mutation(command) {
+        Class::FileExportMutation
+    } else if is_tauri_read_only_route(command) {
+        Class::ReadOnly
+    } else if is_tauri_runtime_mutation(command) {
+        Class::RuntimeMutation
+    } else {
+        return None;
+    };
+    Some(class)
+}
+
+fn is_tauri_file_export_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "install_application_update"
+            | "save_project_v1"
+            | "save_project_as_v1"
+            | "save_user_template_v1"
+            | "save_project_backup_v1"
+            | "import_video_output_bitmap_mask"
+            | "download_gdtf_from_url"
+            | "download_gdtf_from_share"
+            | "cache_gdtf_from_share"
+            | "save_custom_fixture_profile"
+            | "delete_project_backup"
+            | "export_diagnostic_package"
+            | "save_engine_telemetry_report"
+            | "save_effect_preset"
+            | "save_fixture_preset"
+            | "save_midi_mappings"
+            | "save_osc_mappings"
+            | "save_node_graph_preset_file"
+            | "save_stage_map_preset_file"
+            | "save_video_output_mapping_preset_file"
+    )
+}
+
+fn is_tauri_read_only_route(command: &str) -> bool {
+    matches!(
+        command,
+        "capture_pane_window_placements"
+            | "check_application_update"
+            | "dmx_input_status"
+            | "get_application_update_configuration"
+            | "get_control_plane_canonical_registry"
+            | "get_control_plane_operation_registry"
+            | "get_control_plane_query_capabilities"
+            | "get_control_plane_query_schema_catalog"
+            | "get_debug_video_output_preview"
+            | "get_debug_video_output_test_pattern"
+            | "get_debug_video_preview"
+            | "get_engine_telemetry_report"
+            | "get_external_video_io_plans"
+            | "get_external_video_transport_status"
+            | "get_fixture_groups"
+            | "get_fixture_profile_health"
+            | "get_live_audio_input_capabilities"
+            | "get_live_video_monitor_frame"
+            | "get_media_asset_preview_frame"
+            | "get_media_asset_thumbnail"
+            | "get_operator_policy"
+            | "get_operator_selection_context"
+            | "get_output_ownership_status"
+            | "get_project_authority_bundle"
+            | "get_project_checkpoint"
+            | "get_project_checkpoint_bundle"
+            | "get_project_control_mappings"
+            | "get_project_history_status"
+            | "get_project_recovery_authority_status"
+            | "get_snapshot"
+            | "get_snapshot_delta"
+            | "get_timeline_cue_audio_status"
+            | "get_video_clip_slot_runtime"
+            | "get_video_composition_plans"
+            | "get_video_layer_thumbnail"
+            | "get_video_layer_transition_runtime"
+            | "get_video_output_render_plans"
+            | "get_video_output_window_statuses"
+            | "get_video_preview_diagnostics"
+            | "get_video_runtime_status"
+            | "get_visualizer_external_model_assets"
+            | "get_visualizer_model_asset_cache_summary"
+            | "get_visualizer_model_render_plans"
+            | "get_visualizer_render_payload"
+            | "get_visualizer_resolved_render_payload"
+            | "get_visualizer_scene"
+            | "get_vj_preview_transport"
+            | "inspect_media_asset_availability"
+            | "inspect_reserved_media_asset_availability"
+            | "list_audio_input_devices"
+            | "list_audio_output_devices"
+            | "list_gdtf_fixture_cache"
+            | "list_midi_inputs"
+            | "list_midi_outputs"
+            | "list_project_backups"
+            | "list_serial_ports"
+            | "list_show_lan_interfaces"
+            | "list_verified_fixture_profiles"
+            | "list_video_display_monitors"
+            | "live_audio_input_backends"
+            | "live_audio_input_levels"
+            | "live_audio_input_status"
+            | "midi_feedback_status"
+            | "poll_control_plane_observation_events"
+            | "poll_project_authority_bundle"
+            | "preview_custom_fixture_profile"
+            | "query_control_plane_output_ownership"
+            | "query_control_plane_project_authority"
+            | "query_control_plane_runtime_generations"
+            | "query_display_add_lease_authority_v1"
+            | "query_output_control_authority_v1"
+            | "query_output_lease_authority_v1"
+            | "query_timeline_follow_abort_authority_v1"
+            | "query_timeline_transport_authority_v1"
+            | "remote_access_urls"
+            | "remote_control_status"
+            | "search_gdtf_share"
+            | "select_gdtf_file"
+            | "select_standby_sync_directory"
+            | "select_timeline_audio_clip_file"
+            | "select_video_isf_file"
+            | "select_video_source_file"
+            | "select_video_source_files"
+            | "standby_sync_status"
+            | "video_audio_monitor_status"
+            | "video_output_recording_status"
+    )
+}
+
+fn is_tauri_runtime_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "acquire_output_lease_v2"
+            | "add_display_output_v2"
+            | "add_local_media_layers"
+            | "add_still_image_layer"
+            | "add_video_file_layer"
+            | "analyze_timeline_audio_clip_path"
+            | "arm_output_control_v2"
+            | "begin_media_asset_preview"
+            | "bootstrap_vj_show"
+            | "cancel_queued_video_clip_slot_authoritative"
+            | "clear_cue_live_modifier"
+            | "clear_fixture_flags"
+            | "clear_programmer"
+            | "clear_vj_preview"
+            | "close_open_video_output_windows"
+            | "close_pane_window"
+            | "close_video_output_window"
+            | "connect_midi_clock"
+            | "connect_midi_control"
+            | "connect_midi_feedback"
+            | "create_custom_fixture_profile"
+            | "disconnect_midi_clock"
+            | "disconnect_midi_control"
+            | "disconnect_midi_feedback"
+            | "disconnect_remote_client"
+            | "discover_art_rdm_devices"
+            | "discover_usb_rdm_devices"
+            | "enable_output_control_v2"
+            | "end_media_asset_preview"
+            | "fade_video_layer_opacity"
+            | "finalize_prepared_media_asset_relink"
+            | "finalize_prepared_media_assets"
+            | "force_transfer_output_lease_v2"
+            | "import_gdtf"
+            | "jump_video_cue_point"
+            | "jump_video_cue_point_relative"
+            | "launch_video_clip_slot_authoritative"
+            | "launch_video_layer_transition_bus_authoritative"
+            | "learn_dmx_control"
+            | "learn_midi_control"
+            | "learn_osc_control"
+            | "load_custom_fixture_profile"
+            | "load_gdtf_model_file"
+            | "load_gdtf_wheel_media"
+            | "load_midi_mappings"
+            | "load_osc_mappings"
+            | "load_stage_map_preset_file"
+            | "load_verified_fixture_profile"
+            | "open_pane_window"
+            | "open_video_output_window"
+            | "play_video_layer_audio_monitor"
+            | "prepare_local_media_assets"
+            | "prepare_media_asset_relink"
+            | "prepare_reserved_media_asset_relink"
+            | "prepare_reserved_media_assets"
+            | "pulse_video_layer_isf_event"
+            | "queue_video_clip_slot_authoritative"
+            | "recover_output_lease_v2"
+            | "refresh_video_layer_metadata"
+            | "release_blackout_output_control_v2"
+            | "release_cue"
+            | "release_video_layer_transition_bus_authoritative"
+            | "relink_media_asset"
+            | "relinquish_output_lease_v2"
+            | "renew_output_lease_v2"
+            | "reset_engine_telemetry"
+            | "rotate_dj_link_token"
+            | "scale_timeline_loop"
+            | "seek_direct_child_timeline"
+            | "seek_timeline"
+            | "seek_timeline_beat"
+            | "seek_video_clip_slot_authoritative"
+            | "seek_vj_preview"
+            | "send_art_rdm_request"
+            | "send_dmx_routes_test_frame"
+            | "send_dmx_test_frame"
+            | "send_midi_feedback"
+            | "send_usb_rdm_request"
+            | "set_auto_vj_armed"
+            | "set_auto_vj_hold"
+            | "set_bpm"
+            | "set_cue_fade_paused"
+            | "set_cue_live_modifier"
+            | "set_direct_child_timeline_playing"
+            | "set_display_output_window_open_v2"
+            | "set_fixture_highlight"
+            | "set_fixture_park"
+            | "set_fixture_solo"
+            | "set_group_highlight"
+            | "set_group_park"
+            | "set_group_solo"
+            | "set_group_strobe"
+            | "set_group_submaster"
+            | "set_lighting_master"
+            | "set_machine_timeline_cue_audio_settings"
+            | "set_midi_feedback_auto"
+            | "set_operator_feature_fader"
+            | "set_operator_selection_context"
+            | "set_playback_executor_level"
+            | "set_playback_master"
+            | "set_program_audio_handoff_config"
+            | "set_programmer_attribute"
+            | "set_programmer_fixture_attribute_batch"
+            | "set_programmer_group_attribute"
+            | "set_programmer_mode"
+            | "set_timeline_loop_enabled"
+            | "set_timeline_playing"
+            | "set_timeline_transport_playing_runtime_v1"
+            | "set_video_layer_audio_monitor_volume"
+            | "set_video_master_opacity"
+            | "set_vj_preview_playing"
+            | "set_vj_preview_speed"
+            | "stage_vj_preview_layer"
+            | "start_art_rdm_full_discovery"
+            | "start_dmx_input"
+            | "start_live_audio_input"
+            | "start_osc_input"
+            | "start_remote_control"
+            | "start_standby_sync"
+            | "start_video_output_recording"
+            | "stop_dmx_input"
+            | "stop_live_audio_input"
+            | "stop_osc_input"
+            | "stop_remote_control"
+            | "stop_standby_sync"
+            | "stop_video_layer_audio_monitor"
+            | "stop_video_output_recording"
+            | "sync_ableton_link_clock"
+            | "sync_external_video_transports"
+            | "sync_ltc_timecode"
+            | "sync_open_video_output_windows"
+            | "sync_video_output_window"
+            | "take_open_project_paths"
+            | "take_over_output_control_v2"
+            | "tap_bpm"
+            | "trigger_cue"
+            | "trigger_cue_list_next"
+            | "trigger_cue_list_previous"
+            | "trigger_next_cue"
+            | "trigger_playback_executor"
+            | "trigger_previous_cue"
+            | "use_fixture_profile"
+    )
+}
+
+fn is_backend_authoritative_project_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "commit_prepared_media_assets_authoritative"
+            | "commit_prepared_media_asset_relink_authoritative"
+            | "commit_prepared_video_file_layer_authoritative"
+            | "commit_prepared_still_image_layer_authoritative"
+            | "commit_prepared_local_media_layers_authoritative"
+            | "commit_prepared_bootstrap_vj_show_authoritative"
+            | "create_video_clip_slot_authoritative"
+            | "assign_video_clip_slot_asset_authoritative"
+            | "update_video_clip_slot_authoritative"
+            | "remove_video_clip_slot_authoritative"
+            | "reorder_video_clip_slots_authoritative"
+            | "duplicate_video_clip_slot_authoritative"
+            | "set_default_video_clip_slot_authoritative"
+            | "import_and_assign_video_clip_slots_authoritative"
+            | "apply_video_effect_catalog_authoritative"
+            | "apply_timeline_advanced_authoritative"
+            | "set_project_control_mappings"
+            | "set_video_layer_isf_effect"
+            | "add_video_layer_isf_effect"
+            | "add_builtin_video_isf_effect"
+            | "move_video_layer_isf_effect"
+            | "remove_video_layer_isf_effect"
+            | "set_video_layer_isf_effect_enabled"
+            | "reset_video_layer_isf_effect"
+            | "set_video_layer_isf_control"
+            | "set_effect_enabled"
+            | "create_empty_cue"
+            | "delete_cue_list"
+            | "reorder_cue_lists"
+    )
+}
+
+fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
+    matches!(
+        command,
+        "analyze_audio_file"
+            | "clear_timeline_audio"
+            | "add_timeline_audio_clip"
+            | "update_timeline_audio_clip"
+            | "remove_timeline_audio_clip"
+            | "set_timeline_audio_master"
+            | "set_timeline_metronome"
+            | "patch_fixtures"
+            | "remove_fixture"
+            | "repair_fixture_profile"
+            | "set_fixture_patch"
+            | "set_fixture_limits"
+            | "set_fixture_groups"
+            | "create_fixture_group"
+            | "rename_fixture_group"
+            | "recolor_fixture_group"
+            | "delete_fixture_group"
+            | "undo_delete_fixture_group"
+            | "set_attribute"
+            | "set_fixture_attribute_batch"
+            | "set_group_attribute"
+            | "commit_programmer"
+            | "set_fixture_transform"
+            | "set_stage_map_config"
+            | "set_output_config"
+            | "set_dmx_outputs"
+            | "create_cue_from_current"
+            | "create_cue_list"
+            | "rename_cue_list"
+            | "set_cue_list"
+            | "create_reference_palette"
+            | "update_reference_palette"
+            | "remove_reference_palette"
+            | "apply_reference_palette"
+            | "set_cue_palette_targets"
+            | "create_playback_executor"
+            | "update_playback_executor"
+            | "remove_playback_executor"
+            | "update_cue_from_current"
+            | "update_cue_from_current_batch"
+            | "set_cue_effect_targets"
+            | "add_cue_owned_effect"
+            | "set_cue_metadata"
+            | "set_cue_child_timeline"
+            | "set_cue_steps"
+            | "set_cue_color"
+            | "set_cue_live_modifier_defaults"
+            | "set_group_color"
+            | "move_cue"
+            | "move_cue_between_scene_banks_batch"
+            | "duplicate_cue"
+            | "remove_cue"
+            | "set_timeline_cue_event"
+            | "add_timeline_scene_block"
+            | "set_timeline_scene_block"
+            | "remove_timeline_scene_block"
+            | "snap_timeline_items"
+            | "remove_timeline_event"
+            | "add_timeline_layer"
+            | "update_timeline_layer"
+            | "remove_timeline_layer"
+            | "reorder_timeline_layers"
+            | "add_timeline_automation"
+            | "add_timeline_group_automation"
+            | "set_timeline_automation"
+            | "add_timeline_video_automation"
+            | "set_timeline_video_automation"
+            | "set_timeline_automation_enabled"
+            | "remove_timeline_automation"
+            | "add_video_input_layer"
+            | "duplicate_video_layer"
+            | "remove_video_layer"
+            | "set_video_layer_order"
+            | "set_video_layer_label"
+            | "set_video_layer_state"
+            | "launch_video_clip"
+            | "take_video_clip"
+            | "set_auto_vj_config"
+            | "set_video_ab_mix"
+            | "stop_video_clip"
+            | "add_video_cue_point"
+            | "remove_video_cue_point"
+            | "set_video_layer_blend_mode"
+            | "add_video_composition"
+            | "remove_video_composition"
+            | "set_video_composition_layers"
+            | "add_video_output"
+            | "remove_video_output"
+            | "set_video_output_config"
+            | "set_video_output_enabled"
+            | "set_video_output_routing"
+            | "set_video_output_opacity"
+            | "fade_video_output_opacity"
+            | "set_video_output_mapping"
+            | "save_video_output_mapping_preset"
+            | "remove_video_output_mapping_preset"
+            | "load_video_output_mapping_preset_file"
+            | "add_lfo_effect"
+            | "add_position_wave_effect"
+            | "add_color_effect"
+            | "add_chaser_effect"
+            | "add_move_effect"
+            | "add_value_effect"
+            | "add_curve_effect"
+            | "add_mapping_effect"
+            | "add_color_mapping_effect"
+            | "update_lfo_effect"
+            | "update_position_wave_effect"
+            | "update_color_effect"
+            | "update_chaser_effect"
+            | "update_move_effect"
+            | "update_value_effect"
+            | "update_curve_effect"
+            | "update_mapping_effect"
+            | "update_color_mapping_effect"
+            | "set_node_graph_enabled"
+            | "set_effect_video_target_position"
+            | "move_effect"
+            | "duplicate_effect"
+            | "remove_effect"
+            | "load_fixture_preset"
+            | "load_fixture_preset_for_group"
+            | "load_fixture_preset_for_all_matching"
+            | "save_stage_map_preset"
+            | "apply_stage_map_preset"
+            | "remove_stage_map_preset"
+            | "import_stage_map_preset"
+            | "add_stage_object"
+            | "set_stage_object"
+            | "remove_stage_object"
+            | "set_touch_surface"
+            | "set_operator_policy"
+            | "clear_operator_policy"
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlPlaneRegistryError {
@@ -240,7 +838,7 @@ fn build_canonical_registry() -> Result<CanonicalControlPlaneRegistry, ControlPl
         .operations
         .iter()
         .filter(|descriptor| descriptor.source_family == OperationSourceFamily::TauriCommand)
-        .filter_map(|descriptor| canonical_descriptor_for_source(descriptor))
+        .filter_map(canonical_descriptor_for_source)
         .collect::<Vec<_>>();
     canonical_operations.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
 
@@ -763,11 +1361,10 @@ fn canonical_descriptor_for_source(
         request_schema: descriptor.request_schema.clone(),
         response_schema: descriptor.response_schema.clone(),
         idempotency,
-        audit: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
-            OperationAuditRequirement::Immutable
-        } else if matches!(
+        audit: if matches!(
             reviewed,
-            ReviewedCanonicalOperation::ReleaseBlackout
+            ReviewedCanonicalOperation::EngageSafetyBlackout
+                | ReviewedCanonicalOperation::ReleaseBlackout
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
@@ -1141,7 +1738,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
 pub fn registered_tauri_command_names_from_source(
     source: &str,
 ) -> Result<Vec<String>, ControlPlaneRegistryError> {
-    const MARKER: &str = ".invoke_handler(tauri::generate_handler![";
+    const MARKER: &str = "tauri::generate_handler![";
     if source.match_indices(MARKER).count() > 1 {
         return Err(ControlPlaneRegistryError::MultipleHandlerMarkers);
     }
@@ -1151,10 +1748,15 @@ pub fn registered_tauri_command_names_from_source(
     let body_start = marker_offset + MARKER.len();
     let remainder = &source[body_start..];
     let body_end = remainder
-        .find("]) ")
+        .find("](invoke)")
+        .or_else(|| remainder.find("],\r\n"))
+        .or_else(|| remainder.find("],\n"))
+        .or_else(|| remainder.find("];"))
+        .or_else(|| remainder.find("]) "))
         .or_else(|| remainder.find("])\r\n"))
         .or_else(|| remainder.find("])\n"))
         .or_else(|| remainder.find("])"))
+        .or_else(|| remainder.find("\n]"))
         .ok_or(ControlPlaneRegistryError::HandlerClosingBracketMissing)?;
     let mut distinct = BTreeSet::new();
     let mut names = Vec::new();
@@ -1220,6 +1822,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tauri_route_admission_table_is_exact_and_fail_closed() {
+        let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
+        let mut counts = std::collections::BTreeMap::new();
+        for name in &names {
+            let class = tauri_route_admission_class(name)
+                .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
+            *counts.entry(class).or_insert(0usize) += 1;
+        }
+        assert_eq!(names.len(), 478);
+        assert_eq!(
+            counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
+            133
+        );
+        assert_eq!(
+            counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
+            29
+        );
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 86);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 142);
+        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
+        assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
+        assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 30);
+        assert_eq!(tauri_route_admission_class("patch_fixture"), None);
+        assert_eq!(
+            tauri_route_admission_class("future_unreviewed_mutation"),
+            None
+        );
+    }
+
+    #[test]
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
@@ -1238,8 +1873,8 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 476);
-        const ENGINE_COMMAND_COUNT: usize = 262;
+        assert_eq!(names.len(), 478);
+        const ENGINE_COMMAND_COUNT: usize = 263;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -1261,16 +1896,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 415;
+        const FRONTEND_INVOKE_COUNT: usize = 417;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            476 + ENGINE_COMMAND_COUNT
+            478 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1475);
+        assert_eq!(registry.operations.len(), 1480);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1280,7 +1915,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            463 + ENGINE_COMMAND_COUNT
+            465 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1311,7 +1946,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 463);
+        assert_eq!(tauri_unavailable.clone().count(), 465);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -1370,10 +2005,11 @@ mod tests {
             assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
             assert_eq!(descriptor.idempotency, OperationIdempotency::Mutating);
         }
-        for (source_id, semantic_operation_id) in [(
-            "query_output_control_authority_v1",
-            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-        )] {
+        {
+            let (source_id, semantic_operation_id) = (
+                "query_output_control_authority_v1",
+                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            );
             let descriptor = registry
                 .operations
                 .iter()
@@ -1573,19 +2209,19 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 476;
-        const ENGINE_COUNT: usize = 262;
+        const TAURI_COUNT: usize = 478;
+        const ENGINE_COUNT: usize = 263;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 415;
+        const FRONTEND_COUNT: usize = 417;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1475);
-        assert_eq!(SOURCE_TOTAL, 1508);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1480);
+        assert_eq!(SOURCE_TOTAL, 1513);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 31);
 
@@ -1734,10 +2370,11 @@ mod tests {
                 Some(operation_id)
             );
         }
-        for (source_id, operation_id) in [(
-            "query_output_control_authority_v1",
-            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-        )] {
+        {
+            let (source_id, operation_id) = (
+                "query_output_control_authority_v1",
+                OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            );
             let source = canonical
                 .source_inventory
                 .iter()
@@ -1893,7 +2530,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1057);
+        assert_eq!(unclassified.len(), 1060);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2529,11 +3166,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1475);
+        assert_eq!(legacy.operations.len(), 1480);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1475);
+        assert_eq!(operations.len(), 1480);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"
@@ -2663,8 +3300,7 @@ mod tests {
 
     #[test]
     fn duplicate_handler_command_is_rejected() {
-        let source =
-            ".invoke_handler(tauri::generate_handler![\n  get_snapshot,\n  get_snapshot,\n])";
+        let source = "tauri::generate_handler![\n  get_snapshot,\n  get_snapshot,\n]";
         assert_eq!(
             registered_tauri_command_names_from_source(source),
             Err(ControlPlaneRegistryError::DuplicateCommandName(
@@ -2693,7 +3329,7 @@ mod tests {
 
     #[test]
     fn multiple_production_handler_blocks_are_rejected() {
-        let source = ".invoke_handler(tauri::generate_handler![\n  get_snapshot,\n])\n.invoke_handler(tauri::generate_handler![\n  get_snapshot_delta,\n])";
+        let source = "tauri::generate_handler![\n  get_snapshot,\n]\ntauri::generate_handler![\n  get_snapshot_delta,\n]";
         assert_eq!(
             registered_tauri_command_names_from_source(source),
             Err(ControlPlaneRegistryError::MultipleHandlerMarkers)

@@ -2,7 +2,6 @@ import { createSignal, type Accessor, type Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type {
   DmxOutputConfig,
-  DmxTestFrameResult,
   EngineSnapshot,
   EngineTelemetryReport,
   SerialPortSummary,
@@ -82,56 +81,21 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const applyOutput = async () => {
-    try {
-      await options.invoke("set_output_config", { config: output() });
-      setDmxOutputRoutes((current) => [output(), ...current.slice(1)]);
-      if (isSerialDmxProtocol(output().protocol)) {
-        options.setMessage(`${outputProtocolLabel(output().protocol)} target ${output().serial_port} @ ${output().serial_baud_rate}`);
-      } else {
-        options.setMessage(
-          `${outputProtocolLabel(output().protocol)} target ${output().target_ip}:${output().port} universe ${output().universe}`,
-        );
-      }
-      await options.refreshSnapshot();
-    } catch (error) {
-      options.setMessage(String(error));
-    }
+    options.setMessage(
+      "DMX output configuration is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
+    );
   };
 
   const sendDmxTestFrame = async () => {
-    try {
-      const result = await options.invoke<DmxTestFrameResult>("send_dmx_test_frame", {
-        request: {
-          config: output(),
-          channel: dmxTestChannel(),
-          width: dmxTestWidth(),
-          value: dmxTestValue(),
-        },
-      });
-      options.setMessage(
-        `Sent ${outputProtocolLabel(result.protocol)} test U${result.universe} CH${result.channel} +${result.width} @ ${result.value} (${result.bytes} bytes)`,
-      );
-    } catch (error) {
-      options.setMessage(String(error));
-    }
+    options.setMessage(
+      "DMX test output is unavailable until a lease-bound OutputControl action is reviewed; no frame was sent.",
+    );
   };
 
   const sendDmxRoutesTestFrame = async () => {
-    const routes = [output(), ...dmxOutputRoutes().slice(1)];
-    try {
-      const results = await options.invoke<DmxTestFrameResult[]>("send_dmx_routes_test_frame", {
-        request: {
-          configs: routes,
-          channel: dmxTestChannel(),
-          width: dmxTestWidth(),
-          value: dmxTestValue(),
-        },
-      });
-      const bytes = results.reduce((sum, result) => sum + result.bytes, 0);
-      options.setMessage(`Sent test frame to ${results.length} DMX route(s) (${bytes} bytes).`);
-    } catch (error) {
-      options.setMessage(String(error));
-    }
+    options.setMessage(
+      "DMX route test output is unavailable until a lease-bound OutputControl action is reviewed; no frames were sent.",
+    );
   };
 
   const dmxRouteLabel = (route: DmxOutputConfig) => isSerialDmxProtocol(route.protocol)
@@ -139,15 +103,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     : `${outputProtocolLabel(route.protocol)} ${route.target_ip}:${route.port} U${route.universe}`;
 
   const applyDmxOutputRoutes = async (routes: DmxOutputConfig[]) => {
-    try {
-      await options.invoke("set_dmx_outputs", { configs: routes });
-      setDmxOutputRoutes(routes);
-      setOutput(routes[0] ?? defaultOutput);
-      options.setMessage(`Applied ${routes.length} DMX output route(s).`);
-      await options.refreshSnapshot();
-    } catch (error) {
-      options.setMessage(String(error));
-    }
+    void routes;
+    options.setMessage(
+      "DMX output routes are unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
+    );
   };
 
   const applyCurrentDmxRoutes = async () => {

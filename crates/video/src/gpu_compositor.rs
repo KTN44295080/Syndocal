@@ -475,18 +475,18 @@ impl GpuCompositor {
                     contents: &[0; 4],
                     usage: wgpu::BufferUsages::STORAGE,
                 });
-            let params = compositor_params(
-                width,
-                height,
-                frame.width,
-                frame.height,
-                layer.opacity.clamp(0.0, 1.0),
-                blend_mode_index(&layer.blend_mode),
-                texture_spec.source_format,
-                &layer.transform,
-                &layer.color,
-                &layer.fx,
-            );
+            let params = compositor_params(CompositorParams {
+                output_width: width,
+                output_height: height,
+                source_width: frame.width,
+                source_height: frame.height,
+                opacity: layer.opacity.clamp(0.0, 1.0),
+                blend_mode: blend_mode_index(&layer.blend_mode),
+                source_format: texture_spec.source_format,
+                transform: &layer.transform,
+                color: &layer.color,
+                fx: &layer.fx,
+            });
             let params_buffer = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -722,18 +722,32 @@ pub(crate) fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
     }
 }
 
-pub(crate) fn compositor_params(
-    output_width: u32,
-    output_height: u32,
-    source_width: u32,
-    source_height: u32,
-    opacity: f32,
-    blend_mode: u32,
-    source_format: u32,
-    transform: &Transform2D,
-    color: &VideoColorAdjust,
-    fx: &VideoFxAdjust,
-) -> [u8; 128] {
+pub(crate) struct CompositorParams<'a> {
+    pub output_width: u32,
+    pub output_height: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub opacity: f32,
+    pub blend_mode: u32,
+    pub source_format: u32,
+    pub transform: &'a Transform2D,
+    pub color: &'a VideoColorAdjust,
+    pub fx: &'a VideoFxAdjust,
+}
+
+pub(crate) fn compositor_params(params: CompositorParams<'_>) -> [u8; 128] {
+    let CompositorParams {
+        output_width,
+        output_height,
+        source_width,
+        source_height,
+        opacity,
+        blend_mode,
+        source_format,
+        transform,
+        color,
+        fx,
+    } = params;
     let color = sanitize_color_adjust(*color);
     let fx = sanitize_fx_adjust(*fx);
     let crop_left = transform.crop_left.clamp(0.0, 1.0);

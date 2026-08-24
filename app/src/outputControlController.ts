@@ -359,7 +359,20 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
   }
 };
 
-const commandForAction = (action: OutputControlOperationAction): string => {
+type OutputControlInvokeCommand =
+  | "enable_output_control_v2"
+  | "arm_output_control_v2"
+  | "release_blackout_output_control_v2"
+  | "take_over_output_control_v2"
+  | "add_display_output_v2"
+  | "set_display_output_window_open_v2"
+  | "acquire_output_lease_v2"
+  | "renew_output_lease_v2"
+  | "recover_output_lease_v2"
+  | "relinquish_output_lease_v2"
+  | "force_transfer_output_lease_v2";
+
+const commandForAction = (action: OutputControlOperationAction): OutputControlInvokeCommand => {
   switch (action.kind) {
     case "enable_output": return "enable_output_control_v2";
     case "arm": return "arm_output_control_v2";
@@ -847,7 +860,7 @@ const executeOutputControlOperation = async (
     request: { operation_id: operationId, request_id: requestId, expected_fence: authority.fence, action },
   });
   let terminal: unknown;
-  const command = commandForAction(action) as Parameters<FrontendTauriInvoke>[0];
+  const command = commandForAction(action);
   try {
     terminal = await invoke<unknown>(command, executeArgs);
   } catch (firstError) {

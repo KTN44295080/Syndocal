@@ -43,7 +43,8 @@ assert.match(fixturePanelSource, /aria-rowcount=\{props\.fixtures\.length\}/);
 const cuePanelSource = await readFile(new URL("../src/components/CueManagementPanel.tsx", import.meta.url), "utf8");
 assert.match(cuePanelSource, /cuesPerPage\s*=\s*12/);
 assert.match(cuePanelSource, /<For each=\{visibleCues\(\)\}>/);
-assert.match(cuePanelSource, /aria-setsize=\{props\.cues\.length\}/);
+assert.match(cuePanelSource, /setStableCues\(reconcile\(props\.cues, \{ key: "id" \}\)\)/);
+assert.match(cuePanelSource, /aria-setsize=\{stableCues\.length\}/);
 
 const chaserEditorSource = await readFile(new URL("../src/components/ChaserEffectEditorPanel.tsx", import.meta.url), "utf8");
 assert.match(chaserEditorSource, /chaserStepsPerPage\s*=\s*8/);

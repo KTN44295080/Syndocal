@@ -4,7 +4,7 @@
 > requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
 > roll-up, and Media A1 resume instructions are historical. Use
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.7` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
+> `1.2.0-alpha.8` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
 > workflow. Do not compare old and current percentages without identical denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
@@ -2304,3 +2304,213 @@ The next dependency-ordered completion work is physical multi-display VJ, DMX,
 MIDI, DJ Link plus Stream Deck Pedal, audible click/Guide, the remaining ASIO
 matrix/licensing/fault paths, and the integrated long soak. This checkpoint does
 not advance those hardware denominators or claim whole-product completion.
+
+## 37. 2026-08-23 intentional pause and exact resume point
+
+The exhaustive remaining-task inventory and dependency-ordered resume sequence are
+in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. It supersedes conversational status
+for the current dirty tree. Resume with the DJ transport fixed-hash review and
+integrated D3 gates; do not build alpha.8 or touch hardware before those are green.
+The accepted denominator remains 19/71 (26.8%).
+
+## 38. 2026-08-24 pre-alpha.8 software/source closure checkpoint
+
+Branch `codex/syndocal-v1.2` remains based at
+`23f350c366ede2fdffcfbf3232e18112eada51ea`; product metadata is still
+`1.2.0-alpha.7`. D3 is now accepted at the software/source boundary. Its final
+fixed-hash review returned P0 0 / P1 0 / release-blocking P2 0, with full Engine
+822 passed / 2 ignored, I/O 148 passed / 1 ignored, and Syndocal no-default 951
+passed / 5 ignored. The frozen source hashes are main
+`2CC94D3E5307E6BBC026F1EC815ABC02BFF47E987D62526446AFD1059984E6C7`, Engine
+`F2DCE4D4F6E4B9CA4E15DB722608461D9D0ADBD9948FB41D5796FD4B94E1B2F7`, and I/O
+`E552FEA70D017BBAE40B534A6D854BE1C1B20AFFE111B9E733E0C19FA7A1E8B4`.
+
+The Tauri flat-payload adapter covers 51 commands (39 common + 11 video + 1
+repair) with six passing focused tests and fail-closed Raw/invalid-body handling.
+The warning-ratchet library/test hashes are
+`55D2388C3EA244F3C58B207E651E56F33DB10B6E76BD404A2943497E384926AA` and
+`3391F2F149ADCED3B5641E48E326680686B8D243389EAFC7E2DCC3799AEA7E55`;
+independent review found no release-blocking issue and the exercised warning counts
+are total/first-party 0/0.
+
+The frozen frontend chain passed routing 133/29/33/402, 417 invokes, backend
+478/311/133, project transaction/authority, E3/E4, output ownership/control/runtime,
+the Scene Matrix strip plus full five-viewport matrix, DVC DMX 35 assertions,
+localization 3556/3556, and worktree/cached diff checks. The Scene Matrix test now
+measures Playback Executor Bank labels on the actual Live/Playback surface instead
+of the intentionally unmounted Edit surface; both it and the DVC DMX strengthening
+received fixed-hash reviews without a release-blocking finding.
+
+The companion DJ Agent `Beta` commit
+`6c4f4328a6866d9d48022bd8ee20a7887c9de851` is pushed and clean with 54 tests,
+16 syntax checks, zero warnings, and packaged `server.exe` SHA-256
+`339ECF6E82EB463F55977F63A137CB0CB52886CD7E2874E87F5AD4724234377B`.
+This does not accept physical rekordbox/DJ Link/State Sync/Pedal operation.
+
+The accepted denominator remains exactly 19/71 (26.8%): no source-only result is
+promoted to native or physical acceptance. The intended source manifest is
+`qa/artifacts/source-freeze/2026-08-24-alpha7-pre-alpha8-source-freeze.sha256`.
+Next is one synchronized alpha.8 version change plus `check:release`, then the exact
+native/WER/reload, current-PC hardware, ASIO/DJ, and one-hour soak gates.
+
+## 39. 2026-08-24 Step 6 alpha.8 product-metadata checkpoint
+
+The current product train is now `1.2.0-alpha.8` at all 20 authoritative
+locations. An exact coordinate audit passed 20/20 while retaining the historical
+alpha.7 evidence. Release metadata, the eight-assertion Tauri build-wrapper gate,
+and locked Cargo metadata passed; all eight first-party workspace packages resolve
+to `1.2.0-alpha.8`. The Windows frontend TypeScript/Vite warning ratchet also
+rebuilt successfully with total/first-party/third-party warnings 0/0/0 and all
+three output markers present.
+
+This is a product-metadata-only checkpoint. No project/schema/API/ABI boundary
+changed, no native alpha.8 executable has yet been built or launched, and no
+WER/reload, display, physical hardware, ASIO/DJ, or soak row is inferred. The
+accepted denominator remains exactly 19/71 (26.8%); next is the required exact-path
+native build and native/physical acceptance sequence.
+
+## 40. 2026-08-24 alpha.8 native crash-closure checkpoint
+
+The branch remains `codex/syndocal-v1.2` at base HEAD
+`23f350c366ede2fdffcfbf3232e18112eada51ea`. Product metadata is
+`1.2.0-alpha.8`, synchronized at 20/20 authoritative points. The frozen frontend
+chain is 25/25 green; final checker
+`app/scripts/check-viewport-containment.mjs` is
+`E0FA2A5E0FA27A97CCCDCAE842BF6E6104270E85EBE8C1BE4FA572FE41915118`, with Gate
+12 and Gate 13 passing twice across all five viewports. Independent Sol review is
+P0=0/P1=0/release-blocking P2=0. The App TDZ repair and native reload harness
+hashes are `E62439B070BC210CDE4FE08DBDBAABBEF3E16C738A14F3925B3D9DB9AB60F241`
+and `BBFDF9D65742964625DF127D581AA78E54F7B6638DCED67CCD08ADBFADBB2E42`.
+
+Native build attempt 1 at 10:20 failed because Cargo selected
+`C:\Program Files\Git\usr\bin\link.exe` despite the parent PATH showing MSVC;
+this was a toolchain-selection failure before source compilation, not a source
+failure. Setting `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to the absolute
+VS2022 14.43.34808 linker fixed it. The required
+`pnpm --dir app tauri build --no-bundle` passed in 4m09s with zero
+warning-shaped lines. The 57,491,456-byte alpha.8 executable hash is
+`86423537C3F1DC8B3BBD602E7CC51F58F63DBC4CA05AEE2DAA3BCA485E8F6882`; its
+19,582,976-byte PDB hash is
+`776DB6E8099DA6F996E2411CD81F3DDB1D3112EF09B9587582E9D352595A451B`.
+FileVersion and ProductVersion both read `1.2.0-alpha.8`.
+
+Launch produced exact PID `126188`, exactly one responsive maximized Syndocal
+window at 1920x1032, and CDP port 9333. With WER baseline
+`2026-08-24 10:27:02 JST`, the fixed harness artifact
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-final/native-reload-stress-100.json`
+(`99694A08414B52C8C35B567146E3E98006EF8BD2FF81CF1ED835F6B5697C004D`) passed
+100/100 reloads, 100 unique origins, exit 0, total 45.884s, min 319ms, p50
+439.1ms, p95 595.7ms, max 717.3ms, runtime exceptions 0, and log issues 0.
+Only the two expected Tauri reload warning messages appeared (2,134 each).
+Post-run PID/window responsiveness remained intact; WER Event and Reliability
+deltas were zero. The measured process snapshot was WS 83,218,432 bytes, private
+52,027,392 bytes, 538 handles, and 48 threads.
+
+Five active physical displays are confirmed. D3 `MSI MPG321UX OLED` is the
+physical 3840x2160 4K display and is logically 2560x1440 at 150% scaling. The
+required native route `D5 -> D2 -> D3 -> D1 -> D6` remains open. Daslight PID
+72476/UDP 6454 and Ableton PID 103764/UDP 20909 were not touched. DJ/rekordbox,
+physical MIDI/Pedal, ASIO, fault/recovery matrices, and one-hour soak remain
+pending or fail-closed where not physically proven; this checkpoint does not
+advance the 19/71 denominator to whole-product completion.
+
+The disk audit measured 343.777 GiB for the workspace, 343.04 GiB for `target`,
+238.15 GiB for `target/debug` (149 GiB incremental), and 90.36 GiB for the old
+named QA target. No cleanup was performed. If subsequent source/document changes
+invalidate the frozen frontend evidence, rerun the final frontend chain; otherwise
+the next actions are checkpoint commit/push and verified five-display native UI
+acceptance. Full hardware, ASIO, DJ, release, and soak claims remain gated.
+
+## 41. 2026-08-24 alpha.8 current-source build/reload and physical-route checkpoint
+
+The current branch is `codex/syndocal-v1.2` at pre-commit base HEAD
+`23f350c366ede2fdffcfbf3232e18112eada51ea`, with product metadata synchronized
+at `1.2.0-alpha.8`. The current-source final frontend chain is 25/25 green in
+`target/qa/alpha8-current-source-final-gates-20260824-114918`; the independent
+fixed-hash review is P0=0/P1=0/release-blocking P2=0. Current source identifiers
+are CSS `4974a2f828b8b8bd1c9fbe43390d97d5d6702179`, upper-workspace checker
+`73a43ecfb2c6f10c07fb638f84f50375de5213a0`, and Scene Matrix checker SHA-256
+`F164CD5B5C6C130E1D27B21C6A04CB1C361CEE3346F08FA9DFF77DE522C5FE11`. Exercised
+warning counts are total/first-party/third-party 0/0/0.
+
+The authoritative staged-source inventory is
+`qa/artifacts/source-freeze/2026-08-24-alpha8-current-source-freeze.sha256`.
+It contains 103 payload records and excludes only its own manifest envelope from
+the payload to avoid recursive self-hashing. The alpha.7 pre-alpha.8 manifest is
+retained as historical evidence and is not current alpha.8 source authority.
+
+The exact required native command, run from the Visual Studio Developer Shell,
+was `pnpm --dir app tauri build --no-bundle`; it passed using MSVC
+14.43.34808/Windows SDK 10.0.26100.0. The current
+`target/release/syndocal.exe` is 57,491,456 bytes, SHA-256
+`627BE88032774C7FA0A4C3CD3510A7BFB52E8ED0E76884ADD414B9BFD101F459`, and both
+file/product versions are alpha.8. The matching PDB is 19,582,976 bytes,
+SHA-256 `5548E4F4B2C3CBB38F1881AAA6C9299AE42211616A8A05E9189C3019838F56AB`.
+Launch verification found exactly one responsive maximized Syndocal window from
+the exact checkout executable.
+
+The current-source reload artifact is
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-reload-stress-100-current-source.json`,
+SHA-256 `6D12AA14371B1C837DF67DDE80AB44CB1C6B1329F093567B81524E35076FB621`:
+100/100 reloads, 100 unique origins, exit 0, total 40.1424 s, min 232.5 ms,
+p50 407.3 ms, p95 479 ms, max 530.1 ms, runtime/log issues 0, and WER
+Application Error/Reliability deltas 0. The earlier
+`2026-08-24-alpha8-final` evidence remains immutable historical pre-CSS output;
+the current-source evidence is under `2026-08-24-alpha8-current-source-final`.
+
+The native five-display pane route is complete via the supported
+`open_pane_window` placement path: `D5 -> D2 -> D3 -> D1 -> D6`. Every pane was
+maximized and each step recorded zero document scroll. Measurements and exact
+positions are D5 monitor 1920x1080/scale 1.5/viewport 1280x650 at `{-2465,1731}`;
+D2 1920x1080/scale 1/viewport 1920x1009 at `{0,0}`; D3 real physical
+3840x2160 4K/scale 1.5/viewport 2560x1370 at `{-3840,-429}`; D1 2560x1440/
+scale 1.25/viewport 2048x1082 at `{1920,-364}`; and D6 2560x720/scale 1/
+viewport 2560x649 at `{1598,1080}`.
+
+Current-source evidence under
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final`
+is `D5-timeline-pane-route.jpg` SHA-256
+`37EDB56EA3F81BA014C23A96A1C78F32EEBB68C6B3E4C3D7C6692FD30E2FD0E1`,
+`D2-timeline-pane-route.jpg` SHA-256
+`0A037F7E6359FBC22C1FC16F297D9A3860157544777764679FABD2C194C20CFD`,
+`D3-4K-timeline-pane-route.jpg` SHA-256
+`55E83F6AFC32A32DD9BD5AAB187DA659DC0221DB0EF82EAEAA65215327F591CD`,
+`D1-timeline-pane-route.jpg` SHA-256
+`C22918826714D16E0E02DB5190AFB1E2724CEB387943A0D3FA4FABCDE5DD645E`, and
+`D6-timeline-pane-route.jpg` SHA-256
+`2336172DB637B9E4F9D4906B3E7D6D781408CD0A4B11D18229974FC92E820340`.
+The canonical machine-readable route record is
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-display-route-current-source.json`,
+SHA-256 `41F1D6E2528E7439657F8879F753255221E25F2DF0474139B56C1570E2C32C41`.
+The expanded D5 evidence `D5-timeline-tools-expanded-fixed.jpg` has SHA-256
+`B780CD4CCDA35CC8A8F1148A64B26C91065EB15E33D57A38FDCC04F8B0A3724D` and
+records native popup client/scroll 345/345, nested surfaces 335/335, and the
+deepest 44px target inside the viewport/popup with hit/focus proof and Escape
+focus return. The pane was closed afterward; final verification had one exact
+responsive PID 123952, CDP page 1, and a maximized D5 main viewport of 1280x672.
+
+All five detached Timeline pane screenshots still show the non-secret status six
+seconds after each pane opened:
+`Window 'pane-timeline' has no current project transaction owner registration`.
+At the same six-second point, `get_project_authority_bundle` from the pane succeeds
+with epoch 0/revision 1, but that separate read does not prove transaction-owner
+registration or make the persisted status stale. This evidence accepts placement,
+maximize, and containment only; it does not accept transactional pane operation,
+warning-clean pane startup, or completed owner registration. The main D5 Timeline
+Tools proof remains clean. Keep the owner-registration ordering/status behavior as
+an alpha.9 P1 investigation boundary rather than promoting it to an accepted row.
+
+This closes native multi-display pane placement/containment only. It does not
+claim display-output playback, fullscreen playback, GPU reset/recovery, physical
+DJ Link/rekordbox, Stream Deck Pedal/MIDI, ASIO, real DMX, fault/recovery
+matrices, or integrated one-hour soak; the accepted denominator remains exactly
+19/71 (26.8%).
+
+The non-destructive capacity audit measured about 343.777 GiB for the workspace,
+343.04 GiB for `target`, 238.15 GiB for `target/debug` including about 149 GiB
+incremental, and 90.36 GiB for the old named QA target directories. The
+`.claude/worktrees` copies are only about 5.3 MiB each and `vendor` is about
+0.29 MiB, so the size is overwhelmingly generated Rust build and QA cache output,
+not historical source/worktree copies. No cleanup was performed because the
+deletion/rebuild-cost tradeoff was not authorized; generated `target` remains
+excluded from Git.

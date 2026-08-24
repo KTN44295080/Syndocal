@@ -214,6 +214,15 @@ pub const SUPPORTED_EFFECT_ENVELOPE_HZ: u32 = 44;
 /// to admit the replacement snapshot. Once admitted, the caller waits for the
 /// definitive publication acknowledgement rather than synthesizing a timeout.
 pub const PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+/// Maximum caller-side admission wait for a DJ Link transport mutation. Once
+/// the worker admits the command, the caller waits for its definitive
+/// publication/rollback ACK instead of returning a timeout that could race a
+/// late physical mutation.
+pub const DJ_LINK_ENGINE_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+/// Shared DJ publication resources are acquired only through bounded
+/// cancellation-aware try-write loops.  This leaves the remainder of the
+/// listener's four-second retirement budget for caller and worker teardown.
+const DJ_LINK_PUBLICATION_RESERVATION_BUDGET: Duration = Duration::from_millis(5);
 
 /// Published click metadata for the next native audio-bus tranche.  This
 /// module intentionally does not synthesize or open an audio device.
@@ -358,11 +367,7 @@ impl TimelineTempoMeterAuthority {
                 return Ok(point.bpm);
             };
             if quarter_beat < timeline_point_quarter_beats(next)? {
-                return Ok(interpolate_timeline_bpm(
-                    point,
-                    next,
-                    quarter_beat - position,
-                )?);
+                return interpolate_timeline_bpm(point, next, quarter_beat - position);
             }
             previous_position = position;
             previous_bpm = point.bpm;
@@ -533,7 +538,8 @@ impl TimelineTempoMeterAuthority {
         sample_rate: u32,
         lookahead_frames: u64,
     ) -> Result<bool, String> {
-        let schedule = |authority: &Self| -> Result<Vec<(u64, u64, u16, u8, u8)>, String> {
+        type TimelineClickScheduleEntry = (u64, u64, u16, u8, u8);
+        let schedule = |authority: &Self| -> Result<Vec<TimelineClickScheduleEntry>, String> {
             let position_seconds = position_ms as f64 / 1_000.0;
             let start_quarter = authority.quarter_beat_at_seconds(position_seconds)?;
             let start_frame = authority.sample_frame_at_quarter_beat(start_quarter, sample_rate)?;
@@ -875,6 +881,12 @@ pub struct TimelineClickScheduler {
     count_in_active: bool,
     last_position_units: Option<u64>,
     overflow: Option<String>,
+}
+
+impl Default for TimelineClickScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TimelineClickScheduler {
@@ -1420,6 +1432,21 @@ impl OutputOwnershipGate {
                     "Output ownership gate lock was poisoned".to_string(),
                 )
             })
+    }
+
+    pub fn try_status(&self) -> Option<OutputOwnershipStatus> {
+        match self.inner.state.try_lock() {
+            Ok(state) => Some(state.status.clone()),
+            Err(std::sync::TryLockError::Poisoned(_)) => Some(OutputOwnershipStatus::failed(
+                MachineOutputRole::Standby,
+                None,
+                0,
+                0,
+                OutputOwnershipReason::TransitionFailed,
+                "Output ownership gate lock was poisoned".to_string(),
+            )),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
     }
 
     pub fn acquire(&self, capability: OutputCapability) -> Result<OutputOwnershipPermit, String> {
@@ -2369,21 +2396,588 @@ enum ProjectSnapshotLoadAdmissionState {
     Cancelled,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DjLinkCommandReceiptState {
+    Queued,
+    Admitted,
+    Planning,
+    ResourcesReserved,
+    Committing,
+    Cancelled,
+    Finished(Result<(), String>),
+}
+
+/// DJ Link's caller/worker receipt is separate from the legacy project-load
+/// admission. `Planning` may hold a provisional worker-local B image and
+/// `ResourcesReserved` owns every shared publication guard, but both remain
+/// cancellable. The receipt mutex stays held from the `Committing`
+/// linearization point through the prepared-image swaps and `Finished`, so a
+/// caller can never observe an open-ended committed state or synthesize a
+/// timeout over B.
+struct DjLinkCommandReceipt {
+    state: Mutex<DjLinkCommandReceiptState>,
+    /// A second, prebuilt view of the exact image installed at commit. It is
+    /// prepared while the receipt is still cancellable, then read only after
+    /// `Finished(Ok)` so a production socket handler never has to reacquire
+    /// the shared snapshot lock after an accepted mutation.
+    committed_snapshot: Mutex<Option<Arc<EngineSnapshot>>>,
+    wake: Condvar,
+    #[cfg(test)]
+    test_hooks: DjLinkCommandTestHooks,
+}
+
+impl std::fmt::Debug for DjLinkCommandReceipt {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DjLinkCommandReceipt")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+type DjLinkCommandReceiptHandle = Arc<DjLinkCommandReceipt>;
+
+#[cfg(test)]
+type DjLinkPreCommitHook = Arc<dyn Fn() + Send + Sync>;
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct DjLinkCommandTestHooks {
+    admitted: Option<DjLinkPreCommitHook>,
+    planning: Option<DjLinkPreCommitHook>,
+    resources_reserved: Option<DjLinkPreCommitHook>,
+    commit_boundary: Option<DjLinkPreCommitHook>,
+}
+
+impl DjLinkCommandReceipt {
+    fn new() -> DjLinkCommandReceiptHandle {
+        Arc::new(Self {
+            state: Mutex::new(DjLinkCommandReceiptState::Queued),
+            committed_snapshot: Mutex::new(None),
+            wake: Condvar::new(),
+            #[cfg(test)]
+            test_hooks: DjLinkCommandTestHooks::default(),
+        })
+    }
+
+    #[cfg(test)]
+    fn new_with_pre_commit_hook(hook: DjLinkPreCommitHook) -> DjLinkCommandReceiptHandle {
+        Arc::new(Self {
+            state: Mutex::new(DjLinkCommandReceiptState::Queued),
+            committed_snapshot: Mutex::new(None),
+            wake: Condvar::new(),
+            test_hooks: DjLinkCommandTestHooks {
+                admitted: Some(hook),
+                ..DjLinkCommandTestHooks::default()
+            },
+        })
+    }
+
+    #[cfg(test)]
+    fn new_with_test_hooks(hooks: DjLinkCommandTestHooks) -> DjLinkCommandReceiptHandle {
+        Arc::new(Self {
+            state: Mutex::new(DjLinkCommandReceiptState::Queued),
+            committed_snapshot: Mutex::new(None),
+            wake: Condvar::new(),
+            test_hooks: hooks,
+        })
+    }
+
+    fn run_pre_commit_hook(&self) {
+        #[cfg(test)]
+        if let Some(hook) = &self.test_hooks.admitted {
+            hook();
+        }
+    }
+
+    fn run_planning_hook(&self) {
+        #[cfg(test)]
+        if let Some(hook) = &self.test_hooks.planning {
+            hook();
+        }
+    }
+
+    fn run_resources_reserved_hook(&self) {
+        #[cfg(test)]
+        if let Some(hook) = &self.test_hooks.resources_reserved {
+            hook();
+        }
+    }
+
+    fn try_admit_before(&self, deadline: Instant) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state != DjLinkCommandReceiptState::Queued {
+            return false;
+        }
+        if Instant::now() >= deadline {
+            *state = DjLinkCommandReceiptState::Cancelled;
+            self.wake.notify_all();
+            return false;
+        }
+        *state = DjLinkCommandReceiptState::Admitted;
+        self.wake.notify_all();
+        true
+    }
+
+    fn cancel_before_commit(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if matches!(
+            *state,
+            DjLinkCommandReceiptState::Queued
+                | DjLinkCommandReceiptState::Admitted
+                | DjLinkCommandReceiptState::Planning
+                | DjLinkCommandReceiptState::ResourcesReserved
+        ) {
+            *state = DjLinkCommandReceiptState::Cancelled;
+            self.wake.notify_all();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn begin_planning(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state != DjLinkCommandReceiptState::Admitted {
+            return false;
+        }
+        *state = DjLinkCommandReceiptState::Planning;
+        self.wake.notify_all();
+        true
+    }
+
+    /// Record that the worker owns every shared publication guard. The state
+    /// remains cancellable until `begin_commit` wins the receipt mutex.
+    fn reserve_resources(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state != DjLinkCommandReceiptState::Planning {
+            return false;
+        }
+        *state = DjLinkCommandReceiptState::ResourcesReserved;
+        self.wake.notify_all();
+        true
+    }
+
+    /// Cross the sole irreversible boundary while retaining the receipt lock.
+    /// The caller must already own every external publication guard and must
+    /// not acquire another lock before calling `finish_commit`.
+    fn begin_commit(&self) -> Option<std::sync::MutexGuard<'_, DjLinkCommandReceiptState>> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state != DjLinkCommandReceiptState::ResourcesReserved {
+            return None;
+        }
+        // Deterministic tests may pause after this worker has won the receipt
+        // mutex but strictly before the Committing state is installed. The
+        // production build has no callback here, and the Committing call
+        // graph below remains moves/assignments/atomics only.
+        #[cfg(test)]
+        if let Some(hook) = &self.test_hooks.commit_boundary {
+            hook();
+        }
+        *state = DjLinkCommandReceiptState::Committing;
+        Some(state)
+    }
+
+    /// Complete a commit without releasing the receipt mutex between the
+    /// prepared publication swaps and the definitive result.
+    fn finish_commit(
+        &self,
+        mut state: std::sync::MutexGuard<'_, DjLinkCommandReceiptState>,
+        result: Result<(), String>,
+    ) {
+        debug_assert!(matches!(*state, DjLinkCommandReceiptState::Committing));
+        *state = DjLinkCommandReceiptState::Finished(result);
+        self.wake.notify_all();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        matches!(
+            *self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            DjLinkCommandReceiptState::Cancelled
+        )
+    }
+
+    /// Store the already-built canonical response image before crossing the
+    /// commit boundary. The slot is receipt-private and cannot make B visible:
+    /// callers consult it only after the same receipt reaches Finished(Ok).
+    fn prepare_committed_snapshot(&self, snapshot: Arc<EngineSnapshot>) {
+        let mut committed_snapshot = self
+            .committed_snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        debug_assert!(committed_snapshot.is_none());
+        *committed_snapshot = Some(snapshot);
+    }
+
+    fn finish(&self, result: Result<(), String>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if matches!(*state, DjLinkCommandReceiptState::Cancelled) {
+            return;
+        }
+        if !matches!(*state, DjLinkCommandReceiptState::Finished(_)) {
+            *state = DjLinkCommandReceiptState::Finished(result);
+            self.wake.notify_all();
+        }
+    }
+
+    fn wait_for_result(
+        &self,
+        deadline: Instant,
+        timeout: Duration,
+        operation: &str,
+    ) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            match &*state {
+                DjLinkCommandReceiptState::Finished(result) => return result.clone(),
+                DjLinkCommandReceiptState::Cancelled => {
+                    return Err(format!(
+                        "{operation} acknowledgement timed out after {} ms before commit",
+                        timeout.as_millis()
+                    ));
+                }
+                DjLinkCommandReceiptState::Queued
+                | DjLinkCommandReceiptState::Admitted
+                | DjLinkCommandReceiptState::Planning
+                | DjLinkCommandReceiptState::ResourcesReserved => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        drop(state);
+                        if self.cancel_before_commit() {
+                            return Err(format!(
+                                "{operation} acknowledgement timed out after {} ms before commit",
+                                timeout.as_millis()
+                            ));
+                        }
+                        state = self
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        continue;
+                    }
+                    let (next_state, wait_result) = self
+                        .wake
+                        .wait_timeout(state, remaining)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state = next_state;
+                    if wait_result.timed_out()
+                        && matches!(
+                            *state,
+                            DjLinkCommandReceiptState::Queued
+                                | DjLinkCommandReceiptState::Admitted
+                                | DjLinkCommandReceiptState::Planning
+                                | DjLinkCommandReceiptState::ResourcesReserved
+                        )
+                    {
+                        drop(state);
+                        if self.cancel_before_commit() {
+                            return Err(format!(
+                                "{operation} acknowledgement timed out after {} ms before commit",
+                                timeout.as_millis()
+                            ));
+                        }
+                        state = self
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                }
+                DjLinkCommandReceiptState::Committing => {
+                    // Production commit retains this mutex until Finished, so
+                    // observing Committing proves the worker abandoned its
+                    // guard (for example by unwinding). There is no live
+                    // worker which can publish a late B after this result.
+                    return Err(format!(
+                        "{operation} acknowledgement failed: engine commit receipt was abandoned"
+                    ));
+                }
+            }
+        }
+    }
+
+    fn wait_for_result_with_snapshot(
+        &self,
+        deadline: Instant,
+        timeout: Duration,
+        operation: &str,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.wait_for_result(deadline, timeout, operation)?;
+        self.committed_snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                format!(
+                    "{operation} acknowledgement failed: committed snapshot receipt was missing"
+                )
+            })
+    }
+
+    #[cfg(test)]
+    fn wait_for_state(&self, expected: DjLinkCommandReceiptState, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while *state != expected {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next_state, wait_result) = self
+                .wake
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = next_state;
+            if wait_result.timed_out() && *state != expected {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Shared request state whose transition is the linearization point for a
 /// project snapshot load. The caller can cancel only `Queued`; the runtime
 /// can admit only `Queued` before its deadline. Whichever transition acquires
 /// the mutex first owns the request's outcome.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone)]
+struct ProjectSnapshotLoadPublicationBarrier {
+    state: Arc<Mutex<ProjectSnapshotLoadPublicationBarrierState>>,
+    wake: Arc<Condvar>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Default)]
+struct ProjectSnapshotLoadPublicationBarrierState {
+    entered: bool,
+    released: bool,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl std::fmt::Debug for ProjectSnapshotLoadPublicationBarrier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProjectSnapshotLoadPublicationBarrier(..)")
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ProjectSnapshotLoadPublicationBarrier {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Arc::new(Mutex::new(
+                ProjectSnapshotLoadPublicationBarrierState::default(),
+            )),
+            wake: Arc::new(Condvar::new()),
+        })
+    }
+
+    fn enter_and_wait(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.entered = true;
+        self.wake.notify_all();
+        while !state.released {
+            state = self
+                .wake
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    fn wait_until_entered(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !state.entered {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next_state, wait_result) = self
+                .wake
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = next_state;
+            if wait_result.timed_out() && !state.entered {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn release(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.released = true;
+        self.wake.notify_all();
+    }
+}
+
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct ProjectSnapshotLoadAdmission {
     state: Arc<Mutex<ProjectSnapshotLoadAdmissionState>>,
+    wake: Arc<Condvar>,
+    dj_link_receipt: Option<DjLinkCommandReceiptHandle>,
+    #[cfg(any(test, feature = "test-support"))]
+    publication_barrier: Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
 }
 
 impl ProjectSnapshotLoadAdmission {
     fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+            wake: Arc::new(Condvar::new()),
+            dj_link_receipt: None,
+            #[cfg(any(test, feature = "test-support"))]
+            publication_barrier: None,
         }
+    }
+
+    fn new_dj_link() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+            wake: Arc::new(Condvar::new()),
+            dj_link_receipt: Some(DjLinkCommandReceipt::new()),
+            #[cfg(any(test, feature = "test-support"))]
+            publication_barrier: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn new_with_publication_barrier(
+        publication_barrier: Arc<ProjectSnapshotLoadPublicationBarrier>,
+    ) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+            wake: Arc::new(Condvar::new()),
+            dj_link_receipt: None,
+            publication_barrier: Some(publication_barrier),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_dj_link_with_pre_commit_hook(hook: DjLinkPreCommitHook) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+            wake: Arc::new(Condvar::new()),
+            dj_link_receipt: Some(DjLinkCommandReceipt::new_with_pre_commit_hook(hook)),
+            #[cfg(any(test, feature = "test-support"))]
+            publication_barrier: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_dj_link_with_test_hooks(hooks: DjLinkCommandTestHooks) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+            wake: Arc::new(Condvar::new()),
+            dj_link_receipt: Some(DjLinkCommandReceipt::new_with_test_hooks(hooks)),
+            #[cfg(any(test, feature = "test-support"))]
+            publication_barrier: None,
+        }
+    }
+
+    fn dj_link_receipt(&self) -> Option<DjLinkCommandReceiptHandle> {
+        self.dj_link_receipt.clone()
+    }
+
+    fn try_admit_dj_link_before(&self, deadline: Instant) -> bool {
+        self.dj_link_receipt
+            .as_ref()
+            .is_none_or(|receipt| receipt.try_admit_before(deadline))
+    }
+
+    fn begin_dj_link_planning(&self) -> bool {
+        self.dj_link_receipt
+            .as_ref()
+            .is_none_or(|receipt| receipt.begin_planning())
+    }
+
+    fn cancel_dj_link_before_commit(&self) -> bool {
+        self.dj_link_receipt
+            .as_ref()
+            .map(|receipt| receipt.cancel_before_commit())
+            .unwrap_or_else(|| self.cancel_if_queued())
+    }
+
+    fn run_dj_link_pre_commit_hook(&self) {
+        if let Some(receipt) = &self.dj_link_receipt {
+            receipt.run_pre_commit_hook();
+        }
+    }
+
+    fn run_dj_link_planning_hook(&self) {
+        if let Some(receipt) = &self.dj_link_receipt {
+            receipt.run_planning_hook();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_for_dj_link_result(
+        &self,
+        deadline: Instant,
+        timeout: Duration,
+        operation: &str,
+    ) -> Option<Result<(), String>> {
+        self.dj_link_receipt
+            .as_ref()
+            .map(|receipt| receipt.wait_for_result(deadline, timeout, operation))
+    }
+
+    fn wait_for_dj_link_result_with_snapshot(
+        &self,
+        deadline: Instant,
+        timeout: Duration,
+        operation: &str,
+    ) -> Option<Result<Arc<EngineSnapshot>, String>> {
+        self.dj_link_receipt
+            .as_ref()
+            .map(|receipt| receipt.wait_for_result_with_snapshot(deadline, timeout, operation))
+    }
+
+    #[cfg(test)]
+    fn wait_for_dj_link_state(
+        &self,
+        expected: DjLinkCommandReceiptState,
+        timeout: Duration,
+    ) -> bool {
+        self.dj_link_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.wait_for_state(expected, timeout))
     }
 
     fn try_admit_before(&self, deadline: Instant) -> bool {
@@ -2396,9 +2990,11 @@ impl ProjectSnapshotLoadAdmission {
         }
         if Instant::now() >= deadline {
             *state = ProjectSnapshotLoadAdmissionState::Cancelled;
+            self.wake.notify_all();
             return false;
         }
         *state = ProjectSnapshotLoadAdmissionState::Admitted;
+        self.wake.notify_all();
         true
     }
 
@@ -2409,6 +3005,7 @@ impl ProjectSnapshotLoadAdmission {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if *state == ProjectSnapshotLoadAdmissionState::Queued {
             *state = ProjectSnapshotLoadAdmissionState::Cancelled;
+            self.wake.notify_all();
             true
         } else {
             false
@@ -2420,6 +3017,39 @@ impl ProjectSnapshotLoadAdmission {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn publication_barrier(&self) -> Option<Arc<ProjectSnapshotLoadPublicationBarrier>> {
+        self.publication_barrier.clone()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn wait_for_state(
+        &self,
+        expected: ProjectSnapshotLoadAdmissionState,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while *state != expected {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next_state, wait_result) = self
+                .wake
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = next_state;
+            if wait_result.timed_out() && *state != expected {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -2493,32 +3123,134 @@ fn receive_fixture_patch_allocated_ack(
     }
 }
 
+#[cfg(test)]
+fn receive_admitted_command_ack(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+    operation: &str,
+) -> Result<(), String> {
+    let result = admission
+        .wait_for_dj_link_result(deadline, timeout, operation)
+        .ok_or_else(|| {
+            format!("{operation} acknowledgement failed: missing DJ cancel-or-commit receipt")
+        })?;
+    // The shared receipt is authoritative for DJ Link. The channel is
+    // retained for the engine worker's existing ACK plumbing, but a caller
+    // never races a late channel send against a committed receipt.
+    drop(receiver);
+    result
+}
+
+fn receive_admitted_command_ack_with_snapshot(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+    operation: &str,
+) -> Result<Arc<EngineSnapshot>, String> {
+    let result = admission
+        .wait_for_dj_link_result_with_snapshot(deadline, timeout, operation)
+        .ok_or_else(|| {
+            format!("{operation} acknowledgement failed: missing DJ cancel-or-commit receipt")
+        })?;
+    drop(receiver);
+    result
+}
+
 fn receive_project_snapshot_load_ack(
     receiver: mpsc::Receiver<Result<(), String>>,
     admission: &ProjectSnapshotLoadAdmission,
     deadline: Instant,
     timeout: Duration,
 ) -> Result<(), String> {
+    receive_admitted_command_ack_unbounded(
+        receiver,
+        admission,
+        deadline,
+        timeout,
+        "project snapshot load",
+    )
+}
+
+/// Legacy authored/project replacement commands retain their existing
+/// definitive publication contract. They are not part of the bounded DJ Link
+/// shutdown lane and may wait for the snapshot writer after admission.
+fn receive_admitted_command_ack_unbounded(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+    operation: &str,
+) -> Result<(), String> {
     match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             if admission.cancel_if_queued() {
                 Err(format!(
-                    "project snapshot load acknowledgement timed out after {} ms",
-                    timeout.as_millis()
+                    "{operation} acknowledgement timed out after {} ms",
+                    timeout.as_millis(),
                 ))
             } else {
-                // Admission won the race with cancellation. A timeout is no
-                // longer a valid caller outcome: wait for the runtime to
-                // publish or report its definitive failure.
                 receiver.recv().map_err(|_| {
-                    "project snapshot load acknowledgement failed: engine disconnected".to_string()
+                    format!("{operation} acknowledgement failed: engine disconnected")
                 })?
             }
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err("project snapshot load acknowledgement failed: engine disconnected".to_string())
-        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "{operation} acknowledgement failed: engine disconnected"
+        )),
+    }
+}
+
+/// Test-support submission for the real project-load command. It exposes only
+/// the two worker barriers needed to prove FIFO/publication ordering; normal
+/// builds do not compile this type or its associated EngineHandle method.
+#[cfg(any(test, feature = "test-support"))]
+pub struct ProjectSnapshotLoadTestSubmission {
+    admission: ProjectSnapshotLoadAdmission,
+    receiver: Option<mpsc::Receiver<Result<(), String>>>,
+    deadline: Instant,
+    timeout: Duration,
+    publication_barrier: Arc<ProjectSnapshotLoadPublicationBarrier>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ProjectSnapshotLoadTestSubmission {
+    pub fn wait_until_admitted(&self, timeout: Duration) -> bool {
+        self.admission
+            .wait_for_state(ProjectSnapshotLoadAdmissionState::Admitted, timeout)
+    }
+
+    pub fn wait_until_pending_publication(&self, timeout: Duration) -> bool {
+        self.publication_barrier.wait_until_entered(timeout)
+    }
+
+    pub fn release_publication_barrier(&self) {
+        self.publication_barrier.release();
+    }
+
+    pub fn wait_result(self) -> Result<(), String> {
+        let mut submission = self;
+        submission.publication_barrier.release();
+        let receiver = submission
+            .receiver
+            .take()
+            .expect("project snapshot test submission result was already consumed");
+        receive_project_snapshot_load_ack(
+            receiver,
+            &submission.admission,
+            submission.deadline,
+            submission.timeout,
+        )
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for ProjectSnapshotLoadTestSubmission {
+    fn drop(&mut self) {
+        self.publication_barrier.release();
     }
 }
 
@@ -2563,7 +3295,7 @@ pub enum MediaAssetTransaction {
     /// identity and is therefore retained only as a legacy engine route.
     BootstrapVjShow {
         candidate: MediaAssetImportCandidate,
-        output: VideoOutputSummary,
+        output: Box<VideoOutputSummary>,
     },
     Update(MediaAssetSummary),
 }
@@ -3186,6 +3918,15 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    MoveCueBetweenBanksPublished {
+        cue_id: CueId,
+        target_cue_list_id: CueListId,
+        target_group_id: Option<String>,
+        target_cue_id: Option<CueId>,
+        insert_after: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetCueEffectTargetsPublished {
         cue_id: CueId,
         effect_targets: Vec<CueEffectTarget>,
@@ -3586,6 +4327,8 @@ define_engine_command! {
     /// runtime; it never mutates the authored project/history image.
     DjLinkStartTimeline {
         timeline_id: TimelineId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// Canonical, generation-fenced local-runtime Play/Pause publication.
@@ -3611,6 +4354,8 @@ define_engine_command! {
     DjLinkSetTimelineLoopAbsolute {
         division: u8,
         enabled: bool,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// Authored-grid absolute beat jump used by the DJ Link timeline lane.
@@ -3619,11 +4364,15 @@ define_engine_command! {
     DjLinkTimelineBeatJump {
         timeline_id: TimelineId,
         bars: i8,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// One queue item for DJ Link RELEASE: disable the loop and resume the
     /// timeline as one rollback-capable runtime publication.
     DjLinkRelease {
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     ToggleTimelineLoop,
@@ -4758,9 +5507,10 @@ impl EngineHandle {
                     runtime_timeline_audio_projection_authority,
                     runtime_timeline_audio_publication_generation,
                     #[cfg(test)]
-                    runtime_test_fail_next_pending_publication,
-                    #[cfg(test)]
-                    runtime_test_media_asset_publication_failed_after_b,
+                    (
+                        runtime_test_fail_next_pending_publication,
+                        runtime_test_media_asset_publication_failed_after_b,
+                    ),
                 );
                 runtime.timeline_follow_video_render_snapshot =
                     Some(runtime_timeline_follow_video_render_snapshot);
@@ -5057,7 +5807,7 @@ impl EngineHandle {
                     domain.label()
                 );
             }
-            if current >= u64::MAX {
+            if current == u64::MAX {
                 panic!(
                     "allocator domain '{}' exhausted at {}",
                     domain.label(),
@@ -5085,7 +5835,7 @@ impl EngineHandle {
                     domain.label()
                 );
             }
-            if current >= u32::MAX {
+            if current == u32::MAX {
                 panic!(
                     "allocator domain '{}' exhausted at {}",
                     domain.label(),
@@ -5132,12 +5882,45 @@ impl EngineHandle {
     /// publication result.  Remote callers must not treat queue admission as
     /// a successful transition.
     pub fn dj_link_start_timeline(&self, timeline_id: TimelineId) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::DjLinkStartTimeline { timeline_id, ack })
-            .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("DJ Link timeline start acknowledgement failed: {error}"))?
+        self.dj_link_start_timeline_with_timeout(timeline_id, DJ_LINK_ENGINE_ACK_TIMEOUT)
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_start_timeline_with_timeout(
+        &self,
+        timeline_id: TimelineId,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.dj_link_start_timeline_with_snapshot_timeout(timeline_id, timeout)
+            .map(|_| ())
+    }
+
+    /// Return the exact prebuilt image installed by the accepted commit. This
+    /// keeps a network handler from taking a second shared snapshot lock after
+    /// B is already definitive.
+    #[doc(hidden)]
+    pub fn dj_link_start_timeline_with_canonical_snapshot(
+        &self,
+        timeline_id: TimelineId,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_start_timeline_with_snapshot_timeout(timeline_id, DJ_LINK_ENGINE_ACK_TIMEOUT)
+    }
+
+    fn dj_link_start_timeline_with_snapshot_timeout(
+        &self,
+        timeline_id: TimelineId,
+        timeout: Duration,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            timeout,
+            "DJ Link timeline start",
+            |expires_at, admission, ack| EngineCommand::DjLinkStartTimeline {
+                timeline_id,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     /// Submit an absolute authored-loop convergence and wait for its result.
@@ -5146,16 +5929,54 @@ impl EngineHandle {
         division: u8,
         enabled: bool,
     ) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::DjLinkSetTimelineLoopAbsolute {
+        self.dj_link_set_timeline_loop_absolute_with_timeout(
             division,
             enabled,
-            ack,
-        })
-        .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("DJ Link absolute loop acknowledgement failed: {error}"))?
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_set_timeline_loop_absolute_with_timeout(
+        &self,
+        division: u8,
+        enabled: bool,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.dj_link_set_timeline_loop_absolute_with_snapshot_timeout(division, enabled, timeout)
+            .map(|_| ())
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
+        &self,
+        division: u8,
+        enabled: bool,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_set_timeline_loop_absolute_with_snapshot_timeout(
+            division,
+            enabled,
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
+    }
+
+    fn dj_link_set_timeline_loop_absolute_with_snapshot_timeout(
+        &self,
+        division: u8,
+        enabled: bool,
+        timeout: Duration,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            timeout,
+            "DJ Link absolute loop",
+            |expires_at, admission, ack| EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                division,
+                enabled,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     /// Publish a bounded authored-grid beat jump and wait for the worker
@@ -5166,28 +5987,111 @@ impl EngineHandle {
         timeline_id: TimelineId,
         bars: i8,
     ) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::DjLinkTimelineBeatJump {
+        self.dj_link_timeline_beat_jump_with_timeout(timeline_id, bars, DJ_LINK_ENGINE_ACK_TIMEOUT)
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_timeline_beat_jump_with_timeout(
+        &self,
+        timeline_id: TimelineId,
+        bars: i8,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.dj_link_timeline_beat_jump_with_snapshot_timeout(timeline_id, bars, timeout)
+            .map(|_| ())
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_timeline_beat_jump_with_canonical_snapshot(
+        &self,
+        timeline_id: TimelineId,
+        bars: i8,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_timeline_beat_jump_with_snapshot_timeout(
             timeline_id,
             bars,
-            ack,
-        })
-        .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("DJ Link beat jump acknowledgement failed: {error}"))?
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
+    }
+
+    fn dj_link_timeline_beat_jump_with_snapshot_timeout(
+        &self,
+        timeline_id: TimelineId,
+        bars: i8,
+        timeout: Duration,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            timeout,
+            "DJ Link beat jump",
+            |expires_at, admission, ack| EngineCommand::DjLinkTimelineBeatJump {
+                timeline_id,
+                bars,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     /// Submit the atomic DJ Link RELEASE publication.  Disable-loop and
     /// resume are one queue item and are rolled back together if either side
     /// rejects the transition.
     pub fn dj_link_release(&self) -> Result<(), String> {
+        self.dj_link_release_with_timeout(DJ_LINK_ENGINE_ACK_TIMEOUT)
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_release_with_timeout(&self, timeout: Duration) -> Result<(), String> {
+        self.dj_link_release_with_snapshot_timeout(timeout)
+            .map(|_| ())
+    }
+
+    #[doc(hidden)]
+    pub fn dj_link_release_with_canonical_snapshot(&self) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_release_with_snapshot_timeout(DJ_LINK_ENGINE_ACK_TIMEOUT)
+    }
+
+    fn dj_link_release_with_snapshot_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(timeout, "DJ Link release", |expires_at, admission, ack| {
+            EngineCommand::DjLinkRelease {
+                expires_at,
+                admission,
+                ack,
+            }
+        })
+    }
+
+    fn submit_dj_link_command(
+        &self,
+        timeout: Duration,
+        operation: &'static str,
+        build: impl FnOnce(
+            Instant,
+            ProjectSnapshotLoadAdmission,
+            mpsc::SyncSender<Result<(), String>>,
+        ) -> EngineCommand,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        // Keep every public DJ caller inside the listener's four-second
+        // retirement budget, including doc-hidden test/integration callers
+        // that provide a custom timeout. The remaining receipt margin and
+        // bounded publication seam are reserved for worker/join bookkeeping.
+        let timeout = timeout.min(DJ_LINK_ENGINE_ACK_TIMEOUT);
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new_dj_link();
         let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::DjLinkRelease { ack })
-            .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("DJ Link release acknowledgement failed: {error}"))?
+        if let Err(error) = self.send(build(deadline, admission.clone(), ack)) {
+            // The command never reached the worker, but keep the shared
+            // state truthful for test/instrumentation observers and make the
+            // enqueue-failure path explicit rather than leaving it Queued.
+            admission.cancel_dj_link_before_commit();
+            return Err(error.to_string());
+        }
+        receive_admitted_command_ack_with_snapshot(
+            receiver, &admission, deadline, timeout, operation,
+        )
     }
 
     fn send_safety(&self, command: EngineCommand) -> Result<(), EngineError> {
@@ -5404,7 +6308,7 @@ impl EngineHandle {
             if current == 0 {
                 return Err("media asset allocator attempted to issue reserved ID 0".to_string());
             }
-            if current >= u64::MAX {
+            if current == u64::MAX {
                 return Err("media asset allocator is exhausted".to_string());
             }
             let next = current + 1;
@@ -5428,7 +6332,7 @@ impl EngineHandle {
                     "video clip slot allocator attempted to issue reserved ID 0".to_string()
                 );
             }
-            if current >= u64::MAX {
+            if current == u64::MAX {
                 return Err("video clip slot allocator is exhausted".to_string());
             }
             let next = current + 1;
@@ -5970,6 +6874,30 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Cue update acknowledgement failed: {error}"))?
+    }
+
+    pub fn move_cue_between_banks_published(
+        &self,
+        cue_id: CueId,
+        target_cue_list_id: CueListId,
+        target_group_id: Option<String>,
+        target_cue_id: Option<CueId>,
+        insert_after: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::MoveCueBetweenBanksPublished {
+            cue_id,
+            target_cue_list_id,
+            target_group_id,
+            target_cue_id,
+            insert_after,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Scene Bank move acknowledgement failed: {error}"))?
     }
 
     pub fn set_cue_effect_targets_published(
@@ -7467,6 +8395,39 @@ impl EngineHandle {
         )
     }
 
+    /// Enqueue the real project-load command for an integration harness that
+    /// must prove admission and the pending-publication boundary separately.
+    /// The support feature is intentionally nondefault; production callers
+    /// continue through `load_project_snapshot_and_wait` above.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn submit_project_snapshot_load_for_test(
+        &self,
+        snapshot: EngineSnapshot,
+    ) -> Result<ProjectSnapshotLoadTestSubmission, String> {
+        let timeout = PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT;
+        let deadline = Instant::now() + timeout;
+        let publication_barrier = ProjectSnapshotLoadPublicationBarrier::new();
+        let admission = ProjectSnapshotLoadAdmission::new_with_publication_barrier(Arc::clone(
+            &publication_barrier,
+        ));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::LoadProjectSnapshotPublished {
+            snapshot,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        Ok(ProjectSnapshotLoadTestSubmission {
+            admission,
+            receiver: Some(receiver),
+            deadline,
+            timeout,
+            publication_barrier,
+        })
+    }
+
     fn load_project_snapshot_and_wait_with_timeout(
         &self,
         snapshot: EngineSnapshot,
@@ -7498,6 +8459,23 @@ impl EngineHandle {
                 public
             })
             .unwrap_or_default()
+    }
+
+    /// Read the latest complete public snapshot without waiting behind a
+    /// writer. Listener/shutdown infrastructure uses this with a retained
+    /// last-good image, so a project publication can never pin an unrelated
+    /// network worker inside `RwLock::read` during serial stop/replacement.
+    /// A successful clone is structurally bounded by the validated project
+    /// collection limits and performs no I/O or callbacks.
+    pub fn try_snapshot(&self) -> Option<EngineSnapshot> {
+        let snapshot = match self.snapshot.try_read() {
+            Ok(snapshot) => snapshot,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        let mut public = snapshot.clone();
+        public.authored_video = None;
+        Some(public)
     }
 
     /// Return the public, runtime-only Follow status stamped with the caller's
@@ -7577,6 +8555,10 @@ impl EngineHandle {
 
     pub fn output_ownership_status(&self) -> OutputOwnershipStatus {
         self.output_ownership_gate.status()
+    }
+
+    pub fn try_output_ownership_status(&self) -> Option<OutputOwnershipStatus> {
+        self.output_ownership_gate.try_status()
     }
 
     pub fn mark_output_ownership_startup_failure(&self, error: impl Into<String>) {
@@ -7891,8 +8873,7 @@ impl EngineHandle {
                             }
                         });
                         let position_ms = snapshot.timeline.follow_runtime.elapsed_ms;
-                        child_clips.extend(target.audio_clips.iter().filter_map(|clip| {
-                            (clip.duration_ms > 0
+                        child_clips.extend(target.audio_clips.iter().filter(|&clip| clip.duration_ms > 0
                                 && !target.audio_muted
                                 && timeline_audio_layer_is_effectively_audible(
                                     &target.layers,
@@ -7901,8 +8882,7 @@ impl EngineHandle {
                                 && audio_clip_asset_is_available(clip)
                                 && position_ms >= clip.start_ms
                                 && position_ms
-                                    < clip.start_ms.saturating_add(clip.duration_ms))
-                            .then(|| {
+                                    < clip.start_ms.saturating_add(clip.duration_ms) ).map(|clip| {
                                 let mut clip = resolve_audio_clip(clip.clone());
                                 clip.gain *= follow_progress;
                                 ChildTimelineAudioRuntimeClip {
@@ -7918,8 +8898,7 @@ impl EngineHandle {
                                     position_ms,
                                     clip,
                                 }
-                            })
-                        }));
+                            }));
                     } else {
                         child_clips.retain_mut(|child| {
                             if source_muted {
@@ -8196,6 +9175,10 @@ impl EngineHandle {
             }
             EngineCommand::UpsertCueList { cue_list_id, .. }
             | EngineCommand::SetCueList { cue_list_id, .. }
+            | EngineCommand::MoveCueBetweenBanksPublished {
+                target_cue_list_id: cue_list_id,
+                ..
+            }
             | EngineCommand::DeleteCueListPublished { cue_list_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
             }
@@ -8706,14 +9689,14 @@ impl AllocatorMaximums {
             AllocatorDomain::StageObjects => &mut self.stage_objects,
             AllocatorDomain::TimelineLayers => return,
         };
-        if slot.map_or(true, |current| value > current) {
+        if slot.is_none_or(|current| value > current) {
             *slot = Some(value);
         }
     }
 
     fn observe_u32(&mut self, domain: AllocatorDomain, value: u32) {
         debug_assert!(matches!(domain, AllocatorDomain::TimelineLayers));
-        if self.timeline_layers.map_or(true, |current| value > current) {
+        if self.timeline_layers.is_none_or(|current| value > current) {
             self.timeline_layers = Some(value);
         }
     }
@@ -8925,7 +9908,7 @@ fn allocate_u64_id_locked(counter: &AtomicU64, domain: AllocatorDomain) -> Resul
                 domain.label()
             ));
         }
-        if current >= u64::MAX {
+        if current == u64::MAX {
             return Err(format!(
                 "allocator domain '{}' is exhausted",
                 domain.label()
@@ -9755,7 +10738,7 @@ enum RuntimeEffectKind {
     Lfo(RuntimeLfoEffect),
     PositionWave(PositionWaveEffectRequest),
     Color(RuntimeColorEffect),
-    Chaser(RuntimeChaserEffect),
+    Chaser(Box<RuntimeChaserEffect>),
     Move(RuntimeMoveEffect),
     Value(RuntimeValueEffect),
     Curve(RuntimeCurveEffect),
@@ -11023,9 +12006,11 @@ enum CompiledSyndocalRandomFx {
         rng_seed: u32,
         period_ms: f64,
         palette: Arc<[ColorEffectColor]>,
-        state: RefCell<SyndocalSparkleState>,
+        state: Box<RefCell<SyndocalSparkleState>>,
     },
 }
+
+type ColorEffectSampleClock = (Instant, Instant);
 
 struct PreservedSyndocalSparkleState {
     number: usize,
@@ -11036,7 +12021,7 @@ struct PreservedSyndocalSparkleState {
     rng_seed: u32,
     source_width: usize,
     source_height: usize,
-    state: RefCell<SyndocalSparkleState>,
+    state: Box<RefCell<SyndocalSparkleState>>,
 }
 
 impl CompiledSyndocalRandomFx {
@@ -11175,14 +12160,14 @@ impl CompiledSyndocalRandomFx {
                     rng_seed: *rng_seed,
                     period_ms: request.period_ms.max(10) as f64,
                     palette,
-                    state: RefCell::new(SyndocalSparkleState::new(
+                    state: Box::new(RefCell::new(SyndocalSparkleState::new(
                         source_width,
                         source_height,
                         usize::from(*number),
                         f64::from(*lifetime_ms),
                         *rng_seed,
                         tube_full_raster_height,
-                    )),
+                    ))),
                 }))
             }
             _ => Ok(None),
@@ -11196,9 +12181,9 @@ impl CompiledSyndocalRandomFx {
         strip_count: usize,
         target_x: f32,
         target_y: f32,
-        created_at: Instant,
-        now: Instant,
+        clock: ColorEffectSampleClock,
     ) -> ColorEffectColor {
+        let (created_at, now) = clock;
         match self {
             Self::RandomFill {
                 point_width,
@@ -11322,8 +12307,7 @@ impl CompiledSyndocalRandomFx {
             strip_count,
             0.0,
             0.0,
-            created_at,
-            now,
+            (created_at, now),
         )
     }
 
@@ -11360,14 +12344,14 @@ impl CompiledSyndocalRandomFx {
             source_height,
             state: std::mem::replace(
                 state,
-                RefCell::new(SyndocalSparkleState::new(
+                Box::new(RefCell::new(SyndocalSparkleState::new(
                     source_width,
                     source_height,
                     *number,
                     *lifetime_ms,
                     *rng_seed,
                     *tube_full_raster_height,
-                )),
+                ))),
             ),
         })
     }
@@ -11533,6 +12517,18 @@ struct CompiledDaslightPerlin {
     time_signal: Cell<Option<CompiledDaslightPerlinTimeSignal>>,
 }
 
+struct DaslightPerlinCompileOptions {
+    grayscale: bool,
+    vertical_symmetry: bool,
+    horizontal_symmetry: bool,
+    rotation_degrees: f32,
+    octaves: u8,
+    zoom: f32,
+    direction: f32,
+    speed: f32,
+    amplitude: f32,
+}
+
 fn daslight_perlin_hash_radians(x: i32, y: i32) -> f64 {
     // CPerlinEffect helper 0x14035A950 uses signed 32-bit wraparound for the
     // classic fixed lattice hash, clears the sign bit, maps it through
@@ -11579,16 +12575,19 @@ impl CompiledDaslightPerlin {
     fn compile(
         request: &ColorEffectRequest,
         runtime_targets: &[RuntimeColorSpatialTarget],
-        grayscale: bool,
-        vertical_symmetry: bool,
-        horizontal_symmetry: bool,
-        rotation_degrees: f32,
-        octaves: u8,
-        zoom: f32,
-        direction: f32,
-        speed: f32,
-        amplitude: f32,
+        options: DaslightPerlinCompileOptions,
     ) -> Result<Self, String> {
+        let DaslightPerlinCompileOptions {
+            grayscale,
+            vertical_symmetry,
+            horizontal_symmetry,
+            rotation_degrees,
+            octaves,
+            zoom,
+            direction,
+            speed,
+            amplitude,
+        } = options;
         if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&request.stops.len())
@@ -11755,9 +12754,7 @@ impl CompiledDaslightPerlin {
     }
 
     fn sample_phase_palette_byte(&self, time_phase: f64, target_index: usize) -> Option<u8> {
-        let Some(target) = self.targets.get(target_index) else {
-            return None;
-        };
+        let target = self.targets.get(target_index)?;
         let cycle = time_phase.rem_euclid(1.0);
         let cycle_bits = cycle.to_bits();
         let signal = self
@@ -12220,15 +13217,17 @@ fn compile_daslight_perlin(
         } => CompiledDaslightPerlin::compile(
             request,
             runtime_targets,
-            *grayscale,
-            *vertical_symmetry,
-            *horizontal_symmetry,
-            *rotation_degrees,
-            *octaves,
-            *zoom,
-            *direction_degrees,
-            *speed,
-            *amplitude,
+            DaslightPerlinCompileOptions {
+                grayscale: *grayscale,
+                vertical_symmetry: *vertical_symmetry,
+                horizontal_symmetry: *horizontal_symmetry,
+                rotation_degrees: *rotation_degrees,
+                octaves: *octaves,
+                zoom: *zoom,
+                direction: *direction_degrees,
+                speed: *speed,
+                amplitude: *amplitude,
+            },
         )
         .map(Some),
         _ => Ok(None),
@@ -13128,9 +14127,8 @@ impl CompiledDaslightBounce {
             }
         }
         let sampled_pixel_count = sample_x.len();
-        let rendered_frame_count = (request.period_ms as usize / 40)
-            .max(1)
-            .min(DASLIGHT_BOUNCE_FRAME_CAP);
+        let rendered_frame_count =
+            (request.period_ms as usize / 40).clamp(1, DASLIGHT_BOUNCE_FRAME_CAP);
         let mut compiled = Self {
             #[cfg(test)]
             random_a,
@@ -13660,9 +14658,8 @@ impl CompiledDaslightFire {
             sampled_pixel_count += x_mask.count_ones() as usize;
             row
         });
-        let rendered_frame_count = (request.period_ms as usize / 40)
-            .max(1)
-            .min(DASLIGHT_FIRE_FRAME_CAP);
+        let rendered_frame_count =
+            (request.period_ms as usize / 40).clamp(1, DASLIGHT_FIRE_FRAME_CAP);
         let mut compiled = Self {
             random_q15,
             palette_lut,
@@ -13965,6 +14962,18 @@ struct CompiledDaslightParticles {
     precomputed_frames: Option<Arc<CompiledDaslightParticleFrames>>,
 }
 
+type ParticleEllipse = (f64, f64, f64);
+
+struct ExplosionRenderParams {
+    explosion_number: usize,
+    explosion_size: f32,
+    particle_number: usize,
+    particle_size: f32,
+    particle_life: f32,
+    trail_size: usize,
+    gravity: f32,
+}
+
 impl CompiledDaslightParticles {
     #[cfg(test)]
     fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
@@ -14149,12 +15158,11 @@ impl CompiledDaslightParticles {
         sampled_rows: &[CompiledDaslightParticleSampleRow; DASLIGHT_PARTICLE_RASTER_SIZE],
         sampled_y_rows: u128,
         cache: &mut CompiledDaslightParticleRasterCache,
-        x: f64,
-        y: f64,
-        size: f64,
+        ellipse: ParticleEllipse,
         color: ColorEffectColor,
         opacity: f32,
     ) {
+        let (x, y, size) = ellipse;
         let opacity = opacity.clamp(0.0, 1.0);
         if opacity <= 0.0 || size <= 0.0 {
             return;
@@ -14233,12 +15241,11 @@ impl CompiledDaslightParticles {
         sampled_rows: &[u128; DASLIGHT_PARTICLE_RASTER_SIZE],
         sampled_y_rows: u128,
         raster: &mut [ColorEffectColor; DASLIGHT_PARTICLE_RASTER_PIXELS],
-        x: f64,
-        y: f64,
-        size: f64,
+        ellipse: ParticleEllipse,
         color: ColorEffectColor,
         opacity: f32,
     ) {
+        let (x, y, size) = ellipse;
         let opacity = opacity.clamp(0.0, 1.0);
         if opacity <= 0.0 || size <= 0.0 {
             return;
@@ -14282,7 +15289,7 @@ impl CompiledDaslightParticles {
             let mut pending = sampled_row & span_mask;
             while pending != 0 {
                 let pixel_x = pending.trailing_zeros() as usize;
-                let destination = &mut raster[row + pixel_x as usize];
+                let destination = &mut raster[row + pixel_x];
                 if opacity >= 1.0 {
                     *destination = color;
                 } else if *destination != color {
@@ -14311,9 +15318,7 @@ impl CompiledDaslightParticles {
             &[(1_u128 << DASLIGHT_PARTICLE_RASTER_SIZE) - 1; DASLIGHT_PARTICLE_RASTER_SIZE],
             (1_u128 << DASLIGHT_PARTICLE_RASTER_SIZE) - 1,
             raster,
-            x,
-            y,
-            size,
+            (x, y, size),
             color,
             opacity,
         );
@@ -14382,9 +15387,7 @@ impl CompiledDaslightParticles {
                 &self.sampled_rows,
                 self.sampled_y_rows,
                 cache,
-                x,
-                y,
-                size,
+                (x, y, size),
                 color,
                 opacity,
             );
@@ -14562,14 +15565,17 @@ impl CompiledDaslightParticles {
         &self,
         cache: &mut CompiledDaslightParticleRasterCache,
         generation: usize,
-        explosion_number: usize,
-        explosion_size: f32,
-        particle_number: usize,
-        particle_size: f32,
-        particle_life: f32,
-        trail_size: usize,
-        gravity: f32,
+        params: ExplosionRenderParams,
     ) {
+        let ExplosionRenderParams {
+            explosion_number,
+            explosion_size,
+            particle_number,
+            particle_size,
+            particle_life,
+            trail_size,
+            gravity,
+        } = params;
         let spawn_period =
             Self::explosion_spawn_period(self.rendered_frame_count, explosion_number);
         let decay = (1.0 - particle_life) * 0.05;
@@ -14605,11 +15611,11 @@ impl CompiledDaslightParticles {
                 );
                 if child_count > 0 {
                     let previous_opacity = 1.0 - decay * (age - 1) as f32;
-                    for oldest_index in 0..child_count {
+                    for (oldest_index, layer) in layers.iter_mut().take(child_count).enumerate() {
                         let newest_index = child_count - 1 - oldest_index;
                         let child_opacity =
                             previous_opacity * (1.0 - newest_index as f32 / trail_size as f32);
-                        layers[oldest_index] = (
+                        *layer = (
                             f64::from(x),
                             f64::from(y),
                             f64::from(particle_size),
@@ -14668,11 +15674,11 @@ impl CompiledDaslightParticles {
                 Self::starfield_trajectory(angle, rotation, radius, first_age);
             if child_count > 0 {
                 let previous_opacity = 1.0 - decay * (age - 1) as f32;
-                for oldest_index in 0..child_count {
+                for (oldest_index, layer) in layers.iter_mut().take(child_count).enumerate() {
                     let newest_index = child_count - 1 - oldest_index;
                     let child_opacity =
                         previous_opacity * (1.0 - newest_index as f32 / trail as f32);
-                    layers[oldest_index] = (
+                    *layer = (
                         f64::from(x),
                         f64::from(y),
                         f64::from(size),
@@ -14717,13 +15723,15 @@ impl CompiledDaslightParticles {
             } => self.render_explosion(
                 cache,
                 generation,
-                explosion_number,
-                explosion_size,
-                particle_number,
-                particle_size,
-                particle_life,
-                trail_size,
-                gravity,
+                ExplosionRenderParams {
+                    explosion_number,
+                    explosion_size,
+                    particle_number,
+                    particle_size,
+                    particle_life,
+                    trail_size,
+                    gravity,
+                },
             ),
             CompiledDaslightParticleRecipe::Starfield {
                 particles,
@@ -15430,6 +16438,15 @@ struct CueBody {
     effect_targets: Vec<CueEffectTarget>,
 }
 
+struct CueCreateMetadata {
+    cue_id: CueId,
+    cue_list_id: CueListId,
+    group_id: Option<String>,
+    recall_mode: RecallMode,
+    authored_beats: Option<f32>,
+    replace_existing: bool,
+}
+
 #[derive(Clone)]
 struct RuntimeFade {
     cue_id: CueId,
@@ -15495,6 +16512,17 @@ struct PendingCueTrigger {
     fade_started_at: Option<Instant>,
     timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     dispatch: Option<CueDispatchEntry>,
+    child_transport_id: Option<RuntimeChildTransportId>,
+    direct_child_anchor_at: Option<Instant>,
+}
+
+struct CueStartContext {
+    now: Instant,
+    source: PendingCueTriggerSource,
+    repeat_count: u64,
+    fade_override_ms: Option<u64>,
+    fade_started_at: Option<Instant>,
+    timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     child_transport_id: Option<RuntimeChildTransportId>,
     direct_child_anchor_at: Option<Instant>,
 }
@@ -15599,6 +16627,18 @@ struct RuntimeChildTransport {
     activated_events: Vec<bool>,
 }
 
+struct ChildTransportBuildContext {
+    parent_event_id: TimelineEventId,
+    window_start_ms: u64,
+    window_end_ms: u64,
+    iteration_period_ms: u64,
+    rate: f32,
+    loop_fill: bool,
+    source_offset_ms: i64,
+    direct_parent_cue_id: Option<CueId>,
+    parent_transport_id: Option<RuntimeChildTransportId>,
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeDirectChildCountIn {
     cue_id: CueId,
@@ -15655,6 +16695,26 @@ struct RuntimeTimelineFollowTransition {
     /// settlement quorum. This is bounded by `settlement_domains`, whose
     /// consumers were frozen at admission; it is never persisted.
     accepted_settlement_acknowledgements: Vec<TimelineFollowSettlementAck>,
+}
+
+struct TimelineFollowFailureContext {
+    now: Instant,
+    generation: u64,
+    source_timeline_id: TimelineId,
+    target: Option<TimelineSnapshot>,
+    source_bpm: Option<f32>,
+    fault_policy: protocol::TimelineFollowFaultPolicy,
+    admission_reason: protocol::TimelineFollowAdmissionReason,
+}
+
+struct TimelineGuideCueContext {
+    guide_enabled: bool,
+    generation: u64,
+    at_ms: u64,
+    label: String,
+    cue: TimelineGuideCueKind,
+    predictive: bool,
+    declared_frame_override: Option<u64>,
 }
 
 /// Admission-time identity of one physical DMX route.  The serialized route
@@ -15953,6 +17013,46 @@ struct PendingCommandAck {
     publication_error: &'static str,
 }
 
+/// Exact worker-local A image for a provisional DJ Link Timeline START.
+///
+/// START installs a different authored Timeline and, at position zero, may
+/// also rewrite lighting automation values and retire runtime transports.
+/// Re-running `install_timeline_bank_entry` during rollback is not exact: it
+/// allocates a new audio revision and can fail after B consumed the final
+/// successor. Keep every START-owned field directly swappable instead. The
+/// broader transport image retains the effect/child/video/click state which
+/// the install helpers are also permitted to change.
+#[derive(Clone)]
+struct DjLinkTimelineStartRollbackImage {
+    timeline_bank: Vec<TimelineSnapshot>,
+    timeline_id: TimelineId,
+    timeline_label: String,
+    timeline_layers: Vec<TimelineLayerSummary>,
+    timeline_events: Vec<RuntimeTimelineEvent>,
+    timeline_automations: Vec<RuntimeTimelineAutomation>,
+    timeline_video_automations: Vec<RuntimeTimelineVideoAutomation>,
+    timeline_audio: Option<AudioAnalysisSummary>,
+    timeline_audio_clips: Vec<TimelineAudioClipSummary>,
+    timeline_audio_clips_derived: bool,
+    timeline_audio_duration_ms: u64,
+    timeline_video_clips: Vec<TimelineVideoClipSummary>,
+    timeline_phases: Vec<TimelinePhaseSummary>,
+    timeline_item_groups: Vec<TimelineItemGroupSummary>,
+    timeline_loop_region: Option<TimelineLoopRegionSummary>,
+    timeline_follow: Option<TimelineFollowSummary>,
+    timeline_guide_enabled: bool,
+    timeline_audio_offset_ms: i64,
+    timeline_audio_muted: bool,
+    timeline_metronome_enabled: bool,
+    timeline_count_in_beats: u8,
+    timeline_tempo_meter_map: Vec<TimelineTempoMeterPoint>,
+    timeline_tempo_meter_map_version: u8,
+    timeline_due_cues: Vec<TimelineCueOccurrence>,
+    values: HashMap<(FixtureId, String), u16>,
+    cue_value_origins: HashMap<(FixtureId, String), CueListId>,
+    transport: Box<PendingCommandRollback>,
+}
+
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
@@ -16171,7 +17271,7 @@ enum PendingCommandRollback {
         follow: Option<TimelineFollowSummary>,
         guide_enabled: bool,
         loop_runtime: TimelineLoopRuntimeSummary,
-        follow_transition: Option<RuntimeTimelineFollowTransition>,
+        follow_transition: Box<Option<RuntimeTimelineFollowTransition>>,
         follow_transport: Option<RuntimeChildTransport>,
         nested_child_transports: Vec<RuntimeChildTransport>,
         effect_activations: Vec<RuntimeEffectActivation>,
@@ -16205,11 +17305,27 @@ enum PendingCommandRollback {
         click_scheduler: TimelineClickScheduler,
         last_error: Option<String>,
     },
+    /// Complete A image for DJ Link START. The image is restored by direct
+    /// assignment; rollback never re-enters the fallible Timeline installer.
+    RestoreDjLinkTimelineStart {
+        image: Box<DjLinkTimelineStartRollbackImage>,
+        receipt: Option<DjLinkCommandReceiptHandle>,
+    },
+    /// DJ Link loop/jump/release mutations are runtime transport commands,
+    /// but unlike the legacy Play/Pause lane they must never inherit a
+    /// blocking publication barrier. Keep their exact transport A image
+    /// tagged so the worker can use bounded try-write publication and restore
+    /// only this command when the shared snapshot is busy.
+    RestoreDjLinkTimelineTransport {
+        transport: Box<PendingCommandRollback>,
+        receipt: Option<DjLinkCommandReceiptHandle>,
+    },
     /// Complete A image for the one runtime-only canonical Play/Pause lane.
     /// The command may abort a Follow, pause an active fade or retime effect
     /// clocks, so a publication failure must restore more than its boolean.
     RestoreTimelineTransport {
         playing: bool,
+        position_ms: u64,
         transport_epoch: u64,
         transport_generation: u64,
         loop_runtime: TimelineLoopRuntimeSummary,
@@ -16222,7 +17338,7 @@ enum PendingCommandRollback {
         follow_natural_boundary_armed: bool,
         follow_runtime: TimelineFollowRuntimeSummary,
         follow_abort_ticks_remaining: u8,
-        follow_transition: Option<RuntimeTimelineFollowTransition>,
+        follow_transition: Box<Option<RuntimeTimelineFollowTransition>>,
         follow_transport: Option<RuntimeChildTransport>,
         follow_terminal_receipt: Option<TimelineFollowSettlementTerminalReceipt>,
         guide_cues: Vec<TimelineGuideCueSummary>,
@@ -16244,7 +17360,7 @@ enum PendingCommandRollback {
         timeline_video_layer_restores: HashMap<VideoLayerId, RuntimeTimelineVideoLayerRestore>,
         video_layers: Vec<RuntimeVideoLayer>,
         video_layer_fades: Vec<RuntimeVideoLayerFade>,
-        clock: BpmClock,
+        clock: Box<BpmClock>,
         click_scheduler: TimelineClickScheduler,
         last_error: Option<String>,
     },
@@ -16252,6 +17368,9 @@ enum PendingCommandRollback {
 
 impl PendingCommandRollback {
     fn restores_last_error(&self) -> bool {
+        if let Self::RestoreDjLinkTimelineTransport { transport, .. } = self {
+            return transport.restores_last_error();
+        }
         matches!(
             self,
             Self::RemoveAddedEffect { .. }
@@ -16275,9 +17394,26 @@ impl PendingCommandRollback {
                 | Self::RestoreTimelineAudioMaster { .. }
                 | Self::RestoreTimelineAdvancedAuthoring { .. }
                 | Self::RestoreTimelineBank { .. }
+                | Self::RestoreDjLinkTimelineStart { .. }
+                | Self::RestoreDjLinkTimelineTransport { .. }
                 | Self::RestoreTimelineTransport { .. }
                 | Self::RestoreTouchSurface { .. }
         )
+    }
+
+    fn is_dj_link(&self) -> bool {
+        matches!(
+            self,
+            Self::RestoreDjLinkTimelineStart { .. } | Self::RestoreDjLinkTimelineTransport { .. }
+        )
+    }
+
+    fn dj_link_receipt(&self) -> Option<DjLinkCommandReceiptHandle> {
+        match self {
+            Self::RestoreDjLinkTimelineStart { receipt, .. }
+            | Self::RestoreDjLinkTimelineTransport { receipt, .. } => receipt.clone(),
+            _ => None,
+        }
     }
 }
 
@@ -16372,6 +17508,12 @@ struct RuntimeAutoVj {
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
+    #[cfg(any(test, feature = "test-support"))]
+    test_project_snapshot_publication_barrier: Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
+    /// A DJ Link command is held here when an earlier normal command still
+    /// has a pending publication ACK. This keeps the bounded DJ publication
+    /// cycle from sharing a rollback batch with a blocking authored command.
+    deferred_normal_command: Option<QueuedEngineCommand>,
     /// Test-only deterministic seam for publication rollback coverage. The
     /// production definitive barrier blocks for the shared snapshot instead
     /// of manufacturing a timeout/failure under normal lock contention.
@@ -16659,6 +17801,13 @@ impl RuntimeDmxOutput {
     }
 }
 
+type ResolvedCueTargets = (
+    Vec<CueFixtureTarget>,
+    Vec<VideoLayerTarget>,
+    Vec<VideoOutputTarget>,
+    Vec<CueNodeGraphTarget>,
+);
+
 impl EngineRuntime {
     fn apply_video_clip_slot_published(
         &mut self,
@@ -16739,8 +17888,10 @@ impl EngineRuntime {
             Arc::new(RwLock::new(HashMap::new())),
             Arc::new(RwLock::new(TimelineAudioProjectionAuthority::default())),
             Arc::new(AtomicU64::new(1)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            (
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            ),
         )
     }
 
@@ -16753,17 +17904,22 @@ impl EngineRuntime {
             RwLock<TimelineAudioProjectionAuthority>,
         >,
         published_timeline_audio_publication_generation: Arc<AtomicU64>,
-        #[cfg(test)] test_fail_next_pending_publication: Arc<AtomicBool>,
-        #[cfg(test)] test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
+        #[cfg(test)] test_publication_failure_flags: (Arc<AtomicBool>, Arc<AtomicBool>),
     ) -> Self {
         let output_ownership_role = output_ownership_gate.status().effective_role;
         let dmx_sender_result =
             create_enabled_dmx_sender(&output, output_ownership_role.lighting_allowed());
         let last_error = dmx_sender_result.as_ref().err().cloned();
         let dmx_sender = dmx_sender_result.ok().flatten();
+        #[cfg(test)]
+        let (test_fail_next_pending_publication, test_media_asset_publication_failed_after_b) =
+            test_publication_failure_flags;
         Self {
             shared_telemetry,
             pending_command_acks: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            test_project_snapshot_publication_barrier: None,
+            deferred_normal_command: None,
             #[cfg(test)]
             fail_next_pending_publication: false,
             #[cfg(test)]
@@ -17320,9 +18476,8 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
-        validate_timeline_bank(&snapshot, &snapshot.video.media_assets).map_err(|error| {
+        validate_timeline_bank(&snapshot, &snapshot.video.media_assets).inspect_err(|error| {
             self.last_error = Some(error.clone());
-            error
         })?;
         validate_project_child_tempo_meter_maps(&snapshot.cues)?;
         // A legacy layer ISF is an exact renderer projection of its canonical
@@ -17877,8 +19032,8 @@ impl EngineRuntime {
             std::mem::replace(&mut self.video_outputs, loaded_video_outputs);
         let previous_effects = std::mem::replace(&mut self.effects, loaded_effects);
         let previous_node_graphs = std::mem::replace(&mut self.node_graphs, loaded_node_graphs);
-        let previous_timeline_due_cues = std::mem::replace(&mut self.timeline_due_cues, Vec::new());
-        let previous_pending_cues = std::mem::replace(&mut self.pending_cues, VecDeque::new());
+        let previous_timeline_due_cues = std::mem::take(&mut self.timeline_due_cues);
+        let previous_pending_cues = std::mem::take(&mut self.pending_cues);
 
         let result = (|| {
             self.recompute_timeline_event_layers()?;
@@ -18068,7 +19223,7 @@ impl EngineRuntime {
                     let runtime = self.restore_chaser_effect_request(runtime.request).ok()?;
                     Some(RuntimeEffect {
                         id: effect.id,
-                        kind: RuntimeEffectKind::Chaser(runtime),
+                        kind: RuntimeEffectKind::Chaser(Box::new(runtime)),
                         enabled: effect.enabled,
                         created_at: now,
                     })
@@ -18235,7 +19390,14 @@ impl EngineRuntime {
             // The S0 lane is always drained before normal authored/runtime
             // traffic, so a saturated ordinary queue cannot delay blackout.
             self.consume_commands(&safety_queue);
-            self.consume_commands(&queue);
+            // Flush the safety lane before normal traffic. In particular, a
+            // safety publication that needs the shared snapshot must not be
+            // folded into the bounded DJ Link rollback batch below.
+            self.publish_pending_command_acks(
+                queue.len().saturating_add(safety_queue.len()),
+                &snapshot,
+            );
+            self.consume_normal_commands(&queue);
             self.publish_pending_command_acks(
                 queue.len().saturating_add(safety_queue.len()),
                 &snapshot,
@@ -18271,12 +19433,46 @@ impl EngineRuntime {
     }
 
     fn consume_commands(&mut self, queue: &ArrayQueue<QueuedEngineCommand>) {
+        self.consume_commands_inner(queue, false);
+    }
+
+    fn consume_normal_commands(&mut self, queue: &ArrayQueue<QueuedEngineCommand>) {
+        self.consume_commands_inner(queue, true);
+    }
+
+    fn consume_commands_inner(
+        &mut self,
+        queue: &ArrayQueue<QueuedEngineCommand>,
+        include_deferred_normal_command: bool,
+    ) {
         let mut consumed = 0usize;
         let mut consumed_since_last_reset = 0usize;
         for _ in 0..COMMANDS_PER_TICK_LIMIT {
-            let Some(queued_command) = queue.pop() else {
+            let Some(queued_command) = (if include_deferred_normal_command {
+                self.deferred_normal_command.take().or_else(|| queue.pop())
+            } else {
+                queue.pop()
+            }) else {
                 break;
             };
+            let is_dj_link_command = matches!(
+                queued_command.command,
+                EngineCommand::DjLinkStartTimeline { .. }
+                    | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                    | EngineCommand::DjLinkTimelineBeatJump { .. }
+                    | EngineCommand::DjLinkRelease { .. }
+            );
+            if include_deferred_normal_command
+                && is_dj_link_command
+                && !self.pending_command_acks.is_empty()
+            {
+                // The previous normal command will be published at the end
+                // of this engine turn. Retain FIFO authority for DJ Link and
+                // do not let it inherit that command's blocking publication
+                // policy or rollback image.
+                self.deferred_normal_command = Some(queued_command);
+                break;
+            }
             self.record_command_queue_latency(queued_command.queued_at.elapsed());
             self.track_command_for_dmx_tick(queued_command.queued_at);
             let resets_telemetry = matches!(queued_command.command, EngineCommand::ResetTelemetry);
@@ -18331,6 +19527,10 @@ impl EngineRuntime {
                     | EngineCommand::UpdateColorMappingEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::SetTimelinePlayingPublished { .. }
+                    | EngineCommand::DjLinkStartTimeline { .. }
+                    | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                    | EngineCommand::DjLinkTimelineBeatJump { .. }
+                    | EngineCommand::DjLinkRelease { .. }
                     | EngineCommand::SafetyBlackoutEngagePublished { .. }
                     | EngineCommand::SafetyBlackoutReleasePublished { .. }
                     | EngineCommand::UpsertNodeGraphPublished { .. }
@@ -18361,6 +19561,8 @@ impl EngineRuntime {
                 self.low_latency_dmx_tick_requested = true;
             }
             self.apply_command(queued_command.command);
+            #[cfg(any(test, feature = "test-support"))]
+            self.wait_for_test_project_snapshot_publication_barrier();
             consumed = consumed.saturating_add(1);
             if resets_telemetry {
                 consumed_since_last_reset = 0;
@@ -18368,6 +19570,13 @@ impl EngineRuntime {
                 consumed_since_last_reset = consumed_since_last_reset.saturating_add(1);
             }
             if publication_barrier {
+                break;
+            }
+            if include_deferred_normal_command && is_dj_link_command {
+                // Keep the DJ receipt in its own publication cycle even when
+                // it was the first normal command in the queue.  Otherwise a
+                // later authored command could join this batch and make the
+                // bounded DJ try-write inherit an unrelated blocking image.
                 break;
             }
         }
@@ -18385,6 +19594,13 @@ impl EngineRuntime {
         self.apply_command_inner(command);
         if rebuild_effect_activations && self.pending_command_acks.len() == pending_ack_count {
             self.rebuild_effect_activations(Instant::now());
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn wait_for_test_project_snapshot_publication_barrier(&mut self) {
+        if let Some(barrier) = self.test_project_snapshot_publication_barrier.take() {
+            barrier.enter_and_wait();
         }
     }
 
@@ -19081,6 +20297,8 @@ impl EngineRuntime {
                 admission,
                 ack,
             } => {
+                #[cfg(any(test, feature = "test-support"))]
+                let publication_barrier = admission.publication_barrier();
                 let admitted = admission.try_admit_before(expires_at);
                 let result =
                     if !admitted {
@@ -19089,6 +20307,8 @@ impl EngineRuntime {
                     } else {
                         self.load_project_snapshot_checked(snapshot)
                     };
+                #[cfg(any(test, feature = "test-support"))]
+                let accepted = admitted && result.is_ok();
                 let rollback = if admitted && result.is_ok() {
                     PendingCommandRollback::ProjectSnapshotApplied
                 } else {
@@ -19101,6 +20321,10 @@ impl EngineRuntime {
                     publication_error:
                         "Project snapshot load could not publish an acknowledged snapshot",
                 });
+                #[cfg(any(test, feature = "test-support"))]
+                if accepted {
+                    self.test_project_snapshot_publication_barrier = publication_barrier;
+                }
             }
             EngineCommand::RequestPersistenceSnapshot { response } => {
                 let _ = response.send(self.build_persistence_snapshot());
@@ -19768,7 +20992,7 @@ impl EngineRuntime {
                     self.resolve_chaser_effect_request(request).map(|runtime| {
                         self.effects.push(RuntimeEffect {
                             id: effect_id,
-                            kind: RuntimeEffectKind::Chaser(runtime),
+                            kind: RuntimeEffectKind::Chaser(Box::new(runtime)),
                             enabled,
                             created_at: Instant::now(),
                         });
@@ -20162,7 +21386,7 @@ impl EngineRuntime {
                             if !matches!(&effect.kind, RuntimeEffectKind::Chaser(_)) {
                                 return Err(format!("Effect {effect_id} is not a Chaser"));
                             }
-                            effect.kind = RuntimeEffectKind::Chaser(runtime);
+                            effect.kind = RuntimeEffectKind::Chaser(Box::new(runtime));
                             effect.created_at = Instant::now();
                             Ok(())
                         })
@@ -20774,11 +21998,14 @@ impl EngineRuntime {
                 effect_targets,
             } => {
                 let result = self.create_cue_state(
-                    cue_id,
-                    DEFAULT_CUE_LIST_ID,
-                    None,
-                    RecallMode::Coexist,
-                    authored_beats,
+                    CueCreateMetadata {
+                        cue_id,
+                        cue_list_id: DEFAULT_CUE_LIST_ID,
+                        group_id: None,
+                        recall_mode: RecallMode::Coexist,
+                        authored_beats,
+                        replace_existing: true,
+                    },
                     CueBody {
                         label,
                         fade_ms,
@@ -20788,7 +22015,6 @@ impl EngineRuntime {
                         node_graph_targets,
                         effect_targets,
                     },
-                    true,
                 );
                 self.last_error = result.err();
             }
@@ -20832,11 +22058,14 @@ impl EngineRuntime {
                     Err("Cue create expired before engine execution".to_string())
                 } else {
                     self.create_cue_state(
-                        cue_id,
-                        cue_list_id,
-                        group_id,
-                        recall_mode,
-                        authored_beats,
+                        CueCreateMetadata {
+                            cue_id,
+                            cue_list_id,
+                            group_id,
+                            recall_mode,
+                            authored_beats,
+                            replace_existing: false,
+                        },
                         CueBody {
                             label,
                             fade_ms,
@@ -20846,7 +22075,6 @@ impl EngineRuntime {
                             node_graph_targets,
                             effect_targets,
                         },
-                        false,
                     )
                 };
                 self.last_error = if result.is_ok() {
@@ -20894,11 +22122,14 @@ impl EngineRuntime {
                     Err("Empty Cue creation requires the New Scene label".to_string())
                 } else {
                     self.create_cue_state(
-                        cue_id,
-                        cue_list_id,
-                        None,
-                        RecallMode::Coexist,
-                        None,
+                        CueCreateMetadata {
+                            cue_id,
+                            cue_list_id,
+                            group_id: None,
+                            recall_mode: RecallMode::Coexist,
+                            authored_beats: None,
+                            replace_existing: false,
+                        },
                         CueBody {
                             label,
                             fade_ms: 0,
@@ -20908,7 +22139,6 @@ impl EngineRuntime {
                             node_graph_targets: Vec::new(),
                             effect_targets: Vec::new(),
                         },
-                        false,
                     )
                 };
                 self.last_error = if result.is_ok() {
@@ -21006,6 +22236,146 @@ impl EngineRuntime {
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue update was rolled back",
+                });
+            }
+            EngineCommand::MoveCueBetweenBanksPublished {
+                cue_id,
+                target_cue_list_id,
+                target_group_id,
+                target_cue_id,
+                insert_after,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = (|| {
+                    if Instant::now() > expires_at {
+                        return Err("Scene Bank move expired before engine execution".to_string());
+                    }
+                    if !self
+                        .cue_lists
+                        .iter()
+                        .any(|cue_list| cue_list.id == target_cue_list_id)
+                    {
+                        return Err(format!("Cue List {target_cue_list_id} was not found"));
+                    }
+                    if target_cue_id == Some(cue_id) {
+                        return Err("Scene Bank move target cannot be the source Cue".to_string());
+                    }
+                    if target_cue_id.is_none() && !insert_after {
+                        return Err(
+                            "Scene Bank move without a target must insert at the destination end"
+                                .to_string(),
+                        );
+                    }
+                    let target_group_id = target_group_id
+                        .map(|group_id| group_id.trim().to_string())
+                        .filter(|group_id| !group_id.is_empty());
+                    let mut candidate = self.cues.clone();
+                    let index = candidate
+                        .iter()
+                        .position(|cue| cue.id == cue_id)
+                        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+                    let previous_cue_list_id = candidate[index].cue_list_id;
+                    candidate[index].cue_list_id = target_cue_list_id;
+                    candidate[index].group_id = target_group_id;
+                    let moved = candidate.remove(index);
+                    let insert_index = match target_cue_id {
+                        Some(target_cue_id) => {
+                            let target_index = candidate
+                                .iter()
+                                .position(|cue| cue.id == target_cue_id)
+                                .ok_or_else(|| {
+                                    format!("Target Cue {target_cue_id} was not found")
+                                })?;
+                            if candidate[target_index].cue_list_id != target_cue_list_id {
+                                return Err(format!(
+                                    "Target Cue {target_cue_id} does not belong to Cue List {target_cue_list_id}"
+                                ));
+                            }
+                            target_index + usize::from(insert_after)
+                        }
+                        None => candidate
+                            .iter()
+                            .rposition(|cue| cue.cue_list_id == target_cue_list_id)
+                            .map(|index| index + 1)
+                            .unwrap_or(candidate.len()),
+                    };
+                    candidate.insert(insert_index, moved);
+                    let move_effect_activation = self
+                        .cue_list_effect_activation_cues
+                        .get(&previous_cue_list_id)
+                        .copied()
+                        == Some(cue_id);
+                    let was_active_group_cue = self
+                        .active_group_cue_ids
+                        .values()
+                        .any(|active_cue_id| *active_cue_id == cue_id);
+                    for cue_list in &mut self.cue_lists {
+                        if cue_list.active_cue_id == Some(cue_id) {
+                            cue_list.active_cue_id = None;
+                        }
+                    }
+                    if self.active_cue_id == Some(cue_id) {
+                        if let Some(cue_list) = self
+                            .cue_lists
+                            .iter_mut()
+                            .find(|cue_list| cue_list.id == target_cue_list_id)
+                        {
+                            cue_list.active_cue_id = Some(cue_id);
+                        }
+                    }
+                    if move_effect_activation && previous_cue_list_id != target_cue_list_id {
+                        self.cue_list_effect_activation_cues
+                            .remove(&previous_cue_list_id);
+                        self.cue_list_effect_activation_cues
+                            .insert(target_cue_list_id, cue_id);
+                    }
+                    self.cues = candidate;
+                    if was_active_group_cue {
+                        let group_id = self
+                            .cues
+                            .iter()
+                            .find(|cue| cue.id == cue_id)
+                            .and_then(|cue| cue.group_id.clone());
+                        self.active_group_cue_ids
+                            .retain(|_, active_cue_id| *active_cue_id != cue_id);
+                        if let Some(group_id) = group_id {
+                            self.active_group_cue_ids.insert(group_id, cue_id);
+                        }
+                    }
+                    self.rebuild_cue_value_origins();
+                    Ok(())
+                })();
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Scene Bank move could not publish an acknowledged snapshot",
                 });
             }
             EngineCommand::SetCueEffectTargetsPublished {
@@ -22638,7 +24008,7 @@ impl EngineRuntime {
                     follow: self.timeline_follow.clone(),
                     guide_enabled: self.timeline_guide_enabled,
                     loop_runtime: self.timeline_loop_runtime.clone(),
-                    follow_transition: self.timeline_follow_transition.clone(),
+                    follow_transition: Box::new(self.timeline_follow_transition.clone()),
                     follow_transport: self.timeline_follow_transport.clone(),
                     nested_child_transports: self.nested_child_transports.clone(),
                     effect_activations: self.effect_activations.clone(),
@@ -23054,10 +24424,46 @@ impl EngineRuntime {
             EngineCommand::StartTimeline { timeline_id } => {
                 self.last_error = self.start_timeline_runtime(timeline_id).err();
             }
-            EngineCommand::DjLinkStartTimeline { timeline_id, ack } => {
-                let result = self.start_timeline_runtime(timeline_id);
-                self.last_error = result.clone().err();
-                let _ = ack.send(result);
+            EngineCommand::DjLinkStartTimeline {
+                timeline_id,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineStart {
+                    image: Box::new(self.dj_link_timeline_start_rollback_image()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.start_timeline_runtime(timeline_id)
+                } else {
+                    Err("DJ Link timeline start expired or was cancelled before commit".to_string())
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link timeline start was rolled back",
+                });
             }
             EngineCommand::SetTimelinePlayingPublished {
                 expected_epoch,
@@ -23121,32 +24527,128 @@ impl EngineRuntime {
             EngineCommand::DjLinkSetTimelineLoopAbsolute {
                 division,
                 enabled,
+                expires_at,
+                admission,
                 ack,
             } => {
-                let result = self.set_timeline_loop_absolute_state(division, enabled);
-                self.last_error = result.clone().err();
-                let _ = ack.send(result);
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.set_timeline_loop_absolute_state(division, enabled)
+                } else {
+                    Err("DJ Link absolute loop expired or was cancelled before commit".to_string())
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link absolute loop was rolled back",
+                });
             }
             EngineCommand::DjLinkTimelineBeatJump {
                 timeline_id,
                 bars,
+                expires_at,
+                admission,
                 ack,
             } => {
-                let result = self.dj_link_timeline_beat_jump_state(timeline_id, bars);
-                self.last_error = result.clone().err();
-                let _ = ack.send(result);
-            }
-            EngineCommand::DjLinkRelease { ack } => {
-                let rollback = self.timeline_transport_rollback();
-                let result = (|| {
-                    self.set_timeline_loop_enabled_state(false);
-                    self.apply_timeline_playing_command(true, true).map(|_| ())
-                })();
-                if result.is_err() {
-                    self.rollback_pending_command(rollback);
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
                 }
-                self.last_error = result.clone().err();
-                let _ = ack.send(result);
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.dj_link_timeline_beat_jump_state(timeline_id, bars)
+                } else {
+                    Err("DJ Link beat jump expired or was cancelled before commit".to_string())
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link beat jump was rolled back",
+                });
+            }
+            EngineCommand::DjLinkRelease {
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    {
+                        self.set_timeline_loop_enabled_state(false);
+                        self.apply_timeline_playing_command(true, true).map(|_| ())
+                    }
+                } else {
+                    Err("DJ Link release expired or was cancelled before commit".to_string())
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error: "Engine snapshot was busy; DJ Link release was rolled back",
+                });
             }
             EngineCommand::ToggleTimelineLoop => {
                 let enabled = matches!(
@@ -24641,7 +26143,7 @@ impl EngineRuntime {
                     .video_output_mapping_presets
                     .iter()
                     .find(|preset| preset.label == label)
-                    .map(|preset| preset.mapping.clone())
+                    .map(|preset| preset.mapping)
                 else {
                     self.last_error =
                         Some(format!("Video output mapping preset {label} was not found"));
@@ -24719,6 +26221,20 @@ impl EngineRuntime {
         }
         let pending = std::mem::take(&mut self.pending_command_acks);
         let requires_publication = pending.iter().any(|pending| pending.result.is_ok());
+        let contains_dj_link = pending
+            .iter()
+            .any(|pending| pending.result.is_ok() && pending.rollback.is_dj_link());
+        let contains_other_success = pending
+            .iter()
+            .any(|pending| pending.result.is_ok() && !pending.rollback.is_dj_link());
+        // The run loop flushes the safety lane first and defers a normal DJ
+        // command whenever an earlier normal ACK is pending. Keep this
+        // invariant explicit: a bounded DJ rollback must never be mixed with
+        // a blocking authored/safety publication image.
+        debug_assert!(
+            !(contains_dj_link && contains_other_success),
+            "DJ Link pending ACKs must have an isolated publication cycle"
+        );
         let waits_for_definitive_publication = pending.iter().any(|pending| {
             pending.result.is_ok()
                 && matches!(
@@ -24734,6 +26250,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
                         | PendingCommandRollback::RestoreVideoEffectCatalog { .. }
                         | PendingCommandRollback::RestoreVideoLayerTransitionRuntime { .. }
+                        | PendingCommandRollback::RestoreTimelineTransport { .. }
                 )
         });
         #[cfg(test)]
@@ -24745,24 +26262,56 @@ impl EngineRuntime {
             || force_publication_failure_from_handle;
         #[cfg(not(test))]
         let force_publication_failure = false;
-        let (mut prepared_audio_projection, audio_projection_error) =
-            if requires_publication && !force_publication_failure {
-                match self.prepare_timeline_audio_projection_publication() {
-                    Ok(prepared) => (prepared, None),
-                    Err(error) => (None, Some(error)),
-                }
-            } else {
-                (None, None)
-            };
-        let (mut prepared_audio_commit, audio_commit_error) =
-            if requires_publication && !force_publication_failure {
-                match self.prepare_timeline_audio_commit_publication() {
-                    Ok(prepared) => (prepared, None),
-                    Err(error) => (None, Some(error)),
-                }
-            } else {
-                (None, None)
-            };
+        let dj_link_receipt = contains_dj_link.then(|| {
+            pending
+                .iter()
+                .find_map(|pending| pending.rollback.dj_link_receipt())
+        });
+        let dj_link_receipt = dj_link_receipt.flatten();
+        debug_assert!(
+            !contains_dj_link
+                || pending
+                    .iter()
+                    .filter(|pending| pending.result.is_ok() && pending.rollback.is_dj_link())
+                    .count()
+                    == 1,
+            "a DJ Link publication cycle must contain exactly one successful command"
+        );
+        let dj_link_cancelled_before_preparation = dj_link_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.is_cancelled());
+        if contains_dj_link
+            && requires_publication
+            && !force_publication_failure
+            && !dj_link_cancelled_before_preparation
+        {
+            // This can clone and walk variable-sized runtime collections. It
+            // belongs to cancellable Planning, before any shared guard or the
+            // Committing linearization point.
+            self.rebuild_effect_activations(Instant::now());
+        }
+        let (mut prepared_audio_projection, audio_projection_error) = if requires_publication
+            && !force_publication_failure
+            && !dj_link_cancelled_before_preparation
+        {
+            match self.prepare_timeline_audio_projection_publication() {
+                Ok(prepared) => (prepared, None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
+        let (mut prepared_audio_commit, audio_commit_error) = if requires_publication
+            && !force_publication_failure
+            && !dj_link_cancelled_before_preparation
+        {
+            match self.prepare_timeline_audio_commit_publication() {
+                Ok(prepared) => (prepared, None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
         if let Some(error) = audio_projection_error
             .as_ref()
             .or(audio_commit_error.as_ref())
@@ -24771,16 +26320,54 @@ impl EngineRuntime {
         }
         let audio_projection_ready =
             audio_projection_error.is_none() && audio_commit_error.is_none();
+        let mut prepared_dj_snapshot = if contains_dj_link
+            && requires_publication
+            && !force_publication_failure
+            && audio_projection_ready
+            && !dj_link_cancelled_before_preparation
+        {
+            // Snapshot construction performs every variable-size clone,
+            // collection walk, render projection, and allocation before the
+            // worker owns either shared publication guard.
+            Some(self.build_snapshot(queue_depth))
+        } else {
+            None
+        };
+        // The handler response owns a second canonical image so it never has
+        // to reacquire the shared snapshot after B commits. Perform this
+        // variable-sized clone while the receipt is still cancellable and no
+        // publication guard is held.
+        let mut prepared_dj_receipt_snapshot = prepared_dj_snapshot
+            .as_ref()
+            .map(|snapshot| Arc::new(snapshot.clone()));
         let published = if requires_publication {
             if force_publication_failure || !audio_projection_ready {
                 false
+            } else if contains_dj_link {
+                prepared_dj_snapshot
+                    .take()
+                    .is_some_and(|prepared_snapshot| {
+                        // DJ Link transport carries an exact runtime A image and
+                        // is intentionally bounded. Held readers or cancellation
+                        // leave both shared authorities at A and roll the
+                        // provisional worker-local image back before the tick.
+                        self.try_publish_dj_link_snapshot(
+                            snapshot,
+                            dj_link_receipt.as_deref(),
+                            prepared_snapshot,
+                            &mut prepared_dj_receipt_snapshot,
+                            &mut prepared_audio_projection,
+                            &mut prepared_audio_commit,
+                        )
+                    })
             } else {
                 if waits_for_definitive_publication {
-                    // A project load has already committed its complete runtime
-                    // replacement. It therefore cannot be rolled back through an
-                    // EngineSnapshot if the shared publication lock is busy: that
-                    // snapshot omits runtime-only state. Hold the publication
-                    // barrier until the authoritative replacement is visible.
+                    // These commands commit a complete runtime replacement or
+                    // a broad transport image. They therefore cannot be
+                    // rolled back through an EngineSnapshot if the shared
+                    // publication lock is busy: that snapshot omits runtime-
+                    // only state. Hold the publication barrier until the
+                    // authoritative result is visible.
                     let mut guard = snapshot
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -24861,22 +26448,155 @@ impl EngineRuntime {
                     && matches!(
                         &pending.rollback,
                         PendingCommandRollback::RestoreTimelineAdvancedAuthoring { .. }
+                            | PendingCommandRollback::RestoreDjLinkTimelineStart { .. }
+                            | PendingCommandRollback::RestoreDjLinkTimelineTransport { .. }
                             | PendingCommandRollback::RestoreTimelineTransport { .. }
                     )
             });
         // That rollback restores a live Follow subtree and its activation
         // ranges verbatim. Rebuilding here would derive only authored root
         // transports and tear the restored Follow/nested subtree down again.
-        if pending.iter().any(|pending| pending.result.is_ok()) && !restored_timeline_runtime {
+        if pending.iter().any(|pending| pending.result.is_ok())
+            && !restored_timeline_runtime
+            && !contains_dj_link
+        {
             self.rebuild_effect_activations(Instant::now());
         }
         for pending in pending {
-            let result = if pending.result.is_ok() && !published {
+            let pending_was_success = pending.result.is_ok();
+            let result = if pending_was_success && !published {
                 Err(pending.publication_error.to_string())
             } else {
                 pending.result
             };
-            let _ = pending.ack.send(result);
+            if let Some(receipt) = pending.rollback.dj_link_receipt() {
+                // A successful DJ publication finished its receipt while the
+                // commit mutex and both publication guards were still held.
+                // Pre-commit cancellation/failure completes only after exact
+                // A rollback. The one-shot legacy channel is explicitly
+                // nonblocking so it cannot extend the committed region.
+                if !(pending_was_success && published) {
+                    receipt.finish(result.clone());
+                }
+                let _ = pending.ack.try_send(result);
+            } else {
+                let _ = pending.ack.send(result);
+            }
+        }
+    }
+
+    /// Commit a DJ Link snapshot and its audio projection without waiting on
+    /// either shared lock. Both locks are acquired before mutating either
+    /// publication, so a mixed pending batch can never expose a half-published
+    /// DJ image or leave a handler waiting behind an unrelated reader.
+    fn try_publish_dj_link_snapshot(
+        &mut self,
+        snapshot: &RwLock<EngineSnapshot>,
+        receipt: Option<&DjLinkCommandReceipt>,
+        prepared_snapshot: EngineSnapshot,
+        prepared_receipt_snapshot: &mut Option<Arc<EngineSnapshot>>,
+        prepared_audio_projection: &mut Option<(
+            TimelineAudioProjectionAuthority,
+            TimelineAudioProjectionSignature,
+        )>,
+        prepared_audio_commit: &mut Option<(u64, TimelineAudioCommitSignature)>,
+    ) -> bool {
+        let deadline = Instant::now() + DJ_LINK_PUBLICATION_RESERVATION_BUDGET;
+        loop {
+            if receipt.is_some_and(DjLinkCommandReceipt::is_cancelled) {
+                return false;
+            }
+            let mut snapshot_guard = match snapshot.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => return false,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::yield_now();
+                    continue;
+                }
+            };
+            let mut projection_guard = if prepared_audio_projection.is_some() {
+                match self
+                    .published_timeline_audio_projection_authority
+                    .try_write()
+                {
+                    Ok(guard) => Some(guard),
+                    Err(std::sync::TryLockError::Poisoned(_)) => return false,
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        drop(snapshot_guard);
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        std::thread::yield_now();
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+
+            if receipt.is_some_and(DjLinkCommandReceipt::is_cancelled) {
+                return false;
+            }
+            let commit_state = if let Some(receipt) = receipt {
+                let Some(response_snapshot) = prepared_receipt_snapshot.take() else {
+                    return false;
+                };
+                // This private result slot is prepared before ResourcesReserved
+                // and remains invisible until Finished(Ok). No receipt mutex is
+                // retained while any external guard is acquired.
+                receipt.prepare_committed_snapshot(response_snapshot);
+                if !receipt.reserve_resources() {
+                    return false;
+                }
+                receipt.run_resources_reserved_hook();
+                let Some(state) = receipt.begin_commit() else {
+                    return false;
+                };
+                Some((receipt, state))
+            } else {
+                None
+            };
+
+            // From begin_commit through finish_commit this call graph contains
+            // only moves/swaps, Copy assignments, atomic stores and the
+            // receipt transition. Old variable-size images are retained and
+            // dropped only after Finished has been published.
+            let old_snapshot = std::mem::replace(&mut *snapshot_guard, prepared_snapshot);
+            let old_audio_commit_signature =
+                prepared_audio_commit.take().map(|(generation, signature)| {
+                    self.timeline_audio_publication_generation = generation;
+                    std::mem::replace(&mut self.timeline_audio_commit_signature, signature)
+                });
+            self.published_timeline_audio_publication_generation.store(
+                self.timeline_audio_publication_generation,
+                Ordering::Release,
+            );
+            let old_audio_projection_signature =
+                prepared_audio_projection
+                    .take()
+                    .map(|(authority, signature)| {
+                        self.timeline_audio_projection_authority = authority;
+                        let old = std::mem::replace(
+                            &mut self.timeline_audio_projection_signature,
+                            signature,
+                        );
+                        if let Some(guard) = projection_guard.as_mut() {
+                            **guard = authority;
+                        }
+                        old
+                    });
+            if let Some((receipt, state)) = commit_state {
+                receipt.finish_commit(state, Ok(()));
+            }
+            drop(projection_guard);
+            drop(snapshot_guard);
+            drop(old_snapshot);
+            drop(old_audio_commit_signature);
+            drop(old_audio_projection_signature);
+            return true;
         }
     }
 
@@ -25338,7 +27058,7 @@ impl EngineRuntime {
                 self.timeline_follow = follow;
                 self.timeline_guide_enabled = guide_enabled;
                 self.timeline_loop_runtime = loop_runtime;
-                self.timeline_follow_transition = follow_transition;
+                self.timeline_follow_transition = *follow_transition;
                 self.timeline_follow_transport = follow_transport;
                 self.nested_child_transports = nested_child_transports;
                 self.effect_activations = effect_activations;
@@ -25390,8 +27110,72 @@ impl EngineRuntime {
                 self.timeline_click_scheduler = click_scheduler;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreDjLinkTimelineStart { image, .. } => {
+                let DjLinkTimelineStartRollbackImage {
+                    timeline_bank,
+                    timeline_id,
+                    timeline_label,
+                    timeline_layers,
+                    timeline_events,
+                    timeline_automations,
+                    timeline_video_automations,
+                    timeline_audio,
+                    timeline_audio_clips,
+                    timeline_audio_clips_derived,
+                    timeline_audio_duration_ms,
+                    timeline_video_clips,
+                    timeline_phases,
+                    timeline_item_groups,
+                    timeline_loop_region,
+                    timeline_follow,
+                    timeline_guide_enabled,
+                    timeline_audio_offset_ms,
+                    timeline_audio_muted,
+                    timeline_metronome_enabled,
+                    timeline_count_in_beats,
+                    timeline_tempo_meter_map,
+                    timeline_tempo_meter_map_version,
+                    timeline_due_cues,
+                    values,
+                    cue_value_origins,
+                    transport,
+                } = *image;
+                self.timeline_bank = timeline_bank;
+                self.timeline_id = timeline_id;
+                self.timeline_label = timeline_label;
+                self.timeline_layers = timeline_layers;
+                self.timeline_events = timeline_events;
+                self.timeline_automations = timeline_automations;
+                self.timeline_video_automations = timeline_video_automations;
+                self.timeline_audio = timeline_audio;
+                self.timeline_audio_clips = timeline_audio_clips;
+                self.timeline_audio_clips_derived = timeline_audio_clips_derived;
+                self.timeline_audio_duration_ms = timeline_audio_duration_ms;
+                self.timeline_video_clips = timeline_video_clips;
+                self.timeline_phases = timeline_phases;
+                self.timeline_item_groups = timeline_item_groups;
+                self.timeline_loop_region = timeline_loop_region;
+                self.timeline_follow = timeline_follow;
+                self.timeline_guide_enabled = timeline_guide_enabled;
+                self.timeline_audio_offset_ms = timeline_audio_offset_ms;
+                self.timeline_audio_muted = timeline_audio_muted;
+                self.timeline_metronome_enabled = timeline_metronome_enabled;
+                self.timeline_count_in_beats = timeline_count_in_beats;
+                self.timeline_tempo_meter_map = timeline_tempo_meter_map;
+                self.timeline_tempo_meter_map_version = timeline_tempo_meter_map_version;
+                self.timeline_due_cues = timeline_due_cues;
+                self.values = values;
+                self.cue_value_origins = cue_value_origins;
+                // No validation, allocation or authority successor is needed:
+                // this exact runtime image was captured before provisional B.
+                self.rollback_pending_command(*transport);
+            }
+            PendingCommandRollback::RestoreDjLinkTimelineTransport { transport, .. } => {
+                self.rollback_pending_command(*transport);
+            }
             PendingCommandRollback::RestoreTimelineTransport {
                 playing,
+                position_ms,
                 transport_epoch,
                 transport_generation,
                 loop_runtime,
@@ -25431,6 +27215,7 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.timeline_playing = playing;
+                self.timeline_position_ms = position_ms;
                 self.timeline_transport_epoch = transport_epoch;
                 self.timeline_transport_generation = transport_generation;
                 self.timeline_loop_runtime = loop_runtime;
@@ -25443,7 +27228,7 @@ impl EngineRuntime {
                 self.timeline_follow_natural_boundary_armed = follow_natural_boundary_armed;
                 self.timeline_follow_runtime = follow_runtime;
                 self.timeline_follow_abort_ticks_remaining = follow_abort_ticks_remaining;
-                self.timeline_follow_transition = follow_transition;
+                self.timeline_follow_transition = *follow_transition;
                 self.timeline_follow_transport = follow_transport;
                 self.timeline_follow_terminal_settlement_receipt = follow_terminal_receipt;
                 self.timeline_guide_cues = guide_cues;
@@ -25465,7 +27250,7 @@ impl EngineRuntime {
                 self.timeline_video_layer_restores = timeline_video_layer_restores;
                 self.video_layers = video_layers;
                 self.video_layer_fades = video_layer_fades;
-                self.clock = clock;
+                self.clock = *clock;
                 self.timeline_click_scheduler = click_scheduler;
                 self.last_error = last_error;
             }
@@ -26380,13 +28165,13 @@ impl EngineRuntime {
             auto_vj_selection_token(self.auto_vj.config.seed, show_revision, boundary_index);
         let candidate_count = self.auto_vj.config.eligible_layer_ids.len();
         let mut candidate_index = (selection_token % candidate_count as u64) as usize;
-        if self.auto_vj.config.avoid_immediate_repeat && candidate_count > 1 {
-            if self.auto_vj.config.eligible_layer_ids[candidate_index]
+        if self.auto_vj.config.avoid_immediate_repeat
+            && candidate_count > 1
+            && self.auto_vj.config.eligible_layer_ids[candidate_index]
                 == self.auto_vj.last_selected_layer_id.unwrap_or(0)
-            {
-                let offset = 1 + ((selection_token >> 32) as usize % (candidate_count - 1));
-                candidate_index = (candidate_index + offset) % candidate_count;
-            }
+        {
+            let offset = 1 + ((selection_token >> 32) as usize % (candidate_count - 1));
+            candidate_index = (candidate_index + offset) % candidate_count;
         }
         let layer_id = self.auto_vj.config.eligible_layer_ids[candidate_index];
         let transition_ms = self.auto_vj.config.transition_ms;
@@ -27373,14 +29158,17 @@ impl EngineRuntime {
 
     fn create_cue_state(
         &mut self,
-        cue_id: CueId,
-        cue_list_id: CueListId,
-        group_id: Option<String>,
-        recall_mode: RecallMode,
-        authored_beats: Option<f32>,
+        metadata: CueCreateMetadata,
         body: CueBody,
-        replace_existing: bool,
     ) -> Result<(), String> {
+        let CueCreateMetadata {
+            cue_id,
+            cue_list_id,
+            group_id,
+            recall_mode,
+            authored_beats,
+            replace_existing,
+        } = metadata;
         if !self
             .cue_lists
             .iter()
@@ -27769,13 +29557,13 @@ impl EngineRuntime {
                         event.id, event.cue_id
                     )
                 })?;
-            if referenced.child_timeline.is_some() {
-                if self.child_reference_reaches(event.cue_id, owner_cue_id) {
-                    return Err(format!(
-                        "Cue {owner_cue_id} child timeline contains a cyclic reference through Cue {}",
-                        event.cue_id
-                    ));
-                }
+            if referenced.child_timeline.is_some()
+                && self.child_reference_reaches(event.cue_id, owner_cue_id)
+            {
+                return Err(format!(
+                    "Cue {owner_cue_id} child timeline contains a cyclic reference through Cue {}",
+                    event.cue_id
+                ));
             }
         }
         for event in &child.events {
@@ -27840,15 +29628,7 @@ impl EngineRuntime {
         video_targets: Vec<VideoLayerTarget>,
         video_output_targets: Vec<VideoOutputTarget>,
         node_graph_targets: Vec<CueNodeGraphTarget>,
-    ) -> Result<
-        (
-            Vec<CueFixtureTarget>,
-            Vec<VideoLayerTarget>,
-            Vec<VideoOutputTarget>,
-            Vec<CueNodeGraphTarget>,
-        ),
-        String,
-    > {
+    ) -> Result<ResolvedCueTargets, String> {
         let targets = targets
             .into_iter()
             .map(|target| {
@@ -28020,9 +29800,9 @@ impl EngineRuntime {
             EffectParamsSnapshot::Color(request) => {
                 RuntimeEffectKind::Color(self.resolve_color_effect_request(request.clone())?)
             }
-            EffectParamsSnapshot::Chaser(request) => {
-                RuntimeEffectKind::Chaser(self.resolve_chaser_effect_request(request.clone())?)
-            }
+            EffectParamsSnapshot::Chaser(request) => RuntimeEffectKind::Chaser(Box::new(
+                self.resolve_chaser_effect_request(request.clone())?,
+            )),
             EffectParamsSnapshot::Move(request) => {
                 // Cue-owned imports can deliberately retain a beam body whose
                 // current fixture profile exposes no Pan/Tilt pairs. Compile it
@@ -28060,17 +29840,20 @@ impl EngineRuntime {
         &self,
         owner_cue_id: CueId,
         mut child: ChildTimelineSummary,
-        parent_event_id: TimelineEventId,
-        window_start_ms: u64,
-        window_end_ms: u64,
-        iteration_period_ms: u64,
-        rate: f32,
-        loop_fill: bool,
-        source_offset_ms: i64,
-        direct_parent_cue_id: Option<CueId>,
-        parent_transport_id: Option<RuntimeChildTransportId>,
+        context: ChildTransportBuildContext,
         cue_dispatch: &HashMap<CueId, CueDispatchEntry>,
     ) -> Result<RuntimeChildTransport, String> {
+        let ChildTransportBuildContext {
+            parent_event_id,
+            window_start_ms,
+            window_end_ms,
+            iteration_period_ms,
+            rate,
+            loop_fill,
+            source_offset_ms,
+            direct_parent_cue_id,
+            parent_transport_id,
+        } = context;
         self.normalize_and_validate_child_timeline(owner_cue_id, &mut child)?;
         let tempo_driven = child.tempo_driven;
         let any_solo = child.layers.iter().any(|layer| layer.solo);
@@ -28249,15 +30032,17 @@ impl EngineRuntime {
             match self.build_child_transport(
                 parent_event.cue_id,
                 child,
-                parent_event.id,
-                parent_event.time_ms,
-                timeline_event_end_ms(&parent_event),
-                timeline_event_iteration_period_ms(&parent_event),
-                parent_event.rate.unwrap_or(1.0),
-                parent_event.loop_fill,
-                parent_event.source_offset_ms,
-                None,
-                None,
+                ChildTransportBuildContext {
+                    parent_event_id: parent_event.id,
+                    window_start_ms: parent_event.time_ms,
+                    window_end_ms: timeline_event_end_ms(&parent_event),
+                    iteration_period_ms: timeline_event_iteration_period_ms(&parent_event),
+                    rate: parent_event.rate.unwrap_or(1.0),
+                    loop_fill: parent_event.loop_fill,
+                    source_offset_ms: parent_event.source_offset_ms,
+                    direct_parent_cue_id: None,
+                    parent_transport_id: None,
+                },
                 &cue_dispatch,
             ) {
                 Ok(transport) => {
@@ -28285,15 +30070,17 @@ impl EngineRuntime {
             match self.build_child_transport(
                 cue_id,
                 child,
-                0,
-                0,
-                u64::MAX,
-                1,
-                1.0,
-                false,
-                0,
-                Some(cue_id),
-                None,
+                ChildTransportBuildContext {
+                    parent_event_id: 0,
+                    window_start_ms: 0,
+                    window_end_ms: u64::MAX,
+                    iteration_period_ms: 1,
+                    rate: 1.0,
+                    loop_fill: false,
+                    source_offset_ms: 0,
+                    direct_parent_cue_id: Some(cue_id),
+                    parent_transport_id: None,
+                },
                 &cue_dispatch,
             ) {
                 Ok(transport) => {
@@ -28385,15 +30172,17 @@ impl EngineRuntime {
             match self.build_child_transport(
                 event.cue_id,
                 child,
-                event.id,
-                event.time_ms,
-                timeline_event_end_ms(&event),
-                timeline_event_iteration_period_ms(&event),
-                event.rate.unwrap_or(1.0),
-                event.loop_fill,
-                event.source_offset_ms,
-                direct_parent_cue_id,
-                Some(parent_transport_id),
+                ChildTransportBuildContext {
+                    parent_event_id: event.id,
+                    window_start_ms: event.time_ms,
+                    window_end_ms: timeline_event_end_ms(&event),
+                    iteration_period_ms: timeline_event_iteration_period_ms(&event),
+                    rate: event.rate.unwrap_or(1.0),
+                    loop_fill: event.loop_fill,
+                    source_offset_ms: event.source_offset_ms,
+                    direct_parent_cue_id,
+                    parent_transport_id: Some(parent_transport_id),
+                },
                 cue_dispatch,
             ) {
                 Ok(mut transport) => {
@@ -30369,7 +32158,7 @@ impl EngineRuntime {
                 .any(|step| !step.target_group_ids.is_empty());
             match runtime_chaser_effect_from_request(runtime.request.clone(), fixtures, false) {
                 Ok(rebuilt) => {
-                    *runtime = rebuilt;
+                    **runtime = rebuilt;
                     !runtime.target_phase_offsets.is_empty()
                         || !runtime.beam_targets.is_empty()
                         || has_group_reference
@@ -31747,13 +33536,18 @@ impl EngineRuntime {
             .ok_or_else(|| "Active Timeline must exist in the Timeline bank".to_string())?;
         let active = prepared[active_index].0.clone();
         let runtime_events = prepared[active_index].1.clone();
-        let mut validation = EngineSnapshot::default();
-        validation.timeline = active.clone();
-        validation.timeline_bank = prepared
-            .iter()
-            .map(|(timeline, _)| timeline.clone())
-            .collect();
-        validation.video.media_assets = self.media_assets.clone();
+        let validation = EngineSnapshot {
+            timeline: active.clone(),
+            timeline_bank: prepared
+                .iter()
+                .map(|(timeline, _)| timeline.clone())
+                .collect(),
+            video: VideoSnapshot {
+                media_assets: self.media_assets.clone(),
+                ..VideoSnapshot::default()
+            },
+            ..EngineSnapshot::default()
+        };
         validate_timeline_bank(&validation, &self.media_assets)?;
 
         self.preflight_timeline_transport_authority_invalidation()?;
@@ -33084,14 +34878,16 @@ impl EngineRuntime {
             self.start_cue_at_index(
                 dispatch.cue_index,
                 dispatch.next_cue_index,
-                now,
-                pending.source,
-                pending.repeat_count,
-                pending.fade_override_ms,
-                pending.fade_started_at,
-                pending.timeline_effect_activation,
-                pending.child_transport_id,
-                pending.direct_child_anchor_at,
+                CueStartContext {
+                    now,
+                    source: pending.source,
+                    repeat_count: pending.repeat_count,
+                    fade_override_ms: pending.fade_override_ms,
+                    fade_started_at: pending.fade_started_at,
+                    timeline_effect_activation: pending.timeline_effect_activation,
+                    child_transport_id: pending.child_transport_id,
+                    direct_child_anchor_at: pending.direct_child_anchor_at,
+                },
             );
         }
         self.apply_active_fade(now);
@@ -33106,14 +34902,16 @@ impl EngineRuntime {
         self.start_cue_at_index(
             cue_index,
             next_cue_index,
-            now,
-            source,
-            1,
-            None,
-            None,
-            None,
-            None,
-            (source == PendingCueTriggerSource::Manual).then_some(now),
+            CueStartContext {
+                now,
+                source,
+                repeat_count: 1,
+                fade_override_ms: None,
+                fade_started_at: None,
+                timeline_effect_activation: None,
+                child_transport_id: None,
+                direct_child_anchor_at: (source == PendingCueTriggerSource::Manual).then_some(now),
+            },
         );
     }
 
@@ -33121,15 +34919,18 @@ impl EngineRuntime {
         &mut self,
         cue_index: usize,
         next_cue_index: Option<usize>,
-        now: Instant,
-        source: PendingCueTriggerSource,
-        repeat_count: u64,
-        fade_override_ms: Option<u64>,
-        fade_started_at: Option<Instant>,
-        timeline_effect_activation: Option<PendingTimelineEffectActivation>,
-        child_transport_id: Option<RuntimeChildTransportId>,
-        direct_child_anchor_at: Option<Instant>,
+        context: CueStartContext,
     ) {
+        let CueStartContext {
+            now,
+            source,
+            repeat_count,
+            fade_override_ms,
+            fade_started_at,
+            timeline_effect_activation,
+            child_transport_id,
+            direct_child_anchor_at,
+        } = context;
         if repeat_count == 0 {
             return;
         }
@@ -33393,8 +35194,8 @@ impl EngineRuntime {
             }
         }
         let video_output_start_opacities = video_output_targets
-            .iter()
-            .filter_map(|(output_id, _)| {
+            .keys()
+            .filter_map(|output_id| {
                 self.video_outputs
                     .iter()
                     .find(|output| output.summary.id == *output_id)
@@ -33475,7 +35276,7 @@ impl EngineRuntime {
                     layer.state = video_trigger_state(&layer.state, target_state);
                 }
             }
-            for (_, target) in &video_output_targets {
+            for target in video_output_targets.values() {
                 if video_output_timings
                     .get(&target.output_id)
                     .is_some_and(|(delay, _)| delay.is_zero())
@@ -35560,15 +37361,17 @@ impl EngineRuntime {
         let mut transport = self.build_child_transport(
             0,
             child,
-            0,
-            0,
-            u64::MAX,
-            target.duration_ms.max(1),
-            1.0,
-            false,
-            0,
-            Some(u64::MAX),
-            None,
+            ChildTransportBuildContext {
+                parent_event_id: 0,
+                window_start_ms: 0,
+                window_end_ms: u64::MAX,
+                iteration_period_ms: target.duration_ms.max(1),
+                rate: 1.0,
+                loop_fill: false,
+                source_offset_ms: 0,
+                direct_parent_cue_id: Some(u64::MAX),
+                parent_transport_id: None,
+            },
             &cue_dispatch,
         )?;
         transport.active = true;
@@ -35913,28 +37716,33 @@ impl EngineRuntime {
             {
                 if !target.audio_muted {
                     let position_ms = self.timeline_follow_runtime.elapsed_ms;
-                    active_child_clips.extend(target.audio_clips.iter().filter_map(|clip| {
-                        (clip.duration_ms > 0
-                            && timeline_audio_layer_is_effectively_audible(
-                                &target.layers,
-                                clip.layer_id,
-                            )
-                            && clip_is_available(clip)
-                            && position_ms >= clip.start_ms
-                            && position_ms < clip.start_ms.saturating_add(clip.duration_ms))
-                        .then(|| {
-                            (
-                                ChildTimelineAudioRuntimeRoot::Follow {
-                                    source_timeline_id: self.timeline_id,
-                                    target_timeline_id: target.id,
-                                    generation: self.timeline_follow_runtime.generation,
-                                    target_root: true,
-                                },
-                                Vec::new(),
-                                clip.id,
-                            )
-                        })
-                    }));
+                    active_child_clips.extend(
+                        target
+                            .audio_clips
+                            .iter()
+                            .filter(|&clip| {
+                                clip.duration_ms > 0
+                                    && timeline_audio_layer_is_effectively_audible(
+                                        &target.layers,
+                                        clip.layer_id,
+                                    )
+                                    && clip_is_available(clip)
+                                    && position_ms >= clip.start_ms
+                                    && position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+                            })
+                            .map(|clip| {
+                                (
+                                    ChildTimelineAudioRuntimeRoot::Follow {
+                                        source_timeline_id: self.timeline_id,
+                                        target_timeline_id: target.id,
+                                        generation: self.timeline_follow_runtime.generation,
+                                        target_root: true,
+                                    },
+                                    Vec::new(),
+                                    clip.id,
+                                )
+                            }),
+                    );
                 }
             }
         }
@@ -36302,6 +38110,38 @@ impl EngineRuntime {
             .ok_or_else(|| "Timeline audio transport revision is exhausted".to_string())
     }
 
+    fn dj_link_timeline_start_rollback_image(&self) -> DjLinkTimelineStartRollbackImage {
+        DjLinkTimelineStartRollbackImage {
+            timeline_bank: self.timeline_bank.clone(),
+            timeline_id: self.timeline_id,
+            timeline_label: self.timeline_label.clone(),
+            timeline_layers: self.timeline_layers.clone(),
+            timeline_events: self.timeline_events.clone(),
+            timeline_automations: self.timeline_automations.clone(),
+            timeline_video_automations: self.timeline_video_automations.clone(),
+            timeline_audio: self.timeline_audio.clone(),
+            timeline_audio_clips: self.timeline_audio_clips.clone(),
+            timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+            timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+            timeline_video_clips: self.timeline_video_clips.clone(),
+            timeline_phases: self.timeline_phases.clone(),
+            timeline_item_groups: self.timeline_item_groups.clone(),
+            timeline_loop_region: self.timeline_loop_region.clone(),
+            timeline_follow: self.timeline_follow.clone(),
+            timeline_guide_enabled: self.timeline_guide_enabled,
+            timeline_audio_offset_ms: self.timeline_audio_offset_ms,
+            timeline_audio_muted: self.timeline_audio_muted,
+            timeline_metronome_enabled: self.timeline_metronome_enabled,
+            timeline_count_in_beats: self.timeline_count_in_beats,
+            timeline_tempo_meter_map: self.timeline_tempo_meter_map.clone(),
+            timeline_tempo_meter_map_version: self.timeline_tempo_meter_map_version,
+            timeline_due_cues: self.timeline_due_cues.clone(),
+            values: self.values.clone(),
+            cue_value_origins: self.cue_value_origins.clone(),
+            transport: Box::new(self.timeline_transport_rollback()),
+        }
+    }
+
     /// Capture every runtime field the Play/Pause transition is permitted to
     /// touch. This image is deliberately broader than `{playing, generation}`:
     /// stopping an active Follow or pausing a Timeline fade has visible live
@@ -36309,6 +38149,7 @@ impl EngineRuntime {
     fn timeline_transport_rollback(&self) -> PendingCommandRollback {
         PendingCommandRollback::RestoreTimelineTransport {
             playing: self.timeline_playing,
+            position_ms: self.timeline_position_ms,
             transport_epoch: self.timeline_transport_epoch,
             transport_generation: self.timeline_transport_generation,
             loop_runtime: self.timeline_loop_runtime.clone(),
@@ -36321,7 +38162,7 @@ impl EngineRuntime {
             follow_natural_boundary_armed: self.timeline_follow_natural_boundary_armed,
             follow_runtime: self.timeline_follow_runtime.clone(),
             follow_abort_ticks_remaining: self.timeline_follow_abort_ticks_remaining,
-            follow_transition: self.timeline_follow_transition.clone(),
+            follow_transition: Box::new(self.timeline_follow_transition.clone()),
             follow_transport: self.timeline_follow_transport.clone(),
             follow_terminal_receipt: self.timeline_follow_terminal_settlement_receipt.clone(),
             guide_cues: self.timeline_guide_cues.clone(),
@@ -36343,7 +38184,7 @@ impl EngineRuntime {
             timeline_video_layer_restores: self.timeline_video_layer_restores.clone(),
             video_layers: self.video_layers.clone(),
             video_layer_fades: self.video_layer_fades.clone(),
-            clock: self.clock.clone(),
+            clock: Box::new(self.clock.clone()),
             click_scheduler: self.timeline_click_scheduler.clone(),
             last_error: self.last_error.clone(),
         }
@@ -36853,15 +38694,15 @@ impl EngineRuntime {
         // Complete is an event-domain terminal cue, not a visual-end cue.
         // It is published only after the successful settlement has installed
         // the target image and exactly once on this committed path.
-        self.push_timeline_guide_cue_with_generation(
-            transition.guide_enabled,
-            transition.guide_generation,
-            target_position_ms,
-            "Complete".to_string(),
-            TimelineGuideCueKind::Complete,
-            false,
-            None,
-        );
+        self.push_timeline_guide_cue_with_generation(TimelineGuideCueContext {
+            guide_enabled: transition.guide_enabled,
+            generation: transition.guide_generation,
+            at_ms: target_position_ms,
+            label: "Complete".to_string(),
+            cue: TimelineGuideCueKind::Complete,
+            predictive: false,
+            declared_frame_override: None,
+        });
         if !self.timeline_follow_bpm_is_externally_owned() {
             self.clock
                 .set_bpm_preserving_beat_position(transition.target_bpm, now);
@@ -37070,13 +38911,15 @@ impl EngineRuntime {
             TimelineFollowSettlementState::Fault => self
                 .settle_timeline_follow_failure_with_reserved_authority(
                     fault_text.unwrap_or_else(|| "Timeline Follow settlement failed".to_string()),
-                    now,
-                    terminal_transition.generation,
-                    terminal_transition.source_timeline_id,
-                    Some(terminal_transition.target),
-                    Some(terminal_transition.source_bpm),
-                    terminal_transition.fault_policy,
-                    terminal_transition.admission_reason,
+                    TimelineFollowFailureContext {
+                        now,
+                        generation: terminal_transition.generation,
+                        source_timeline_id: terminal_transition.source_timeline_id,
+                        target: Some(terminal_transition.target),
+                        source_bpm: Some(terminal_transition.source_bpm),
+                        fault_policy: terminal_transition.fault_policy,
+                        admission_reason: terminal_transition.admission_reason,
+                    },
                     reserved_terminal_authority
                         .expect("terminal Follow fault must reserve an authority successor"),
                 ),
@@ -37215,26 +39058,10 @@ impl EngineRuntime {
     fn settle_timeline_follow_failure(
         &mut self,
         error: String,
-        now: Instant,
-        generation: u64,
-        source_timeline_id: TimelineId,
-        target: Option<TimelineSnapshot>,
-        source_bpm: Option<f32>,
-        fault_policy: protocol::TimelineFollowFaultPolicy,
-        admission_reason: protocol::TimelineFollowAdmissionReason,
+        context: TimelineFollowFailureContext,
     ) -> Result<(), String> {
         let reserved = self.reserve_timeline_transport_authority_invalidation()?;
-        self.settle_timeline_follow_failure_with_reserved_authority(
-            error,
-            now,
-            generation,
-            source_timeline_id,
-            target,
-            source_bpm,
-            fault_policy,
-            admission_reason,
-            reserved,
-        )
+        self.settle_timeline_follow_failure_with_reserved_authority(error, context, reserved)
     }
 
     /// Settle a failure after the terminal path has already reserved the
@@ -37243,15 +39070,18 @@ impl EngineRuntime {
     fn settle_timeline_follow_failure_with_reserved_authority(
         &mut self,
         error: String,
-        now: Instant,
-        generation: u64,
-        source_timeline_id: TimelineId,
-        target: Option<TimelineSnapshot>,
-        source_bpm: Option<f32>,
-        fault_policy: protocol::TimelineFollowFaultPolicy,
-        admission_reason: protocol::TimelineFollowAdmissionReason,
+        context: TimelineFollowFailureContext,
         reserved: TimelineTransportAuthority,
     ) -> Result<(), String> {
+        let TimelineFollowFailureContext {
+            now,
+            generation,
+            source_timeline_id,
+            target,
+            source_bpm,
+            fault_policy,
+            admission_reason,
+        } = context;
         let revision_successors =
             if matches!(fault_policy, protocol::TimelineFollowFaultPolicy::Cut) && target.is_some()
             {
@@ -37344,15 +39174,19 @@ impl EngineRuntime {
         });
         if let Err(error) = self.settle_timeline_follow_failure(
             error,
-            now,
-            next_timeline_runtime_generation(self.timeline_follow_runtime.generation),
-            self.timeline_id,
-            target,
-            None,
-            follow
-                .map(|follow| follow.fault_policy)
-                .unwrap_or(protocol::TimelineFollowFaultPolicy::Fault),
-            admission_reason,
+            TimelineFollowFailureContext {
+                now,
+                generation: next_timeline_runtime_generation(
+                    self.timeline_follow_runtime.generation,
+                ),
+                source_timeline_id: self.timeline_id,
+                target,
+                source_bpm: None,
+                fault_policy: follow
+                    .map(|follow| follow.fault_policy)
+                    .unwrap_or(protocol::TimelineFollowFaultPolicy::Fault),
+                admission_reason,
+            },
         ) {
             self.last_error = Some(error);
         }
@@ -37477,13 +39311,15 @@ impl EngineRuntime {
                 }
                 if let Err(error) = self.settle_timeline_follow_failure_with_reserved_authority(
                     timeout,
-                    now,
-                    transition.generation,
-                    transition.source_timeline_id,
-                    Some(transition.target),
-                    Some(transition.source_bpm),
-                    transition.fault_policy,
-                    transition.admission_reason,
+                    TimelineFollowFailureContext {
+                        now,
+                        generation: transition.generation,
+                        source_timeline_id: transition.source_timeline_id,
+                        target: Some(transition.target),
+                        source_bpm: Some(transition.source_bpm),
+                        fault_policy: transition.fault_policy,
+                        admission_reason: transition.admission_reason,
+                    },
                     reserved,
                 ) {
                     self.last_error = Some(error);
@@ -37532,13 +39368,15 @@ impl EngineRuntime {
             Err(error) => {
                 if let Err(settlement_error) = self.settle_timeline_follow_failure(
                     error,
-                    now,
-                    transition.generation,
-                    transition.source_timeline_id,
-                    Some(transition.target),
-                    Some(transition.source_bpm),
-                    transition.fault_policy,
-                    transition.admission_reason,
+                    TimelineFollowFailureContext {
+                        now,
+                        generation: transition.generation,
+                        source_timeline_id: transition.source_timeline_id,
+                        target: Some(transition.target),
+                        source_bpm: Some(transition.source_bpm),
+                        fault_policy: transition.fault_policy,
+                        admission_reason: transition.admission_reason,
+                    },
                 ) {
                     self.last_error = Some(settlement_error);
                 }
@@ -37589,15 +39427,15 @@ impl EngineRuntime {
 
     fn push_timeline_guide_cue(&mut self, at_ms: u64, label: String, cue: TimelineGuideCueKind) {
         let predictive = matches!(cue, TimelineGuideCueKind::Phase { .. });
-        self.push_timeline_guide_cue_with_generation(
-            self.timeline_guide_enabled,
-            self.timeline_audio_transport_revision,
+        self.push_timeline_guide_cue_with_generation(TimelineGuideCueContext {
+            guide_enabled: self.timeline_guide_enabled,
+            generation: self.timeline_audio_transport_revision,
             at_ms,
             label,
             cue,
             predictive,
-            None,
-        );
+            declared_frame_override: None,
+        });
     }
 
     fn push_predicted_timeline_guide_cue(
@@ -37608,15 +39446,15 @@ impl EngineRuntime {
         label: String,
         cue: TimelineGuideCueKind,
     ) {
-        self.push_timeline_guide_cue_with_generation(
+        self.push_timeline_guide_cue_with_generation(TimelineGuideCueContext {
             guide_enabled,
             generation,
             at_ms,
             label,
             cue,
-            true,
-            None,
-        );
+            predictive: true,
+            declared_frame_override: None,
+        });
     }
 
     fn push_exact_predicted_timeline_guide_cue(
@@ -37628,27 +39466,27 @@ impl EngineRuntime {
         label: String,
         cue: TimelineGuideCueKind,
     ) {
-        self.push_timeline_guide_cue_with_generation(
+        self.push_timeline_guide_cue_with_generation(TimelineGuideCueContext {
             guide_enabled,
             generation,
             at_ms,
             label,
             cue,
-            true,
-            Some(sample_frame),
-        );
+            predictive: true,
+            declared_frame_override: Some(sample_frame),
+        });
     }
 
-    fn push_timeline_guide_cue_with_generation(
-        &mut self,
-        guide_enabled: bool,
-        generation: u64,
-        at_ms: u64,
-        label: String,
-        cue: TimelineGuideCueKind,
-        predictive: bool,
-        declared_frame_override: Option<u64>,
-    ) {
+    fn push_timeline_guide_cue_with_generation(&mut self, context: TimelineGuideCueContext) {
+        let TimelineGuideCueContext {
+            guide_enabled,
+            generation,
+            at_ms,
+            label,
+            cue,
+            predictive,
+            declared_frame_override,
+        } = context;
         if !guide_enabled {
             return;
         }
@@ -38311,14 +40149,14 @@ impl EngineRuntime {
     /// Advance one monotonically increasing transport segment. Returns true
     /// when a Scene Block jump changed the destination, in which case callers
     /// must not continue an A-B wrap using the discarded linear remainder.
-    fn planned_jump_for_segment<'a>(
-        plan: &'a TimelineTickDiscontinuityPlan,
+    fn planned_jump_for_segment(
+        plan: &TimelineTickDiscontinuityPlan,
         completed_wraps: u128,
         previous_position: u64,
         current_position: u64,
         include_previous: bool,
         include_current: bool,
-    ) -> Option<&'a TimelinePlannedJump> {
+    ) -> Option<&TimelinePlannedJump> {
         let jump = plan.jump.as_ref()?;
         if plan.loop_wraps != completed_wraps
             || jump.at_ms < previous_position
@@ -40587,7 +42425,7 @@ impl EngineRuntime {
         if output
             .monitor_identity
             .as_deref()
-            .map_or(true, |identity| identity.trim().is_empty())
+            .is_none_or(|identity| identity.trim().is_empty())
         {
             return Err("Display output requires a stable monitor identity".to_string());
         }
@@ -41113,7 +42951,7 @@ impl EngineRuntime {
                     .iter()
                     .map(runtime_video_layer_from_summary)
                     .collect::<Vec<_>>();
-                let output = sanitize_video_output(output);
+                let output = sanitize_video_output(*output);
                 self.media_assets = candidate_video.media_assets;
                 self.video_layers = next_layers;
                 self.video_layer_fades.clear();
@@ -42067,20 +43905,12 @@ impl EngineRuntime {
                 }
             }
         }
-        if effect.is_none() {
-            if let Some(index) = existing_chain_index {
-                candidate.effect_chains.remove(index);
-            }
-        } else {
+        if let Some(effect) = effect.as_ref() {
             let existing_stages = existing_chain_index
                 .and_then(|index| candidate.effect_chains.get(index))
                 .map(|chain| chain.stages.as_slice())
                 .unwrap_or_default();
-            let stages = canonical_stages_from_legacy_isf(
-                effect.as_ref().expect("checked is_some"),
-                existing_stages,
-                ids,
-            )?;
+            let stages = canonical_stages_from_legacy_isf(effect, existing_stages, ids)?;
             if let Some(index) = existing_chain_index {
                 candidate.effect_chains[index].bypassed = false;
                 candidate.effect_chains[index].stages = stages;
@@ -42098,6 +43928,8 @@ impl EngineRuntime {
                     stages,
                 });
             }
+        } else if let Some(index) = existing_chain_index {
+            candidate.effect_chains.remove(index);
         }
         candidate.layers[layer_index].isf_effect = effect;
         let layer_chain = candidate
@@ -43293,6 +45125,7 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
             | EngineCommand::CreateCuePublished { .. }
             | EngineCommand::UpdateCue { .. }
             | EngineCommand::UpdateCuePublished { .. }
+            | EngineCommand::MoveCueBetweenBanksPublished { .. }
             | EngineCommand::SetCueEffectTargetsPublished { .. }
             | EngineCommand::SetCueStepsPublished { .. }
             | EngineCommand::SetCueChildTimeline { .. }
@@ -44388,9 +46221,9 @@ fn copy_authored_visual_state_into_rendered(layer: &mut RuntimeVideoLayer) {
     layer.state.enabled = layer.authored_state.enabled;
     layer.state.solo = layer.authored_state.solo;
     layer.state.opacity = layer.authored_state.opacity;
-    layer.state.transform = layer.authored_state.transform.clone();
-    layer.state.color = layer.authored_state.color.clone();
-    layer.state.fx = layer.authored_state.fx.clone();
+    layer.state.transform = layer.authored_state.transform;
+    layer.state.color = layer.authored_state.color;
+    layer.state.fx = layer.authored_state.fx;
 }
 
 /// Compatibility layer commands historically edited `VideoLayerState`
@@ -45288,7 +47121,7 @@ fn sanitize_timeline_layer_label(layer: &mut TimelineLayerSummary) -> Result<(),
     Ok(())
 }
 
-fn normalize_timeline_layer_orders(layers: &mut Vec<TimelineLayerSummary>) -> Result<(), String> {
+fn normalize_timeline_layer_orders(layers: &mut [TimelineLayerSummary]) -> Result<(), String> {
     let mut ids = HashSet::with_capacity(layers.len());
     for layer in layers.iter_mut() {
         sanitize_timeline_layer_label(layer)?;
@@ -45393,7 +47226,7 @@ fn resolve_timeline_event_layer(
 }
 
 fn normalize_and_validate_timeline_layers(
-    layers: &mut Vec<TimelineLayerSummary>,
+    layers: &mut [TimelineLayerSummary],
     events: &[TimelineCueEventSummary],
 ) -> Result<(), String> {
     normalize_timeline_layer_orders(layers)?;
@@ -45408,7 +47241,7 @@ fn normalize_and_validate_timeline_layers(
 
 fn normalize_and_validate_timeline_audio_clips(
     layers: &[TimelineLayerSummary],
-    clips: &mut Vec<TimelineAudioClipSummary>,
+    clips: &mut [TimelineAudioClipSummary],
 ) -> Result<(), String> {
     let mut ids = HashSet::with_capacity(clips.len());
     for clip in clips.iter_mut() {
@@ -48408,7 +50241,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             target_indices: HashMap::new(),
             spatial: None,
         }),
-        EffectKind::Chaser => RuntimeEffectKind::Chaser(RuntimeChaserEffect {
+        EffectKind::Chaser => RuntimeEffectKind::Chaser(Box::new(RuntimeChaserEffect {
             request: effect.chaser.clone()?,
             step_order: Vec::new(),
             target_phase_offsets: HashMap::new(),
@@ -48426,7 +50259,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             feature_fixture_ids: Vec::new(),
             beam_targets: Vec::new(),
             beam_attribute_indices: HashMap::new(),
-        }),
+        })),
         EffectKind::Move => {
             let request = effect.move_effect.clone()?;
             let path = CompiledMovePath::compile(&request).ok()?;
@@ -48792,7 +50625,7 @@ fn runtime_effect_beam_intensity_attributes(
         .get(target.beam_index as usize)
         .or_else(|| {
             (target.beam_index == 0)
-                .then(|| fixture.color_binding.as_ref())
+                .then_some(fixture.color_binding.as_ref())
                 .flatten()
         })
         .map(|binding| binding.outputs.keys().cloned().collect::<Vec<_>>())
@@ -50253,17 +52086,16 @@ fn runtime_value_effect_from_request(
     })
 }
 
+type RuntimeValueSpatialEffectResult = (
+    RuntimeColorEffect,
+    HashMap<FixtureId, HashMap<String, RuntimeValueSpatialBinding>>,
+);
+
 fn runtime_value_spatial_effect(
     request: &ValueEffectRequest,
     fixture_ids: &[FixtureId],
     fixtures: &[RuntimeFixture],
-) -> Result<
-    (
-        RuntimeColorEffect,
-        HashMap<FixtureId, HashMap<String, RuntimeValueSpatialBinding>>,
-    ),
-    String,
-> {
+) -> Result<RuntimeValueSpatialEffectResult, String> {
     let mut pattern = request
         .spatial_pattern
         .clone()
@@ -52166,17 +53998,16 @@ fn runtime_color_effect_from_request(
     })
 }
 
+type RuntimeColorSpatialTargetsResult = (
+    Vec<RuntimeColorSpatialTarget>,
+    HashMap<FixtureId, HashMap<String, usize>>,
+);
+
 fn runtime_color_spatial_targets(
     request: &ColorEffectRequest,
     fixtures: &[RuntimeFixture],
     base_targets: &[RuntimeColorTarget],
-) -> Result<
-    (
-        Vec<RuntimeColorSpatialTarget>,
-        HashMap<FixtureId, HashMap<String, usize>>,
-    ),
-    String,
-> {
+) -> Result<RuntimeColorSpatialTargetsResult, String> {
     let pattern = request
         .spatial_pattern
         .as_ref()
@@ -52478,11 +54309,10 @@ fn compile_runtime_color_segment_bindings(
             outputs.insert(white.attribute.clone(), RuntimeColorOutput::White);
         }
         for control in segment {
-            match runtime_segment_color_component(&control.attribute) {
-                Some("amber" | "uv" | "lime") => {
-                    outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
-                }
-                _ => {}
+            if let Some("amber" | "uv" | "lime") =
+                runtime_segment_color_component(&control.attribute)
+            {
+                outputs.insert(control.attribute.clone(), RuntimeColorOutput::Zero);
             }
         }
         insert_runtime_uncalibrated_emitter_zero_outputs(segment, &mut outputs);
@@ -52916,8 +54746,8 @@ fn best_nonnegative_emitter_mix(
         let mut mixed = [0.0; 3];
         for (index, weight) in entries {
             let weight = weight.max(0.0);
-            for axis in 0..3 {
-                mixed[axis] += candidates[*index].xyz[axis] * weight;
+            for (axis, mixed_value) in mixed.iter_mut().enumerate() {
+                *mixed_value += candidates[*index].xyz[axis] * weight;
             }
         }
         let residual = [
@@ -53250,6 +55080,13 @@ fn runtime_named_color(
 }
 
 #[cfg(test)]
+struct RuntimeColorEvaluationTiming<'a> {
+    created_at: Instant,
+    now: Instant,
+    clock: &'a ClockSnapshot,
+}
+
+#[cfg(test)]
 #[allow(dead_code)]
 fn evaluate_runtime_color_attribute(
     runtime: &RuntimeColorEffect,
@@ -53258,12 +55095,19 @@ fn evaluate_runtime_color_attribute(
     attribute: &str,
     base_value: u16,
     effect_id: EffectId,
-    created_at: Instant,
-    now: Instant,
-    clock: &ClockSnapshot,
+    timing: RuntimeColorEvaluationTiming<'_>,
 ) -> Option<u16> {
     evaluate_runtime_color_attribute_at_rate(
-        runtime, binding, fixture_id, attribute, base_value, effect_id, created_at, now, clock, 1.0,
+        runtime,
+        binding,
+        fixture_id,
+        attribute,
+        base_value,
+        effect_id,
+        timing.created_at,
+        timing.now,
+        timing.clock,
+        1.0,
     )
 }
 
@@ -53839,8 +55683,7 @@ fn evaluate_color_spatial_sample_at_rate(
                 target.strip_count,
                 target.x,
                 target.z,
-                created_at,
-                now,
+                (created_at, now),
             ),
             opacity: 1.0,
         };
@@ -55615,7 +57458,7 @@ fn bpm_grid_adjacent_beat(position_ms: u64, duration_ms: u64, bpm: f32, directio
     let interval = (60_000.0 / f64::from(bpm.max(1.0))).round().max(1.0) as u64;
     if direction > 0 {
         let next = position_ms.saturating_add(1);
-        let target = ((next + interval - 1) / interval).saturating_mul(interval);
+        let target = next.div_ceil(interval).saturating_mul(interval);
         target.min(duration_ms)
     } else {
         let previous = position_ms.saturating_sub(1);
@@ -57410,10 +59253,10 @@ where
     }
 }
 
-fn control_for_attribute<'a>(
-    controls: &'a [AttributeControl],
+fn control_for_attribute(
+    controls: &[AttributeControl],
     axis: MovementAxis,
-) -> Option<&'a AttributeControl> {
+) -> Option<&AttributeControl> {
     controls
         .iter()
         .find(|control| movement_axis(&control.attribute) == Some(axis))
@@ -57607,6 +59450,8 @@ mod tests {
         assert!(!EngineCommand::DjLinkTimelineBeatJump {
             timeline_id: TimelineId(1),
             bars: 4,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
             ack: mpsc::sync_channel(1).0,
         }
         .mutates_persistence_snapshot());
@@ -58751,26 +60596,30 @@ mod tests {
         assert_eq!(runtime.last_error, None);
     }
 
+    struct GroupRecallTarget<'a> {
+        fade_ms: u64,
+        attribute: &'a str,
+        value: u16,
+    }
+
     fn create_group_recall_cue(
         runtime: &mut EngineRuntime,
         cue_id: CueId,
         group_id: &str,
         recall_mode: RecallMode,
-        fade_ms: u64,
-        attribute: &str,
-        value: u16,
+        target: GroupRecallTarget<'_>,
         effect_targets: Vec<CueEffectTarget>,
     ) {
         runtime.apply_command(EngineCommand::CreateCue {
             authored_beats: None,
             cue_id,
             label: format!("Group Cue {cue_id}"),
-            fade_ms,
+            fade_ms: target.fade_ms,
             targets: vec![CueFixtureTarget {
                 fixture_id: 1,
                 values: vec![AttributeValueSummary {
-                    attribute: attribute.to_string(),
-                    value,
+                    attribute: target.attribute.to_string(),
+                    value: target.value,
                 }],
             }],
             video_targets: Vec::new(),
@@ -58795,9 +60644,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            400,
-            "Dimmer",
-            u16::MAX,
+            GroupRecallTarget {
+                fade_ms: 400,
+                attribute: "Dimmer",
+                value: u16::MAX,
+            },
             Vec::new(),
         );
         create_group_recall_cue(
@@ -58805,9 +60656,11 @@ mod tests {
             2,
             "Front",
             RecallMode::ReplaceGroup,
-            0,
-            "Pan",
-            50_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Pan",
+                value: 50_000,
+            },
             Vec::new(),
         );
         runtime
@@ -58830,9 +60683,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            400,
-            "Dimmer",
-            u16::MAX,
+            GroupRecallTarget {
+                fade_ms: 400,
+                attribute: "Dimmer",
+                value: u16::MAX,
+            },
             vec![owned_lfo_target(91, owned)],
         );
         create_group_recall_cue(
@@ -58840,9 +60695,11 @@ mod tests {
             2,
             "Front",
             RecallMode::ReplaceGroup,
-            0,
-            "Pan",
-            50_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Pan",
+                value: 50_000,
+            },
             Vec::new(),
         );
         let started_at = Instant::now();
@@ -58881,9 +60738,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            0,
-            "Dimmer",
-            40_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Dimmer",
+                value: 40_000,
+            },
             Vec::new(),
         );
         create_group_recall_cue(
@@ -58891,9 +60750,11 @@ mod tests {
             2,
             "Front",
             RecallMode::Coexist,
-            0,
-            "Pan",
-            50_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Pan",
+                value: 50_000,
+            },
             Vec::new(),
         );
         let now = Instant::now();
@@ -58942,9 +60803,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            1_000,
-            "Dimmer",
-            u16::MAX,
+            GroupRecallTarget {
+                fade_ms: 1_000,
+                attribute: "Dimmer",
+                value: u16::MAX,
+            },
             Vec::new(),
         );
         let started_at = Instant::now();
@@ -58987,9 +60850,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            0,
-            "Dimmer",
-            20_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Dimmer",
+                value: 20_000,
+            },
             Vec::new(),
         );
         create_group_recall_cue(
@@ -58997,9 +60862,11 @@ mod tests {
             2,
             "Back",
             RecallMode::Coexist,
-            0,
-            "Dimmer",
-            50_000,
+            GroupRecallTarget {
+                fade_ms: 0,
+                attribute: "Dimmer",
+                value: 50_000,
+            },
             Vec::new(),
         );
         let now = Instant::now();
@@ -59027,9 +60894,11 @@ mod tests {
             1,
             "Front",
             RecallMode::Coexist,
-            1_000,
-            "Dimmer",
-            u16::MAX,
+            GroupRecallTarget {
+                fade_ms: 1_000,
+                attribute: "Dimmer",
+                value: u16::MAX,
+            },
             Vec::new(),
         );
         let started_at = Instant::now();
@@ -59992,9 +61861,11 @@ mod tests {
         let mut runtime = EngineRuntime::new(output.clone());
         runtime.output_ownership_role = MachineOutputRole::Standby;
         runtime.publish_output_ownership_status();
-        let mut authored = EngineSnapshot::default();
-        authored.output = output.clone();
-        authored.dmx_outputs = vec![output];
+        let authored = EngineSnapshot {
+            output: output.clone(),
+            dmx_outputs: vec![output],
+            ..EngineSnapshot::default()
+        };
         runtime.load_project_snapshot(authored);
         let snapshot = RwLock::new(EngineSnapshot::default());
 
@@ -60909,7 +62780,7 @@ mod tests {
                 .unwrap();
             let output = DmxOutputConfig {
                 enabled: true,
-                protocol: protocol.clone(),
+                protocol,
                 target_ip: "127.0.0.1".to_string(),
                 port: receiver.local_addr().unwrap().port(),
                 universe: if protocol == DmxOutputProtocol::Sacn {
@@ -63720,9 +65591,10 @@ mod tests {
         let cue_list_id = id;
         let layer_id = u32::try_from(id).expect("allocator test id fits timeline layers");
         let audio_layer_id = layer_id.saturating_add(1);
-        let mut snapshot = EngineSnapshot::default();
-
-        snapshot.fixtures = vec![sample_patched_fixture(fixture_id, "Reserved Fixture", 1)];
+        let mut snapshot = EngineSnapshot {
+            fixtures: vec![sample_patched_fixture(fixture_id, "Reserved Fixture", 1)],
+            ..EngineSnapshot::default()
+        };
         snapshot.cue_lists = vec![
             CueListSummary::default(),
             CueListSummary {
@@ -64028,14 +65900,16 @@ mod tests {
                 snapshot.fixtures = vec![sample_patched_fixture(candidate, "Boundary", 1)];
             }
             AllocatorDomain::Effects => {
-                let mut cue = CueSummary::default();
-                cue.id = 1;
-                cue.effect_targets = vec![CueEffectTarget {
-                    effect_id: candidate,
-                    enabled: false,
-                    params: None,
-                    transition_ms: None,
-                }];
+                let cue = CueSummary {
+                    id: 1,
+                    effect_targets: vec![CueEffectTarget {
+                        effect_id: candidate,
+                        enabled: false,
+                        params: None,
+                        transition_ms: None,
+                    }],
+                    ..CueSummary::default()
+                };
                 snapshot.cues = vec![cue];
             }
             AllocatorDomain::Cues => {
@@ -64526,11 +66400,16 @@ mod tests {
         }
     }
 
+    type AllocatorCommandFactory = Box<dyn Fn(u64) -> EngineCommand>;
+    type AllocatorCommandSetup = Box<dyn Fn(&EngineHandle, u64)>;
+    type AllocatorConcurrentFactory = Arc<dyn Fn(u64) -> EngineCommand + Send + Sync>;
+    type DjLinkOperation = (&'static str, fn(&EngineHandle) -> Result<(), String>);
+
     struct AllocatorCommandCase {
         name: &'static str,
         domain: AllocatorDomain,
-        make: Box<dyn Fn(u64) -> EngineCommand>,
-        setup: Option<Box<dyn Fn(&EngineHandle, u64)>>,
+        make: AllocatorCommandFactory,
+        setup: Option<AllocatorCommandSetup>,
     }
 
     fn allocator_ack() -> mpsc::SyncSender<Result<(), String>> {
@@ -64855,16 +66734,15 @@ mod tests {
             )
         };
         let color = || test_color_request(vec![1], test_color(255, 0, 0));
-        let deadline_case = |name: &'static str,
-                             domain: AllocatorDomain,
-                             make: Box<dyn Fn(u64) -> EngineCommand>| {
-            AllocatorCommandCase {
-                name,
-                domain,
-                make,
-                setup: None,
-            }
-        };
+        let deadline_case =
+            |name: &'static str, domain: AllocatorDomain, make: AllocatorCommandFactory| {
+                AllocatorCommandCase {
+                    name,
+                    domain,
+                    make,
+                    setup: None,
+                }
+            };
         let mut cases = vec![
             deadline_case(
                 "PatchFixture",
@@ -65567,7 +67445,7 @@ mod tests {
                 Box::new(|id| EngineCommand::MediaAssetTransactionPublished {
                     transaction: MediaAssetTransaction::BootstrapVjShow {
                         candidate: allocator_media_asset_candidate_with_clip_slot(id),
-                        output: VideoOutputSummary {
+                        output: Box::new(VideoOutputSummary {
                             id: 1,
                             label: "Allocator bootstrap output".to_string(),
                             kind: VideoOutputKind::Display,
@@ -65582,7 +67460,7 @@ mod tests {
                             opacity: 1.0,
                             blackout: true,
                             mapping: VideoOutputMapping::default(),
-                        },
+                        }),
                     },
                     expires_at: allocator_expiry(),
                     admission: ProjectSnapshotLoadAdmission::new(),
@@ -66115,11 +67993,7 @@ mod tests {
 
     #[test]
     fn explicit_command_enqueue_races_are_linearized_with_allocation() {
-        let cases: [(
-            &str,
-            AllocatorDomain,
-            Arc<dyn Fn(u64) -> EngineCommand + Send + Sync>,
-        ); 5] = [
+        let cases: [(&'static str, AllocatorDomain, AllocatorConcurrentFactory); 5] = [
             (
                 "node graph",
                 AllocatorDomain::NodeGraphs,
@@ -68121,6 +69995,106 @@ mod tests {
         assert_eq!(runtime.cues.len(), 1);
         assert_eq!(runtime.cues[0].id, 7);
         assert!(runtime.cues[0].effect_targets.is_empty());
+    }
+
+    #[test]
+    fn scene_bank_move_publishes_one_atomic_image_and_rolls_back_on_failure() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut snapshot = EngineSnapshot {
+            cue_lists: vec![
+                CueListSummary {
+                    id: 1,
+                    label: "A".to_string(),
+                    ..CueListSummary::default()
+                },
+                CueListSummary {
+                    id: 2,
+                    label: "B".to_string(),
+                    ..CueListSummary::default()
+                },
+            ],
+            ..EngineSnapshot::default()
+        };
+        snapshot.cues = vec![
+            CueSummary {
+                id: 1,
+                cue_list_id: 1,
+                label: "Source".to_string(),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 2,
+                cue_list_id: 2,
+                label: "B1".to_string(),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 3,
+                cue_list_id: 2,
+                label: "B2".to_string(),
+                ..CueSummary::default()
+            },
+        ];
+        engine
+            .load_project_snapshot_and_wait(snapshot.clone())
+            .unwrap();
+
+        engine
+            .move_cue_between_banks_published(1, 2, Some("group-b".to_string()), Some(2), true)
+            .unwrap();
+        let moved = engine.snapshot();
+        assert_eq!(
+            moved.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
+        let source = moved.cues.iter().find(|cue| cue.id == 1).unwrap();
+        assert_eq!(source.cue_list_id, 2);
+        assert_eq!(source.group_id.as_deref(), Some("group-b"));
+
+        engine
+            .load_project_snapshot_and_wait(snapshot.clone())
+            .unwrap();
+        let before_invalid_end = engine.snapshot();
+        assert!(engine
+            .move_cue_between_banks_published(1, 2, None, None, false)
+            .is_err());
+        assert_eq!(engine.snapshot(), before_invalid_end);
+        engine
+            .move_cue_between_banks_published(1, 2, None, Some(2), false)
+            .unwrap();
+        assert_eq!(
+            engine
+                .snapshot()
+                .cues
+                .iter()
+                .map(|cue| cue.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
+        engine
+            .move_cue_between_banks_published(1, 2, None, None, true)
+            .unwrap();
+        assert_eq!(
+            engine
+                .snapshot()
+                .cues
+                .iter()
+                .map(|cue| cue.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+
+        let before_failure = engine.snapshot();
+        engine.force_next_pending_publication_failure_for_tests();
+        assert!(engine
+            .move_cue_between_banks_published(1, 2, None, Some(2), false)
+            .is_err());
+        assert_eq!(engine.snapshot(), before_failure);
     }
 
     #[test]
@@ -74026,6 +76000,13 @@ mod tests {
             Err(EngineError::QueueFull)
         ));
         assert_eq!(shared_telemetry.queue_push_failure_count(), 1);
+        let before_dj = handle.snapshot();
+        let dj_error = handle
+            .dj_link_release_with_timeout(Duration::from_millis(25))
+            .expect_err("a full queue must reject DJ Link before admission");
+        assert!(dj_error.to_ascii_lowercase().contains("full"));
+        assert_eq!(handle.snapshot().timeline, before_dj.timeline);
+        assert_eq!(shared_telemetry.queue_push_failure_count(), 2);
         let (safety_ack, _) = mpsc::sync_channel(1);
         handle
             .send_safety(EngineCommand::SafetyBlackoutEngagePublished {
@@ -74038,7 +76019,7 @@ mod tests {
             .unwrap();
         assert_eq!(handle.queue.len(), 1);
         assert_eq!(handle.safety_queue.len(), 1);
-        assert_eq!(shared_telemetry.queue_push_failure_count(), 1);
+        assert_eq!(shared_telemetry.queue_push_failure_count(), 2);
 
         let mut runtime = EngineRuntime::new_with_shared_telemetry(
             DmxOutputConfig {
@@ -74049,7 +76030,7 @@ mod tests {
         );
         assert_eq!(
             runtime.build_snapshot(0).telemetry.queue_push_failure_count,
-            1
+            2
         );
         runtime.reset_telemetry();
         assert_eq!(
@@ -82084,7 +84065,7 @@ mod tests {
                         default_clip_slot_id: Some(VideoClipSlotId(clip_slot_id)),
                     }],
                 },
-                output: VideoOutputSummary {
+                output: Box::new(VideoOutputSummary {
                     id: output_id,
                     label: "Bootstrap B program".to_string(),
                     kind: VideoOutputKind::Display,
@@ -82099,7 +84080,7 @@ mod tests {
                     opacity: 1.0,
                     blackout: true,
                     mapping: VideoOutputMapping::default(),
-                },
+                }),
             })
             .unwrap_err();
 
@@ -87611,13 +89592,17 @@ mod tests {
             ..DmxOutputConfig::default()
         });
 
-        let mut cue = CueSummary::default();
-        cue.id = 5;
-        cue.cue_number = "1".to_string();
-        cue.label = "Colored".to_string();
-        cue.group_id = Some("Front".to_string());
-        let mut snapshot = EngineSnapshot::default();
-        snapshot.cues = vec![cue];
+        let cue = CueSummary {
+            id: 5,
+            cue_number: "1".to_string(),
+            label: "Colored".to_string(),
+            group_id: Some("Front".to_string()),
+            ..CueSummary::default()
+        };
+        let mut snapshot = EngineSnapshot {
+            cues: vec![cue],
+            ..EngineSnapshot::default()
+        };
         snapshot.output.enabled = false;
         snapshot.dmx_outputs = vec![snapshot.output.clone()];
         engine
@@ -88422,9 +90407,11 @@ mod tests {
                 ..CueSummary::default()
             })
             .collect::<Vec<_>>();
-        let mut snapshot = EngineSnapshot::default();
-        snapshot.fixtures = fixtures;
-        snapshot.cues = cues;
+        let mut snapshot = EngineSnapshot {
+            fixtures,
+            cues,
+            ..EngineSnapshot::default()
+        };
         snapshot.output.enabled = false;
         snapshot.dmx_outputs = vec![snapshot.output.clone()];
 
@@ -89213,10 +91200,10 @@ mod tests {
         let mut reference = [background; DASLIGHT_PARTICLE_RASTER_PIXELS];
         let mut masked = [background; DASLIGHT_PARTICLE_RASTER_PIXELS];
         let mut sampled_rows = [0_u128; DASLIGHT_PARTICLE_RASTER_SIZE];
-        for y in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+        for (y, sampled_row) in sampled_rows.iter_mut().enumerate() {
             for x in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
                 if x == 0 || x == 99 || y == 0 || y == 99 || (x * 17 + y * 31) % 47 == 0 {
-                    sampled_rows[y] |= 1_u128 << x;
+                    *sampled_row |= 1_u128 << x;
                 }
             }
         }
@@ -89264,9 +91251,7 @@ mod tests {
                 &sampled_rows,
                 sampled_y_rows,
                 &mut masked,
-                x,
-                y,
-                size,
+                (x, y, size),
                 color,
                 opacity,
             );
@@ -89274,9 +91259,7 @@ mod tests {
                 &sampled_descriptors,
                 sampled_y_rows,
                 &mut compact,
-                x,
-                y,
-                size,
+                (x, y, size),
                 color,
                 opacity,
             );
@@ -89303,9 +91286,7 @@ mod tests {
                 &sampled_rows,
                 sampled_y_rows,
                 &mut masked,
-                x,
-                y,
-                size,
+                (x, y, size),
                 color,
                 opacity,
             );
@@ -89313,17 +91294,15 @@ mod tests {
                 &sampled_descriptors,
                 sampled_y_rows,
                 &mut compact,
-                x,
-                y,
-                size,
+                (x, y, size),
                 color,
                 opacity,
             );
         }
-        for y in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+        for (y, sampled_row) in sampled_rows.iter().enumerate() {
             for x in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
                 let index = y * DASLIGHT_PARTICLE_RASTER_SIZE + x;
-                if sampled_rows[y] & (1_u128 << x) != 0 {
+                if *sampled_row & (1_u128 << x) != 0 {
                     assert_eq!(masked[index], reference[index], "masked pixel ({x},{y})");
                     let row = sampled_descriptors[y];
                     let slot =
@@ -92131,9 +94110,11 @@ mod tests {
             attribute,
             base,
             10,
-            now,
-            now,
-            &ClockSnapshot::default(),
+            RuntimeColorEvaluationTiming {
+                created_at: now,
+                now,
+                clock: &ClockSnapshot::default(),
+            },
         )
         .unwrap_or(base)
     }
@@ -92559,7 +94540,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let created_at = Instant::now();
-        compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+        compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, (created_at, created_at));
         let state = compiled_sparkle_state(&compiled).borrow();
         assert_eq!((state.source_width, state.source_height), (100, 100));
         assert_eq!(state.particles.len(), 1);
@@ -92595,7 +94576,8 @@ mod tests {
         assert_eq!(*height, 100, "Tube must paint every mapping-raster row");
         assert!(*tube_full_raster_height);
         let created_at = Instant::now();
-        let first = compiled.sample_at_mapping_time(0.0, 0, 100, 0.5, 0.5, created_at, created_at);
+        let first =
+            compiled.sample_at_mapping_time(0.0, 0, 100, 0.5, 0.5, (created_at, created_at));
         let initial_particle_capacity = state.borrow().particles.capacity();
         let strip_capacity = state.borrow().strip.capacity();
         for epoch in 1..=8 {
@@ -92606,8 +94588,7 @@ mod tests {
                 100,
                 0.5,
                 0.5,
-                created_at,
-                now,
+                (created_at, now),
             );
         }
         let state = state.borrow();
@@ -92624,8 +94605,7 @@ mod tests {
                 100,
                 column as f32 / (source_width - 1) as f32,
                 0.0,
-                created_at,
-                final_now,
+                (created_at, final_now),
             );
             assert_eq!(color.red, color.green, "qGray red/green column={column}");
             assert_eq!(color.green, color.blue, "qGray green/blue column={column}");
@@ -92637,8 +94617,7 @@ mod tests {
                         100,
                         column as f32 / (source_width - 1) as f32,
                         row as f32 / (source_height - 1) as f32,
-                        created_at,
-                        final_now,
+                        (created_at, final_now),
                     ),
                     color,
                     "Tube full-height sample column={column} row={row}"
@@ -92799,8 +94778,7 @@ mod tests {
                 200,
                 0.0,
                 0.0,
-                created_at,
-                created_at + Duration::from_millis(epoch * 40),
+                (created_at, created_at + Duration::from_millis(epoch * 40)),
             )
         };
         let _ = sample_epoch(0);
@@ -92893,7 +94871,8 @@ mod tests {
             let CompiledSyndocalRandomFx::Sparkle { state, .. } = &compiled else {
                 unreachable!();
             };
-            let _ = compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+            let _ =
+                compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, (created_at, created_at));
             let start_x = {
                 let state = state.borrow();
                 assert!(state
@@ -92908,8 +94887,7 @@ mod tests {
                 100,
                 start_x as f32 / 99.0,
                 0.0,
-                created_at,
-                created_at,
+                (created_at, created_at),
             );
             assert_eq!(
                 rendered, palette[number as usize],
@@ -92970,7 +94948,7 @@ mod tests {
             let fixed_alpha = (splitmix64(batch ^ 0xC6BC_2796_92B5_CC83) >> 48) as u32;
             let alpha = fixed_alpha as f32 / f32::from(u16::MAX);
             let mut actual = (0_u64..103)
-                .map(|lane| splitmix64(batch * 103 + lane ^ 0xA24B_AED4_963E_E407) as u16)
+                .map(|lane| splitmix64((batch * 103 + lane) ^ 0xA24B_AED4_963E_E407) as u16)
                 .collect::<Vec<_>>();
             let expected = actual
                 .iter()
@@ -93044,7 +95022,7 @@ mod tests {
         for elapsed_ms in [0_u64, 217, 743] {
             let phase = elapsed_ms as f64 / *period_ms;
             let now = created_at + Duration::from_millis(elapsed_ms);
-            let _ = compiled.sample_at_mapping_time(phase, 0, 200, 0.0, 0.0, created_at, now);
+            let _ = compiled.sample_at_mapping_time(phase, 0, 200, 0.0, 0.0, (created_at, now));
             let state = state.borrow();
             let visual_ms = phase * *period_ms;
             let mut expected = vec![black_color(); state.source_width];
@@ -93119,7 +95097,7 @@ mod tests {
         };
         assert!(!*tube_full_raster_height);
         let created_at = Instant::now();
-        let _ = compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+        let _ = compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, (created_at, created_at));
         let state = state.borrow();
         assert_eq!(state.particles.len(), 1);
         assert!(state.particles[0].start_x <= 50);
@@ -93963,13 +95941,13 @@ mod tests {
                 / 2.0
         };
         assert_ne!(
-            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.0, 0.0, at, at,),
-            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.1, 0.0, at, at,),
+            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.0, 0.0, (at, at)),
+            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.1, 0.0, (at, at)),
             "changing X must select a different flat cell rank"
         );
         assert_ne!(
-            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.0, at, at,),
-            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.1, at, at,),
+            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.0, (at, at)),
+            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.1, (at, at)),
             "changing Y must select a different flat cell rank"
         );
 
@@ -93990,7 +95968,7 @@ mod tests {
         let tail_phase =
             (rank_order.rank(0, tail_cell, *cell_count) as f64 + 0.5) / *cell_count as f64 / 2.0;
         assert_ne!(
-            partial.sample_at_mapping_time(tail_phase, 0, 100, 1.0, 1.0, at, at),
+            partial.sample_at_mapping_time(tail_phase, 0, 100, 1.0, 1.0, (at, at)),
             black_color(),
             "the partial right/bottom cell covering source pixel 99 must be sampled"
         );
@@ -94025,7 +96003,7 @@ mod tests {
                 + permutations.len() * std::mem::size_of::<SyndocalRandomFillAffinePermutation>(),
             42_040
         );
-        assert!(42_040 < 10_200_000);
+        assert!(42_040 < base_ranks.len() * permutations.len() * std::mem::size_of::<u32>());
         let mut seen = vec![false; *cell_count];
         for permutation in permutations.iter().copied() {
             assert_eq!(
@@ -94115,8 +96093,8 @@ mod tests {
                 let (first_x, first_y) = first.normalized();
                 let (second_x, second_y) = second.normalized();
                 assert_ne!(
-                    compiled.sample_at_mapping_time(phase, 0, 100, first_x, first_y, at, at,),
-                    compiled.sample_at_mapping_time(phase, 0, 100, second_x, second_y, at, at,)
+                    compiled.sample_at_mapping_time(phase, 0, 100, first_x, first_y, (at, at)),
+                    compiled.sample_at_mapping_time(phase, 0, 100, second_x, second_y, (at, at))
                 );
             };
         assert_samples_differ(plain, transformed);
@@ -94124,11 +96102,11 @@ mod tests {
 
         let phase = 0.173;
         let (x, y) = transformed.normalized();
-        let color = compiled.sample_at_mapping_time(phase, 0, 100, x, y, at, at);
+        let color = compiled.sample_at_mapping_time(phase, 0, 100, x, y, (at, at));
         let grayscale = CompiledSyndocalRandomFx::compile(&request_for(true), 100)
             .unwrap()
             .unwrap()
-            .sample_at_mapping_time(phase, 0, 100, x, y, at, at);
+            .sample_at_mapping_time(phase, 0, 100, x, y, (at, at));
         assert_eq!(grayscale, daslight_grayscale_color(color));
     }
 
@@ -95671,7 +97649,7 @@ mod tests {
         let now = Instant::now();
         let effect = RuntimeEffect {
             id: 98,
-            kind: RuntimeEffectKind::Chaser(runtime),
+            kind: RuntimeEffectKind::Chaser(Box::new(runtime)),
             enabled: true,
             created_at: now,
         };
@@ -95790,7 +97768,7 @@ mod tests {
         let now = Instant::now();
         let effect = RuntimeEffect {
             id: 99,
-            kind: RuntimeEffectKind::Chaser(runtime),
+            kind: RuntimeEffectKind::Chaser(Box::new(runtime)),
             enabled: true,
             created_at: now,
         };
@@ -96481,7 +98459,7 @@ mod tests {
             )
             .collect(),
         };
-        let wheel_binding = compile_runtime_color_binding(&[wheel.clone()]).unwrap();
+        let wheel_binding = compile_runtime_color_binding(std::slice::from_ref(&wheel)).unwrap();
         assert!(!wheel_binding.conversions.rgbw);
         assert!(!wheel_binding.conversions.cmy);
         assert!(!wheel_binding.conversions.hsv);
@@ -97522,8 +99500,10 @@ mod tests {
         beat_request.fixture_spread = 0.0;
         beat_request.clock_sync = Some(protocol::EffectClockSync { beats: 2.0 });
         let beat = runtime.resolve_move_effect_request(beat_request).unwrap();
-        let mut beat_clock = ClockSnapshot::default();
-        beat_clock.beat_counter = 1;
+        let beat_clock = ClockSnapshot {
+            beat_counter: 1,
+            ..ClockSnapshot::default()
+        };
         let beat_pan = evaluate_runtime_move_attribute(
             &beat,
             1,
@@ -98584,7 +100564,7 @@ mod tests {
 
         let summary = effect_summary(&RuntimeEffect {
             id: 7,
-            kind: RuntimeEffectKind::Chaser(resolved.clone()),
+            kind: RuntimeEffectKind::Chaser(Box::new(resolved.clone())),
             enabled: true,
             created_at: Instant::now(),
         });
@@ -98766,8 +100746,10 @@ mod tests {
         let synced = runtime
             .resolve_chaser_effect_request(synced_request)
             .unwrap();
-        let mut beat_clock = ClockSnapshot::default();
-        beat_clock.beat_counter = 1;
+        let beat_clock = ClockSnapshot {
+            beat_counter: 1,
+            ..ClockSnapshot::default()
+        };
         assert_eq!(
             evaluate_chaser_effect(&synced, 0, 3, now, now, &beat_clock),
             u16::MAX
@@ -98832,7 +100814,7 @@ mod tests {
 
         runtime.effects.push(RuntimeEffect {
             id: 90,
-            kind: RuntimeEffectKind::Chaser(resolved),
+            kind: RuntimeEffectKind::Chaser(Box::new(resolved)),
             enabled: true,
             created_at: now,
         });
@@ -98877,7 +100859,7 @@ mod tests {
         let effect = runtime.resolve_chaser_effect_request(request).unwrap();
         runtime.effects.push(RuntimeEffect {
             id: 77,
-            kind: RuntimeEffectKind::Chaser(effect),
+            kind: RuntimeEffectKind::Chaser(Box::new(effect)),
             enabled: true,
             created_at: Instant::now(),
         });
@@ -100752,9 +102734,9 @@ mod tests {
                 1 => {
                     let mut request = chaser_base.clone();
                     request.phase = phase;
-                    RuntimeEffectKind::Chaser(
+                    RuntimeEffectKind::Chaser(Box::new(
                         runtime.resolve_chaser_effect_request(request).unwrap(),
-                    )
+                    ))
                 }
                 2 => {
                     let mut request = move_base.clone();
@@ -102521,9 +104503,9 @@ mod tests {
 
         let created_at = Instant::now();
         for index in 0..RELEASE_GATE_EFFECT_COUNT {
-            let kind = RuntimeEffectKind::Chaser(
+            let kind = RuntimeEffectKind::Chaser(Box::new(
                 runtime.resolve_chaser_effect_request(base.clone()).unwrap(),
-            );
+            ));
             runtime.effects.push(RuntimeEffect {
                 id: index as EffectId + 1,
                 kind,
@@ -103603,6 +105585,342 @@ mod tests {
         assert!(persisted.timeline.guide_cues.is_empty());
     }
 
+    fn dj_link_transaction_test_engine() -> EngineHandle {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut seeded = engine.persistence_snapshot().unwrap();
+        let mut first = seeded.timeline.clone();
+        first.id = TimelineId(1);
+        first.label = "DJ Link A".to_string();
+        first.phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(9_001),
+            label: "DJ Link transaction window".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 60_000,
+        }];
+        first.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 1_000,
+            b_ms: 20_000,
+            enabled: true,
+            musical_length_beats: None,
+        });
+        first.playing = false;
+        first.position_ms = 0;
+        first.duration_ms = 60_000;
+        let mut second = first.clone();
+        second.id = TimelineId(2);
+        second.label = "DJ Link B".to_string();
+        seeded.timeline = first.clone();
+        seeded.timeline_bank = vec![first, second];
+        engine.load_project_snapshot_and_wait(seeded).unwrap();
+        engine
+    }
+
+    fn dj_link_transaction_test_command(
+        operation: &str,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    ) -> EngineCommand {
+        match operation {
+            "start" => EngineCommand::DjLinkStartTimeline {
+                timeline_id: TimelineId(2),
+                expires_at,
+                admission,
+                ack,
+            },
+            "loop" => EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                division: 0,
+                enabled: false,
+                expires_at,
+                admission,
+                ack,
+            },
+            "beat jump" => EngineCommand::DjLinkTimelineBeatJump {
+                timeline_id: TimelineId(1),
+                bars: 4,
+                expires_at,
+                admission,
+                ack,
+            },
+            "release" => EngineCommand::DjLinkRelease {
+                expires_at,
+                admission,
+                ack,
+            },
+            _ => unreachable!("unknown DJ Link transaction test operation"),
+        }
+    }
+
+    fn assert_dj_link_exact_a(
+        operation: &str,
+        before: &EngineSnapshot,
+        before_audio: &TimelineAudioRuntimeSnapshot,
+        engine: &EngineHandle,
+    ) {
+        let after = engine.snapshot();
+        assert_eq!(after.timeline, before.timeline, "{operation} timeline A");
+        assert_eq!(after.video, before.video, "{operation} video A");
+        let after_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(
+            after_audio.clips, before_audio.clips,
+            "{operation} audio clips A"
+        );
+        assert_eq!(
+            after_audio.child_clips.len(),
+            before_audio.child_clips.len(),
+            "{operation} child audio membership A"
+        );
+        assert_eq!(
+            after_audio.source_projection_authority, before_audio.source_projection_authority,
+            "{operation} audio projection authority A"
+        );
+        assert_eq!(
+            after_audio.publication_generation, before_audio.publication_generation,
+            "{operation} audio publication generation A"
+        );
+        assert_eq!(
+            after_audio.transport_revision, before_audio.transport_revision,
+            "{operation} audio transport revision A"
+        );
+        assert_eq!(
+            after_audio.playing, before_audio.playing,
+            "{operation} audio playing A"
+        );
+        assert_eq!(
+            after_audio.position_ms, before_audio.position_ms,
+            "{operation} audio position A"
+        );
+    }
+
+    fn assert_dj_link_canonical_b(operation: &str, before: &EngineSnapshot, engine: &EngineHandle) {
+        let after = engine.snapshot();
+        match operation {
+            "start" => {
+                assert_eq!(after.timeline.id, TimelineId(2));
+                assert!(after.timeline.playing);
+                assert!(
+                    after.timeline.position_ms < 1_000,
+                    "START must publish at the new Timeline origin before ordinary ticks advance it"
+                );
+            }
+            "loop" => assert!(matches!(
+                after.timeline.loop_runtime.status,
+                TimelineLoopRuntimeStatus::Disabled
+            )),
+            "beat jump" => {
+                assert_eq!(after.timeline.id, TimelineId(1));
+                assert!(after.timeline.position_ms > before.timeline.position_ms);
+            }
+            "release" => {
+                assert!(after.timeline.playing);
+                assert!(matches!(
+                    after.timeline.loop_runtime.status,
+                    TimelineLoopRuntimeStatus::Disabled
+                ));
+            }
+            _ => unreachable!("unknown DJ Link transaction test operation"),
+        }
+        let audio = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(
+            audio.playing, after.timeline.playing,
+            "{operation} audio B playing"
+        );
+        if after.timeline.playing {
+            assert!(
+                audio.position_ms >= after.timeline.position_ms
+                    && audio.position_ms.saturating_sub(after.timeline.position_ms) < 1_000,
+                "{operation} audio B position {} did not follow canonical Timeline position {}",
+                audio.position_ms,
+                after.timeline.position_ms
+            );
+        } else {
+            assert_eq!(audio.position_ms, 0, "{operation} audio B position");
+        }
+        assert_eq!(
+            audio.transport_revision, after.timeline.audio_transport_revision,
+            "{operation} audio B revision"
+        );
+    }
+
+    #[test]
+    fn dj_link_all_four_commands_cancel_during_provisional_planning_to_exact_a() {
+        for operation in ["start", "loop", "beat jump", "release"] {
+            let engine = dj_link_transaction_test_engine();
+            let before = engine.snapshot();
+            let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let release_rx = Arc::new(Mutex::new(release_rx));
+            let admission =
+                ProjectSnapshotLoadAdmission::new_dj_link_with_test_hooks(DjLinkCommandTestHooks {
+                    planning: Some(Arc::new({
+                        let release_rx = Arc::clone(&release_rx);
+                        move || {
+                            entered_tx.send(()).unwrap();
+                            release_rx.lock().unwrap().recv().unwrap();
+                        }
+                    })),
+                    ..DjLinkCommandTestHooks::default()
+                });
+            let (ack, receiver) = mpsc::sync_channel(1);
+            engine
+                .send(dj_link_transaction_test_command(
+                    operation,
+                    Instant::now() + Duration::from_secs(1),
+                    admission.clone(),
+                    ack,
+                ))
+                .unwrap();
+            entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::Planning,
+                Duration::from_secs(1),
+            ));
+            assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+
+            let caller_admission = admission.clone();
+            let caller = thread::spawn(move || {
+                receive_admitted_command_ack(
+                    receiver,
+                    &caller_admission,
+                    Instant::now() + Duration::from_millis(20),
+                    Duration::from_millis(20),
+                    operation,
+                )
+            });
+            let result = caller.join().unwrap();
+            assert!(
+                matches!(&result, Err(error) if error.contains("timed out")),
+                "{operation} planning cancellation returned {result:?}"
+            );
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::Cancelled,
+                Duration::from_secs(1),
+            ));
+            release_tx.send(()).unwrap();
+            engine.persistence_snapshot().unwrap();
+            assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+            thread::sleep(Duration::from_millis(25));
+            assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+        }
+    }
+
+    #[test]
+    fn dj_link_all_four_commands_cancel_after_resource_reservation_to_exact_a() {
+        for operation in ["start", "loop", "beat jump", "release"] {
+            let engine = dj_link_transaction_test_engine();
+            let before = engine.snapshot();
+            let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let release_rx = Arc::new(Mutex::new(release_rx));
+            let admission =
+                ProjectSnapshotLoadAdmission::new_dj_link_with_test_hooks(DjLinkCommandTestHooks {
+                    resources_reserved: Some(Arc::new({
+                        let release_rx = Arc::clone(&release_rx);
+                        move || {
+                            entered_tx.send(()).unwrap();
+                            release_rx.lock().unwrap().recv().unwrap();
+                        }
+                    })),
+                    ..DjLinkCommandTestHooks::default()
+                });
+            let (ack, receiver) = mpsc::sync_channel(1);
+            engine
+                .send(dj_link_transaction_test_command(
+                    operation,
+                    Instant::now() + Duration::from_secs(1),
+                    admission.clone(),
+                    ack,
+                ))
+                .unwrap();
+            entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::ResourcesReserved,
+                Duration::from_secs(1),
+            ));
+
+            let caller_admission = admission.clone();
+            let caller = thread::spawn(move || {
+                receive_admitted_command_ack(
+                    receiver,
+                    &caller_admission,
+                    Instant::now() + Duration::from_millis(20),
+                    Duration::from_millis(20),
+                    operation,
+                )
+            });
+            let result = caller.join().unwrap();
+            assert!(
+                matches!(&result, Err(error) if error.contains("timed out")),
+                "{operation} resource cancellation returned {result:?}"
+            );
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::Cancelled,
+                Duration::from_secs(1),
+            ));
+            release_tx.send(()).unwrap();
+            engine.persistence_snapshot().unwrap();
+            assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+            thread::sleep(Duration::from_millis(25));
+            assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+        }
+    }
+
+    #[test]
+    fn dj_link_all_four_commands_commit_boundary_wins_with_canonical_snapshot_and_audio() {
+        for operation in ["start", "loop", "beat jump", "release"] {
+            let engine = dj_link_transaction_test_engine();
+            let before = engine.snapshot();
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let release_rx = Arc::new(Mutex::new(release_rx));
+            let admission =
+                ProjectSnapshotLoadAdmission::new_dj_link_with_test_hooks(DjLinkCommandTestHooks {
+                    commit_boundary: Some(Arc::new({
+                        let release_rx = Arc::clone(&release_rx);
+                        move || {
+                            entered_tx.send(()).unwrap();
+                            release_rx.lock().unwrap().recv().unwrap();
+                        }
+                    })),
+                    ..DjLinkCommandTestHooks::default()
+                });
+            let (ack, receiver) = mpsc::sync_channel(1);
+            engine
+                .send(dj_link_transaction_test_command(
+                    operation,
+                    Instant::now() + Duration::from_secs(1),
+                    admission.clone(),
+                    ack,
+                ))
+                .unwrap();
+            entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let caller_admission = admission.clone();
+            let caller = thread::spawn(move || {
+                receive_admitted_command_ack(
+                    receiver,
+                    &caller_admission,
+                    Instant::now() + Duration::from_millis(20),
+                    Duration::from_millis(20),
+                    operation,
+                )
+            });
+            thread::sleep(Duration::from_millis(30));
+            release_tx.send(()).unwrap();
+            assert_eq!(caller.join().unwrap(), Ok(()), "{operation} commit result");
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::Finished(Ok(())),
+                Duration::from_secs(1),
+            ));
+            assert_dj_link_canonical_b(operation, &before, &engine);
+        }
+    }
+
     #[test]
     fn dj_link_absolute_loop_division_is_non_cumulative_and_bounds_checked() {
         let region = TimelineLoopRegionSummary {
@@ -103674,6 +105992,498 @@ mod tests {
         assert!(engine.dj_link_start_timeline(TimelineId(u64::MAX)).is_err());
         assert!(engine.dj_link_set_timeline_loop_absolute(1, true).is_err());
         assert!(engine.dj_link_release().is_ok());
+    }
+
+    #[test]
+    fn dj_link_all_four_api_commands_cancel_while_queued_without_late_mutation() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.snapshot();
+        let barrier_snapshot = before.clone();
+        let barrier_admission = ProjectSnapshotLoadAdmission::new();
+        let (barrier_ack, barrier_receiver) = mpsc::sync_channel(1);
+        engine
+            .send(EngineCommand::LoadProjectSnapshotPublished {
+                snapshot: barrier_snapshot,
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: barrier_admission.clone(),
+                ack: barrier_ack,
+            })
+            .unwrap();
+        assert!(barrier_admission.wait_for_state(
+            ProjectSnapshotLoadAdmissionState::Admitted,
+            Duration::from_secs(1),
+        ));
+        assert_eq!(
+            barrier_admission.current_state(),
+            ProjectSnapshotLoadAdmissionState::Admitted
+        );
+        // Acquire the publication lock only after the worker has crossed the
+        // admission linearization point. This avoids blocking the worker's
+        // initial render tick before it can consume the barrier itself.
+        let read_guard = engine.snapshot.read().unwrap();
+
+        let operations: [DjLinkOperation; 4] = [
+            ("start", |engine| {
+                engine.dj_link_start_timeline_with_timeout(TimelineId(1), Duration::from_millis(5))
+            }),
+            ("loop", |engine| {
+                engine.dj_link_set_timeline_loop_absolute_with_timeout(
+                    0,
+                    true,
+                    Duration::from_millis(5),
+                )
+            }),
+            ("beat jump", |engine| {
+                engine.dj_link_timeline_beat_jump_with_timeout(
+                    TimelineId(1),
+                    4,
+                    Duration::from_millis(5),
+                )
+            }),
+            ("release", |engine| {
+                engine.dj_link_release_with_timeout(Duration::from_millis(5))
+            }),
+        ];
+        for (name, operation) in operations {
+            let error = operation(&engine).expect_err("queued DJ Link command must cancel");
+            assert!(
+                error.contains("timed out"),
+                "{name} returned an unexpected cancellation error: {error}"
+            );
+        }
+
+        // Queue a second publication barrier after all four cancelled DJ
+        // commands. Its ACK is the deterministic drain point proving that
+        // every worker turn observed cancellation before any mutation.
+        let (drain_ack, drain_receiver) = mpsc::sync_channel(1);
+        engine
+            .send(EngineCommand::LoadProjectSnapshotPublished {
+                snapshot: before.clone(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack: drain_ack,
+            })
+            .unwrap();
+
+        drop(read_guard);
+        assert_eq!(
+            barrier_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        assert_eq!(
+            drain_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        let after_barrier = engine.snapshot().timeline;
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(engine.snapshot().timeline, after_barrier);
+    }
+
+    #[test]
+    fn dj_link_all_four_api_commands_cancel_after_admission_before_commit() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let operations = ["start", "loop", "beat jump", "release"];
+        for operation in operations {
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let release_rx = Arc::new(Mutex::new(release_rx));
+            let hook = Arc::new({
+                let release_rx = Arc::clone(&release_rx);
+                move || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.lock().unwrap().recv().unwrap();
+                }
+            });
+            let admission = ProjectSnapshotLoadAdmission::new_dj_link_with_pre_commit_hook(hook);
+            let (ack, receiver) = mpsc::sync_channel(1);
+            let expires_at = Instant::now() + Duration::from_secs(1);
+            let command = match operation {
+                "start" => EngineCommand::DjLinkStartTimeline {
+                    timeline_id: TimelineId(1),
+                    expires_at,
+                    admission: admission.clone(),
+                    ack,
+                },
+                "loop" => EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                    division: 0,
+                    enabled: true,
+                    expires_at,
+                    admission: admission.clone(),
+                    ack,
+                },
+                "beat jump" => EngineCommand::DjLinkTimelineBeatJump {
+                    timeline_id: TimelineId(1),
+                    bars: 4,
+                    expires_at,
+                    admission: admission.clone(),
+                    ack,
+                },
+                "release" => EngineCommand::DjLinkRelease {
+                    expires_at,
+                    admission: admission.clone(),
+                    ack,
+                },
+                _ => unreachable!(),
+            };
+            engine.send(command).unwrap();
+            assert!(admission.wait_for_dj_link_state(
+                DjLinkCommandReceiptState::Admitted,
+                Duration::from_secs(1),
+            ));
+            assert!(entered_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+            assert_eq!(
+                admission
+                    .dj_link_receipt
+                    .as_ref()
+                    .unwrap()
+                    .state
+                    .lock()
+                    .unwrap()
+                    .clone(),
+                DjLinkCommandReceiptState::Admitted
+            );
+
+            let caller_admission = admission.clone();
+            let caller = thread::spawn(move || {
+                receive_admitted_command_ack(
+                    receiver,
+                    &caller_admission,
+                    Instant::now() + Duration::from_millis(10),
+                    Duration::from_millis(10),
+                    operation,
+                )
+            });
+            let result = caller.join().unwrap();
+            assert!(
+                matches!(&result, Err(error) if error.contains("timed out")),
+                "{operation} must cancel before B, got {result:?}"
+            );
+            assert_eq!(
+                admission
+                    .dj_link_receipt
+                    .as_ref()
+                    .unwrap()
+                    .state
+                    .lock()
+                    .unwrap()
+                    .clone(),
+                DjLinkCommandReceiptState::Cancelled
+            );
+            release_tx.send(()).unwrap();
+        }
+
+        // The persistence request is a non-mutating FIFO drain sentinel. Its
+        // response proves every pre-B cancellation has been observed by the
+        // worker before the no-late-mutation assertion below.
+        let _ = engine.persistence_snapshot().unwrap();
+        let after_drain = engine.snapshot().timeline;
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(engine.snapshot().timeline, after_drain);
+    }
+
+    #[test]
+    fn dj_link_admission_with_held_snapshot_finishes_exact_a_before_caller_deadline() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut before = engine.snapshot().timeline;
+        for _ in 0..20 {
+            if !before.layers.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            before = engine.snapshot().timeline;
+        }
+        // Drain one ordinary publication before taking the read guard. This
+        // leaves the worker past its startup tick, so the held-reader result
+        // below exercises the real resource reservation path.
+        let (barrier_ack, barrier_receiver) = mpsc::sync_channel(1);
+        let barrier_admission = ProjectSnapshotLoadAdmission::new();
+        engine
+            .send(EngineCommand::LoadProjectSnapshotPublished {
+                snapshot: engine.snapshot(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: barrier_admission.clone(),
+                ack: barrier_ack,
+            })
+            .unwrap();
+        assert!(barrier_admission.wait_for_state(
+            ProjectSnapshotLoadAdmissionState::Admitted,
+            Duration::from_secs(1),
+        ));
+        assert_eq!(
+            barrier_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        before = engine.snapshot().timeline;
+        let read_guard = engine.snapshot.read().unwrap();
+        let admission = ProjectSnapshotLoadAdmission::new_dj_link();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let worker_deadline = Instant::now() + Duration::from_secs(1);
+        engine
+            .send(EngineCommand::DjLinkRelease {
+                expires_at: worker_deadline,
+                admission: admission.clone(),
+                ack,
+            })
+            .unwrap();
+        let publication_error =
+            "Engine snapshot was busy; DJ Link release was rolled back".to_string();
+        assert!(admission.wait_for_dj_link_state(
+            DjLinkCommandReceiptState::Finished(Err(publication_error.clone())),
+            Duration::from_secs(1),
+        ));
+        let caller_admission = admission.clone();
+        let caller = thread::spawn(move || {
+            receive_admitted_command_ack(
+                receiver,
+                &caller_admission,
+                Instant::now() + Duration::from_millis(10),
+                Duration::from_millis(10),
+                "DJ Link release",
+            )
+        });
+        let result = caller.join().unwrap();
+        assert!(
+            result == Err(publication_error),
+            "the held read guard must produce a definitive exact-A result: {result:?}"
+        );
+        drop(read_guard);
+        assert_eq!(engine.snapshot().timeline, before);
+    }
+
+    #[test]
+    fn dj_link_public_api_read_guard_rolls_back_before_shutdown_deadline() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut before = engine.snapshot().timeline;
+        for _ in 0..20 {
+            if !before.layers.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            before = engine.snapshot().timeline;
+        }
+        // Establish a real worker/publication barrier before taking the
+        // guard.  The test is about the bounded snapshot-write seam, not
+        // whether a freshly spawned worker has received its first command.
+        let (barrier_ack, barrier_receiver) = mpsc::sync_channel(1);
+        let barrier_admission = ProjectSnapshotLoadAdmission::new();
+        engine
+            .send(EngineCommand::LoadProjectSnapshotPublished {
+                snapshot: engine.snapshot(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: barrier_admission.clone(),
+                ack: barrier_ack,
+            })
+            .unwrap();
+        assert!(barrier_admission.wait_for_state(
+            ProjectSnapshotLoadAdmissionState::Admitted,
+            Duration::from_secs(1),
+        ));
+        assert_eq!(
+            barrier_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        before = engine.snapshot().timeline;
+        let read_guard = engine.snapshot.read().unwrap();
+        let started = Instant::now();
+        let error = engine
+            .dj_link_release_with_timeout(Duration::from_secs(3))
+            .expect_err("held snapshot guard must force a definitive DJ rollback");
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "public DJ API must not inherit an unbounded snapshot write"
+        );
+        drop(read_guard);
+        assert_eq!(engine.snapshot().timeline, before);
+    }
+
+    #[test]
+    fn dj_link_public_api_audio_projection_reader_rolls_back_before_shutdown_deadline() {
+        let engine = dj_link_transaction_test_engine();
+        let before = engine.snapshot();
+        let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+        // START selects Timeline 2, so its prepared audio projection carries a
+        // new timeline identity even though this fixture has no audio clips.
+        let audio_reader = engine.timeline_audio_projection_authority.read().unwrap();
+        let started = Instant::now();
+        let error = engine
+            .dj_link_start_timeline_with_timeout(TimelineId(2), Duration::from_secs(3))
+            .expect_err("held audio projection reader must force exact-A rollback");
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "DJ Link must not wait behind the native audio projection reader"
+        );
+        drop(audio_reader);
+        assert_dj_link_exact_a("held audio reader", &before, &before_audio, &engine);
+    }
+
+    #[test]
+    fn dj_link_does_not_inherit_a_blocking_priority_safety_publication_batch() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut before = engine.snapshot().timeline;
+        for _ in 0..20 {
+            if !before.layers.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            before = engine.snapshot().timeline;
+        }
+        let read_guard = engine.snapshot.read().unwrap();
+        let (safety_ack, safety_receiver) = mpsc::sync_channel(1);
+        let safety_outcome = Arc::new(Mutex::new(None));
+        engine
+            .send_safety(EngineCommand::SafetyBlackoutEngagePublished {
+                expires_at: Instant::now() + Duration::from_secs(1),
+                completion: SafetyBlackoutPublicationCompletion {
+                    ack: safety_ack,
+                    outcome: Arc::clone(&safety_outcome),
+                },
+            })
+            .unwrap();
+
+        let error = engine
+            .dj_link_release_with_timeout(Duration::from_millis(25))
+            .expect_err("DJ Link must cancel while priority publication owns the barrier");
+        assert!(error.contains("timed out"), "unexpected DJ result: {error}");
+        drop(read_guard);
+        assert_eq!(
+            safety_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(Ok(()))
+        );
+        assert_eq!(
+            safety_outcome.lock().unwrap().take(),
+            Some(SafetyBlackoutEngageDisposition::Applied)
+        );
+        assert_eq!(engine.snapshot().timeline, before);
+    }
+
+    #[test]
+    fn dj_link_publication_failure_rolls_back_release_to_exact_snapshot() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut before = engine.snapshot().timeline;
+        for _ in 0..20 {
+            if !before.layers.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            before = engine.snapshot().timeline;
+        }
+        engine.force_next_pending_publication_failure_for_tests();
+        let error = engine
+            .dj_link_release()
+            .expect_err("forced DJ Link publication failure must be definitive");
+        assert!(error.contains("rolled back"), "unexpected error: {error}");
+        assert_eq!(engine.snapshot().timeline, before);
+    }
+
+    #[test]
+    fn dj_link_start_publication_failure_at_final_audio_successor_restores_exact_a() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut first = runtime.authored_timeline_snapshot();
+        first.id = TimelineId(1);
+        first.duration_ms = 1_000;
+        let mut second = first.clone();
+        second.id = TimelineId(2);
+        second.label = "DJ Link replacement".to_string();
+        second.automations.push(TimelineAutomationSummary {
+            id: 9_901,
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            timeline_layer_id: None,
+            keyframes: vec![AutomationKeyframeSummary {
+                time_ms: 0,
+                value: 12_345,
+                interpolation: AutomationInterpolation::Linear,
+            }],
+            enabled: true,
+        });
+        runtime
+            .apply_timeline_bank_state(vec![first, second], TimelineId(1), true)
+            .unwrap();
+        runtime.timeline_audio_transport_revision = u64::MAX - 1;
+        runtime.last_error = Some("pre-existing DJ diagnostic".to_string());
+        let before = runtime.timeline_snapshot();
+        let before_shared = runtime.build_snapshot(0);
+        let before_bank = runtime.timeline_bank.clone();
+        let before_last_error = runtime.last_error.clone();
+        let before_values = runtime.values.clone();
+        let before_origins = runtime.cue_value_origins.clone();
+        let before_audio_projection_authority = runtime.timeline_audio_projection_authority;
+        let before_audio_projection_signature = runtime.timeline_audio_projection_signature.clone();
+        let before_audio_publication_generation = runtime.timeline_audio_publication_generation;
+        let before_audio_commit_signature = runtime.timeline_audio_commit_signature.clone();
+        runtime.fail_next_pending_publication = true;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DjLinkStartTimeline {
+            timeline_id: TimelineId(2),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        assert_eq!(runtime.timeline_id, TimelineId(2));
+        assert_eq!(runtime.timeline_audio_transport_revision, u64::MAX);
+        assert_eq!(
+            runtime.values.get(&(1, "Dimmer".to_string())),
+            Some(&12_345),
+            "the forced failure must exercise a real provisional B"
+        );
+        let published = RwLock::new(before_shared.clone());
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.timeline_snapshot(), before);
+        assert_eq!(runtime.timeline_bank, before_bank);
+        assert_eq!(runtime.last_error, before_last_error);
+        assert_eq!(runtime.values, before_values);
+        assert_eq!(runtime.cue_value_origins, before_origins);
+        assert_eq!(
+            runtime.timeline_audio_projection_authority,
+            before_audio_projection_authority
+        );
+        assert_eq!(
+            runtime.timeline_audio_projection_signature,
+            before_audio_projection_signature
+        );
+        assert_eq!(
+            runtime.timeline_audio_publication_generation,
+            before_audio_publication_generation
+        );
+        assert_eq!(
+            runtime.timeline_audio_commit_signature,
+            before_audio_commit_signature
+        );
+        assert_eq!(*published.read().unwrap(), before_shared);
+
+        // A later publication cycle/tick cannot revive the provisional B.
+        runtime.publish_pending_command_acks(1, &published);
+        let next_tick = runtime.build_snapshot(1);
+        assert_eq!(next_tick.timeline.id, TimelineId(1));
+        assert_eq!(next_tick.timeline.audio_transport_revision, u64::MAX - 1);
+        assert_eq!(next_tick.timeline_bank, before_shared.timeline_bank);
     }
 
     #[test]
@@ -104011,13 +106821,15 @@ mod tests {
         let transition = cut.timeline_follow_transition.clone().unwrap();
         cut.settle_timeline_follow_failure(
             "forced Cut settlement fault".to_string(),
-            now,
-            transition.generation,
-            transition.source_timeline_id,
-            Some(transition.target),
-            Some(transition.source_bpm),
-            transition.fault_policy,
-            transition.admission_reason,
+            TimelineFollowFailureContext {
+                now,
+                generation: transition.generation,
+                source_timeline_id: transition.source_timeline_id,
+                target: Some(transition.target),
+                source_bpm: Some(transition.source_bpm),
+                fault_policy: transition.fault_policy,
+                admission_reason: transition.admission_reason,
+            },
         )
         .unwrap();
         assert_eq!(cut.timeline_id, TimelineId(8_102));
@@ -104111,13 +106923,15 @@ mod tests {
         let terminal_cut_error = terminal_cut
             .settle_timeline_follow_failure(
                 "terminal Cut settlement fault".to_string(),
-                now,
-                transition.generation,
-                transition.source_timeline_id,
-                Some(transition.target),
-                Some(transition.source_bpm),
-                transition.fault_policy,
-                transition.admission_reason,
+                TimelineFollowFailureContext {
+                    now,
+                    generation: transition.generation,
+                    source_timeline_id: transition.source_timeline_id,
+                    target: Some(transition.target),
+                    source_bpm: Some(transition.source_bpm),
+                    fault_policy: transition.fault_policy,
+                    admission_reason: transition.admission_reason,
+                },
             )
             .unwrap_err();
         assert_eq!(
@@ -104928,8 +107742,7 @@ mod tests {
         }];
         runtime
             .apply_timeline_bank_state(vec![source], TimelineId(8_101), false)
-            .err()
-            .expect("standalone enabled Follow must remain rejected");
+            .expect_err("standalone enabled Follow must remain rejected");
         let mut source = runtime.authored_timeline_snapshot();
         source.id = TimelineId(8_101);
         source.label = "Follow source".to_string();
@@ -105087,7 +107900,7 @@ mod tests {
         let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
         let layer_id = 8_151;
         add_runtime_test_video_layer(&mut runtime, layer_id, VideoLayerState::default());
-        let source_automations = vec![
+        let source_automations = [
             TimelineVideoAutomationSummary {
                 id: 8_152,
                 layer_id,
@@ -105762,12 +108575,16 @@ mod tests {
                 fade_in_ms: 0,
                 fade_out_ms: 0,
             };
-            let source_clips = source_has_audio
-                .then(|| vec![make_clip(80_300, "source.wav")])
-                .unwrap_or_default();
-            let target_clips = target_has_audio
-                .then(|| vec![make_clip(80_301, "target.wav")])
-                .unwrap_or_default();
+            let source_clips = if source_has_audio {
+                vec![make_clip(80_300, "source.wav")]
+            } else {
+                Default::default()
+            };
+            let target_clips = if target_has_audio {
+                vec![make_clip(80_301, "target.wav")]
+            } else {
+                Default::default()
+            };
             runtime.timeline_audio_clips = source_clips.clone();
             runtime.timeline_audio_muted = source_muted;
             runtime.timeline_bank[0].audio_clips = source_clips;
@@ -105934,9 +108751,11 @@ mod tests {
         let mut mixed = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
         mixed.output.enabled = true;
         mixed.output.universe = 80;
-        let mut disabled = DmxOutputConfig::default();
-        disabled.enabled = false;
-        disabled.universe = 81;
+        let disabled = DmxOutputConfig {
+            enabled: false,
+            universe: 81,
+            ..DmxOutputConfig::default()
+        };
         mixed.additional_dmx_outputs.push(RuntimeDmxOutput {
             config: disabled,
             sender: None,
@@ -106012,9 +108831,11 @@ mod tests {
         // A disable/re-enable which restores byte-equal visible config is an
         // ABA boundary. Old successful telemetry must not settle the Follow.
         let mut reenabled = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
-        let mut primary = DmxOutputConfig::default();
-        primary.enabled = true;
-        primary.universe = 8_110;
+        let primary = DmxOutputConfig {
+            enabled: true,
+            universe: 8_110,
+            ..DmxOutputConfig::default()
+        };
         reenabled.apply_command(EngineCommand::SetOutput(primary.clone()));
         reenabled
             .begin_timeline_follow(
@@ -106047,12 +108868,16 @@ mod tests {
         // Removing and re-adding a secondary route at its old vector index
         // and universe likewise cannot satisfy the original admission.
         let mut readded = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
-        let mut disabled_primary = DmxOutputConfig::default();
-        disabled_primary.enabled = false;
-        disabled_primary.universe = 8_120;
-        let mut secondary = DmxOutputConfig::default();
-        secondary.enabled = true;
-        secondary.universe = 8_121;
+        let disabled_primary = DmxOutputConfig {
+            enabled: false,
+            universe: 8_120,
+            ..DmxOutputConfig::default()
+        };
+        let secondary = DmxOutputConfig {
+            enabled: true,
+            universe: 8_121,
+            ..DmxOutputConfig::default()
+        };
         readded.apply_command(EngineCommand::SetDmxOutputs(vec![
             disabled_primary.clone(),
             secondary.clone(),
@@ -106095,10 +108920,12 @@ mod tests {
         // be mistaken for an acknowledgement.
         let mut endpoint_changed =
             timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
-        let mut endpoint = DmxOutputConfig::default();
-        endpoint.enabled = true;
-        endpoint.universe = 8_130;
-        endpoint.target_ip = "127.0.0.1".to_string();
+        let endpoint = DmxOutputConfig {
+            enabled: true,
+            universe: 8_130,
+            target_ip: "127.0.0.1".to_string(),
+            ..DmxOutputConfig::default()
+        };
         endpoint_changed.apply_command(EngineCommand::SetOutput(endpoint.clone()));
         endpoint_changed
             .begin_timeline_follow(
@@ -106136,9 +108963,11 @@ mod tests {
         // matches admission.
         let mut stale_telemetry =
             timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
-        let mut current = DmxOutputConfig::default();
-        current.enabled = true;
-        current.universe = 8_140;
+        let current = DmxOutputConfig {
+            enabled: true,
+            universe: 8_140,
+            ..DmxOutputConfig::default()
+        };
         stale_telemetry.apply_command(EngineCommand::SetOutput(current));
         stale_telemetry
             .begin_timeline_follow(
@@ -116091,9 +118920,7 @@ mod tests {
             ..CueSummary::default()
         };
         let encoded = serde_json::to_vec(&cue).unwrap();
-        let legacy_encoded = concat!(
-            r#"{"id":42,"cue_list_id":1,"cue_number":"","label":"Flat","group_id":null,"recall_mode":"Coexist","fade_ms":0,"authored_beats":null,"pre_wait_ms":0,"follow_ms":null,"ifcb_timing":{"intensity_fade_ms":null,"intensity_delay_ms":0,"focus_fade_ms":null,"focus_delay_ms":0,"color_fade_ms":null,"color_delay_ms":0,"beam_fade_ms":null,"beam_delay_ms":0},"parts":[],"mark":false,"mib_fixture_ids":[],"palette_targets":[],"tracking":true,"notes":"","targets":[],"video_targets":[],"video_output_targets":[],"node_graph_targets":[],"effect_targets":[]}"#,
-        );
+        let legacy_encoded = "{\"id\":42,\"cue_list_id\":1,\"cue_number\":\"\",\"label\":\"Flat\",\"group_id\":null,\"recall_mode\":\"Coexist\",\"fade_ms\":0,\"authored_beats\":null,\"pre_wait_ms\":0,\"follow_ms\":null,\"ifcb_timing\":{\"intensity_fade_ms\":null,\"intensity_delay_ms\":0,\"focus_fade_ms\":null,\"focus_delay_ms\":0,\"color_fade_ms\":null,\"color_delay_ms\":0,\"beam_fade_ms\":null,\"beam_delay_ms\":0},\"parts\":[],\"mark\":false,\"mib_fixture_ids\":[],\"palette_targets\":[],\"tracking\":true,\"notes\":\"\",\"targets\":[],\"video_targets\":[],\"video_output_targets\":[],\"node_graph_targets\":[],\"effect_targets\":[]}";
         assert_eq!(encoded, legacy_encoded.as_bytes());
         let child_field_present = String::from_utf8(encoded.clone())
             .unwrap()
@@ -116807,16 +119634,16 @@ mod tests {
             )
             .is_err());
         assert_eq!(scheduler.identity(), identity_before);
-        assert_eq!(&*scheduler.queued_events(), &queued_before);
+        assert_eq!(scheduler.queued_events(), &queued_before);
         assert!(scheduler.overflow().is_some());
         assert!(scheduler.take_current_events(identity_before).is_empty());
-        assert_eq!(&*scheduler.queued_events(), &queued_before);
+        assert_eq!(scheduler.queued_events(), &queued_before);
 
         scheduler.identity.schedule_generation = u64::MAX;
         let max_identity = scheduler.identity();
         assert!(scheduler.invalidate(9, 9).is_err());
         assert_eq!(scheduler.identity(), max_identity);
-        assert_eq!(&*scheduler.queued_events(), &queued_before);
+        assert_eq!(scheduler.queued_events(), &queued_before);
     }
 
     #[test]

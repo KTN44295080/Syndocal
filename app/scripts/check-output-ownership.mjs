@@ -67,6 +67,124 @@ const tauriCommandSegments = (source) => {
   });
 };
 
+const rustFunctionSegment = (source, functionName, label) => {
+  const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = source.match(new RegExp(`\\bfn\\s+${escapedName}\\s*\\(`));
+  assert(match, `${label}: missing production helper ${functionName}`);
+  const bodyStart = source.indexOf("{", match.index);
+  assert(bodyStart >= 0, `${label}: ${functionName} is missing its function body`);
+
+  let depth = 0;
+  let state = "code";
+  let blockCommentDepth = 0;
+  let rawStringEnd = "";
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const character = source[index];
+    const nextCharacter = source[index + 1];
+    if (state === "line-comment") {
+      if (character === "\n") state = "code";
+      continue;
+    }
+    if (state === "block-comment") {
+      if (character === "/" && nextCharacter === "*") {
+        blockCommentDepth += 1;
+        index += 1;
+      } else if (character === "*" && nextCharacter === "/") {
+        blockCommentDepth -= 1;
+        index += 1;
+        if (blockCommentDepth === 0) state = "code";
+      }
+      continue;
+    }
+    if (state === "string") {
+      if (character === "\\") index += 1;
+      else if (character === '"') state = "code";
+      continue;
+    }
+    if (state === "char") {
+      if (character === "\\") index += 1;
+      else if (character === "'") state = "code";
+      continue;
+    }
+    if (state === "raw-string") {
+      if (source.startsWith(rawStringEnd, index)) {
+        index += rawStringEnd.length - 1;
+        state = "code";
+      }
+      continue;
+    }
+    if (character === "/" && nextCharacter === "/") {
+      state = "line-comment";
+      index += 1;
+      continue;
+    }
+    if (character === "/" && nextCharacter === "*") {
+      state = "block-comment";
+      blockCommentDepth = 1;
+      index += 1;
+      continue;
+    }
+    const rawString = source.slice(index).match(/^(?:b)?r(#{0,255})"/);
+    if (rawString) {
+      rawStringEnd = `"${rawString[1]}`;
+      state = "raw-string";
+      index += rawString[0].length - 1;
+      continue;
+    }
+    if (character === '"') {
+      state = "string";
+      continue;
+    }
+    if (character === "'") {
+      state = "char";
+      continue;
+    }
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(match.index, index + 1);
+    }
+  }
+  assert.fail(`${label}: unterminated production helper ${functionName}`);
+};
+
+const appendDirectProductionHelpers = (segments, source, delegates) => segments.map((segment) => {
+  const helperName = delegates.get(segment.name);
+  if (!helperName) return segment;
+  const bodyStart = segment.source.indexOf("{");
+  const bodyEnd = segment.source.lastIndexOf("}");
+  assert(bodyStart >= 0 && bodyEnd > bodyStart, `${segment.name}: missing command body`);
+  const body = segment.source.slice(bodyStart + 1, bodyEnd);
+  const escapedHelperName = helperName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const helperCallMatches = [...body.matchAll(new RegExp(`\\b${escapedHelperName}\\s*\\(`, "g"))];
+  assert.equal(
+    helperCallMatches.length,
+    1,
+    `${segment.name}: expected exactly one direct call to production helper ${helperName}`,
+  );
+  assert.match(
+    body,
+    new RegExp(`(?:^|\\n)\\s*(?:return\\s+)?${escapedHelperName}\\s*\\([^;{}]*\\)\\s*;?\\s*$`),
+    `${segment.name}: production helper ${helperName} must be the direct final call`,
+  );
+  assert.doesNotMatch(
+    source,
+    new RegExp(`#\\[tauri::command\\]\\s*(?:async\\s+)?fn\\s+${escapedHelperName}\\s*\\(`),
+    `${segment.name}: ${helperName} must remain a production helper, not a Tauri wrapper`,
+  );
+  const helperSource = rustFunctionSegment(
+    source,
+    helperName,
+    `${segment.name} production-helper attribution`,
+  );
+  return {
+    ...segment,
+    productionHelperSource: helperSource,
+    source: `${segment.source}\n${helperSource}`,
+  };
+});
+
 const protocolProjectSwapConstructor = sliceBetween(
   protocol,
   "pub fn project_swap_disarmed(",
@@ -883,6 +1001,17 @@ const externalAdapterRoutes = [
   "start_osc_input",
   "start_remote_control",
 ];
+// D3 project preflight deliberately keeps the Tauri wrapper small. Attribute
+// only the production helper it directly calls; never widen this inventory to
+// the rest of main.rs, where unrelated commands would be misattributed.
+const directProductionHelpers = new Map([
+  ["start_remote_control", "start_remote_control_after_project_preflight"],
+]);
+const commandSegmentsWithProductionHelpers = appendDirectProductionHelpers(
+  commandSegments,
+  appBackend,
+  directProductionHelpers,
+);
 const usesForbiddenVariant = (source) => [...forbiddenVariants].some((variant) =>
   new RegExp(`EngineCommand::${variant}(?:\\s|\\(|\\{)`).test(source));
 const discoveredLegacyRoutes = commandSegments
@@ -897,8 +1026,9 @@ assert.deepEqual(
   legacyTauriOutputRoutes,
   "generated legacy Tauri output-route inventory changed; classify and fail-close every new ingress",
 );
-const discoveredExternalAdapters = commandSegments
-  .filter(({ source }) => usesForbiddenVariant(source))
+const discoveredExternalAdapters = commandSegmentsWithProductionHelpers
+  .filter(({ source, productionHelperSource }) => usesForbiddenVariant(source)
+    && (!productionHelperSource || usesForbiddenVariant(productionHelperSource)))
   .map(({ name }) => name)
   .filter((name) => externalAdapterRoutes.includes(name))
   .sort();
@@ -937,9 +1067,17 @@ for (const route of legacyTauriOutputRoutes) {
 }
 
 for (const route of externalAdapterRoutes) {
-  const matches = commandSegments.filter(({ name }) => name === route);
+  const matches = commandSegmentsWithProductionHelpers.filter(({ name }) => name === route);
   assert.equal(matches.length, 1, `${route}: expected one external adapter command`);
-  const body = matches[0].source;
+  const commandBody = commandSegments.find(({ name }) => name === route)?.source ?? "";
+  const helperBody = matches[0].productionHelperSource ?? null;
+  if (helperBody !== null) {
+    assert(
+      !usesForbiddenVariant(commandBody),
+      `${route}: the Tauri wrapper must not produce a forbidden EngineCommand before its attributed production helper`,
+    );
+  }
+  const body = helperBody ?? commandBody;
   assert(
     body.includes("send_engine_command_if_callback_epoch")
       || body.includes("external_output_command_requires_local_r4(&command)"),
@@ -1025,7 +1163,7 @@ assert.deepEqual(
 const nativeDangerConfirmation = sliceBetween(
   outputRuntime,
   "fn output_action_requires_native_danger_confirmation(",
-  "pub(crate) fn issue_output_control_authority(",
+  "pub(crate) fn issue_output_control_authority_for_window_label(",
   "native dangerous OutputControl confirmation helper",
 );
 assert.match(
@@ -1228,7 +1366,7 @@ assertOrdered(
 const remoteExternalCallback = sliceBetween(
   appBackend,
   "RemoteInputEvent::SetVideoOutputBlackout",
-  "move || snapshot_engine.snapshot()",
+  "move || snapshot_engine.try_snapshot()",
   "Web Remote external callback seam",
 );
 assertOrdered(

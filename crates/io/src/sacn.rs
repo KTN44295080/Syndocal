@@ -82,7 +82,7 @@ impl SacnSender {
     fn next_sequence(&self) -> u8 {
         self.sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(if current >= 255 { 1 } else { current + 1 })
+                Some(if current == u8::MAX { 1 } else { current + 1 })
             })
             .unwrap_or(1)
     }

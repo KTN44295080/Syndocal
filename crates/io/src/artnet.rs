@@ -359,7 +359,7 @@ impl ArtNetSender {
     fn next_sequence(&self) -> u8 {
         self.sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(if current >= 255 { 1 } else { current + 1 })
+                Some(if current == u8::MAX { 1 } else { current + 1 })
             })
             .unwrap_or(1)
     }
@@ -429,7 +429,7 @@ pub fn parse_art_dmx_packet(packet: &[u8]) -> Option<ArtDmxPacket<'_>> {
     }
 
     let length = u16::from_be_bytes([packet[16], packet[17]]) as usize;
-    if !(2..=512).contains(&length) || length % 2 != 0 {
+    if !(2..=512).contains(&length) || !length.is_multiple_of(2) {
         return None;
     }
     let end = ART_DMX_HEADER_LEN.checked_add(length)?;

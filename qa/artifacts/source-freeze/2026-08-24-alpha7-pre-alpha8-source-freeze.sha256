@@ -1,0 +1,154 @@
+# Syndocal source-freeze manifest
+# manifest-path: qa/artifacts/source-freeze/2026-08-24-alpha7-pre-alpha8-source-freeze.sha256
+# manifest-envelope: excluded from payload to avoid recursive self-hash
+# manifest-self-sha256: intentionally external; compute after creation
+# encoding: UTF-8 without BOM (ASCII subset), LF
+# record-order: git status --porcelain=v1 -uall path order from repository root
+# hash-algorithm: SHA-256 over current working-tree file bytes
+# repository-resolved: C:/Users/kouty/Documents/KDMX
+# branch: codex/syndocal-v1.2
+# head: 23f350c366ede2fdffcfbf3232e18112eada51ea
+# upstream-ref: origin/codex/syndocal-v1.2
+# upstream-head: 23f350c366ede2fdffcfbf3232e18112eada51ea
+# ahead: 0
+# behind: 0
+# payload-path-count: 98
+# payload-status-worktree-modified-count: 60
+# payload-status-untracked-count: 38
+# payload-status-other-count: 0
+# manifest-envelope-path-count: 1 after creation
+# total-dirty-untracked-path-count-after-envelope: 99
+# unknown-category-count: 0
+# payload-records-sha256: 541891B68643F9D0BC369202048A769715F00E12EF575C2AB6D5D510475DE93A
+# payload-start-end-stability: verified by immediate post-apply rehash
+# git-diff-check: exit 0
+# git-diff-cached-check: exit 0
+# category-count-core-runtime: 19
+# category-count-frontend-contract-gate: 13
+# category-count-frontend-product-metadata: 1
+# category-count-frontend-runtime: 11
+# category-count-native-product-metadata: 1
+# category-count-native-runtime: 11
+# category-count-qa-documentation: 5
+# category-count-qa-native-physical-evidence: 15
+# category-count-vendored-tauri-runtime-source: 20
+# category-count-workspace-metadata: 2
+# excluded-generated-app-dist: exists=true files=273 logical-bytes=4944008
+# excluded-generated-app-dist-ignore-proof: .gitignore:7:/app/dist/ app/dist
+# excluded-generated-target: exists=true files=369251 logical-bytes=368151112999
+# excluded-generated-target-ignore-proof: .gitignore:1:/target/ target
+# excluded-generated-trees-are-not-payload-hashed: true
+# vendor-crate: tauri-runtime-wry 2.6.0
+# vendor-resolved: C:/Users/kouty/Documents/KDMX/vendor/tauri-runtime-wry-2.6.0-syndocal
+# vendor-upstream-sha1: 977c4b496cbf96b811c0c5080263e31b83d8e084
+# vendor-upstream-path: crates/tauri-runtime-wry
+# vendor-file-count: 20
+# vendor-directory-count: 3
+# vendor-binary-artifact-count: 0
+# vendor-artifact-directory-count: 0
+# vendor-reparse-point-count: 0
+# vendor-cargo-ok-present: false
+# quarantined-cargo-ok-source: vendor/tauri-runtime-wry-2.6.0-syndocal/.cargo-ok
+# quarantined-cargo-ok-destination: C:/Users/kouty/AppData/Local/Codex/quarantine/KDMX-20260824/vendor/tauri-runtime-wry-2.6.0-syndocal/.cargo-ok
+# quarantined-cargo-ok-bytes: 7
+# quarantined-cargo-ok-sha256: AFBF9D0F3560B0FD7795E81C42A0A79EE6B6FC67E064F77826AEE642CAD28D91
+# quarantined-cargo-ok-content: {"v":1}
+# columns: git-xy | category | sha256 | bytes | repo-relative-path
+" M" | workspace-metadata | 43D0932D5EDB57A40A1C861266789E644F03CC3AA84DDDAE07700BEDEB85421E | 178435 | Cargo.lock
+" M" | workspace-metadata | 001D6D11D02FF9B3DEE5FD1C9B25F88686F6A723FE4692A4454F8029720BC1E2 | 2128 | Cargo.toml
+" M" | frontend-product-metadata | 26E92C158E40E804CAD5908EB8186FAF9A4BD939DCAC7CD0663E50B1CEE87AB4 | 10616 | app/package.json
+" M" | frontend-contract-gate | 71300042ED424A8BEA624291D3B695179B199AFD24503234F5815E3DCEB087BD | 12080 | app/scripts/check-backend-operator-contract.mjs
+" M" | frontend-contract-gate | 8076355D3A4A1A0CFE4CC05B477E7CCF175904131C235AC0E9D8CF0B0B15940F | 9375 | app/scripts/check-dvc-dmx-shortcuts.mjs
+" M" | frontend-contract-gate | 22BD39F0F28F070BB5D181A2EEC07F522041A58A0BE5BD81F0F3DBA7A9DA8206 | 8397 | app/scripts/check-dvc-midi-shortcuts.mjs
+" M" | frontend-contract-gate | F063FC091715C51229DF56AAE43DB5805E7F3E015B4345739BED1D468EA39B8B | 40535 | app/scripts/check-output-control-runtime.mjs
+" M" | frontend-contract-gate | DAA56AC4C3689AE7B0ACF1D5F119A12422C5676B0C15C4E478553F5E40B951A8 | 51538 | app/scripts/check-output-ownership.mjs
+" M" | frontend-contract-gate | 798373F095A9EAF7E0805B4CB424A612724FB731AA6514B94604912F25033D78 | 4596 | app/scripts/check-project-transaction.mjs
+" M" | frontend-contract-gate | 3C10F3015DF7281EEBC1F6F9C796758EBFDB436821D59831E7348F6E379E1550 | 21811 | app/scripts/check-timeline-external-dnd.mjs
+" M" | frontend-contract-gate | 9074FDCB36544B1E9F893B9C41D477EA7F30CAC05D5ECA21F4D0BE4010C0D2AC | 1707891 | app/scripts/check-viewport-containment.mjs
+" M" | frontend-contract-gate | 57ADCAF70C7EDFC85F4AF779FB0E2F51C9ECE4D2FE1BE2A9F020319801C5C170 | 2956 | app/scripts/check-virtualization.mjs
+" M" | frontend-contract-gate | 4904E71D5B546806F9DACAEBCE2BF800606AE576D1B6E1FFAAB927C2E1B19912 | 12965 | app/scripts/check-vj-first-run.mjs
+" M" | frontend-contract-gate | 3391F2F149ADCED3B5641E48E326680686B8D243389EAFC7E2DCC3799AEA7E55 | 70515 | app/scripts/test-warning-ratchet.mjs
+" M" | frontend-contract-gate | 55D2388C3EA244F3C58B207E651E56F33DB10B6E76BD404A2943497E384926AA | 74600 | app/scripts/warning-ratchet-lib.mjs
+" M" | native-product-metadata | 0AC8A76E55DDAF3109B0017AF01045BA0EFCACB155DB6E22D084901E235AEA3F | 1611 | app/src-tauri/Cargo.toml
+" M" | native-runtime | 747BF0E9DAD7A50A59D9470B9A4A628FD6EA7B3605CC0BE8867721659CAB656E | 72760 | app/src-tauri/src/authored_control_plane.rs
+" M" | native-runtime | 6D40FFB648CB5E01F7BD21CB10DE06466389479C664970C9C7888E87F2B4A7A1 | 142099 | app/src-tauri/src/control_plane.rs
+" M" | native-runtime | E227446C21C8E442DBEB2B3C96428D3934826EC195CE43BF35B7DCF46ED8682B | 99471 | app/src-tauri/src/control_plane_query.rs
+" M" | native-runtime | FD37EC2E197C257F16AE4327CD7F976EDE72388178228933C60677F7E1509163 | 215119 | app/src-tauri/src/control_plane_runtime.rs
+" M" | native-runtime | 115284F8ED631894990F24716EA38A646B259B7C1B532194501C61589F98E264 | 768209 | app/src-tauri/src/dvc_import.rs
+" M" | native-runtime | C169634FC6A6DADB76DA620ED111BF3FE6F8E01B562601259C5CE0B01A8F2F07 | 33979 | app/src-tauri/src/e3_native_acceptance.rs
+" M" | native-runtime | 2CC94D3E5307E6BBC026F1EC815ABC02BFF47E987D62526446AFD1059984E6C7 | 4553901 | app/src-tauri/src/main.rs
+" M" | native-runtime | 3426A24D425F1A9267EC59A64E9C1A401155C59C44B08598A91D55C1F14D03BE | 121284 | app/src-tauri/src/ndi_transport.rs
+" M" | native-runtime | 050ACA35A000F0A1B92870F78013C18975019909C7DF41C5EA3804200FDBE15A | 146797 | app/src-tauri/src/output_lease.rs
+" M" | native-runtime | 6F5854B8519EE8B2595DC4685EF5360A6A235BB26AC07305313D45FA7065F1CD | 133793 | app/src-tauri/src/spout_transport.rs
+" M" | native-runtime | 203B48AFA04E8027C17D95EB6015CEF4E88A4BAF95312562F81B48CF2FD3F8C4 | 137167 | app/src-tauri/src/timeline_cue_audio.rs
+" M" | frontend-runtime | 8993D5CD12D19C86F901415A39161EABAF1FA74BEF96802467ABA183730D2DDE | 1129905 | app/src/App.tsx
+" M" | frontend-runtime | B094585CF4327B769119E4A311C4FA0DF2F2840CB32DD4195839FDA6AF5061B8 | 19104 | app/src/components/FixtureCatalogPanel.tsx
+" M" | frontend-runtime | EAE5357734F99753199EEE7758CE4F59357B93E814A445F46E513639B7B6B6AE | 41998 | app/src/components/PatchProfileBrowserPanel.tsx
+" M" | frontend-runtime | CCCFC7B986C9D85C8A0FB035846CD48EE4BD28D8C8D9AB2A9DCDDBA91E7A6541 | 47235 | app/src/components/SceneMatrixPanel.tsx
+" M" | frontend-runtime | 7A10B125B9E288EFB7F0AB36A93F08433A65AD5BC4390F0DFBBE422E2D2F2DB9 | 6823 | app/src/createOutputDiagnosticsController.ts
+" M" | frontend-runtime | A5E6539131FFE9D3004D2FD226497A152F19DC42BB0B01EB28E64C4E231E6DEF | 80251 | app/src/createVideoRuntimeController.ts
+" M" | frontend-runtime | 8E25772CC918DFC1F41304B86B6F005E70C4D9BB13D7B1A29592A9C6E0CA3D5A | 44324 | app/src/outputControlController.ts
+" M" | frontend-runtime | E137ABD6149B155347D886DC2BDC7E2BFCAC211E804C2912E032FEB22182D724 | 774427 | app/src/styles.css
+" M" | frontend-runtime | 1CF6A81F14643D9FE4DDA2684B504F4F3BC79A542B7BDA7C11B86D4EA00A147C | 12913 | app/src/tauri-invoke-manifest.json
+" M" | frontend-runtime | F5A7E438028047C291DB7E7D3CFCA7242FE807B6B12EE814483AC34876BEAF44 | 13366 | app/src/tauriInvokeCommands.ts
+" M" | frontend-runtime | 8A0A69BC64EC7B1670CEC2B829FBC062FE350A383780BC6687B95F2DD4269CAB | 254042 | app/src/uiLocalization.ts
+" M" | core-runtime | 2D2E3F5C794C57F1272804EB559108C9997CD5A864B3D15D6FA62004F89D55D5 | 27658 | crates/audio/src/lib.rs
+" M" | core-runtime | 43063B598EF0B1D5F996F20DAC20C89DE30CC72699DF975B352123BD9C2CEF25 | 324 | crates/engine/Cargo.toml
+" M" | core-runtime | 2ABDDB7CCBC812D4890E9F7C9135CDBDF66678BB874CE6ACF674938AFB9D5C15 | 6055 | crates/engine/src/control_plane.rs
+" M" | core-runtime | F2DCE4D4F6E4B9CA4E15DB722608461D9D0ADBD9948FB41D5796FD4B94E1B2F7 | 4699610 | crates/engine/src/lib.rs
+" M" | core-runtime | 37DD27999E453082BD8F128BC3EEF874351502DC8039D939515B452E0DA7F5CB | 42781 | crates/engine/src/move_path.rs
+" M" | core-runtime | 011F65461D955DA7341518F6DA94D987673C93444456A26CDB5DD629CF971FEA | 71737 | crates/gdtf/src/lib.rs
+" M" | core-runtime | 1147EA63210483C2550378392F6DD81FA8642E106B97793522ADF2954E50006C | 37433 | crates/io/src/artnet.rs
+" M" | core-runtime | 1C9A3C4A6D33BCB2223F108EECFC716FE6073FE90A52858AC350718773799BD2 | 137425 | crates/io/src/midi.rs
+" M" | core-runtime | E552FEA70D017BBAE40B534A6D854BE1C1B20AFFE111B9E733E0C19FA7A1E8B4 | 557730 | crates/io/src/remote_ws.rs
+" M" | core-runtime | 4EAF201808D2A2FFF6BEA4BD5ED1D20CC592F69FD8F86295E515D8272037D6F0 | 8436 | crates/io/src/sacn.rs
+" M" | core-runtime | 7D96AD10BD9F4FBA54680F7A613881E54BB0A543DF4FE313ECCCDEDD0A856DB9 | 17625 | crates/io/src/serial_dmx.rs
+" M" | core-runtime | B7B665DF521707D372380C053B6D684451E91ED0B30E1A078D63DB412D37018B | 20552 | crates/io/src/serial_rdm.rs
+" M" | core-runtime | 90444320897A41D15F1355D640F5CFC6E9014951A9B9D7AC4C1F6EA0CB7A83A9 | 168803 | crates/protocol/src/control_plane_command.rs
+" M" | core-runtime | 6780DD8F1FB758C244373853648BB48AFDBD01874C59EEF7DC25799F7BDF8AAA | 95455 | crates/protocol/src/control_plane_query.rs
+" M" | core-runtime | A1FEF05441B443FEF32BFFDFE0FDE7EFF0206CD92279843F332A2CCD9AF230F8 | 528992 | crates/protocol/src/lib.rs
+" M" | core-runtime | F24A1029AEF4D86C1049055538DAC038695096839A07F3ECB00FB02C92C0A91D | 49379 | crates/video/src/gpu_compositor.rs
+" M" | core-runtime | 18E927C5F42A835C14A1E69A936975133E71851FD867B2B8F182709E6C173938 | 37912 | crates/video/src/gpu_surface.rs
+" M" | core-runtime | 83CDEA263D9EF246015FB773213F5D4A94917141592747BA205278DB0633EF92 | 515656 | crates/video/src/lib.rs
+" M" | core-runtime | D57B315386EE8EAB1E3224F5DAAFB14530718ABB8A9C9B6CC90CB1CA2EF8D9FE | 133951 | crates/visualizer/src/lib.rs
+" M" | qa-documentation | C93587CC29A297F398A16EF27C8020FAECDC648A122F57702AB588A6C66475FD | 137840 | qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md
+" M" | qa-documentation | 2DCB8C827DF3B3DB869D2FE3DAF3E122E1BB5DDE78A41A62AD879307F3FEE2A9 | 115598 | qa/CODEX_HANDOFF_2026-08-19.md
+" M" | qa-documentation | 95E3413AB9C1F842CD6FBB964048CDE8E461361C08DC2AE095E63DF0C622E635 | 89288 | qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md
+"??" | frontend-contract-gate | 9B10A128E1DC3C3337D1F3B2F81CAD88CEE24944B62E74C9C625DD1BA9DC7767 | 32608 | app/scripts/check-frontend-command-routing.mjs
+"??" | qa-documentation | AC98DC5EAE50CAA2CDD9B3CFDEC6CD1488BF97C1F805E14E45DA319ABB56D76C | 54130 | qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md
+"??" | qa-documentation | 17710D93AD9248D24DF6B0A4AC2AA8A3A8FAC5FCE53FCA09F03F6FCD1DB9370F | 6364 | qa/TAURI_CONTEXT_CLONE_MITIGATION_2026-08-23.md
+"??" | qa-native-physical-evidence | 9D591D791351CCD3806A3B1F095CFA044FB77F3505808892F8738AB52FB3E55D | 71653 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/after-relaunch-1282x802.jpg
+"??" | qa-native-physical-evidence | 9E03FB2F723BA4D144BDE94836478EAE920A252B32F1CF8E5FC1392E5443C371 | 127336 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/audio-backend-clipped-1920x1032.jpg
+"??" | qa-native-physical-evidence | 51116C8C69A313A5C4E8560C68BC37F2C7FF166A05106683A3D13AADA63BAF57 | 135177 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/audio-device-dropdown-1920x1032.jpg
+"??" | qa-native-physical-evidence | 704AD196237BC94783673EFD0D3B089C091BA22FEF6BC661CA5F75530692AEBC | 96230 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/current-maximized-1920x1032.jpg
+"??" | qa-native-physical-evidence | C283E20E3EEFBA150D8428787B00C62BBAF1C83E1E9B51969341031286C459E2 | 171814 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/dmx-connection-expanded-1920x1032.jpg
+"??" | qa-native-physical-evidence | 17503F25013ED5917F0070BBFEE62C2D51E9B5ADD04FC0646899298097CFE186 | 97236 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/final-maximized-1920x1032.jpg
+"??" | qa-native-physical-evidence | 7FEAFF7DD1E31BA4F61D506D7109CD32A2E671C3EA9A6FF0946505B984059F7D | 5661 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/hardware-preflight-2026-08-23.md
+"??" | qa-native-physical-evidence | 2A45B1A831E092C49D08CFFBA27537116FB086F98BD916AB5CA0ACDC4B5AE7B5 | 172796 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/io-setup-1920x1032.jpg
+"??" | qa-native-physical-evidence | 1B01659920A82C20BC193DC9C3BC74A9BB96B1E4F1D3C541A1661E9F05144DE6 | 173138 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/midi-device-settings-1920x1032.jpg
+"??" | qa-native-physical-evidence | 2466749E04692618F720EBA5B864E1CA9727036BB3F2CB8524A61DB3ED1A098C | 172917 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/midi-input-dropdown-1920x1032.jpg
+"??" | qa-native-physical-evidence | 981B5C796C9132E8166BF799170015924FC72BA2B311E227D8B18B1B1AF6E92C | 127246 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/setup-check-1920x1032.jpg
+"??" | qa-native-physical-evidence | 4A43D3BA6734D74634CDCF8F31332CC893969769AAD1901A0478EAAB50BF17DC | 96569 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/syndocal-maximized-1920x1032.jpg
+"??" | qa-native-physical-evidence | 9A9DC3A5AC1A8C441954F1A5B9AF8AB81EC522B9412A03E0C1CF1C7A402D90EC | 91228 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/video-tab-1920x1032.jpg
+"??" | qa-native-physical-evidence | 62254B787A9CBE2D9054A269EC762DFB6DFBBA2C9DF3F02E5D90050F198D2A14 | 126606 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/video-target-dropdown-1920x1032.jpg
+"??" | qa-native-physical-evidence | 85E56DF228B57A89B85932F26E21C5669253DDF868BBCE526A894E1885ADE2A9 | 6335 | qa/artifacts/native-physical-acceptance/2026-08-23-alpha7/window-menu-230x147.jpg
+"??" | vendored-tauri-runtime-source | 2BA744C30339669D9C8F3E6CB057BC87949051908768768F505C63F8D48A0379 | 118 | vendor/tauri-runtime-wry-2.6.0-syndocal/.cargo_vcs_info.json
+"??" | vendored-tauri-runtime-source | 8B0ABF98CD4D656ABC7203AD5496CF5A8268712B1B2F71113BE8947A21C5DD6F | 86756 | vendor/tauri-runtime-wry-2.6.0-syndocal/Cargo.lock
+"??" | vendored-tauri-runtime-source | 4CB4D915704696DC37129978E711147E56ADB0F2D42B40175E0CD05A5D30B1C9 | 3410 | vendor/tauri-runtime-wry-2.6.0-syndocal/Cargo.toml
+"??" | vendored-tauri-runtime-source | 8066D1663C8429D7498F5323CDC54AF4F06E1241A10080F80FD3C84AF6F586AD | 2179 | vendor/tauri-runtime-wry-2.6.0-syndocal/Cargo.toml.orig
+"??" | vendored-tauri-runtime-source | 0D542E0C8804E39AA7F37EB00DA5A762149DC682D7829451287E11B938E94594 | 10174 | vendor/tauri-runtime-wry-2.6.0-syndocal/LICENSE_APACHE-2.0
+"??" | vendored-tauri-runtime-source | 9DD42EA92CFF2EDE5CD477CBFCCE051B2D0115C0AC7F368EE88CB545055DFF1D | 1090 | vendor/tauri-runtime-wry-2.6.0-syndocal/LICENSE_MIT
+"??" | vendored-tauri-runtime-source | CF468EFDCD6EB86EF6A2C0B1FBE6ACA80F0DF6A9D3016F77C0BFDB64DC4091C0 | 3193 | vendor/tauri-runtime-wry-2.6.0-syndocal/README.md
+"??" | vendored-tauri-runtime-source | 68B2727346E58A9963803A75AC29695B500AAA7D0673E18551465502B60CBF11 | 587 | vendor/tauri-runtime-wry-2.6.0-syndocal/build.rs
+"??" | vendored-tauri-runtime-source | 5A7B3B5371D5135EE86133C0B914D275DF29AF58EA1B2B8B2AF7EF309CD14283 | 151813 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/lib.rs
+"??" | vendored-tauri-runtime-source | A8C10C3D2D15EEE1B1E1E9F5D85A561BA05F8DC221A4B6269FF3C3B9FB491949 | 600 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/monitor/linux.rs
+"??" | vendored-tauri-runtime-source | 613F29430BAFC6262D2789DC71411CCEEBA7D5B3A3F1115C2CAA0C8542AD17F8 | 962 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/monitor/macos.rs
+"??" | vendored-tauri-runtime-source | 2C786F393713730C38DC374B075D34A765E7588E400F70006658C8C3F027867E | 692 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/monitor/mod.rs
+"??" | vendored-tauri-runtime-source | E1F86D90D13EC57B6097BE45444DECF2665C6BCB3A67FD8AF75503EF72B2A03D | 1144 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/monitor/windows.rs
+"??" | vendored-tauri-runtime-source | 982F60A84E2DC5CBCED1A0610CD3E13EB26BC27F89C45EC88C60D1EBCECAEFC4 | 19553 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/undecorated_resizing.rs
+"??" | vendored-tauri-runtime-source | CBC67EF911A93DB7247EB007D5FC987735E167760D4FE60BDB460680ED23644D | 3972 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/util.rs
+"??" | vendored-tauri-runtime-source | E00552F41E8594B55DF88746B1E7D4AC4FA162DFDA966FB6180BFDE17188223B | 916 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/webview.rs
+"??" | vendored-tauri-runtime-source | 8CAE057B27BD9576AEFADA130CB68EB0E39CE0E73AF3DAD793BAB7D03B269CE2 | 808 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/linux.rs
+"??" | vendored-tauri-runtime-source | 424D9F43927FD1F83F42F15CA82DF0D79E3D23DFE29664275D060AFA50ACBD75 | 1562 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs
+"??" | vendored-tauri-runtime-source | 98D723E2DAAB1C0A763C620D22BF24816E9428EAC32206C35D533FB9743EA9DD | 2085 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/mod.rs
+"??" | vendored-tauri-runtime-source | 734622475B78DBF0C7AC6BD780C893E6CAD6CFE034D84FA5F6397B92EDE139AB | 2038 | vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/windows.rs

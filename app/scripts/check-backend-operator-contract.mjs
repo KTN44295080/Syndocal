@@ -31,7 +31,7 @@ const section = (source, start, end) => {
 
 const mutationSection = section(app, "const projectMutationCommands = new Set([", "const projectMutationLabel");
 const mutationCommands = [...mutationSection.matchAll(/"([a-z0-9_]+)"/g)].map((match) => match[1]);
-const handlerSection = section(backend, ".invoke_handler(tauri::generate_handler![", ".build(tauri::generate_context!())");
+const handlerSection = section(backend, "tauri::generate_handler![", ".build(tauri::generate_context!())");
 const registeredCommands = new Set(
   [...handlerSection.matchAll(/^\s*([a-z][a-z0-9_]+),?\s*$/gm)].map((match) => match[1]),
 );
@@ -153,11 +153,11 @@ assert.match(
   "the shared Begin recovery helper must invoke the canonical backend command with its exact arguments",
 );
 const beginTransactionMatches = [...app.matchAll(/\bbeginProjectTransactionWithRecovery\(/g)];
-assert.equal(beginTransactionMatches.length, 3, "all three Begin workflows must use the shared recovery helper");
+assert.equal(beginTransactionMatches.length, 1, "the sole central mutation workflow must use the shared recovery helper");
 const transactionIdentityMatches = [
   ...app.matchAll(/const transactionIdentity = \{([\s\S]*?)\n\s*\};/g),
 ];
-assert.equal(transactionIdentityMatches.length, 3, "all three transaction workflows must define an exact identity");
+assert.equal(transactionIdentityMatches.length, 1, "the sole central mutation workflow must define an exact identity");
 for (const match of transactionIdentityMatches) {
   assert.match(match[1], /ownerId:\s*projectTransactionOwnerId/, "every transaction identity must bind the renderer owner");
 }
@@ -168,28 +168,26 @@ const cancelRecoveryHelper = section(
 );
 assert.match(cancelRecoveryHelper, /ownerId:\s*identity\.ownerId/);
 assert.match(cancelRecoveryHelper, /"cancel_project_transaction",\s*cancelArgs/);
-const commitRecoveryHelper = section(
-  app,
-  "const commitProjectTransactionWithRecovery = async (",
-  "// A convergence poll can briefly leave the old transaction/recovery detail",
-);
-assert.match(commitRecoveryHelper, /ownerId:\s*identity\.ownerId/);
-assert.match(commitRecoveryHelper, /"commit_project_transaction",\s*commitArgs/);
 assert.equal(
   [...app.matchAll(/\bcancelProjectTransactionWithRecovery\(/g)].length,
-  3,
-  "all three Cancel workflows must use the owner-bound recovery helper",
+  1,
+  "the central Cancel workflow must use the owner-bound recovery helper",
 );
 assert.equal(
   [...app.matchAll(/\bcommitProjectTransactionWithRecovery\(/g)].length,
-  2,
-  "the two specialized Commit workflows must use the owner-bound recovery helper",
+  0,
+  "no specialized workflow may bypass the central inline Commit recovery path",
 );
 const genericCommit = section(app, "transaction = await beginProjectTransactionWithRecovery", "const listen = <T,>");
 assert.match(
   genericCommit,
   /"commit_project_transaction"[\s\S]*?ownerId:\s*projectTransactionOwnerId/,
   "the generic Commit workflow must bind the renderer owner",
+);
+assert.match(
+  genericCommit,
+  /catch \(commitError\)[\s\S]*?queryProjectTransactionTerminal\(transactionIdentity\)[\s\S]*?terminal\.status !== "committed"[\s\S]*?mutation = terminal\.mutation/s,
+  "the generic Commit workflow must recover only the exact committed terminal mutation after reply loss",
 );
 assert.match(
   app,

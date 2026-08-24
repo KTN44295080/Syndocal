@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "captured_at_local": "2026-08-24T12:27:01.180+09:00",
+  "captured_at_utc": "2026-08-24T03:27:01.182Z",
+  "product_version": "1.2.0-alpha.8",
+  "executable": {
+    "path": "target/release/syndocal.exe",
+    "pid": 123952,
+    "sha256": "627BE88032774C7FA0A4C3CD3510A7BFB52E8ED0E76884ADD414B9BFD101F459"
+  },
+  "route": [
+    "\\\\.\\DISPLAY5",
+    "\\\\.\\DISPLAY2",
+    "\\\\.\\DISPLAY3",
+    "\\\\.\\DISPLAY1",
+    "\\\\.\\DISPLAY6"
+  ],
+  "route_method": "The supported open_pane_window command moved the same native Timeline pane through explicit saved placements. Each hop was verified through the pane WebView's Tauri window and current-monitor APIs before capture.",
+  "route_pass": true,
+  "displays": [
+    {
+      "name": "\\\\.\\DISPLAY5",
+      "monitor_position_physical": { "x": -2465, "y": 1731 },
+      "monitor_size_physical": { "width": 1920, "height": 1080 },
+      "scale_factor": 1.5,
+      "pane_outer_position_physical": { "x": -2476, "y": 1720 },
+      "pane_outer_size_physical": { "width": 1942, "height": 1030 },
+      "pane_inner_size_physical": { "width": 1920, "height": 974 },
+      "webview_viewport_css": { "width": 1280, "height": 650 },
+      "maximized": true,
+      "document_scroll": { "x": 0, "y": 0, "scroll_width": 1280, "client_width": 1280, "scroll_height": 650, "client_height": 650 },
+      "evidence": "D5-timeline-pane-route.jpg",
+      "evidence_sha256": "37EDB56EA3F81BA014C23A96A1C78F32EEBB68C6B3E4C3D7C6692FD30E2FD0E1"
+    },
+    {
+      "name": "\\\\.\\DISPLAY2",
+      "monitor_position_physical": { "x": 0, "y": 0 },
+      "monitor_size_physical": { "width": 1920, "height": 1080 },
+      "scale_factor": 1,
+      "pane_outer_position_physical": { "x": -8, "y": -8 },
+      "pane_outer_size_physical": { "width": 1936, "height": 1048 },
+      "pane_inner_size_physical": { "width": 1920, "height": 1009 },
+      "webview_viewport_css": { "width": 1920, "height": 1009 },
+      "maximized": true,
+      "document_scroll": { "x": 0, "y": 0, "scroll_width": 1920, "client_width": 1920, "scroll_height": 1009, "client_height": 1009 },
+      "evidence": "D2-timeline-pane-route.jpg",
+      "evidence_sha256": "0A037F7E6359FBC22C1FC16F297D9A3860157544777764679FABD2C194C20CFD"
+    },
+    {
+      "name": "\\\\.\\DISPLAY3",
+      "monitor_position_physical": { "x": -3840, "y": -429 },
+      "monitor_size_physical": { "width": 3840, "height": 2160 },
+      "scale_factor": 1.5,
+      "pane_outer_position_physical": { "x": -3851, "y": -440 },
+      "pane_outer_size_physical": { "width": 3862, "height": 2110 },
+      "pane_inner_size_physical": { "width": 3840, "height": 2054 },
+      "webview_viewport_css": { "width": 2560, "height": 1370 },
+      "maximized": true,
+      "document_scroll": { "x": 0, "y": 0, "scroll_width": 2560, "client_width": 2560, "scroll_height": 1370, "client_height": 1370 },
+      "evidence": "D3-4K-timeline-pane-route.jpg",
+      "evidence_sha256": "55E83F6AFC32A32DD9BD5AAB187DA659DC0221DB0EF82EAEAA65215327F591CD"
+    },
+    {
+      "name": "\\\\.\\DISPLAY1",
+      "monitor_position_physical": { "x": 1920, "y": -364 },
+      "monitor_size_physical": { "width": 2560, "height": 1440 },
+      "scale_factor": 1.25,
+      "pane_outer_position_physical": { "x": 1911, "y": -373 },
+      "pane_outer_size_physical": { "width": 2578, "height": 1398 },
+      "pane_inner_size_physical": { "width": 2560, "height": 1351 },
+      "webview_viewport_css": { "width": 2048, "height": 1082 },
+      "maximized": true,
+      "document_scroll": { "x": 0, "y": 0, "scroll_width": 2048, "client_width": 2048, "scroll_height": 1082, "client_height": 1082 },
+      "evidence": "D1-timeline-pane-route.jpg",
+      "evidence_sha256": "C22918826714D16E0E02DB5190AFB1E2724CEB387943A0D3FA4FABCDE5DD645E"
+    },
+    {
+      "name": "\\\\.\\DISPLAY6",
+      "monitor_position_physical": { "x": 1598, "y": 1080 },
+      "monitor_size_physical": { "width": 2560, "height": 720 },
+      "scale_factor": 1,
+      "pane_outer_position_physical": { "x": 1590, "y": 1072 },
+      "pane_outer_size_physical": { "width": 2576, "height": 688 },
+      "pane_inner_size_physical": { "width": 2560, "height": 649 },
+      "webview_viewport_css": { "width": 2560, "height": 649 },
+      "maximized": true,
+      "document_scroll": { "x": 0, "y": 0, "scroll_width": 2560, "client_width": 2560, "scroll_height": 649, "client_height": 649 },
+      "evidence": "D6-timeline-pane-route.jpg",
+      "evidence_sha256": "2336172DB637B9E4F9D4906B3E7D6D781408CD0A4B11D18229974FC92E820340"
+    }
+  ],
+  "timeline_tools_native_d5": {
+    "main_webview_viewport_css": { "width": 1280, "height": 672 },
+    "window_mode": "maximized",
+    "popup": { "client_width": 345, "scroll_width": 345, "client_height": 511, "scroll_height": 929 },
+    "nested_horizontal_regions": [
+      { "name": "bank", "client_width": 335, "scroll_width": 335, "focusable_count": 11 },
+      { "name": "cueAudio", "client_width": 335, "scroll_width": 335, "focusable_count": 4 },
+      { "name": "phases", "client_width": 335, "scroll_width": 335, "focusable_count": 1 }
+    ],
+    "deepest_target": {
+      "label": "再生位置にフェーズを追加",
+      "height_css_px": 44,
+      "inside_viewport": true,
+      "inside_popup": true,
+      "element_from_point_hit": true,
+      "focused": true
+    },
+    "escape_closed_popup": true,
+    "escape_returned_focus_to_summary": true,
+    "evidence": "D5-timeline-tools-expanded-fixed.jpg",
+    "evidence_sha256": "B780CD4CCDA35CC8A8F1148A64B26C91065EB15E33D57A38FDCC04F8B0A3724D"
+  },
+  "post_route": {
+    "pane_closed": true,
+    "cdp_page_count": 1,
+    "exact_process_count": 1,
+    "responsive_syndocal_window_count": 1,
+    "main_window_monitor": "\\\\.\\DISPLAY5",
+    "main_window_maximized": true,
+    "main_webview_viewport_css": { "width": 1280, "height": 672 },
+    "main_document_scroll": { "x": 0, "y": 0, "scroll_width": 1280, "client_width": 1280, "scroll_height": 672, "client_height": 672 }
+  },
+  "observed_pane_status_boundary": {
+    "message": "Window 'pane-timeline' has no current project transaction owner registration",
+    "present_in_all_five_pane_route_captures": true,
+    "still_visible_after_six_seconds": true,
+    "post_startup_authority_bundle_probe": { "ok": true, "project_epoch": 0, "project_revision": 1 },
+    "privacy_sensitive": false,
+    "placement_route_blocked": false,
+    "transactional_pane_operation_accepted": false,
+    "disposition": "Backend authority reads succeed after startup, but the early owner-registration failure remains visibly stale. Investigate detached-pane startup ordering, status clearing, and re-arm behavior in the next prerelease tranche. Do not describe this route as warning-clean."
+  },
+  "acceptance_boundary": {
+    "editor_and_detached_pane_multi_display_route": true,
+    "physical_4k_monitor_confirmed": true,
+    "display_output_fullscreen_playback": false,
+    "display_unplug_reorder_gpu_reset": false,
+    "reason": "This run proves native editor/pane placement and containment on all five attached monitors. It does not substitute for output-window playback, cable or GPU fault-recovery acceptance."
+  }
+}

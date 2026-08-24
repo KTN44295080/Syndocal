@@ -388,5 +388,46 @@ assert.match(sourceShelf, /id="timeline-source-context-panel-inspector" role="ta
 assert.match(sourceShelf, /role="group" aria-label="Timeline source categories"/);
 assert.match(sourceShelf, /aria-pressed=\{sourceShelfTab\(\) === "Scenes"\}/);
 assert.match(sourceShelf, /data-timeline-source-shelf-filter/);
+assert.match(
+  sourceShelf,
+  /onDragStart=\{\(event\) => startSourceShelfDrag\(event, timelineExternalDragPayloadForScene\(cue\.id\)\)\}[\s\S]*?onClick=\{\(\) => placeSourceShelfPayload\(timelineExternalDragPayloadForScene\(cue\.id\)\)\}/,
+  "the mounted Scene source must feed the same strict payload to drag and accessible click",
+);
+assert.match(
+  sourceShelf,
+  /const placeSourceShelfPayload = \(payload:[\s\S]*?const target = sourceShelfTargetLayer\(payload\.lane_kind\);[\s\S]*?void props\.onPlace\(payload, target, props\.snapTimeMs\(props\.positionMs\)\);/,
+  "the accessible source action must require the selected exact lane and call the shared placement edge",
+);
+assert.match(
+  appSource,
+  /<TimelineSourceShelf[\s\S]*?onPlace=\{placeTimelineExternalSource\}/,
+  "the mounted Timeline Sources shelf must use the App production placement orchestrator",
+);
+assert.match(
+  appSource,
+  /const placeTimelineExternalSource = async \([\s\S]*?await executeTimelineExternalDrop\([\s\S]*?placeScene: async \([\s\S]*?await placeArmedTimelineCue\(/,
+  "the mounted App placement edge must pass Scene payloads through strict drop validation before mutation",
+);
+assert.match(
+  appSource,
+  /const placeArmedTimelineCue = async \([\s\S]*?\) => timelineSceneBlocks\.addAt\(cueId, timeMs, "Lighting", false, \{[\s\S]*?layerId,/,
+  "validated Scene placement must retain the exact selected Lighting layer",
+);
+assert.match(
+  appSource,
+  /const timelineSceneBlocks = createTimelineSceneBlockController\(\{[\s\S]*?invoke: invokeTimelineSceneBlockCommand,/,
+  "Scene placement must use the shared production Timeline Scene Block controller",
+);
+assert.match(
+  appSource,
+  /const invokeTimelineSceneBlockCommand = async <T,>\([\s\S]*?return invoke<T>\(command, args\);/,
+  "the non-fixture Timeline Scene Block controller must terminate at the registered Tauri invoke edge",
+);
+const timelineSceneBlocksSource = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
+assert.match(
+  timelineSceneBlocksSource,
+  /const eventId = await options\.invoke<number>\("add_timeline_scene_block", \{[\s\S]*?cueId: next\.cue_id,[\s\S]*?timeMs: next\.time_ms,[\s\S]*?track: next\.track,[\s\S]*?layerId: next\.layer_id,/,
+  "the shared controller must send cue, snapped time, track, and exact layer through add_timeline_scene_block",
+);
 
-console.log("timeline external DnD contract: PASS (strict MIME parser, tabbed Sources/Inspector, button-group categories, protected dragover, exact lanes, Audio-origin AV, locked callback-0, production insert orchestration)");
+console.log("timeline external DnD contract: PASS (strict MIME parser, mounted Sources/Inspector, shared drag/click payload, exact lanes, Audio-origin AV, locked callback-0, registered production mutation chain)");

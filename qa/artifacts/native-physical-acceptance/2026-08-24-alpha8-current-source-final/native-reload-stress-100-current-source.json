@@ -1,0 +1,118 @@
+{
+  "startedAt": "2026-08-24T03:03:05.766Z",
+  "completedAt": "2026-08-24T03:03:49.056Z",
+  "cdp": {
+    "port": 9333,
+    "pageId": "36E8F9B04827E306D4B63BCB94DB18B2",
+    "title": "Syndocal",
+    "url": "http://tauri.localhost/"
+  },
+  "count": 100,
+  "checkpointEvery": 10,
+  "settleMs": 25,
+  "transportTimeoutMs": 15000,
+  "uniqueTimeOrigins": 100,
+  "final": {
+    "timeOrigin": 1787540628164.6,
+    "readyState": "complete",
+    "title": "Syndocal",
+    "href": "http://tauri.localhost/",
+    "hasTauri": true,
+    "rootHasBrand": true,
+    "statusReady": true,
+    "navigationType": "reload"
+  },
+  "durationMs": {
+    "min": 232.5,
+    "p50": 407.3,
+    "p95": 479,
+    "max": 530.1,
+    "total": 40142.4
+  },
+  "eventCounts": {
+    "Page.domContentEventFired": 100,
+    "Page.frameNavigated": 100,
+    "Page.frameStartedLoading": 100,
+    "Page.frameStartedNavigating": 100,
+    "Page.frameStoppedLoading": 100,
+    "Page.loadEventFired": 100,
+    "Runtime.consoleAPICalled": 4809,
+    "Runtime.executionContextCreated": 101,
+    "Runtime.executionContextsCleared": 100
+  },
+  "runtimeExceptions": [],
+  "consoleIssues": [
+    {
+      "occurrences": 2419,
+      "message": "warning | IPC custom protocol failed, Tauri will now use the postMessage interface instead | TypeError: Failed to fetch"
+    },
+    {
+      "occurrences": 2390,
+      "message": "warning | [TAURI] Couldn't find callback id <id> in window. This happens when the app is reloaded while Rust is running an asynchronous operation."
+    }
+  ],
+  "logIssues": [],
+  "checkpoints": [
+    {
+      "cycle": 10,
+      "statusReady": true,
+      "timeOrigin": 1787540589710.2,
+      "durationMs": 423.1
+    },
+    {
+      "cycle": 20,
+      "statusReady": true,
+      "timeOrigin": 1787540594028.5,
+      "durationMs": 235.6
+    },
+    {
+      "cycle": 30,
+      "statusReady": true,
+      "timeOrigin": 1787540597951.9,
+      "durationMs": 441.9
+    },
+    {
+      "cycle": 40,
+      "statusReady": true,
+      "timeOrigin": 1787540602556.2,
+      "durationMs": 399.9
+    },
+    {
+      "cycle": 50,
+      "statusReady": true,
+      "timeOrigin": 1787540607097.9,
+      "durationMs": 419.4
+    },
+    {
+      "cycle": 60,
+      "statusReady": true,
+      "timeOrigin": 1787540611371.4,
+      "durationMs": 394.9
+    },
+    {
+      "cycle": 70,
+      "statusReady": true,
+      "timeOrigin": 1787540615483.9,
+      "durationMs": 400.5
+    },
+    {
+      "cycle": 80,
+      "statusReady": true,
+      "timeOrigin": 1787540619649.9,
+      "durationMs": 407.4
+    },
+    {
+      "cycle": 90,
+      "statusReady": true,
+      "timeOrigin": 1787540623930.7,
+      "durationMs": 413.1
+    },
+    {
+      "cycle": 100,
+      "statusReady": true,
+      "timeOrigin": 1787540628164.6,
+      "durationMs": 367
+    }
+  ],
+  "pass": true
+}

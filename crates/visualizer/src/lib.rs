@@ -555,8 +555,7 @@ pub fn build_fixture_model_obj_mesh(
                 &positions,
                 &normals,
                 [face[0], face[triangle_index], face[triangle_index + 1]],
-                bounds_center,
-                scale,
+                (bounds_center, scale),
                 &mut vertices,
                 &mut indices,
             )?;
@@ -1364,11 +1363,11 @@ fn push_obj_triangle(
     positions: &[Vec3],
     normals: &[Vec3],
     triangle: [ObjFaceVertex; 3],
-    bounds_center: Vec3,
-    scale: Vec3,
+    mesh_transform: (Vec3, Vec3),
     vertices: &mut Vec<ModelPrimitiveVertex>,
     indices: &mut Vec<u32>,
 ) -> Result<(), ObjModelMeshError> {
+    let (bounds_center, scale) = mesh_transform;
     let start = u32::try_from(vertices.len()).map_err(|_| ObjModelMeshError::TooManyVertices)?;
     let world_positions = triangle.map(|vertex| {
         transform_mesh_position(plan, positions[vertex.position_index], bounds_center, scale)
@@ -1485,18 +1484,12 @@ fn parse_gltf_mesh_primitives(
             else {
                 continue;
             };
-            let positions = read_gltf_positions(
-                bin_bytes,
-                &accessors,
-                &buffer_views,
-                position_accessor_index,
-            )?;
+            let positions =
+                read_gltf_positions(bin_bytes, accessors, buffer_views, position_accessor_index)?;
             let indices = primitive
                 .get("indices")
                 .and_then(|value| value.as_u64())
-                .map(|index| {
-                    read_gltf_indices(bin_bytes, &accessors, &buffer_views, index as usize)
-                })
+                .map(|index| read_gltf_indices(bin_bytes, accessors, buffer_views, index as usize))
                 .transpose()?
                 .unwrap_or_else(|| (0..positions.len() as u32).collect());
             primitives.push(GltfPrimitiveData { positions, indices });
@@ -3906,7 +3899,7 @@ f -4 -3 -2 -1
     }
 
     fn glb_chunk(chunk_type: u32, mut data: Vec<u8>, padding: u8) -> Vec<u8> {
-        while data.len() % 4 != 0 {
+        while !data.len().is_multiple_of(4) {
             data.push(padding);
         }
         let mut chunk = Vec::with_capacity(data.len() + 8);

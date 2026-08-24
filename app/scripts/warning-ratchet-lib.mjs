@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -28,6 +28,15 @@ const ENCODED_RUSTFLAGS_NAME = ["CARGO", "ENCODED", "RUSTFLAGS"].join("_");
 const ENCODED_RUSTDOCFLAGS_NAME = ["CARGO", "ENCODED", "RUSTDOCFLAGS"].join("_");
 const CARGO_COMPILER_SELECTION_KEYS = ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"];
 const CARGO_BUILD_CONTROL_KEYS = [...CARGO_COMPILER_SELECTION_KEYS, "rustdoc", "rustflags", "rustdocflags", "target"];
+// Diff inspection is intentionally bounded so a pathological worktree cannot exhaust the checker.
+// The current repository diff is well below this limit; overflow is a hard error rather than a partial audit.
+export const GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
+export const GIT_OUTPUT_LIMIT_ERROR_CODE = "WARNING_RATCHET_GIT_OUTPUT_LIMIT";
+// Current-file inspection has its own byte ceiling. Untracked files share this as an
+// aggregate budget; modified Cargo configs share a separate aggregate budget.
+export const CURRENT_FILE_CONTENT_MAX_BYTES = 16 * 1024 * 1024;
+const FILE_CONTENT_LIMIT_ERROR_CODE = "WARNING_RATCHET_FILE_CONTENT_LIMIT";
+const FILE_READ_CHUNK_BYTES = 64 * 1024;
 const CARGO_WARNING_FLAG_KEYS = ["rustflags", "rustdocflags"];
 const CARGO_CONFIG_ENV_KEYS = new Set([
   "RUSTFLAGS",
@@ -74,7 +83,6 @@ const SUPPORTED_COMMAND_EXECUTABLES = new Set(["cargo", "pnpm"]);
 export const GENERIC_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
 const SUPPRESSION_PATTERNS = [
-  { id: "rust-allow-or-expect-attribute", pattern: /#\s*!?\s*\[\s*(?:cfg_attr\s*\([\s\S]{0,300}?,\s*)?(?:allow|expect)\s*\(/i },
   { id: "rust-command-line-allow", pattern: /(?:^|[\s'",\[])(?:-A\s+(?:warnings|[a-zA-Z_][\w-]*)|-A(?:warnings|unused|dead_code|[a-zA-Z][\w-]*_[\w-]+))(?:$|[\s'",\]])/m },
   { id: "rust-cap-lints-allow", pattern: /--cap-lints(?:=|\s+)allow\b/i },
   { id: "cargo-rustflags-config", pattern: /\brustdocflags\s*=|\brustflags\s*=/i },
@@ -364,15 +372,43 @@ export function inspectCargoConfigText(text) {
   return [...new Set(findings)];
 }
 
+function cargoLintTreeContainsAllow(value) {
+  if (typeof value === "string") return value.toLocaleLowerCase("en-US") === "allow";
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (typeof value.level === "string" && value.level.toLocaleLowerCase("en-US") === "allow") return true;
+  return Object.entries(value).some(([key, child]) => key !== "workspace" && cargoLintTreeContainsAllow(child));
+}
+
+export function inspectCargoManifestLintText(text) {
+  let manifest;
+  try {
+    manifest = parseToml(text);
+  } catch {
+    return [];
+  }
+  const findings = [];
+  if (manifest?.lints?.workspace === true) findings.push("cargo-lints-workspace-inheritance");
+  if (cargoLintTreeContainsAllow(manifest?.lints) || cargoLintTreeContainsAllow(manifest?.workspace?.lints)) {
+    findings.push("cargo-lint-level-allow");
+  }
+  return findings;
+}
+
 export function warningAffectingCargoConfigs(repoRoot, environment = process.env) {
   const findings = [];
   for (const candidate of cargoConfigCandidates(repoRoot, environment)) {
     try {
-      const text = readFileSync(candidate, "utf8");
+      const { text } = readBoundedFileText(
+        candidate,
+        candidate,
+        CURRENT_FILE_CONTENT_MAX_BYTES,
+        "Cargo config content",
+      );
       const semanticFindings = inspectCargoConfigText(text);
       if (semanticFindings.length > 0 || /\brust(?:doc)?flags\s*=|\bcap-lints\b|(?:^|\s)-A(?:\s*|=)[\w-]+/im.test(text)) findings.push(candidate);
-    } catch {
-      // Missing config is the expected controlled case.
+    } catch (error) {
+      if (isMissingFileError(error)) continue;
+      throw error;
     }
   }
   return findings;
@@ -721,14 +757,37 @@ export function compareDiagnostics(configuration, current, modifiedFiles = new S
 }
 
 function git(repoRoot, args) {
-  return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trimEnd();
+  try {
+    return execFileSync("git", args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trimEnd();
+  } catch (error) {
+    if (error?.code === "ENOBUFS") {
+      const command = ["git", ...args].join(" ");
+      const limitError = new Error(
+        `Git output exceeded the warning-ratchet limit of ${GIT_OUTPUT_MAX_BUFFER} bytes while running: ${command}`,
+        { cause: error },
+      );
+      limitError.code = GIT_OUTPUT_LIMIT_ERROR_CODE;
+      throw limitError;
+    }
+    throw error;
+  }
+}
+
+function isGitOutputLimitError(error) {
+  return error?.code === GIT_OUTPUT_LIMIT_ERROR_CODE;
 }
 
 function resolveCommit(repoRoot, ref) {
   if (!ref || /^0+$/.test(ref)) throw new Error(`invalid comparison ref: ${ref || "<missing>"}`);
   try {
     return git(repoRoot, ["rev-parse", "--verify", `${ref}^{commit}`]);
-  } catch {
+  } catch (error) {
+    if (isGitOutputLimitError(error)) throw error;
     throw new Error(`unresolvable comparison ref: ${ref}`);
   }
 }
@@ -742,7 +801,8 @@ export function resolveTrustedComparison(repoRoot, baseRef, headRef = "HEAD") {
   let mergeBase;
   try {
     mergeBase = git(repoRoot, ["merge-base", base, head]);
-  } catch {
+  } catch (error) {
+    if (isGitOutputLimitError(error)) throw error;
     throw new Error(`comparison refs have no merge base: ${base} ${head}`);
   }
   if (!mergeBase || mergeBase === head) throw new Error("trusted comparison resolved to self");
@@ -764,11 +824,9 @@ export function resolveExplicitAncestorComparison(repoRoot, baseRef, headRef) {
   const head = resolveCommit(repoRoot, headRef);
   if (base === head) throw new Error("explicit comparison base and head must differ");
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", base, head], {
-      cwd: repoRoot,
-      stdio: "ignore",
-    });
-  } catch {
+    git(repoRoot, ["merge-base", "--is-ancestor", base, head]);
+  } catch (error) {
+    if (isGitOutputLimitError(error)) throw error;
     throw new Error(`explicit comparison base is not an ancestor of head: ${base} ${head}`);
   }
   return { base, head };
@@ -778,50 +836,541 @@ function parseNameOnlyZ(output) {
   return output.split("\0").filter(Boolean).map(normalizeComparisonPath);
 }
 
+function parseNameOnlyZPreservingCase(output) {
+  return output.split("\0").filter(Boolean).map(slash);
+}
+
 export function collectModifiedFiles(repoRoot, comparison) {
-  const files = new Set(parseNameOnlyZ(execFileSync("git", ["diff", "--name-only", "-z", `${comparison.base}...${comparison.head}`], { cwd: repoRoot, encoding: "utf8" })));
+  const files = new Set(parseNameOnlyZ(git(repoRoot, ["diff", "--name-only", "-z", `${comparison.base}...${comparison.head}`])));
   for (const args of [["diff", "--name-only", "-z"], ["diff", "--cached", "--name-only", "-z"], ["ls-files", "--others", "--exclude-standard", "-z"]]) {
-    for (const file of parseNameOnlyZ(execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }))) files.add(file);
+    for (const file of parseNameOnlyZ(git(repoRoot, args))) files.add(file);
   }
   return files;
 }
 
-export function detectSuppressionText(text) {
-  return SUPPRESSION_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ id }) => id);
+function isRustWhitespaceCode(code) {
+  return (code >= 0x09 && code <= 0x0d)
+    || code === 0x20
+    || code === 0x85
+    || code === 0x200e
+    || code === 0x200f
+    || code === 0x2028
+    || code === 0x2029;
 }
 
-function addedDiffText(repoRoot, args) {
-  return git(repoRoot, args).split(/\r?\n/).filter((line) => line.startsWith("+") && !line.startsWith("+++" )).map((line) => line.slice(1)).join("\n");
+function rustCommentEnd(text, index) {
+  if (text[index] !== "/") return null;
+  if (text[index + 1] === "/") {
+    const newline = text.indexOf("\n", index + 2);
+    return newline === -1 ? text.length : newline + 1;
+  }
+  if (text[index + 1] !== "*") return null;
+  let depth = 1;
+  let cursor = index + 2;
+  while (cursor < text.length && depth > 0) {
+    if (text[cursor] === "/" && text[cursor + 1] === "*") {
+      depth += 1;
+      cursor += 2;
+    } else if (text[cursor] === "*" && text[cursor + 1] === "/") {
+      depth -= 1;
+      cursor += 2;
+    } else {
+      cursor += 1;
+    }
+  }
+  return cursor;
+}
+
+function skipRustTrivia(text, index) {
+  let cursor = index;
+  while (cursor < text.length) {
+    if (isRustWhitespaceCode(text.charCodeAt(cursor))) {
+      cursor += 1;
+      continue;
+    }
+    const commentEnd = rustCommentEnd(text, cursor);
+    if (commentEnd === null) break;
+    cursor = commentEnd;
+  }
+  return cursor;
+}
+
+function rustRawStringEnd(text, index) {
+  let cursor;
+  if (text[index] === "r") cursor = index + 1;
+  else if (text[index] === "b" && text[index + 1] === "r") cursor = index + 2;
+  else return null;
+  let hashes = 0;
+  while (text[cursor] === "#" && hashes <= 255) {
+    hashes += 1;
+    cursor += 1;
+  }
+  if (hashes > 255 || text[cursor] !== "\"") return null;
+  const closing = `\"${"#".repeat(hashes)}`;
+  const closingIndex = text.indexOf(closing, cursor + 1);
+  return closingIndex === -1 ? text.length : closingIndex + closing.length;
+}
+
+function rustQuotedStringEnd(text, index) {
+  let quoteIndex = index;
+  if ((text[index] === "b" || text[index] === "c") && text[index + 1] === "\"") quoteIndex += 1;
+  else if (text[index] !== "\"") return null;
+  let cursor = quoteIndex + 1;
+  while (cursor < text.length) {
+    if (text[cursor] === "\\") cursor += 2;
+    else if (text[cursor] === "\"") return cursor + 1;
+    else cursor += 1;
+  }
+  return text.length;
+}
+
+function isRustIdentifierStart(character) {
+  return character === "_" || /[a-zA-Z]/.test(character ?? "");
+}
+
+function isRustIdentifierContinue(character) {
+  return isRustIdentifierStart(character) || /[0-9]/.test(character ?? "");
+}
+
+function rustSuppressionIdentifier(text, index) {
+  let identifierStart = index;
+  let cursor = index;
+  if (text[cursor] === "r" && text[cursor + 1] === "#" && isRustIdentifierStart(text[cursor + 2])) {
+    identifierStart = cursor + 2;
+    cursor = identifierStart;
+  }
+  if (!isRustIdentifierStart(text[cursor])) return null;
+  cursor += 1;
+  while (isRustIdentifierContinue(text[cursor])) cursor += 1;
+  const identifierLength = cursor - identifierStart;
+  if (identifierLength === 5 && text.startsWith("allow", identifierStart)) return { end: cursor, kind: "allow" };
+  if (identifierLength === 6 && text.startsWith("expect", identifierStart)) return { end: cursor, kind: "expect" };
+  return null;
+}
+
+function rustNormalizedTokenHash(text, start, end) {
+  const hash = createHash("sha256");
+  let buffer = "";
+  const append = (type, value) => {
+    buffer += `${type}${value.length}:${value};`;
+    if (buffer.length >= 64 * 1024) {
+      hash.update(buffer);
+      buffer = "";
+    }
+  };
+  let cursor = start;
+  while (cursor < end) {
+    if (isRustWhitespaceCode(text.charCodeAt(cursor))) {
+      cursor += 1;
+      continue;
+    }
+    const commentEnd = rustCommentEnd(text, cursor);
+    if (commentEnd !== null) {
+      cursor = Math.min(commentEnd, end);
+      continue;
+    }
+    const literalEnd = rustRawStringEnd(text, cursor) ?? rustQuotedStringEnd(text, cursor);
+    if (literalEnd !== null) {
+      const boundedLiteralEnd = Math.min(literalEnd, end);
+      append("l", text.slice(cursor, boundedLiteralEnd));
+      cursor = boundedLiteralEnd;
+      continue;
+    }
+    let identifierStart = cursor;
+    if (text[cursor] === "r" && text[cursor + 1] === "#" && isRustIdentifierStart(text[cursor + 2])) {
+      identifierStart = cursor + 2;
+      cursor = identifierStart;
+    }
+    if (isRustIdentifierStart(text[cursor])) {
+      cursor += 1;
+      while (cursor < end && isRustIdentifierContinue(text[cursor])) cursor += 1;
+      append("i", text.slice(identifierStart, cursor));
+      continue;
+    }
+    if (/[0-9]/.test(text[cursor])) {
+      const numberStart = cursor;
+      cursor += 1;
+      while (cursor < end && /[0-9a-zA-Z_.]/.test(text[cursor])) cursor += 1;
+      append("n", text.slice(numberStart, cursor));
+      continue;
+    }
+    append("p", text[cursor]);
+    cursor += 1;
+  }
+  if (buffer.length > 0) hash.update(buffer);
+  return hash.digest("hex");
+}
+
+function rustAttributeScan(text, openBracketIndex) {
+  let squareDepth = 1;
+  let cursor = openBracketIndex + 1;
+  const suppressionKinds = [];
+  const finish = (end) => {
+    if (suppressionKinds.length === 0) return { end, fingerprints: [] };
+    const normalizedHash = rustNormalizedTokenHash(text, openBracketIndex, end);
+    return {
+      end,
+      fingerprints: suppressionKinds.map((kind) => `attribute:${kind}:${normalizedHash}`),
+    };
+  };
+  while (cursor < text.length) {
+    const commentEnd = rustCommentEnd(text, cursor);
+    if (commentEnd !== null) {
+      cursor = commentEnd;
+      continue;
+    }
+    const literalEnd = rustRawStringEnd(text, cursor) ?? rustQuotedStringEnd(text, cursor);
+    if (literalEnd !== null) {
+      cursor = literalEnd;
+      continue;
+    }
+    if (text[cursor] === "[") {
+      squareDepth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "]") {
+      squareDepth -= 1;
+      cursor += 1;
+      if (squareDepth === 0) return finish(cursor);
+      continue;
+    }
+    const suppressionIdentifier = rustSuppressionIdentifier(text, cursor);
+    if (suppressionIdentifier !== null
+      && text[skipRustTrivia(text, suppressionIdentifier.end)] === "(") {
+      suppressionKinds.push(suppressionIdentifier.kind);
+    }
+    if (text[cursor] === "r" && text[cursor + 1] === "#" && isRustIdentifierStart(text[cursor + 2])) cursor += 2;
+    if (isRustIdentifierStart(text[cursor])) {
+      cursor += 1;
+      while (isRustIdentifierContinue(text[cursor])) cursor += 1;
+      continue;
+    }
+    cursor += 1;
+  }
+  return finish(text.length);
+}
+
+function rustMacroInvocationSuppression(text, bangIndex) {
+  const openIndex = skipRustTrivia(text, bangIndex + 1);
+  if (text[openIndex] !== "(" && text[openIndex] !== "[" && text[openIndex] !== "{") return null;
+  const firstToken = skipRustTrivia(text, openIndex + 1);
+  const identifier = rustSuppressionIdentifier(text, firstToken);
+  if (identifier === null) return null;
+  const tokenEnd = skipRustTrivia(text, identifier.end);
+  const expectedClose = text[openIndex] === "(" ? ")" : text[openIndex] === "[" ? "]" : "}";
+  return text[tokenEnd] === "," || text[tokenEnd] === expectedClose ? identifier.kind : null;
+}
+
+function rustSuppressionFingerprints(text) {
+  const fingerprints = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const commentEnd = rustCommentEnd(text, cursor);
+    if (commentEnd !== null) {
+      cursor = commentEnd;
+      continue;
+    }
+    const literalEnd = rustRawStringEnd(text, cursor) ?? rustQuotedStringEnd(text, cursor);
+    if (literalEnd !== null) {
+      cursor = literalEnd;
+      continue;
+    }
+    if (text[cursor] === "!") {
+      const macroSuppression = rustMacroInvocationSuppression(text, cursor);
+      if (macroSuppression !== null) fingerprints.push(`macro:${macroSuppression}`);
+    }
+    if (text[cursor] !== "#") {
+      cursor += 1;
+      continue;
+    }
+    let attributeStart = skipRustTrivia(text, cursor + 1);
+    if (text[attributeStart] === "!") attributeStart = skipRustTrivia(text, attributeStart + 1);
+    if (text[attributeStart] !== "[") {
+      cursor += 1;
+      continue;
+    }
+    const result = rustAttributeScan(text, attributeStart);
+    fingerprints.push(...result.fingerprints);
+    cursor = result.end;
+  }
+  return fingerprints;
+}
+
+export function detectSuppressionText(text) {
+  const findings = SUPPRESSION_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ id }) => id);
+  if (rustSuppressionFingerprints(text).length > 0) findings.push("rust-allow-or-expect-attribute");
+  return findings;
+}
+
+function addedDiffText(repoRoot, tailArgs) {
+  return git(repoRoot, ["diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", ...tailArgs])
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++" ))
+    .map((line) => line.slice(1))
+    .join("\n");
+}
+
+function boundedFileContentError(description, relative, reportedLimit) {
+  const error = new Error(
+    `${description} exceeded the warning-ratchet limit of ${reportedLimit} bytes while reading: ${slash(relative)}`,
+  );
+  error.code = FILE_CONTENT_LIMIT_ERROR_CODE;
+  return error;
+}
+
+function isMissingFileError(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function readBoundedFileText(file, displayPath, maxBytes, description, reportedLimit = maxBytes) {
+  const buffers = [];
+  let bytesRead = 0;
+  let descriptor;
+  let operationError;
+  let overflow = false;
+  try {
+    descriptor = openSync(file, "r");
+    const scratch = Buffer.allocUnsafe(Math.min(FILE_READ_CHUNK_BYTES, maxBytes + 1));
+    while (bytesRead <= maxBytes) {
+      // Probe no further than one byte beyond the remaining budget. This stays bounded
+      // even if the file grows after it is opened; no prior stat result is trusted.
+      const requestedBytes = Math.min(scratch.length, maxBytes + 1 - bytesRead);
+      const currentRead = readSync(descriptor, scratch, 0, requestedBytes, null);
+      if (currentRead === 0) break;
+      bytesRead += currentRead;
+      if (bytesRead > maxBytes) {
+        overflow = true;
+        break;
+      }
+      buffers.push(Buffer.from(scratch.subarray(0, currentRead)));
+    }
+  } catch (error) {
+    operationError = error;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch (error) {
+        operationError ??= error;
+      }
+    }
+  }
+  if (overflow) throw boundedFileContentError(description, displayPath, reportedLimit);
+  if (operationError) throw operationError;
+  return { bytesRead, text: Buffer.concat(buffers, bytesRead).toString("utf8") };
+}
+
+function gitErrorDetail(error) {
+  const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString("utf8") : String(error?.stderr ?? "");
+  return `${stderr}\n${String(error?.message ?? "")}`;
+}
+
+function isMissingGitSnapshotError(error) {
+  const detail = gitErrorDetail(error);
+  return /does not exist in\b|exists on disk, but not in (?:the index|['"])|does not exist \(neither on disk nor in the index\)/i.test(detail);
+}
+
+function readGitSnapshotText(repoRoot, snapshot, relative) {
+  const spec = snapshot === null ? `:${slash(relative)}` : `${snapshot}:${slash(relative)}`;
+  try {
+    return git(repoRoot, ["show", spec]);
+  } catch (error) {
+    if (isGitOutputLimitError(error)) throw error;
+    if (isMissingGitSnapshotError(error)) return null;
+    throw new Error(`unable to read Git snapshot blob: ${spec}`, { cause: error });
+  }
+}
+
+function modifiedPathsFromDiff(repoRoot, args) {
+  return parseNameOnlyZPreservingCase(git(repoRoot, args));
+}
+
+function inspectModifiedSemanticSnapshots({
+  repoRoot,
+  comparison,
+  headPaths,
+  stagedPaths,
+  worktreePaths,
+  untracked,
+  untrackedTextByPath,
+  matches,
+  inspectText,
+  worktreeDescription,
+}) {
+  const findings = [];
+  const inspectSnapshot = (text) => {
+    if (text !== null) findings.push(...inspectText(text));
+  };
+  for (const relative of headPaths.filter(matches)) {
+    inspectSnapshot(readGitSnapshotText(repoRoot, comparison.head, relative));
+  }
+  for (const relative of stagedPaths.filter(matches)) {
+    inspectSnapshot(readGitSnapshotText(repoRoot, null, relative));
+  }
+  let worktreeBytesRead = 0;
+  for (const relative of worktreePaths.filter(matches)) {
+    try {
+      const result = readBoundedFileText(
+        path.join(repoRoot, relative),
+        relative,
+        CURRENT_FILE_CONTENT_MAX_BYTES - worktreeBytesRead,
+        worktreeDescription,
+        CURRENT_FILE_CONTENT_MAX_BYTES,
+      );
+      worktreeBytesRead += result.bytesRead;
+      inspectSnapshot(result.text);
+    } catch (error) {
+      if (isMissingFileError(error)) continue;
+      throw error;
+    }
+  }
+  for (const relative of untracked.filter(matches)) {
+    const normalizedRelative = slash(relative);
+    // Reuse the bounded snapshot. Retrying an unreadable file here could race into
+    // an unbounded read after it changes size or permissions.
+    if (untrackedTextByPath.has(normalizedRelative)) inspectSnapshot(untrackedTextByPath.get(normalizedRelative));
+  }
+  return findings;
+}
+
+function introducesRustSuppression(sourceText, targetText) {
+  const available = new Map();
+  for (const fingerprint of rustSuppressionFingerprints(sourceText)) {
+    available.set(fingerprint, (available.get(fingerprint) ?? 0) + 1);
+  }
+  for (const fingerprint of rustSuppressionFingerprints(targetText)) {
+    const remaining = available.get(fingerprint) ?? 0;
+    if (remaining === 0) return true;
+    available.set(fingerprint, remaining - 1);
+  }
+  return false;
+}
+
+function inspectRustSuppressionTransitions({
+  repoRoot,
+  comparison,
+  headPaths,
+  stagedPaths,
+  worktreePaths,
+  untracked,
+  untrackedTextByPath,
+}) {
+  const rustPaths = (paths) => paths.filter((relative) => /\.rs$/i.test(slash(relative)));
+  for (const relative of rustPaths(headPaths)) {
+    const source = readGitSnapshotText(repoRoot, comparison.base, relative) ?? "";
+    const target = readGitSnapshotText(repoRoot, comparison.head, relative) ?? "";
+    if (introducesRustSuppression(source, target)) return ["rust-allow-or-expect-attribute"];
+  }
+  for (const relative of rustPaths(stagedPaths)) {
+    const source = readGitSnapshotText(repoRoot, "HEAD", relative) ?? "";
+    const target = readGitSnapshotText(repoRoot, null, relative) ?? "";
+    if (introducesRustSuppression(source, target)) return ["rust-allow-or-expect-attribute"];
+  }
+  let worktreeBytesRead = 0;
+  for (const relative of rustPaths(worktreePaths)) {
+    const source = readGitSnapshotText(repoRoot, null, relative) ?? "";
+    let target = "";
+    try {
+      const result = readBoundedFileText(
+        path.join(repoRoot, relative),
+        relative,
+        CURRENT_FILE_CONTENT_MAX_BYTES - worktreeBytesRead,
+        "Modified worktree Rust source content aggregate",
+        CURRENT_FILE_CONTENT_MAX_BYTES,
+      );
+      worktreeBytesRead += result.bytesRead;
+      target = result.text;
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+    }
+    if (introducesRustSuppression(source, target)) return ["rust-allow-or-expect-attribute"];
+  }
+  for (const relative of rustPaths(untracked)) {
+    const target = untrackedTextByPath.get(slash(relative));
+    if (target !== undefined && introducesRustSuppression("", target)) return ["rust-allow-or-expect-attribute"];
+  }
+  return [];
 }
 
 export function findAddedSuppressions(repoRoot, comparison) {
   const chunks = [
-    addedDiffText(repoRoot, ["diff", "--unified=0", "--no-ext-diff", `${comparison.base}...${comparison.head}`]),
-    addedDiffText(repoRoot, ["diff", "--unified=0", "--no-ext-diff"]),
-    addedDiffText(repoRoot, ["diff", "--cached", "--unified=0", "--no-ext-diff"]),
+    addedDiffText(repoRoot, [`${comparison.base}...${comparison.head}`]),
+    addedDiffText(repoRoot, []),
+    addedDiffText(repoRoot, ["--cached"]),
   ];
-  const untracked = parseNameOnlyZ(execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoRoot, encoding: "utf8" }));
+  const untracked = parseNameOnlyZPreservingCase(git(repoRoot, ["ls-files", "--others", "--exclude-standard", "-z"]));
+  const untrackedTextByPath = new Map();
+  let untrackedBytesRead = 0;
   for (const relative of untracked) {
-    try { chunks.push(readFileSync(path.join(repoRoot, relative), "utf8")); } catch { /* binary */ }
-  }
-  const semanticCargoConfigFindings = [];
-  for (const relative of collectModifiedFiles(repoRoot, comparison)) {
-    if (!/(?:^|\/)\.cargo\/config(?:\.toml)?$/i.test(slash(relative))) continue;
     try {
-      semanticCargoConfigFindings.push(...inspectCargoConfigText(readFileSync(path.join(repoRoot, relative), "utf8")));
-    } catch {
-      // A deleted config cannot affect the current build.
+      const result = readBoundedFileText(
+        path.join(repoRoot, relative),
+        relative,
+        CURRENT_FILE_CONTENT_MAX_BYTES - untrackedBytesRead,
+        "Untracked content aggregate",
+        CURRENT_FILE_CONTENT_MAX_BYTES,
+      );
+      untrackedBytesRead += result.bytesRead;
+      untrackedTextByPath.set(slash(relative), result.text);
+      chunks.push(result.text);
+    } catch (error) {
+      if (error?.code === FILE_CONTENT_LIMIT_ERROR_CODE) throw error;
+      // Preserve the existing boundary for an untracked file that disappears or
+      // becomes unreadable during inspection. Limit overflow is never hidden here.
     }
   }
-  return [...new Set([...detectSuppressionText(chunks.join("\n")), ...semanticCargoConfigFindings])];
+  const headPaths = modifiedPathsFromDiff(repoRoot, ["diff", "--no-renames", "--name-only", "-z", `${comparison.base}...${comparison.head}`]);
+  const stagedPaths = modifiedPathsFromDiff(repoRoot, ["diff", "--no-renames", "--cached", "--name-only", "-z"]);
+  const worktreePaths = modifiedPathsFromDiff(repoRoot, ["diff", "--no-renames", "--name-only", "-z"]);
+  const semanticFindings = [
+    ...inspectRustSuppressionTransitions({
+      repoRoot,
+      comparison,
+      headPaths,
+      stagedPaths,
+      worktreePaths,
+      untracked,
+      untrackedTextByPath,
+    }),
+    ...inspectModifiedSemanticSnapshots({
+      repoRoot,
+      comparison,
+      headPaths,
+      stagedPaths,
+      worktreePaths,
+      untracked,
+      untrackedTextByPath,
+      matches: (relative) => /(?:^|\/)\.cargo\/config(?:\.toml)?$/i.test(slash(relative)),
+      inspectText: inspectCargoConfigText,
+      worktreeDescription: "Modified worktree Cargo config content aggregate",
+    }),
+    ...inspectModifiedSemanticSnapshots({
+      repoRoot,
+      comparison,
+      headPaths,
+      stagedPaths,
+      worktreePaths,
+      untracked,
+      untrackedTextByPath,
+      matches: (relative) => /(?:^|\/)Cargo\.toml$/i.test(slash(relative)),
+      inspectText: inspectCargoManifestLintText,
+      worktreeDescription: "Modified worktree Cargo manifest content aggregate",
+    }),
+  ];
+  return [...new Set([...detectSuppressionText(chunks.join("\n")), ...semanticFindings])];
 }
 
 export function loadInventoryAtRef(repoRoot, ref, relativePath, allowMissing = false) {
-  try {
-    return JSON.parse(git(repoRoot, ["show", `${ref}:${slash(relativePath)}`]));
-  } catch (error) {
+  const text = readGitSnapshotText(repoRoot, ref, relativePath);
+  if (text === null) {
     if (allowMissing) return null;
-    throw new Error(`trusted prior inventory is missing or invalid at ${ref}:${relativePath}`, { cause: error });
+    throw new Error(`trusted prior inventory is missing at ${ref}:${relativePath}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`trusted prior inventory is invalid at ${ref}:${relativePath}`, { cause: error });
   }
 }
 

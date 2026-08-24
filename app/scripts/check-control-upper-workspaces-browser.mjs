@@ -11,6 +11,7 @@ const host = "127.0.0.1";
 const vitePort = 5197;
 const cdpPort = 9247;
 const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+const faviconUrl = `http://${host}:${vitePort}/favicon.ico`;
 const screenshotDir = resolve(
   process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR ?? "C:\\TEMP\\syndocal-control-ui-checkpoints",
 );
@@ -57,14 +58,114 @@ class CdpClient {
     this.socket = new WebSocket(url);
     this.nextId = 0;
     this.pending = new Map();
+    this.runtimeExceptions = [];
+    this.runtimeConsoleErrors = [];
+    this.runtimeConsoleWarnings = [];
+    this.logErrors = [];
+    this.logWarnings = [];
+    this.harnessErrors = [];
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      if (!message.id) return;
+      if (!message.id) {
+        this.recordDiagnosticEvent(message);
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result);
+    };
+  }
+
+  recordDiagnosticEvent(message) {
+    const stackFrames = (stackTrace) => (stackTrace?.callFrames ?? []).map((frame) => ({
+      functionName: frame.functionName ?? "",
+      url: frame.url ?? "",
+      lineNumber: frame.lineNumber ?? null,
+      columnNumber: frame.columnNumber ?? null,
+    }));
+    if (message.method === "Fetch.requestPaused") {
+      const requestId = message.params?.requestId;
+      const requestUrl = message.params?.request?.url ?? "";
+      const faviconRequest = requestUrl === faviconUrl;
+      const command = faviconRequest ? "Fetch.fulfillRequest" : "Fetch.continueRequest";
+      const params = faviconRequest ? { requestId, responseCode: 204, responsePhrase: "No Content" } : { requestId };
+      if (!faviconRequest) {
+        this.harnessErrors.push({ command, requestUrl, message: "Unexpected Fetch.requestPaused URL" });
+      }
+      void this.send(command, params).catch((error) => {
+        this.harnessErrors.push({ command, requestUrl, message: error instanceof Error ? error.message : String(error) });
+      });
+      return;
+    }
+    if (message.method === "Runtime.exceptionThrown") {
+      const details = message.params?.exceptionDetails;
+      this.runtimeExceptions.push({
+        timestamp: message.params?.timestamp ?? null,
+        text: details?.text ?? "",
+        description: details?.exception?.description ?? "",
+        url: details?.url ?? "",
+        lineNumber: details?.lineNumber ?? null,
+        columnNumber: details?.columnNumber ?? null,
+        stack: stackFrames(details?.stackTrace),
+      });
+      return;
+    }
+    if (message.method === "Runtime.consoleAPICalled") {
+      const type = message.params?.type ?? "";
+      if (type !== "error" && type !== "warning") return;
+      const entry = {
+        timestamp: message.params?.timestamp ?? null,
+        type,
+        context: message.params?.context ?? "",
+        stack: stackFrames(message.params?.stackTrace),
+        args: (message.params?.args ?? []).map((argument) => (
+          Object.hasOwn(argument ?? {}, "value")
+            ? argument.value
+            : argument?.unserializableValue ?? argument?.description ?? argument?.type ?? ""
+        )),
+      };
+      if (type === "error") this.runtimeConsoleErrors.push(entry);
+      else this.runtimeConsoleWarnings.push(entry);
+      return;
+    }
+    if (message.method === "Log.entryAdded") {
+      const source = message.params?.entry;
+      if (source?.level !== "error" && source?.level !== "warning") return;
+      const entry = {
+        timestamp: source.timestamp ?? null,
+        level: source.level,
+        source: source.source ?? "",
+        text: source.text ?? "",
+        url: source.url ?? "",
+        lineNumber: source.lineNumber ?? null,
+        stack: stackFrames(source.stackTrace),
+      };
+      if (source.level === "error") this.logErrors.push(entry);
+      else this.logWarnings.push(entry);
+    }
+  }
+
+  diagnosticCursor() {
+    return {
+      runtimeExceptions: this.runtimeExceptions.length,
+      runtimeConsoleErrors: this.runtimeConsoleErrors.length,
+      runtimeConsoleWarnings: this.runtimeConsoleWarnings.length,
+      logErrors: this.logErrors.length,
+      logWarnings: this.logWarnings.length,
+      harnessErrors: this.harnessErrors.length,
+    };
+  }
+
+  diagnosticsSince(cursor) {
+    return {
+      runtimeExceptions: this.runtimeExceptions.slice(cursor.runtimeExceptions),
+      runtimeConsoleErrors: this.runtimeConsoleErrors.slice(cursor.runtimeConsoleErrors),
+      runtimeConsoleWarnings: this.runtimeConsoleWarnings.slice(cursor.runtimeConsoleWarnings),
+      logErrors: this.logErrors.slice(cursor.logErrors),
+      logWarnings: this.logWarnings.slice(cursor.logWarnings),
+      harnessErrors: this.harnessErrors.slice(cursor.harnessErrors),
     };
   }
 
@@ -192,11 +293,32 @@ const exercisePopupLastTarget = async (client, selector) => evaluate(client, `(a
   const rectArray = (rect) => [rect.x, rect.y, rect.width, rect.height, rect.right, rect.bottom];
   const popupRect = popup.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
+  const directPerformanceEditor = popup.querySelector(':scope > .timelinePerformanceEditor');
+  const directPerformanceEditorRect = directPerformanceEditor instanceof HTMLElement
+    ? directPerformanceEditor.getBoundingClientRect()
+    : null;
+  const nestedHorizontalRegions = [
+    ['bank', '.timelineBankBody'],
+    ['cueAudio', '.timelineCueAudioEditorBody'],
+    ['phases', '.timelinePhaseEditorBody'],
+  ].map(([name, regionSelector]) => {
+    const region = directPerformanceEditor?.querySelector(regionSelector);
+    const regionRect = region instanceof HTMLElement ? region.getBoundingClientRect() : null;
+    return {
+      name,
+      rect: regionRect ? rectArray(regionRect) : null,
+      clientWidth: region instanceof HTMLElement ? region.clientWidth : 0,
+      scrollWidth: region instanceof HTMLElement ? region.scrollWidth : 0,
+    };
+  });
   const layout = popup.closest('.layout') ?? document.querySelector('.layout');
   const layoutRect = layout?.getBoundingClientRect() ?? null;
   const within = (inner, outer) => Boolean(
     outer && inner.left >= outer.left - 1 && inner.top >= outer.top - 1 &&
     inner.right <= outer.right + 1 && inner.bottom <= outer.bottom + 1
+  );
+  const horizontallyWithin = (inner, outer) => Boolean(
+    inner && outer && inner.left >= outer.left - 1 && inner.right <= outer.right + 1
   );
   const visibleLeft = Math.max(targetRect.left, popupRect.left, layoutRect?.left ?? 0, 0);
   const visibleTop = Math.max(targetRect.top, popupRect.top, layoutRect?.top ?? 0, 0);
@@ -209,6 +331,8 @@ const exercisePopupLastTarget = async (client, selector) => evaluate(client, `(a
   const hit = visibleRight > visibleLeft && visibleBottom > visibleTop ? document.elementFromPoint(point.x, point.y) : null;
   return {
     popup: rectArray(popupRect),
+    popupClientWidth: popup.clientWidth,
+    popupScrollWidth: popup.scrollWidth,
     layout: layoutRect ? rectArray(layoutRect) : null,
     target: rectArray(targetRect),
     targetLabel: target.getAttribute('aria-label') ?? target.textContent?.trim().slice(0, 64) ?? target.tagName,
@@ -216,12 +340,94 @@ const exercisePopupLastTarget = async (client, selector) => evaluate(client, `(a
     popupInsideLayout: layoutRect ? within(popupRect, layoutRect) : false,
     popupInsideViewport: popupRect.left >= -1 && popupRect.top >= -1 && popupRect.right <= innerWidth + 1 && popupRect.bottom <= innerHeight + 1,
     targetInsidePopup: within(targetRect, popupRect),
+    directPerformanceEditor: directPerformanceEditorRect ? rectArray(directPerformanceEditorRect) : null,
+    directPerformanceEditorWidth: directPerformanceEditorRect?.width ?? 0,
+    directPerformanceEditorInsidePopupHorizontally: directPerformanceEditorRect
+      ? horizontallyWithin(directPerformanceEditorRect, popupRect)
+      : null,
+    nestedHorizontalRegions,
     hit: hit === target || target.contains(hit),
     point,
     scrollTop: popup.scrollTop,
     scrollHeight: popup.scrollHeight,
     clientHeight: popup.clientHeight,
   };
+})()`);
+
+const exerciseTimelineNestedRegionTargets = async (client) => evaluate(client, `(async () => {
+  const popup = document.querySelector('.timelineToolsDisclosure[open] .timelineToolsDisclosurePanel');
+  const editor = popup?.querySelector(':scope > [data-timeline-performance-editor]');
+  if (!(popup instanceof HTMLElement) || !(editor instanceof HTMLElement)) return null;
+  const rectArray = (rect) => [rect.x, rect.y, rect.width, rect.height, rect.right, rect.bottom];
+  const within = (inner, outer) => Boolean(
+    inner && outer && inner.left >= outer.left - 1 && inner.top >= outer.top - 1 &&
+    inner.right <= outer.right + 1 && inner.bottom <= outer.bottom + 1
+  );
+  const enabledVisibleFocusable = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const elementRect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return elementRect.width > 0 && elementRect.height > 0 &&
+      style.display !== 'none' && style.visibility !== 'hidden' &&
+      !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true' &&
+      element.tabIndex >= 0 && !element.closest('details:not([open]), [inert], [aria-hidden="true"]');
+  };
+  const specs = [
+    ['bank', '[data-timeline-bank]', '.timelineBankBody'],
+    ['cueAudio', '[data-timeline-cue-audio-editor]', '.timelineCueAudioEditorBody'],
+    ['phases', '[data-timeline-phase-editor]', '.timelinePhaseEditorBody'],
+  ];
+  for (const [, detailsSelector] of specs) {
+    const details = editor.querySelector(detailsSelector);
+    if (details instanceof HTMLDetailsElement) details.open = true;
+  }
+  await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  const proveTarget = async (region, target, role) => {
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const popupRect = popup.getBoundingClientRect();
+    const regionRect = region.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const point = { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 };
+    const hit = document.elementFromPoint(point.x, point.y);
+    return {
+      role,
+      label: target.getAttribute('aria-label') ?? target.textContent?.trim().slice(0, 64) ?? target.tagName,
+      target: rectArray(targetRect),
+      region: rectArray(regionRect),
+      popup: rectArray(popupRect),
+      popupInsideViewport: popupRect.left >= -1 && popupRect.top >= -1 && popupRect.right <= innerWidth + 1 && popupRect.bottom <= innerHeight + 1,
+      targetInsideRegion: within(targetRect, regionRect),
+      targetInsidePopup: within(targetRect, popupRect),
+      targetInsideViewport: targetRect.left >= -1 && targetRect.top >= -1 && targetRect.right <= innerWidth + 1 && targetRect.bottom <= innerHeight + 1,
+      hit: hit === target || target.contains(hit),
+      point,
+    };
+  };
+  const regions = [];
+  for (const [name, detailsSelector, regionSelector] of specs) {
+    const details = editor.querySelector(detailsSelector);
+    const region = details?.querySelector(regionSelector);
+    const controls = region instanceof HTMLElement
+      ? [...new Set(region.querySelectorAll('button, input, select, textarea, summary, [role="button"], [tabindex]'))].filter(enabledVisibleFocusable)
+      : [];
+    const targets = [];
+    if (region instanceof HTMLElement && controls[0]) {
+      targets.push(await proveTarget(region, controls[0], 'representative'));
+    }
+    if (region instanceof HTMLElement && controls.at(-1)) {
+      targets.push(await proveTarget(region, controls.at(-1), 'terminal'));
+    }
+    const regionRect = region instanceof HTMLElement ? region.getBoundingClientRect() : null;
+    regions.push({
+      name,
+      detailsOpen: details instanceof HTMLDetailsElement && details.open,
+      region: regionRect ? rectArray(regionRect) : null,
+      enabledVisibleFocusableCount: controls.length,
+      targets,
+    });
+  }
+  return { regions };
 })()`);
 
 const rectArray = (rect) => [rect.x, rect.y, rect.width, rect.height, rect.right, rect.bottom];
@@ -386,6 +592,23 @@ const measureTimeline = (client) => evaluate(client, `(() => {
   const mixerStyle = mixerPanel instanceof HTMLElement ? getComputedStyle(mixerPanel) : null;
   const shelfStyle = shelf instanceof HTMLElement ? getComputedStyle(shelf) : null;
   const bodyStyle = shelfBody instanceof HTMLElement ? getComputedStyle(shelfBody) : null;
+  const toolsToolbarGroups = [
+    '.timelineToolsScrubGroup',
+    '.timelineViewportToolbar',
+    '.timelineDirectToolbar',
+  ].map((selector) => {
+    const element = toolsPanel?.querySelector(':scope > ' + selector);
+    return { selector, rect: visible(element) ? rect(element) : null };
+  });
+  const toolsPanelRect = rect(toolsPanel);
+  const toolsToolbarGroupsInsidePanel = Boolean(
+    toolsPanelRect
+      && toolsToolbarGroups.every(({ rect: groupRect }) => (
+        groupRect
+          && groupRect[0] >= toolsPanelRect[0] - 1
+          && groupRect[4] <= toolsPanelRect[4] + 1
+      )),
+  );
   const documentElement = document.documentElement;
   const app = document.querySelector('.app');
   const band = document.querySelector('.mappingPersistentWorkspaceBand');
@@ -418,7 +641,11 @@ const measureTimeline = (client) => evaluate(client, `(() => {
     shelfBodyOverflowY: bodyStyle?.overflowY ?? '',
     shelfBodyScroll: (shelfBody?.scrollHeight ?? 0) - (shelfBody?.clientHeight ?? 0),
     toolsOpen: tools instanceof HTMLDetailsElement && tools.open,
-    toolsPanel: rect(toolsPanel),
+    toolsPanel: toolsPanelRect,
+    toolsPanelClientWidth: toolsPanel instanceof HTMLElement ? toolsPanel.clientWidth : 0,
+    toolsPanelScrollWidth: toolsPanel instanceof HTMLElement ? toolsPanel.scrollWidth : 0,
+    toolsToolbarGroups,
+    toolsToolbarGroupsInsidePanel,
     toolsPanelInViewport: contained(rect(toolsPanel)),
     toolsPanelElementFromPointReachable: toolsReachability.hit,
     toolsPanelHitPoint: toolsReachability.point,
@@ -448,6 +675,28 @@ const measureTimeline = (client) => evaluate(client, `(() => {
 const assertOuterScrollFixed = (state, label) => {
   assert.deepEqual(state.outerScroll.document, [0, 0], `${label} document outer scroll remains fixed`);
   assert.ok(!state.outerScroll.app || state.outerScroll.app.every((value) => value <= 1), `${label} app outer scroll remains fixed`);
+};
+
+const diagnosticCounts = (diagnostics) => ({
+  runtimeExceptions: diagnostics.runtimeExceptions.length,
+  runtimeConsoleErrors: diagnostics.runtimeConsoleErrors.length,
+  logErrors: diagnostics.logErrors.length,
+  runtimeConsoleWarnings: diagnostics.runtimeConsoleWarnings.length,
+  logWarnings: diagnostics.logWarnings.length,
+  harnessErrors: diagnostics.harnessErrors.length,
+});
+
+const assertNoCdpErrors = (diagnostics, label) => {
+  assert.deepEqual(
+    {
+      runtimeExceptions: diagnostics.runtimeExceptions,
+      runtimeConsoleErrors: diagnostics.runtimeConsoleErrors,
+      logErrors: diagnostics.logErrors,
+      harnessErrors: diagnostics.harnessErrors,
+    },
+    { runtimeExceptions: [], runtimeConsoleErrors: [], logErrors: [], harnessErrors: [] },
+    `${label} has zero CDP runtime exceptions, console errors, Log.entryAdded errors, and harness errors`,
+  );
 };
 
 const rectHeight = (value) => value?.[3] ?? 0;
@@ -492,15 +741,19 @@ try {
     "about:blank",
   ], { stdio: "ignore" });
   const target = await waitFor(async () => {
-    const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent(baseUrl)}`, { method: "PUT" });
+    const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" });
     return response.ok ? response.json() : null;
   }, "headless browser CDP target");
   client = new CdpClient(target.webSocketDebuggerUrl);
   await client.ready();
+  const diagnosticsOrigin = client.diagnosticCursor();
   await client.send("Page.enable");
   await client.send("Runtime.enable");
+  await client.send("Log.enable");
+  await client.send("Fetch.enable", { patterns: [{ urlPattern: faviconUrl, requestStage: "Request" }] });
 
   for (const viewport of viewports) {
+    const viewportDiagnosticsCursor = client.diagnosticCursor();
     await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
     await client.send("Page.navigate", { url: baseUrl });
     await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
@@ -599,10 +852,25 @@ try {
     assert.equal(toolsOpen.toolsPanelElementFromPointReachable, true, `Timeline Tools/Performance is reachable by elementFromPoint: ${JSON.stringify(toolsOpen.toolsPanelHitPoint)}`);
     assert.ok(toolsOpen.toolsInteractiveCount > 0, "Timeline Tools/Performance remains interactive");
     assert.ok(toolsOpen.toolsSummary?.[3] >= 43.5, "Timeline Tools preserves its 44px summary target");
+    assert.ok(toolsOpen.toolsPanelScrollWidth <= toolsOpen.toolsPanelClientWidth + 1, `Timeline Tools popup has no horizontal overflow at ${viewport.width}x${viewport.height}: ${JSON.stringify({ clientWidth: toolsOpen.toolsPanelClientWidth, scrollWidth: toolsOpen.toolsPanelScrollWidth })}`);
+    assert.equal(toolsOpen.toolsToolbarGroupsInsidePanel, true, `Timeline Tools immediate toolbar groups remain inside the popup at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: toolsOpen.toolsPanel, groups: toolsOpen.toolsToolbarGroups })}`);
+    const nestedRegionTargets = await exerciseTimelineNestedRegionTargets(client);
+    assert.deepEqual(nestedRegionTargets?.regions?.map(({ name }) => name), ['bank', 'cueAudio', 'phases'], `Timeline Tools exercises every nested target region at ${viewport.width}x${viewport.height}`);
+    for (const region of nestedRegionTargets?.regions ?? []) {
+      assert.equal(region.detailsOpen, true, `Timeline ${region.name} details are open before reachability checks at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+      assert.ok(region.region && region.enabledVisibleFocusableCount > 0, `Timeline ${region.name} has an enabled visible focusable control at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+      assert.deepEqual(region.targets.map(({ role }) => role), ['representative', 'terminal'], `Timeline ${region.name} exercises representative and terminal controls at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+      assert.equal(region.targets.every((target) => target.popupInsideViewport && target.targetInsideRegion && target.targetInsidePopup && target.targetInsideViewport && target.hit), true, `Timeline ${region.name} representative/terminal controls remain contained and hit-testable at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+    }
     const toolsLast = await exercisePopupLastTarget(client, '.timelineToolsDisclosure[open] .timelineToolsDisclosurePanel');
     assert.ok(toolsLast?.popupInsideLayout && toolsLast.popupInsideViewport, `Timeline Tools popup remains inside its layout and viewport: ${JSON.stringify(toolsLast)}`);
     assert.ok(toolsLast?.targetInsidePopup && toolsLast.hit, `Timeline Tools last action remains scroll-reachable and hit-testable: ${JSON.stringify(toolsLast)}`);
     assert.ok((toolsLast?.targetHeight ?? 0) >= 24, `Timeline Tools last action keeps a usable control height: ${JSON.stringify(toolsLast)}`);
+    assert.ok((toolsLast?.popupScrollWidth ?? Infinity) <= (toolsLast?.popupClientWidth ?? 0) + 1, `Timeline Tools popup has no horizontal overflow after nested Bank/Cue Audio/Phases open at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast)}`);
+    assert.ok((toolsLast?.directPerformanceEditorWidth ?? 0) > 0, `Timeline Performance editor keeps a useful positive width after nested details open at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast)}`);
+    assert.equal(toolsLast?.directPerformanceEditorInsidePopupHorizontally, true, `Timeline Performance editor remains horizontally inside the popup after nested details open at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast)}`);
+    assert.deepEqual(toolsLast?.nestedHorizontalRegions?.map(({ name }) => name), ['bank', 'cueAudio', 'phases'], `Timeline Tools measures every nested horizontal region at ${viewport.width}x${viewport.height}`);
+    assert.equal(toolsLast?.nestedHorizontalRegions?.every(({ clientWidth, scrollWidth }) => clientWidth > 0 && scrollWidth <= clientWidth + 1), true, `Timeline Bank/Cue Audio/Phases regions have no horizontal overflow after nesting at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast?.nestedHorizontalRegions)}`);
     await capture(client, `control-timeline-tools-open-${viewport.width}x${viewport.height}.png`);
     assert.equal(await clickVisible(client, '.groupLiveMixerDisclosure > summary'), true, "open Live Mixer");
     const mixerOpen = await waitFor(async () => {
@@ -619,7 +887,16 @@ try {
     assert.ok(mixerLast?.targetInsidePopup && mixerLast.hit, `Live Mixer last action remains scroll-reachable and hit-testable: ${JSON.stringify(mixerLast)}`);
     assert.ok((mixerLast?.targetHeight ?? 0) >= 24, `Live Mixer last action keeps a usable control height: ${JSON.stringify(mixerLast)}`);
     await capture(client, `control-timeline-live-mixer-open-${viewport.width}x${viewport.height}.png`);
-    await evaluate(client, "document.querySelector('.groupLiveMixerDisclosure')?.removeAttribute('open')");
+    assert.equal(await clickVisible(client, '.timelineToolsDisclosure > summary'), true, "open Timeline Tools from Live Mixer");
+    const toolsReopened = await waitFor(async () => {
+      const value = await measureTimeline(client);
+      return value?.toolsOpen ? value : false;
+    }, "Timeline Tools disclosure reopened from Live Mixer");
+    assert.deepEqual({ toolsOpen: toolsReopened.toolsOpen, mixerOpen: toolsReopened.mixerOpen }, { toolsOpen: true, mixerOpen: false }, "Tools and Live Mixer disclosures are mutually exclusive in the reverse gate sequence");
+    await evaluate(client, `(() => {
+      document.querySelector('.groupLiveMixerDisclosure')?.removeAttribute('open');
+      document.querySelector('.timelineToolsDisclosure')?.removeAttribute('open');
+    })()`);
     await sleep(40);
 
     // Expansion is a keyboard-priority state machine: the first Escape closes
@@ -663,13 +940,51 @@ try {
     assert.equal(expandedTools.toolsPanelInViewport, true, "Expanded Timeline Tools popup remains contained");
     assert.equal(expandedTools.toolsPanelElementFromPointReachable, true, "Expanded Timeline Tools popup remains elementFromPoint reachable");
     await capture(client, `control-timeline-tools-expanded-open-${viewport.width}x${viewport.height}.png`);
-    assert.equal(await evaluate(client, `(() => {
+    const expandedDeepestTarget = await evaluate(client, `(async () => {
       const panel = document.querySelector('.timelineToolsDisclosure[open] .timelineToolsDisclosurePanel');
-      const target = panel?.querySelector('button, input, select, textarea, [role="button"]');
-      if (!(target instanceof HTMLElement)) return false;
+      if (!(panel instanceof HTMLElement)) return null;
+      for (const details of panel.querySelectorAll('details')) details.open = true;
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true' && element.tabIndex >= 0 && !element.closest('details:not([open]), [inert], [aria-hidden="true"]');
+      };
+      const target = [...panel.querySelectorAll('button, input, select, textarea, summary, [role="button"], [tabindex]')].filter(visible).at(-1);
+      if (!(target instanceof HTMLElement)) return null;
+      const nestedEditor = target.closest('.timelineBankPanel, .timelineCueAudioEditor, .timelinePhaseEditor');
+      const nestedRegion = target.closest('.timelineBankBody, .timelineCueAudioEditorBody, .timelinePhaseEditorBody');
+      if (!(nestedEditor instanceof HTMLDetailsElement) || !(nestedRegion instanceof HTMLElement) || !panel.contains(nestedEditor)) return null;
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      const panelRect = panel.getBoundingClientRect();
+      const nestedRegionRect = nestedRegion.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const within = (inner, outer) => inner.left >= outer.left - 1 && inner.top >= outer.top - 1 && inner.right <= outer.right + 1 && inner.bottom <= outer.bottom + 1;
+      const point = { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 };
+      const hit = document.elementFromPoint(point.x, point.y);
       target.focus();
-      return panel.contains(document.activeElement);
-    })()`), true, "Expanded Timeline Tools accepts focus inside the open popup");
+      const rectArray = (rect) => [rect.x, rect.y, rect.width, rect.height, rect.right, rect.bottom];
+      return {
+        nestedEditorOpen: nestedEditor.open,
+        targetLabel: target.getAttribute('aria-label') ?? target.textContent?.trim().slice(0, 64) ?? target.tagName,
+        target: rectArray(targetRect),
+        nestedRegion: rectArray(nestedRegionRect),
+        popup: rectArray(panelRect),
+        popupInsideViewport: panelRect.left >= -1 && panelRect.top >= -1 && panelRect.right <= innerWidth + 1 && panelRect.bottom <= innerHeight + 1,
+        targetInsideNestedRegion: within(targetRect, nestedRegionRect),
+        targetInsidePopup: within(targetRect, panelRect),
+        targetInsideViewport: targetRect.left >= -1 && targetRect.top >= -1 && targetRect.right <= innerWidth + 1 && targetRect.bottom <= innerHeight + 1,
+        hit: hit === target || target.contains(hit),
+        focused: document.activeElement === target,
+        point,
+      };
+    })()`);
+    assert.equal(expandedDeepestTarget?.focused, true, `Expanded Timeline Tools accepts focus on its deepest visible target inside the open popup: ${JSON.stringify(expandedDeepestTarget)}`);
+    assert.equal(expandedDeepestTarget?.nestedEditorOpen, true, `Expanded Timeline deepest target belongs to an open nested editor: ${JSON.stringify(expandedDeepestTarget)}`);
+    assert.ok(expandedDeepestTarget?.popupInsideViewport && expandedDeepestTarget.targetInsideNestedRegion && expandedDeepestTarget.targetInsidePopup && expandedDeepestTarget.targetInsideViewport, `Expanded Timeline deepest target remains inside its nested region, popup, and viewport after scrolling: ${JSON.stringify(expandedDeepestTarget)}`);
+    assert.equal(expandedDeepestTarget?.hit, true, `Expanded Timeline deepest target remains reachable by elementFromPoint after scrolling: ${JSON.stringify(expandedDeepestTarget)}`);
     await pressEscape(client);
     const firstEscape = await evaluate(client, '(() => { const details = document.querySelector(".timelineToolsDisclosure"); const summary = details?.querySelector(":scope > summary"); return { toolsOpen: details?.open ?? null, expanded: document.querySelector(".mappingPersistentWorkspaceBand")?.getAttribute("data-timeline-pane-expanded") ?? null, focusReturned: document.activeElement === summary }; })()');
     console.log(String(viewport.width) + "x" + String(viewport.height) + " first Escape: " + JSON.stringify(firstEscape));
@@ -700,7 +1015,17 @@ try {
     assertOuterScrollFixed(collapsed, "Timeline after Escape");
     await capture(client, `control-timeline-${viewport.width}x${viewport.height}.png`);
     console.log(`${viewport.width}x${viewport.height} Timeline: upper=${Math.round(rectHeight(collapsed.upper))}px lanes=${collapsed.laneCount} sources=${collapsed.sourceCardCount} lower=${Math.round(rectHeight(collapsed.shelf))}px`);
+    await evaluate(client, "new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))");
+    await sleep(20);
+    const viewportDiagnostics = client.diagnosticsSince(viewportDiagnosticsCursor);
+    console.log(`${viewport.width}x${viewport.height} CDP diagnostics: ${JSON.stringify(diagnosticCounts(viewportDiagnostics))}`);
+    assertNoCdpErrors(viewportDiagnostics, `${viewport.width}x${viewport.height}`);
   }
+  await evaluate(client, "new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))");
+  await sleep(20);
+  const finalDiagnostics = client.diagnosticsSince(diagnosticsOrigin);
+  console.log(`Final CDP diagnostics: ${JSON.stringify(diagnosticCounts(finalDiagnostics))}`);
+  assertNoCdpErrors(finalDiagnostics, "Final cumulative gate");
   console.log(`Control upper workspace browser gate passed; screenshots=${screenshotDir}`);
 } finally {
   client?.close();

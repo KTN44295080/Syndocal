@@ -45,7 +45,13 @@ const checks = [
   [backend.includes("validate_midi_feedback") && backend.includes("MIDI feedback requires at least one state"), "custom MIDI feedback is validated at every persistence and connection boundary"],
   [remote.includes("SetOperatorSelection(OperatorSelectionContext)") && remote.includes("SetOperatorFeatureFader"), "Remote and future AI callers have typed operator-selection commands"],
   [app.includes("selectedControlTargetFixtures().map((fixture) => fixture.id)") && app.includes("visibleControls().map((control) => control.attribute)"), "frontend publishes the exact selected fixtures and visible fader order"],
-  [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"), "DVC import installs MIDI and DMX mappings instead of clearing them"],
+  [backend.includes("fn import_daslight_project_with_result(")
+    && backend.includes("let mappings = project_control_mappings_from_daslight_import_report(&report);")
+    && backend.includes("load_project_from_file_with_control_mappings_and_disposition(")
+    && backend.includes("daslight_import_mapping_result_keeps_report_midi_and_dmx_in_the_project_checkpoint")
+    && app.includes("applyLoadedProjectResult(imported.load, null)")
+    && !app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"),
+  "DVC import publishes MIDI and DMX mappings in the paired backend project result instead of racing a frontend replacement"],
   [app.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
   [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
   [backend.includes('name("syndocal-midi-feedback".to_string())') && backend.includes("MIDI_FEEDBACK_REFRESH_INTERVAL") && backend.includes("TELEMETRY_DMX_TARGET_FRAME_RATE_HZ") && backend.includes("engine.inspect_snapshot"), "auto feedback reads the published snapshot without full clones at the engine's 44 Hz rate"],

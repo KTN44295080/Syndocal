@@ -171,7 +171,7 @@ fn analyze_mono_samples(
 }
 
 fn decode_f32le_mono_samples(bytes: &[u8]) -> Result<Vec<f32>, AudioError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(AudioError::InvalidDecodedAudio);
     }
     Ok(bytes

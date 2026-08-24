@@ -138,6 +138,12 @@ struct OutputLeaseEnableTransition {
     recovered: bool,
 }
 
+struct DisplayAuthorizationContext<'a> {
+    project_identity: &'a str,
+    now_ms: u64,
+    ttl_ms: u64,
+}
+
 impl OutputLeaseOwner {
     pub(crate) fn new(
         principal: impl Into<String>,
@@ -1735,10 +1741,13 @@ impl OutputLeaseRegistry {
         owner: &OutputLeaseOwner,
         expected_generation: u64,
         exact_resources: &OutputLeaseResources,
-        project_identity: &str,
-        now_ms: u64,
-        ttl_ms: u64,
+        context: DisplayAuthorizationContext<'_>,
     ) -> Result<OutputLeaseSnapshot, OutputLeaseError> {
+        let DisplayAuthorizationContext {
+            project_identity,
+            now_ms,
+            ttl_ms,
+        } = context;
         let mut candidate = self.clone();
         candidate.advance_now(now_ms)?;
         checked_deadline(now_ms, ttl_ms)?;
@@ -2381,9 +2390,11 @@ impl OutputLeaseRegistry {
                     owner,
                     *expected_generation,
                     exact_resources,
-                    project_identity,
-                    now_ms,
-                    *ttl_ms,
+                    DisplayAuthorizationContext {
+                        project_identity,
+                        now_ms,
+                        ttl_ms: *ttl_ms,
+                    },
                 );
                 let after = self.lease_view(*lease_id).ok();
                 let mut changes = generation_change(*lease_id, before.as_ref(), after.as_ref());

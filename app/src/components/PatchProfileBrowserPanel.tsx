@@ -1,4 +1,3 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   fixtureCatalogCacheMegabytes,
@@ -18,6 +17,7 @@ import {
   type BundledLibraryAttribution,
 } from "../bundledLibrary";
 import type { FixtureProfileSummary, PatchedFixtureSummary } from "../types";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import {
   filterGdtfProfileTreeFixtures,
   GdtfProfileTree,
@@ -43,6 +43,7 @@ export interface PatchProfileDragItem {
 
 interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   backendAvailable: boolean;
+  invokeCommand: FrontendTauriInvoke;
   shareUser: string;
   sharePassword: string;
   selectedProfile: FixtureProfileSummary | null;
@@ -213,7 +214,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     if (!props.backendAvailable) return;
     setBusy(true);
     try {
-      const cache = await tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache");
+      const cache = await props.invokeCommand<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache");
       setCacheEntries(cache);
     } catch (error) {
       props.onMessage(String(error));
@@ -302,7 +303,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
       limit: 80,
     };
     try {
-      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      const response = await props.invokeCommand<GdtfShareSearchResponse>("search_gdtf_share", { request });
       if (generation !== shareSearchGeneration) return;
       pausedAuthErrorQuery = null;
       setShareResponse(response);
@@ -405,7 +406,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         tested_in_real_life: false,
         limit: 200,
       };
-      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      const response = await props.invokeCommand<GdtfShareSearchResponse>("search_gdtf_share", { request });
       if (activeManufacturerBatch !== run) return;
       if (response.fixtures.length < response.total_matches) {
         throw new Error(`Manufacturer catalog returned only ${response.fixtures.length} of ${response.total_matches} revisions.`);
@@ -440,7 +441,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           revision: fixture.revision,
         };
         try {
-          const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request: downloadRequest });
+          const entry = await props.invokeCommand<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request: downloadRequest });
           upsertCacheEntry(entry);
           cachedKeys.add(identity);
           cached += 1;
@@ -501,7 +502,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     };
     setDownloadingShareKey(key);
     try {
-      const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
+      const entry = await props.invokeCommand<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
       upsertCacheEntry(entry);
       const loaded = await props.onLoadCached(entry.path, preferredMode || entry.modes[0]?.name || null);
       if (loaded) await refreshLocalProfiles();

@@ -131,7 +131,12 @@ assert.ok(backend.includes("blackout: true"));
 assert.ok(backend.includes("fullscreen: false"));
 assert.ok(engine.includes("EngineCommand::BootstrapVjShow"));
 assert.ok(engine.includes("let publication_barrier = matches!("));
-assert.ok(engine.includes("self.publish_pending_command_acks(queue.len(), &snapshot)"));
+assert.ok(
+  engine.includes("self.consume_commands(&safety_queue);")
+    && engine.includes("self.consume_normal_commands(&queue);")
+    && (engine.match(/self\.publish_pending_command_acks\(\s*queue\.len\(\)\.saturating_add\(safety_queue\.len\(\)\),\s*&snapshot,\s*\);/g) ?? []).length >= 2,
+  "first-run publication ACKs must flush after both the safety-first lane and normal authored lane",
+);
 assert.ok(engine.includes("recv_timeout(Duration::from_secs(3))"));
 assert.ok(engine.includes("First-run VJ setup expired before engine execution"));
 // The old bridge stays registered for older renderer binaries, but current

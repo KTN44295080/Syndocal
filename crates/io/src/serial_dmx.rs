@@ -178,15 +178,15 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortSummary>, SerialDmxError> {
         })
 }
 
-fn serial_port_usb_metadata(
-    port_type: &SerialPortType,
-) -> (
+type SerialPortUsbMetadata = (
     Option<u16>,
     Option<u16>,
     Option<String>,
     Option<String>,
     Option<String>,
-) {
+);
+
+fn serial_port_usb_metadata(port_type: &SerialPortType) -> SerialPortUsbMetadata {
     match port_type {
         SerialPortType::UsbPort(info) => (
             Some(info.vid),
@@ -331,7 +331,7 @@ pub fn write_enttec_usb_pro_dmx_frame<W: Write + ?Sized>(
 }
 
 fn serial_error_to_io(error: serialport::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, error.to_string())
+    io::Error::other(error.to_string())
 }
 
 fn serial_port_type_label(port_type: &SerialPortType) -> String {

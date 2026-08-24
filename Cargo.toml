@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-exclude = ["tools/asio-bridge"]
+exclude = [
+    "tools/asio-bridge",
+    "vendor/tauri-runtime-wry-2.6.0-syndocal",
+]
 members = [
     "crates/audio",
     "crates/protocol",
@@ -13,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.0-alpha.7"
+version = "1.2.0-alpha.8"
 edition = "2021"
 license = "MIT"
 authors = ["Seraf()のKTN"]
@@ -58,3 +61,8 @@ video = { path = "crates/video" }
 visualizer = { path = "crates/visualizer" }
 wgpu = { version = "=25.0.2", default-features = false, features = ["dx12", "metal", "vulkan", "gles", "wgsl"] }
 zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+
+[patch.crates-io]
+# Temporary Windows crash containment for tauri-apps/tauri#15408/#15793.
+# This is a source-preserving 2.6.0 vendor backport of tauri PR #15411.
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry-2.6.0-syndocal" }

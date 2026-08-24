@@ -1851,7 +1851,7 @@ mod tests {
             archive
                 .start_file("models/lens.glb", SimpleFileOptions::default())
                 .unwrap();
-            archive.write_all(&[b'g', b'l', b'T', b'F']).unwrap();
+            archive.write_all(b"glTF").unwrap();
             archive.finish().unwrap();
         }
 

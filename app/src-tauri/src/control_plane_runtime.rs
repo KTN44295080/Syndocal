@@ -659,13 +659,15 @@ where
                 app,
                 window,
                 state,
-                spec,
-                &request.expected_fence,
-                &lease_request,
-                lease_now_ms,
-                &binding.principal,
-                &binding.window_label,
-                binding.owner_incarnation,
+                super::DisplayOutputControlRequest {
+                    spec,
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &binding.principal,
+                    expected_owner_window_label: &binding.window_label,
+                    expected_owner_incarnation: binding.owner_incarnation,
+                },
             )
         }
         OutputControlActionV2::SetDisplayWindowOpen {
@@ -676,12 +678,14 @@ where
             state,
             *output_id,
             *open,
-            &request.expected_fence,
-            &lease_request,
-            lease_now_ms,
-            &binding.principal,
-            &binding.window_label,
-            binding.owner_incarnation,
+            super::DisplayOutputWindowControlRequest {
+                expected_fence: &request.expected_fence,
+                lease_request: &lease_request,
+                lease_now_ms,
+                expected_owner_principal: &binding.principal,
+                expected_owner_window_label: &binding.window_label,
+                expected_owner_incarnation: binding.owner_incarnation,
+            },
         ),
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
@@ -733,7 +737,7 @@ where
             }
         };
 
-    let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
+    let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
         operation_id: request.operation_id.clone(),
         request_id: request.request_id,
         shape_sha256: shape_sha256.clone(),
@@ -747,7 +751,7 @@ where
             OutputControlReceiptOutcomeV2::NoOp
         },
         lease_result: Some(lease_result),
-    });
+    }));
     if let Err(error) = response.validate() {
         eprintln!(
             "OutputControl operation {} produced an invalid terminal response: {}",
@@ -822,17 +826,31 @@ pub(crate) fn preflight_output_control_successor(
 /// Build the terminal fence from values preflighted before action commit and
 /// state captured while the coordinator/output transition guards are still
 /// held. No fallible lock or allocation occurs after the physical action.
+pub(crate) struct CommittedOutputControlFenceValues<'a> {
+    pub(crate) project_epoch: u64,
+    pub(crate) project_revision: u64,
+    pub(crate) project_checkpoint_hash: &'a str,
+    pub(crate) project_publication_generation: u64,
+    pub(crate) output_epoch: u64,
+    pub(crate) output_generation: u64,
+    pub(crate) safety_blackout_epoch: u64,
+    pub(crate) safety_blackout_generation: u64,
+}
+
 pub(crate) fn committed_output_control_fence(
     basis: &OutputControlFenceV1,
-    project_epoch: u64,
-    project_revision: u64,
-    project_checkpoint_hash: &str,
-    project_publication_generation: u64,
-    output_epoch: u64,
-    output_generation: u64,
-    safety_blackout_epoch: u64,
-    safety_blackout_generation: u64,
+    values: CommittedOutputControlFenceValues<'_>,
 ) -> OutputControlFenceV1 {
+    let CommittedOutputControlFenceValues {
+        project_epoch,
+        project_revision,
+        project_checkpoint_hash,
+        project_publication_generation,
+        output_epoch,
+        output_generation,
+        safety_blackout_epoch,
+        safety_blackout_generation,
+    } = values;
     let fence = OutputControlFenceV1 {
         process_incarnation: basis.process_incarnation,
         session_incarnation: basis.session_incarnation,
@@ -1510,7 +1528,7 @@ where
                 return response;
             }
         };
-    let response = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
+    let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
         operation_id: request.operation_id.clone(),
         request_id: request.request_id,
         shape_sha256: shape_sha256.clone(),
@@ -1520,7 +1538,7 @@ where
         fence_after: request.expected_fence,
         outcome: OutputControlReceiptOutcomeV2::NoOp,
         lease_result: Some(lease_result),
-    });
+    }));
     state
         .runtime_control_plane
         .finish_output_control_inflight(&inflight);
@@ -3524,8 +3542,7 @@ pub(crate) fn issue_timeline_transport_authority(
         .project_transaction_owner_rotation
         .lock()
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
-    let binding =
-        capture_binding(state, window.label()).map_err(|code| RuntimeCommandErrorV1::new(code))?;
+    let binding = capture_binding(state, window.label()).map_err(RuntimeCommandErrorV1::new)?;
     let project = query_state
         .issue_project_mutation_fence_for_window(window.label(), state)
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
@@ -4073,6 +4090,9 @@ fn capture_binding(
     state: &AppState,
     window_label: &str,
 ) -> Result<CallerBinding, RuntimeCommandErrorCodeV1> {
+    state
+        .ensure_window_authority_not_blocked(window_label)
+        .map_err(|_| RuntimeCommandErrorCodeV1::Forbidden)?;
     let owners = state
         .project_transaction_owners
         .lock()
@@ -4094,6 +4114,35 @@ fn capture_binding(
         window_label: window_label.to_string(),
         owner_incarnation,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn capture_binding_for_test(
+    state: &AppState,
+    window_label: &str,
+) -> Result<(), RuntimeCommandErrorCodeV1> {
+    capture_binding(state, window_label).map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn test_state_signature(state: &RuntimeControlPlaneState) -> String {
+    let inner = state
+        .inner
+        .lock()
+        .expect("runtime control-plane state lock");
+    let follow_abort = state
+        .follow_abort
+        .lock()
+        .expect("runtime Follow abort state lock");
+    let safety_blackout = state
+        .safety_blackout
+        .lock()
+        .expect("runtime safety blackout state lock");
+    let output_control = state
+        .output_control
+        .lock()
+        .expect("runtime output-control state lock");
+    format!("{inner:?}|{follow_abort:?}|{safety_blackout:?}|{output_control:?}")
 }
 
 fn receipt_key(request: &RuntimeCommandRequestV1, binding: &CallerBinding) -> ReceiptKey {
@@ -4507,8 +4556,20 @@ mod tests {
         let basis = test_output_fence();
         assert_eq!(preflight_output_control_successor(&basis).unwrap(), (7, 8));
 
-        let fence =
-            committed_output_control_fence(&basis, 10, 11, &"b".repeat(64), 12, 13, 14, 15, 16);
+        let checkpoint_hash = "b".repeat(64);
+        let fence = committed_output_control_fence(
+            &basis,
+            CommittedOutputControlFenceValues {
+                project_epoch: 10,
+                project_revision: 11,
+                project_checkpoint_hash: &checkpoint_hash,
+                project_publication_generation: 12,
+                output_epoch: 13,
+                output_generation: 14,
+                safety_blackout_epoch: 15,
+                safety_blackout_generation: 16,
+            },
+        );
         assert_eq!(fence.process_incarnation, basis.process_incarnation);
         assert_eq!(fence.session_incarnation, basis.session_incarnation);
         assert_eq!(fence.project_epoch, 10);
@@ -4908,7 +4969,7 @@ mod tests {
         fence_after.project_publication_generation += 1;
         fence_after.output_epoch += 1;
         fence_after.output_generation += 1;
-        let receipt = OutputControlResponseV2::Receipt(OutputControlReceiptV2 {
+        let receipt = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
             operation_id: action.operation_id().to_string(),
             request_id: 2,
             shape_sha256: "c".repeat(64),
@@ -4918,7 +4979,7 @@ mod tests {
             fence_after,
             outcome: OutputControlReceiptOutcomeV2::Applied,
             lease_result: Some(lease_result),
-        });
+        }));
         serde_json::to_value(&receipt).expect("Display terminal receipt must serialize");
     }
 

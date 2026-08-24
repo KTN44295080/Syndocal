@@ -6,7 +6,7 @@
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.7`.
+- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.8`.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -1615,3 +1615,150 @@ and main
 - No commit or push was made by this documentation owner. Root retains integration,
   final hash review, checkpoint commit, push, and all native/hardware completion
   claims.
+
+## 2026-08-23 intentional pause after D3/Tauri/DJ transport work
+
+The current dirty-tree state, exact partial hashes, completed evidence, immediate
+resume order, native/hardware matrix, and every remaining master-roadmap task are
+recorded in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. Treat that file as the
+authoritative resume point. D3, the new DJ transport hash, the Tauri native crash
+mitigation, alpha.8, and all hardware/soak rows remain unaccepted at this pause.
+
+## 2026-08-24 pre-alpha.8 software/source closure handoff
+
+- Branch/base HEAD: `codex/syndocal-v1.2` /
+  `23f350c366ede2fdffcfbf3232e18112eada51ea`. Product metadata remains
+  `1.2.0-alpha.7`; no alpha.8 metadata or artifact is claimed yet.
+- D3 is accepted at the software/source boundary. Its final independent fixed-hash
+  review returned P0=0/P1=0/release-blocking P2=0. Full suite evidence is Engine
+  822 passed / 2 ignored, I/O 148 passed / 1 ignored, and Syndocal no-default 951
+  passed / 5 ignored, all with zero failures and zero first-party warnings. Current
+  source hashes are main
+  `2CC94D3E5307E6BBC026F1EC815ABC02BFF47E987D62526446AFD1059984E6C7`, Engine
+  `F2DCE4D4F6E4B9CA4E15DB722608461D9D0ADBD9948FB41D5796FD4B94E1B2F7`, and I/O
+  `E552FEA70D017BBAE40B534A6D854BE1C1B20AFFE111B9E733E0C19FA7A1E8B4`.
+- The Tauri FlatInvoke adapter covers 51 commands (39 common + 11 video + 1
+  repair), and all six focused adapter tests pass. Raw bodies fail before parsing,
+  absent/null optional arguments retain their wire semantics, and malformed bodies
+  produce invalid-args without dispatch. The final main hash received a separate
+  P0/P1/P2-zero fixed-hash review.
+- The warning-ratchet implementation and adversarial self-tests are frozen at
+  `55D2388C3EA244F3C58B207E651E56F33DB10B6E76BD404A2943497E384926AA` and
+  `3391F2F149ADCED3B5641E48E326680686B8D243389EAFC7E2DCC3799AEA7E55`.
+  Independent review returned no release-blocking finding. Git/Cargo/scanner
+  overflow or ambiguity fails closed, and the exercised frontend warning row is
+  total/first-party 0/0.
+- The frozen frontend chain passed build/warnings; routing 133 renderer mutations,
+  29 server-authoritative routes, 33 raw calls, and 402 facade calls; 417 invokes;
+  backend 478 commands / 311 literal calls / 133 transactions; project
+  authority/transaction; E3/E4; output ownership/control/runtime; Scene Matrix
+  strip and full matrix at five viewports; DVC DMX 35 assertions; localization
+  3556/3556; and worktree/cached diff checks. The Scene Matrix fix measures real
+  Live/Playback executor labels before restoring Edit/Scene Matrix. It and the DVC
+  DMX strengthening each passed fixed-hash review without a release blocker.
+- The companion DJ Agent is committed and pushed on `Beta` at
+  `6c4f4328a6866d9d48022bd8ee20a7887c9de851`; 54 tests and 16 Node syntax checks
+  pass with zero warnings. Packaged `dist/server.exe` SHA-256 is
+  `339ECF6E82EB463F55977F63A137CB0CB52886CD7E2874E87F5AD4724234377B`.
+  This is not physical rekordbox/DJ Link/State Sync/Pedal acceptance.
+- The accepted denominator remains exactly 19/71 (26.8%). Software/source closure
+  is kept separate from native and physical acceptance. The final source manifest
+  is intended at
+  `qa/artifacts/source-freeze/2026-08-24-alpha7-pre-alpha8-source-freeze.sha256`
+  after these documents settle.
+- Next action: synchronize the product ordinal to alpha.8 and run `check:release`;
+  then perform the exact-path no-bundle native build, one responsive maximized
+  window, WER/100-reload stress, physical outputs and current-PC hardware, ASIO/DJ
+  fault matrices, and the integrated one-hour soak. No current KDMX commit or push
+  is made by this documentation owner.
+
+## 2026-08-24 current-source alpha.8 native checkpoint
+
+The inherited alpha.8 work is now at branch `codex/syndocal-v1.2`, pre-commit base HEAD
+`23f350c366ede2fdffcfbf3232e18112eada51ea`, with synchronized product version
+`1.2.0-alpha.8`. The final current-source gate log is
+`target/qa/alpha8-current-source-final-gates-20260824-114918`; all 25/25 gates
+passed. The current CSS and upper-workspace checker hashes are
+`4974a2f828b8b8bd1c9fbe43390d97d5d6702179` and
+`73a43ecfb2c6f10c07fb638f84f50375de5213a0`; the Scene Matrix checker SHA-256 is
+`F164CD5B5C6C130E1D27B21C6A04CB1C361CEE3346F08FA9DFF77DE522C5FE11`.
+Independent fixed-hash review found P0=0/P1=0/release-blocking P2=0, and the
+exercised warning counts were total/first-party/third-party 0/0/0.
+
+The authoritative staged-source inventory is
+`qa/artifacts/source-freeze/2026-08-24-alpha8-current-source-freeze.sha256`.
+It contains 103 payload records and excludes its own manifest envelope from the
+payload to avoid recursive self-hashing. The alpha.7 pre-alpha.8 manifest remains
+historical evidence and is not current alpha.8 source authority.
+
+After stopping only the exact checkout `target/release/syndocal.exe` process,
+`pnpm --dir app tauri build --no-bundle` passed from the Visual Studio Developer
+Shell (MSVC 14.43.34808, Windows SDK 10.0.26100.0). The resulting executable is
+57,491,456 bytes, SHA-256
+`627BE88032774C7FA0A4C3CD3510A7BFB52E8ED0E76884ADD414B9BFD101F459`; the PDB
+is 19,582,976 bytes, SHA-256
+`5548E4F4B2C3CBB38F1881AAA6C9299AE42211616A8A05E9189C3019838F56AB`. Both
+FileVersion and ProductVersion are `1.2.0-alpha.8`. Launch verification found
+one responsive maximized Syndocal window from the exact executable.
+
+The fresh reload artifact
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-reload-stress-100-current-source.json`
+has SHA-256
+`6D12AA14371B1C837DF67DDE80AB44CB1C6B1329F093567B81524E35076FB621` and records
+100/100 reloads, 100 unique origins, exit 0, total 40.1424 s, p50 407.3 ms,
+p95 479 ms, maximum 530.1 ms, zero runtime/log issues, and zero WER Event and
+Reliability deltas. The previous `2026-08-24-alpha8-final` artifact directory
+is historical pre-CSS evidence and is superseded for current-source claims.
+
+The native five-display pane route is complete through the supported
+`open_pane_window` placement path: `D5 -> D2 -> D3 -> D1 -> D6`. Each pane was
+maximized and each step recorded zero document scroll. The route measurements
+are D5 monitor 1920x1080, scale 1.5, viewport 1280x650, position `{-2465,1731}`;
+D2 1920x1080, scale 1, viewport 1920x1009, position `{0,0}`; D3 real physical
+3840x2160 4K, scale 1.5, viewport 2560x1370, position `{-3840,-429}`; D1
+2560x1440, scale 1.25, viewport 2048x1082, position `{1920,-364}`; and D6
+2560x720, scale 1, viewport 2560x649, position `{1598,1080}`.
+
+Canonical route evidence is
+`qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-display-route-current-source.json`,
+SHA-256 `41F1D6E2528E7439657F8879F753255221E25F2DF0474139B56C1570E2C32C41`.
+The five pane screenshots in that directory are D5
+`37EDB56EA3F81BA014C23A96A1C78F32EEBB68C6B3E4C3D7C6692FD30E2FD0E1`, D2
+`0A037F7E6359FBC22C1FC16F297D9A3860157544777764679FABD2C194C20CFD`, D3-4K
+`55E83F6AFC32A32DD9BD5AAB187DA659DC0221DB0EF82EAEAA65215327F591CD`, D1
+`C22918826714D16E0E02DB5190AFB1E2724CEB387943A0D3FA4FABCDE5DD645E`, and D6
+`2336172DB637B9E4F9D4906B3E7D6D781408CD0A4B11D18229974FC92E820340`.
+
+The expanded D5 evidence `D5-timeline-tools-expanded-fixed.jpg` is
+`B780CD4CCDA35CC8A8F1148A64B26C91065EB15E33D57A38FDCC04F8B0A3724D`. Native
+metrics record popup client/scroll 345/345, nested surfaces 335/335, and the
+deepest 44px target inside the viewport/popup with hit/focus proof and Escape
+focus return. The pane was closed; final state was one exact responsive PID
+123952, CDP page 1, and maximized D5 main viewport 1280x672.
+
+All five detached Timeline pane screenshots still show the non-secret status six
+seconds after each pane opened:
+`Window 'pane-timeline' has no current project transaction owner registration`.
+At the same six-second point, `get_project_authority_bundle` from the pane succeeds
+with epoch 0/revision 1, but that separate read does not prove transaction-owner
+registration or make the persisted status stale. This evidence accepts placement,
+maximize, and containment only; it does not accept transactional pane operation,
+warning-clean pane startup, or completed owner registration. The main D5 Timeline
+Tools proof remains clean. Keep the owner-registration ordering/status behavior as
+an alpha.9 P1 investigation boundary, not a completed acceptance row.
+
+This closes native multi-display pane placement/containment only. It does not
+claim display-output playback, fullscreen playback, GPU reset/recovery, physical
+DJ Link/rekordbox, Stream Deck Pedal/MIDI, ASIO, real DMX, failure matrices, or
+the one-hour integrated soak. The accepted denominator remains 19/71 (26.8%).
+Root retains staging, commit/push, and final broader hardware completion claims;
+this documentation update performs no Git write.
+
+The non-destructive capacity audit measured about 343.777 GiB for the workspace,
+343.04 GiB for `target`, 238.15 GiB for `target/debug` including about 149 GiB
+incremental, and 90.36 GiB for the old named QA target directories. The
+`.claude/worktrees` copies are only about 5.3 MiB each and `vendor` is about
+0.29 MiB, so the size is overwhelmingly generated Rust build and QA cache output,
+not historical source/worktree copies. No cleanup was performed because the
+deletion/rebuild-cost tradeoff was not authorized; generated `target` remains
+excluded from Git.

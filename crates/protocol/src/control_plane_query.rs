@@ -1506,7 +1506,7 @@ impl GapMarker {
                 if self
                     .previous_generation
                     .checked_add(1)
-                    .map_or(true, |next| self.next_available_generation <= next) =>
+                    .is_none_or(|next| self.next_available_generation <= next) =>
             {
                 Err(QueryContractValidationError::InconsistentGapMarker)
             }
@@ -1666,9 +1666,7 @@ fn validate_fingerprint(value: &str) -> Result<(), QueryContractValidationError>
 fn validate_dotted_id(value: &str, max_bytes: usize) -> Result<(), QueryContractValidationError> {
     if value.is_empty()
         || value.len() > max_bytes
-        || !value
-            .split('.')
-            .all(|segment| validate_lower_id_segment(segment))
+        || !value.split('.').all(validate_lower_id_segment)
     {
         return Err(QueryContractValidationError::InvalidIdentifier);
     }

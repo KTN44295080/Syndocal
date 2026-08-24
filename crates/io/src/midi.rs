@@ -611,15 +611,13 @@ pub fn learn_midi_control(
         .map_err(|error| MidiError::Connect(error.to_string()))?;
 
     let deadline = Instant::now() + timeout;
-    let result = loop {
-        let now = Instant::now();
-        if now >= deadline {
-            break Ok(None);
-        }
+    let now = Instant::now();
+    let result = if now >= deadline {
+        Ok(None)
+    } else {
         match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
-            Ok(learned) => break Ok(Some(learned)),
-            Err(mpsc::RecvTimeoutError::Timeout) => break Ok(None),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(None),
+            Ok(learned) => Ok(Some(learned)),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => Ok(None),
         }
     };
     drop(connection);
@@ -2280,7 +2278,7 @@ mod tests {
         };
 
         assert_eq!(
-            events_from_midi_message(&[0x91, 60, 127], &[mapping.clone()]),
+            events_from_midi_message(&[0x91, 60, 127], std::slice::from_ref(&mapping)),
             vec![MidiControlEvent::TriggerCue(9)]
         );
         assert!(events_from_midi_message(&[0x91, 60, 0], &[mapping]).is_empty());
@@ -2316,7 +2314,7 @@ mod tests {
         };
 
         assert_eq!(
-            events_from_midi_message(&[0x90, 63, 127], &[mapping.clone()]),
+            events_from_midi_message(&[0x90, 63, 127], std::slice::from_ref(&mapping)),
             vec![MidiControlEvent::TriggerCue(7)]
         );
         assert_eq!(
@@ -2347,7 +2345,7 @@ mod tests {
         };
 
         assert_eq!(
-            events_from_midi_message(&[0x90, 62, 127], &[mapping.clone()]),
+            events_from_midi_message(&[0x90, 62, 127], std::slice::from_ref(&mapping)),
             vec![MidiControlEvent::TriggerCueWithDirection {
                 cue_id: 7,
                 direction: CueLiveDirection::Bounce,
@@ -2408,7 +2406,7 @@ mod tests {
         };
 
         assert_eq!(
-            events_from_midi_message(&[0x90, 52, 127], &[mapping.clone()]),
+            events_from_midi_message(&[0x90, 52, 127], std::slice::from_ref(&mapping)),
             vec![MidiControlEvent::TriggerCueListNext(31)]
         );
         assert!(events_from_midi_message(&[0x90, 52, 0], &[mapping]).is_empty());
@@ -2939,9 +2937,11 @@ mod tests {
             }]
         );
 
-        let mut output_mapping = protocol::VideoOutputMapping::default();
-        output_mapping.keystone_x = 0.5;
-        output_mapping.stage_z = 500.0;
+        let output_mapping = protocol::VideoOutputMapping {
+            keystone_x: 0.5,
+            stage_z: 500.0,
+            ..Default::default()
+        };
         let snapshot = EngineSnapshot {
             video: protocol::VideoSnapshot {
                 outputs: vec![protocol::VideoOutputSummary {
@@ -3686,12 +3686,14 @@ mod tests {
             low: 0.0,
             high: 1.0,
         };
-        let mut cue_list_snapshot = EngineSnapshot::default();
-        cue_list_snapshot.cue_lists = vec![protocol::CueListSummary {
-            id: 2,
-            label: "Parallel".to_string(),
-            active_cue_id: Some(9),
-        }];
+        let cue_list_snapshot = EngineSnapshot {
+            cue_lists: vec![protocol::CueListSummary {
+                id: 2,
+                label: "Parallel".to_string(),
+                active_cue_id: Some(9),
+            }],
+            ..Default::default()
+        };
         assert_eq!(
             build_feedback_messages(&cue_list_snapshot, std::slice::from_ref(&mapping)),
             vec![vec![0x92, 60, 127]]

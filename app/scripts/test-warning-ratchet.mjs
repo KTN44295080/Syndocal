@@ -15,6 +15,7 @@ import {
   collectModifiedFiles,
   controlledChildEnvironment,
   controlledGenericCommandEnvironment,
+  CURRENT_FILE_CONTENT_MAX_BYTES,
   detectToolchain,
   detectSuppressionText,
   diagnosticIdentityHash,
@@ -22,6 +23,9 @@ import {
   findBaselineLaundering,
   forbiddenGenericCommandEnvironment,
   forbiddenWarningEnvironment,
+  GIT_OUTPUT_LIMIT_ERROR_CODE,
+  GIT_OUTPUT_MAX_BUFFER,
+  inspectCargoManifestLintText,
   loadInventory,
   loadInventoryAtRef,
   normalizeRepoPath,
@@ -163,6 +167,24 @@ const suppressionSamples = [
   encodedName + "=-A\u001fwarnings",
   "chunkSize" + "WarningLimit: 9999",
 ];
+suppressionSamples.push(
+  ["#[", "/* hidden */", "allow", "(dead_code)]"].join(""),
+  ["#[", "allow", "/* hidden */", "(dead_code)]"].join(""),
+  ["#[r#", "allow", "(dead_code)]"].join(""),
+  [
+    "#[cfg_attr(all(",
+    Array.from({ length: 40 }, (_, index) => `feature = \"feature_${index}\"`).join(", "),
+    "), ",
+    "allow",
+    "(dead_code))]",
+  ].join(""),
+  [
+    "macro_rules! with_lint { ($level:ident, $item:item) => { #[$level(dead_code)] $item }; }\nwith_lint!(",
+    "allow",
+    ", fn hidden() {})",
+  ].join(""),
+  ["with_lint!(r#", "expect", ", fn hidden() {})"].join(""),
+);
 const compilerSelectionKeys = [
   ["rust", "c"].join(""),
   ["rustc", "-wrapper"].join(""),
@@ -228,6 +250,18 @@ for (const key of compilerSelectionKeys) {
 }
 for (const sample of suppressionSamples) assert.ok(detectSuppressionText(sample).length > 0, sample);
 assert.deepEqual(detectSuppressionText("const rustc = selectCompiler();\nconst wrapperName = 'rustc-wrapper';"), []);
+assert.deepEqual(detectSuppressionText(["const text = \"", "#[", "allow", "(dead_code)]\";"].join("")), []);
+
+for (const manifestText of [
+  "[lints.rust]\ndead_code = \"allow\"\n",
+  "lints.rust.dead_code = \"allow\"\n",
+  "lints = { rust = { dead_code = { level = \"allow\", priority = -1 } } }\n",
+  "[workspace.lints.clippy]\nall = { level = \"allow\", priority = -1 }\n",
+]) {
+  assert.ok(inspectCargoManifestLintText(manifestText).includes("cargo-lint-level-allow"));
+}
+assert.ok(inspectCargoManifestLintText("[lints]\nworkspace = true\n").includes("cargo-lints-workspace-inheritance"));
+assert.deepEqual(inspectCargoManifestLintText("[lints]\nworkspace = false\n"), []);
 
 assert.equal(normalizeRepoPath("\\\\?\\C:\\USERS\\KOUTY\\REPO\\Src\\LIB.rs", "C:\\Users\\kouty\\repo"), "src/lib.rs");
 assert.equal(normalizeRepoPath("\\\\?\\UNC\\server\\share\\Repo\\SRC\\lib.rs", "\\\\server\\share\\repo"), "src/lib.rs");
@@ -349,7 +383,7 @@ assert.throws(() => resolveTrustedComparison(repoRoot, "definitely-missing", "HE
 assert.throws(() => resolveTrustedComparison(repoRoot, "HEAD", "HEAD"), /must differ/);
 const trusted = resolveTrustedComparison(repoRoot, null, "HEAD");
 assert.notEqual(trusted.base, trusted.head);
-assert.throws(() => loadInventoryAtRef(repoRoot, trusted.base, "qa/warnings/does-not-exist.json"), /missing or invalid/);
+assert.throws(() => loadInventoryAtRef(repoRoot, trusted.base, "qa/warnings/does-not-exist.json"), /trusted prior inventory is missing/);
 
 const gitFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-git-"));
 try {
@@ -390,6 +424,303 @@ try {
   assert.deepEqual(findAddedSuppressions(gitFixtureRoot, { base: fixtureBase, head: fixtureHead }), []);
 } finally {
   rmSync(gitFixtureRoot, { recursive: true, force: true });
+}
+
+const cargoConfigSnapshotFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-config-snapshots-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: cargoConfigSnapshotFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Cargo Config Snapshot Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-cargo-config-snapshot@example.invalid"]);
+  const configPath = path.join(cargoConfigSnapshotFixtureRoot, ".cargo", "config.toml");
+  const benignConfig = "[build]\njobs = 2\n";
+  const dangerousInlineConfig = "build = { \"rustc-wrapper\" = \"proxy\" }\n";
+  assert.deepEqual(detectSuppressionText(dangerousInlineConfig), []);
+  mkdirSync(path.dirname(configPath));
+  writeFileSync(configPath, benignConfig);
+  fixtureGit(["add", ".cargo/config.toml"]);
+  fixtureGit(["commit", "-m", "benign base"]);
+  const benignBase = fixtureGit(["rev-parse", "HEAD"]);
+
+  writeFileSync(configPath, dangerousInlineConfig);
+  fixtureGit(["add", ".cargo/config.toml"]);
+  fixtureGit(["commit", "-m", "dangerous committed config"]);
+  const dangerousHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(configPath, benignConfig);
+  assert.ok(findAddedSuppressions(cargoConfigSnapshotFixtureRoot, { base: benignBase, head: dangerousHead }).includes("cargo-build-rustc-wrapper"));
+  rmSync(configPath);
+  assert.ok(findAddedSuppressions(cargoConfigSnapshotFixtureRoot, { base: benignBase, head: dangerousHead }).includes("cargo-build-rustc-wrapper"));
+
+  writeFileSync(configPath, benignConfig);
+  fixtureGit(["add", ".cargo/config.toml"]);
+  fixtureGit(["commit", "-m", "benign staged base"]);
+  const benignHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(configPath, dangerousInlineConfig);
+  fixtureGit(["add", ".cargo/config.toml"]);
+  writeFileSync(configPath, benignConfig);
+  assert.ok(findAddedSuppressions(cargoConfigSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-build-rustc-wrapper"));
+
+  fixtureGit(["add", ".cargo/config.toml"]);
+  writeFileSync(configPath, dangerousInlineConfig);
+  assert.ok(findAddedSuppressions(cargoConfigSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-build-rustc-wrapper"));
+  writeFileSync(configPath, benignConfig);
+
+  const untrackedConfigPath = path.join(cargoConfigSnapshotFixtureRoot, "nested", ".cargo", "config.toml");
+  mkdirSync(path.dirname(untrackedConfigPath), { recursive: true });
+  writeFileSync(untrackedConfigPath, dangerousInlineConfig);
+  assert.ok(findAddedSuppressions(cargoConfigSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-build-rustc-wrapper"));
+} finally {
+  rmSync(cargoConfigSnapshotFixtureRoot, { recursive: true, force: true });
+}
+
+const rustSnapshotFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-rust-snapshots-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: rustSnapshotFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Rust Snapshot Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-rust-snapshot@example.invalid"]);
+  const sourcePath = path.join(rustSnapshotFixtureRoot, "source.rs");
+  const rustSource = (level, body = "fn hidden() {}") => `#[\n${level}(dead_code)\n]\n${body}\n`;
+  writeFileSync(sourcePath, rustSource("warn"));
+  fixtureGit(["add", "source.rs"]);
+  fixtureGit(["commit", "-m", "warn attribute base"]);
+  const warnBase = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(sourcePath, rustSource("allow"));
+  fixtureGit(["add", "source.rs"]);
+  fixtureGit(["commit", "-m", "central line becomes allow"]);
+  const allowHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.ok(findAddedSuppressions(rustSnapshotFixtureRoot, { base: warnBase, head: allowHead }).includes("rust-allow-or-expect-attribute"));
+
+  writeFileSync(sourcePath, rustSource("warn"));
+  fixtureGit(["add", "source.rs"]);
+  fixtureGit(["commit", "-m", "warn staged base"]);
+  const warnHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(sourcePath, rustSource("allow/* hidden */"));
+  fixtureGit(["add", "source.rs"]);
+  writeFileSync(sourcePath, rustSource("warn"));
+  assert.ok(findAddedSuppressions(rustSnapshotFixtureRoot, { base: warnHead, head: warnHead }).includes("rust-allow-or-expect-attribute"));
+
+  fixtureGit(["add", "source.rs"]);
+  writeFileSync(sourcePath, rustSource("allow"));
+  assert.ok(findAddedSuppressions(rustSnapshotFixtureRoot, { base: warnHead, head: warnHead }).includes("rust-allow-or-expect-attribute"));
+  writeFileSync(sourcePath, rustSource("warn"));
+
+  writeFileSync(path.join(rustSnapshotFixtureRoot, "untracked.rs"), rustSource("allow"));
+  assert.ok(findAddedSuppressions(rustSnapshotFixtureRoot, { base: warnHead, head: warnHead }).includes("rust-allow-or-expect-attribute"));
+  rmSync(path.join(rustSnapshotFixtureRoot, "untracked.rs"));
+
+  writeFileSync(sourcePath, rustSource("allow"));
+  fixtureGit(["add", "source.rs"]);
+  fixtureGit(["commit", "-m", "existing allow attribute"]);
+  const existingAllowHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(sourcePath, rustSource("allow", "fn hidden() { let _unchanged = true; }"));
+  assert.ok(!findAddedSuppressions(rustSnapshotFixtureRoot, { base: existingAllowHead, head: existingAllowHead }).includes("rust-allow-or-expect-attribute"));
+} finally {
+  rmSync(rustSnapshotFixtureRoot, { recursive: true, force: true });
+}
+
+const cargoLintSnapshotFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-cargo-lint-snapshots-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: cargoLintSnapshotFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Cargo Lint Snapshot Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-cargo-lint-snapshot@example.invalid"]);
+  const manifestPath = path.join(cargoLintSnapshotFixtureRoot, "Cargo.toml");
+  const benignManifest = "[package]\nname = \"lint-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+  const dangerousManifest = `${benignManifest}[lints.rust]\ndead_code = \"allow\"\n`;
+  writeFileSync(manifestPath, benignManifest);
+  fixtureGit(["add", "Cargo.toml"]);
+  fixtureGit(["commit", "-m", "benign manifest base"]);
+  const benignBase = fixtureGit(["rev-parse", "HEAD"]);
+
+  writeFileSync(manifestPath, dangerousManifest);
+  fixtureGit(["add", "Cargo.toml"]);
+  fixtureGit(["commit", "-m", "dangerous committed lint level"]);
+  const dangerousHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(manifestPath, benignManifest);
+  assert.ok(findAddedSuppressions(cargoLintSnapshotFixtureRoot, { base: benignBase, head: dangerousHead }).includes("cargo-lint-level-allow"));
+
+  fixtureGit(["add", "Cargo.toml"]);
+  fixtureGit(["commit", "-m", "benign manifest head"]);
+  const benignHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(manifestPath, dangerousManifest);
+  fixtureGit(["add", "Cargo.toml"]);
+  writeFileSync(manifestPath, benignManifest);
+  assert.ok(findAddedSuppressions(cargoLintSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-lint-level-allow"));
+
+  fixtureGit(["add", "Cargo.toml"]);
+  writeFileSync(manifestPath, dangerousManifest);
+  assert.ok(findAddedSuppressions(cargoLintSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-lint-level-allow"));
+  writeFileSync(manifestPath, benignManifest);
+
+  const untrackedManifestPath = path.join(cargoLintSnapshotFixtureRoot, "untracked", "Cargo.toml");
+  mkdirSync(path.dirname(untrackedManifestPath), { recursive: true });
+  writeFileSync(untrackedManifestPath, dangerousManifest.replace("lint-fixture", "untracked-lint-fixture"));
+  assert.ok(findAddedSuppressions(cargoLintSnapshotFixtureRoot, { base: benignHead, head: benignHead }).includes("cargo-lint-level-allow"));
+  rmSync(path.dirname(untrackedManifestPath), { recursive: true, force: true });
+
+  const memberManifestPath = path.join(cargoLintSnapshotFixtureRoot, "member", "Cargo.toml");
+  const workspaceManifest = "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n[workspace.lints.rust]\ndead_code = \"allow\"\n";
+  const memberManifest = "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+  mkdirSync(path.dirname(memberManifestPath), { recursive: true });
+  writeFileSync(manifestPath, workspaceManifest);
+  writeFileSync(memberManifestPath, memberManifest);
+  fixtureGit(["add", "Cargo.toml", "member/Cargo.toml"]);
+  fixtureGit(["commit", "-m", "workspace lint base without inheritance"]);
+  const workspaceBase = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(memberManifestPath, `${memberManifest}[lints]\nworkspace = true\n`);
+  fixtureGit(["add", "member/Cargo.toml"]);
+  fixtureGit(["commit", "-m", "activate workspace lint inheritance"]);
+  const workspaceHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.ok(findAddedSuppressions(cargoLintSnapshotFixtureRoot, { base: workspaceBase, head: workspaceHead }).includes("cargo-lints-workspace-inheritance"));
+} finally {
+  rmSync(cargoLintSnapshotFixtureRoot, { recursive: true, force: true });
+}
+
+const gitAttributeDiffFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-git-attributes-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: gitAttributeDiffFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Git Attributes Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-git-attributes@example.invalid"]);
+  fixtureGit(["commit", "--allow-empty", "-m", "base"]);
+  const fixtureBase = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(path.join(gitAttributeDiffFixtureRoot, ".gitattributes"), "*.rs -diff\n");
+  writeFileSync(path.join(gitAttributeDiffFixtureRoot, "source.rs"), "#[" + "allow(dead_code)]\n");
+  fixtureGit(["add", ".gitattributes", "source.rs"]);
+  fixtureGit(["commit", "-m", "attribute-hidden suppression"]);
+  const fixtureHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.ok(findAddedSuppressions(gitAttributeDiffFixtureRoot, { base: fixtureBase, head: fixtureHead }).includes("rust-allow-or-expect-attribute"));
+
+  const macroSource = [
+    "macro_rules! with_lint { ($level:ident, $item:item) => { #[$level(dead_code)] $item }; }\nwith_lint!(",
+    "allow",
+    ", fn hidden() {})\n",
+  ].join("");
+  writeFileSync(path.join(gitAttributeDiffFixtureRoot, "macro.rs"), macroSource);
+  fixtureGit(["add", "macro.rs"]);
+  fixtureGit(["commit", "-m", "literal lint macro invocation"]);
+  const macroHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.ok(findAddedSuppressions(gitAttributeDiffFixtureRoot, { base: fixtureHead, head: macroHead }).includes("rust-allow-or-expect-attribute"));
+} finally {
+  rmSync(gitAttributeDiffFixtureRoot, { recursive: true, force: true });
+}
+
+const gitRenameDiffFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-git-rename-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: gitRenameDiffFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Git Rename Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-git-rename@example.invalid"]);
+  writeFileSync(
+    path.join(gitRenameDiffFixtureRoot, "Cargo.toml"),
+    "[package]\nname = \"rename-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\npath = \"stub.rs\"\n",
+  );
+  writeFileSync(path.join(gitRenameDiffFixtureRoot, "stub.rs"), "pub fn visible() {}\n");
+  writeFileSync(path.join(gitRenameDiffFixtureRoot, "dormant.rs"), "#[" + "allow(dead_code)]\nfn hidden() {}\n");
+  fixtureGit(["add", "Cargo.toml", "stub.rs", "dormant.rs"]);
+  fixtureGit(["commit", "-m", "dormant suppression"]);
+  const fixtureBase = fixtureGit(["rev-parse", "HEAD"]);
+  fixtureGit(["mv", "dormant.rs", "active.rs"]);
+  writeFileSync(
+    path.join(gitRenameDiffFixtureRoot, "Cargo.toml"),
+    "[package]\nname = \"rename-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\npath = \"active.rs\"\n",
+  );
+  fixtureGit(["add", "Cargo.toml"]);
+  fixtureGit(["commit", "-m", "activate renamed suppression"]);
+  const fixtureHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.ok(findAddedSuppressions(gitRenameDiffFixtureRoot, { base: fixtureBase, head: fixtureHead }).includes("rust-allow-or-expect-attribute"));
+} finally {
+  rmSync(gitRenameDiffFixtureRoot, { recursive: true, force: true });
+}
+
+const gitOutputLimitFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-git-output-limit-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: gitOutputLimitFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "core.autocrlf", "false"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Git Output Limit Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-git-output-limit@example.invalid"]);
+  writeFileSync(path.join(gitOutputLimitFixtureRoot, "tracked.txt"), "baseline\n");
+  fixtureGit(["add", "tracked.txt"]);
+  fixtureGit(["commit", "-m", "baseline"]);
+  writeFileSync(path.join(gitOutputLimitFixtureRoot, "tracked.txt"), Buffer.alloc(GIT_OUTPUT_MAX_BUFFER + 1, "x"));
+  assert.throws(
+    () => findAddedSuppressions(gitOutputLimitFixtureRoot, { base: fixtureGit(["rev-parse", "HEAD"]), head: fixtureGit(["rev-parse", "HEAD"]) }),
+    (error) => {
+      assert.equal(error?.code, GIT_OUTPUT_LIMIT_ERROR_CODE);
+      assert.match(error?.message ?? "", new RegExp(`Git output exceeded the warning-ratchet limit of ${GIT_OUTPUT_MAX_BUFFER} bytes`));
+      return true;
+    },
+  );
+
+  writeFileSync(path.join(gitOutputLimitFixtureRoot, "tracked.txt"), "baseline\n");
+  writeFileSync(
+    path.join(gitOutputLimitFixtureRoot, "oversized-untracked.txt"),
+    Buffer.alloc(CURRENT_FILE_CONTENT_MAX_BYTES + 1, "u"),
+  );
+  assert.throws(
+    () => findAddedSuppressions(gitOutputLimitFixtureRoot, { base: fixtureGit(["rev-parse", "HEAD"]), head: fixtureGit(["rev-parse", "HEAD"]) }),
+    new RegExp(`Untracked content aggregate exceeded the warning-ratchet limit of ${CURRENT_FILE_CONTENT_MAX_BYTES} bytes while reading: oversized-untracked\\.txt`),
+  );
+  rmSync(path.join(gitOutputLimitFixtureRoot, "oversized-untracked.txt"));
+
+  const firstUntrackedBytes = Math.floor(CURRENT_FILE_CONTENT_MAX_BYTES / 2);
+  writeFileSync(path.join(gitOutputLimitFixtureRoot, "aggregate-a.txt"), Buffer.alloc(firstUntrackedBytes, "a"));
+  writeFileSync(
+    path.join(gitOutputLimitFixtureRoot, "aggregate-b.txt"),
+    Buffer.alloc(CURRENT_FILE_CONTENT_MAX_BYTES - firstUntrackedBytes + 1, "b"),
+  );
+  assert.throws(
+    () => findAddedSuppressions(gitOutputLimitFixtureRoot, { base: fixtureGit(["rev-parse", "HEAD"]), head: fixtureGit(["rev-parse", "HEAD"]) }),
+    new RegExp(`Untracked content aggregate exceeded the warning-ratchet limit of ${CURRENT_FILE_CONTENT_MAX_BYTES} bytes while reading: aggregate-b\\.txt`),
+  );
+  rmSync(path.join(gitOutputLimitFixtureRoot, "aggregate-a.txt"));
+  rmSync(path.join(gitOutputLimitFixtureRoot, "aggregate-b.txt"));
+
+  const oversizedInventoryPath = path.join(gitOutputLimitFixtureRoot, "oversized-inventory.json");
+  writeFileSync(oversizedInventoryPath, JSON.stringify({ padding: "i".repeat(GIT_OUTPUT_MAX_BUFFER) }));
+  fixtureGit(["add", "oversized-inventory.json"]);
+  fixtureGit(["commit", "-m", "oversized valid inventory"]);
+  const oversizedInventoryHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.throws(
+    () => loadInventoryAtRef(gitOutputLimitFixtureRoot, oversizedInventoryHead, "oversized-inventory.json", true),
+    (error) => {
+      assert.equal(error?.code, GIT_OUTPUT_LIMIT_ERROR_CODE);
+      assert.match(error?.message ?? "", new RegExp(`Git output exceeded the warning-ratchet limit of ${GIT_OUTPUT_MAX_BUFFER} bytes`));
+      return true;
+    },
+  );
+  assert.equal(loadInventoryAtRef(gitOutputLimitFixtureRoot, oversizedInventoryHead, "missing-inventory.json", true), null);
+  writeFileSync(path.join(gitOutputLimitFixtureRoot, "invalid-inventory.json"), "{ invalid json\n");
+  fixtureGit(["add", "invalid-inventory.json"]);
+  fixtureGit(["commit", "-m", "invalid inventory"]);
+  const invalidInventoryHead = fixtureGit(["rev-parse", "HEAD"]);
+  assert.throws(
+    () => loadInventoryAtRef(gitOutputLimitFixtureRoot, invalidInventoryHead, "invalid-inventory.json", true),
+    /trusted prior inventory is invalid/,
+  );
+
+  const cargoConfigPath = path.join(gitOutputLimitFixtureRoot, ".cargo", "config.toml");
+  mkdirSync(path.dirname(cargoConfigPath));
+  let cargoConfigPadding = "# filler\n".repeat(Math.ceil(CURRENT_FILE_CONTENT_MAX_BYTES / 9));
+  writeFileSync(cargoConfigPath, `# baseline\n${cargoConfigPadding}`);
+  fixtureGit(["add", ".cargo/config.toml"]);
+  fixtureGit(["commit", "-m", "oversized Cargo config baseline"]);
+  const cargoConfigHead = fixtureGit(["rev-parse", "HEAD"]);
+  writeFileSync(cargoConfigPath, `# changed!\n${cargoConfigPadding}`);
+  cargoConfigPadding = "";
+  assert.throws(
+    () => findAddedSuppressions(gitOutputLimitFixtureRoot, { base: cargoConfigHead, head: cargoConfigHead }),
+    new RegExp(`Modified worktree Cargo config content aggregate exceeded the warning-ratchet limit of ${CURRENT_FILE_CONTENT_MAX_BYTES} bytes while reading: \\.cargo/config\\.toml`),
+  );
+} finally {
+  rmSync(gitOutputLimitFixtureRoot, { recursive: true, force: true });
 }
 
 assert.deepEqual(findBaselineLaundering({ id: "x" }, { id: "x" }), []);
@@ -982,6 +1313,14 @@ try {
     "[build]\njobs = 2\n[target.'cfg(windows)']\nlinker = \"link.exe\"\n[env]\nrustc_note = \"documentation only\"\nmy_rustc = { value = \"documentation only\" }\nCARGO_TARGET_DIR = \"target-alt\"\nMY_CARGO_PROFILE_RELEASE = \"documentation only\"\n",
   );
   assert.equal(warningAffectingCargoConfigs(cargoConfigRoot, {}).length, 0);
+  writeFileSync(
+    path.join(cargoConfigRoot, ".cargo", "config.toml"),
+    Buffer.alloc(CURRENT_FILE_CONTENT_MAX_BYTES + 1, "#"),
+  );
+  assert.throws(
+    () => warningAffectingCargoConfigs(cargoConfigRoot, {}),
+    new RegExp(`Cargo config content exceeded the warning-ratchet limit of ${CURRENT_FILE_CONTENT_MAX_BYTES} bytes`),
+  );
 } finally {
   rmSync(cargoConfigRoot, { recursive: true, force: true });
 }

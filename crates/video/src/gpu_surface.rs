@@ -9,7 +9,7 @@ use crate::{
         blend_mode_index, compositor_params, create_frame_texture, create_gpu_composite_pipelines,
         dispatch_dimensions, gpu_frame_texture_spec, output_mapping_params,
         requested_video_device_features, write_frame_texture, write_mapping_mask_texture,
-        GpuCompositePipelines, GpuFrameTextureSpec,
+        CompositorParams, GpuCompositePipelines, GpuFrameTextureSpec,
     },
     PreparedVideoOutput,
 };
@@ -719,11 +719,9 @@ impl GpuSurfacePresenter {
                 .iter()
                 .filter(|frame| frame.layer_id == layer.layer_id)
                 .max_by_key(|frame| frame.pts_ms)
-                .ok_or_else(|| {
-                    GpuSurfaceError::Frame(CpuCompositeError::MissingFrame {
-                        layer_id: layer.layer_id,
-                    })
-                })?;
+                .ok_or(GpuSurfaceError::Frame(CpuCompositeError::MissingFrame {
+                    layer_id: layer.layer_id,
+                }))?;
             source_frames.push((frame, gpu_frame_texture_spec(frame, bc_supported)?));
         }
         if self.gpu_buffers.is_none() {
@@ -780,18 +778,18 @@ impl GpuSurfacePresenter {
             .zip(source_frames.iter())
             .enumerate()
         {
-            let params = compositor_params(
-                width,
-                height,
-                frame.width,
-                frame.height,
-                layer.opacity.clamp(0.0, 1.0),
-                blend_mode_index(&layer.blend_mode),
-                spec.source_format,
-                &layer.transform,
-                &layer.color,
-                &layer.fx,
-            );
+            let params = compositor_params(CompositorParams {
+                output_width: width,
+                output_height: height,
+                source_width: frame.width,
+                source_height: frame.height,
+                opacity: layer.opacity.clamp(0.0, 1.0),
+                blend_mode: blend_mode_index(&layer.blend_mode),
+                source_format: spec.source_format,
+                transform: &layer.transform,
+                color: &layer.color,
+                fx: &layer.fx,
+            });
             let layer_buffers = &gpu_buffers.layers[index];
             self.queue.write_buffer(&layer_buffers.params, 0, &params);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
