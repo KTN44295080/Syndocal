@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 
-const normalizeNewlines = (source) => source.replace(/\r\n/g, "\n");
-const app = normalizeNewlines(await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"));
+// Section needles are authored with LF; normalize CRLF checkouts so the
+// contract stays line-ending agnostic under git autocrlf.
+const readText = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
+
+const app = await readText(new URL("../src/App.tsx", import.meta.url));
 const srcRoot = new URL("../src/", import.meta.url);
 const collectSourceFiles = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -16,13 +19,13 @@ const collectSourceFiles = async (directory) => {
 };
 const frontendSources = await Promise.all((await collectSourceFiles(srcRoot)).map(async (url) => ({
   url,
-  source: normalizeNewlines(await readFile(url, "utf8")),
+  source: await readText(url),
 })));
-const backend = normalizeNewlines(await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8"));
-const controlPlane = normalizeNewlines(await readFile(new URL("../src-tauri/src/control_plane.rs", import.meta.url), "utf8"));
-const midi = normalizeNewlines(await readFile(new URL("../../crates/io/src/midi.rs", import.meta.url), "utf8"));
-const osc = normalizeNewlines(await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8"));
-const remote = normalizeNewlines(await readFile(new URL("../../crates/io/src/remote_ws.rs", import.meta.url), "utf8"));
+const backend = await readText(new URL("../src-tauri/src/main.rs", import.meta.url));
+const controlPlane = await readText(new URL("../src-tauri/src/control_plane.rs", import.meta.url));
+const midi = await readText(new URL("../../crates/io/src/midi.rs", import.meta.url));
+const osc = await readText(new URL("../../crates/io/src/osc.rs", import.meta.url));
+const remote = await readText(new URL("../../crates/io/src/remote_ws.rs", import.meta.url));
 
 const section = (source, start, end) => {
   const startIndex = source.indexOf(start);
@@ -150,19 +153,87 @@ assert.doesNotMatch(
 const stageImport = section(backend, "fn import_stage_map_preset(", "fn get_visualizer_scene(");
 assert.match(
   stageImport,
-  /project_transaction_id:[\s\S]*?expected_epoch:[\s\S]*?owner_id:[\s\S]*?project_transaction_for_owner_epoch/,
+  /preset:\s*StageMapPresetSummary,[\s\S]*?project_transaction_id:[\s\S]*?expected_epoch:[\s\S]*?owner_id:[\s\S]*?apply_stage_project_mutation_in_project_transaction/,
   "stage-map import must validate the exact backend transaction owner ticket",
 );
 assert.match(
   stageImport,
-  /upsert_stage_map_preset_published/,
-  "stage-map import must use a definitive engine publication acknowledgement",
+  /apply_stage_project_mutation_in_project_transaction\([\s\S]*?command_name:\s*"import_stage_map_preset",[\s\S]*?StageProjectMutation::UpsertStageMapPreset\(preset\)/,
+  "stage-map import must publish its UpsertStageMapPreset mutation through the shared Stage transaction helper",
+);
+const stageTransactionPublishHelper = section(
+  backend,
+  "fn apply_stage_project_mutation_in_project_transaction_with_publish",
+  "fn stage_project_transaction_unit_result(",
+);
+assert.match(
+  stageTransactionPublishHelper,
+  /lock_renderer_ticketed_project_mutation[\s\S]*?project_transaction_for_owner_epoch/,
+  "the shared Stage transaction helper must fence every route on the exact backend transaction owner ticket",
+);
+assert.match(
+  section(
+    backend,
+    "fn apply_stage_project_mutation_in_project_transaction<",
+    "fn apply_stage_project_mutation_in_project_transaction_with_publish",
+  ),
+  /\|engine, mutation\| engine\.apply_stage_project_mutation_published\(mutation\)/,
+  "every Stage route must publish through one definitive Applied/Unchanged engine acknowledgement",
 );
 const stageController = frontendSources.find(({ url }) => url.pathname.endsWith("/createStageMapController.ts"))?.source ?? "";
 assert.match(
   stageController,
-  /expectedProjectEpoch\s*=\s*options\.projectEpoch\(\)[\s\S]*?load_stage_map_preset_file[\s\S]*?if \(preset === null\)[\s\S]*?import_stage_map_preset[\s\S]*?__expectedProjectEpoch:\s*expectedProjectEpoch/,
-  "stage-map import must open and validate the file before beginning the transactional apply",
+  /expectedProjectAuthority\s*=\s*options\.currentProjectAuthority\(\)[\s\S]*?load_stage_map_preset_file[\s\S]*?if \(preset === null\)[\s\S]*?import_stage_map_preset[\s\S]*?__expectedProjectEpoch:\s*expectedProjectAuthority\.project_epoch,[\s\S]*?__expectedProjectRevision:\s*expectedProjectAuthority\.project_revision,[\s\S]*?__expectedCheckpointHash:\s*expectedProjectAuthority\.checkpoint_hash,/,
+  "stage-map import must capture the full epoch/revision/hash authority before the file dialog and pass all three hidden expected fields",
+);
+assert.match(
+  app,
+  /requestedExpectedCheckpointHash = typeof args\?\.__expectedCheckpointHash === "string"[\s\S]*?delete commandArgs.__expectedCheckpointHash;[\s\S]*?requestedExpectedEpoch !== currentEpoch[\s\S]*?requestedExpectedRevision !== projectTransactionAuthorityRevision[\s\S]*?requestedExpectedCheckpointHash !== projectTransactionAuthorityCheckpointHash[\s\S]*?nothing was applied/,
+  "dialog-based project mutations must strip and fence all three captured authority members against the post-flush current authority before Begin",
+);
+assert.match(
+  app,
+  /let projectTransactionAuthorityCheckpointHash = "";?/,
+  "the module-level current checkpoint hash must exist beside the current revision mirror",
+);
+assert.equal(
+  (app.match(/projectTransactionAuthorityCheckpointHash = /g) ?? []).length,
+  4,
+  "the module-level current checkpoint hash must be declared once and assigned beside every current revision assignment",
+);
+for (const [revision, hash] of [
+  ["next.project_revision", "next.checkpoint_hash"],
+  ["prepared.token.project_revision", "prepared.token.checkpoint_hash"],
+  ["candidateToken.project_revision", "candidateToken.checkpoint_hash"],
+]) {
+  const escaped = (value) => value.replaceAll(".", "\\.");
+  assert.match(
+    app,
+    new RegExp(`projectTransactionAuthorityRevision = ${escaped(revision)};\\s*projectTransactionAuthorityCheckpointHash = ${escaped(hash)};`),
+    "every current revision assignment must update the current checkpoint hash beside it",
+  );
+}
+for (const stageRoute of [
+  "set_fixture_transform",
+  "set_stage_map_config",
+  "save_stage_map_preset",
+  "apply_stage_map_preset",
+  "remove_stage_map_preset",
+  "import_stage_map_preset",
+  "add_stage_object",
+  "set_stage_object",
+  "remove_stage_object",
+]) {
+  assert.match(
+    mutationSection,
+    new RegExp(`"${stageRoute}"`),
+    `${stageRoute} must remain a transactional mutation on the central facade`,
+  );
+}
+assert.match(
+  app,
+  /isStageRendererTicketedCommand\(command\)\s*\?\s*command\s*:\s*null/,
+  "all nine Stage commands must join the shared published-command recovery query",
 );
 assert.match(
   app,
@@ -178,6 +249,11 @@ assert.match(
   beginRecoveryHelper,
   /tauriInvoke<ProjectTransactionTicket>\("begin_project_transaction",\s*beginArgs\)/,
   "the shared Begin recovery helper must invoke the canonical backend command with its exact arguments",
+);
+assert.match(
+  app,
+  /const expectedCheckpointHash = requestedExpectedCheckpointHash[\s\S]*?projectTransactionAuthorityCheckpointHash;[\s\S]*?const beginArgs = \{[\s\S]*?expectedEpoch,[\s\S]*?expectedRevision,[\s\S]*?expectedCheckpointHash,/,
+  "every generic Begin must carry the exact post-flush checkpoint hash",
 );
 const beginTransactionMatches = [...app.matchAll(/\bbeginProjectTransactionWithRecovery\(/g)];
 assert.equal(beginTransactionMatches.length, 1, "the sole central mutation workflow must use the shared recovery helper");
