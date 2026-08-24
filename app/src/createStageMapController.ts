@@ -1,6 +1,7 @@
 import type { Accessor, Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { MappingViewPreset } from "./mappingViewPresets";
+import type { ProjectAuthorityToken } from "./projectAuthority";
 import { stageObjectDefaultColor } from "./stageObjects";
 import type { StageWorldBounds } from "./stageGeometry";
 import type {
@@ -15,7 +16,8 @@ type Invoke = FrontendTauriInvoke;
 
 interface StageMapControllerOptions {
   invoke: Invoke;
-  projectEpoch: Accessor<number>;
+  /** Full E/R/H authority accessor; preset import captures it before any dialog. */
+  currentProjectAuthority: Accessor<ProjectAuthorityToken>;
   snapshot: Accessor<EngineSnapshot>;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
@@ -152,7 +154,11 @@ export function createStageMapController(options: StageMapControllerOptions) {
 
   const importStageMapPreset = async () => {
     try {
-      const expectedProjectEpoch = options.projectEpoch();
+      // Capture the full authority token BEFORE the file dialog opens so the
+      // transactional apply can prove the exact epoch, revision, and
+      // checkpoint hash the operator saw. Selection/read/parse stay before
+      // Begin; the invoke facade re-fences all three after its mapping flush.
+      const expectedProjectAuthority = options.currentProjectAuthority();
       const preset = await options.invoke<StageMapPresetSummary | null>("load_stage_map_preset_file");
       if (preset === null) {
         options.setMessage("Stage map preset import canceled.");
@@ -160,7 +166,9 @@ export function createStageMapController(options: StageMapControllerOptions) {
       }
       const label = await options.invoke<string>("import_stage_map_preset", {
         preset,
-        __expectedProjectEpoch: expectedProjectEpoch,
+        __expectedProjectEpoch: expectedProjectAuthority.project_epoch,
+        __expectedProjectRevision: expectedProjectAuthority.project_revision,
+        __expectedCheckpointHash: expectedProjectAuthority.checkpoint_hash,
       });
       options.setStageMapPresetLabel(label);
       options.setSelectedStageMapPresetLabel(label);

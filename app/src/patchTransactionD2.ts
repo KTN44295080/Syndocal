@@ -1,8 +1,66 @@
 import type {
   ProjectTransactionCommandResult,
+  ProjectTransactionStageCommandResult,
 } from "./types";
 
-export type PatchRepairTransactionCommand = "patch_fixtures" | "repair_fixture_profile";
+/**
+ * Published-command routes sharing one retained receipt recovery query: the
+ * PATCH/Repair pair plus every D4 Stage renderer-ticketed route.
+ */
+export type PatchRepairTransactionCommand =
+  | "patch_fixtures"
+  | "repair_fixture_profile"
+  | StageRendererTicketedCommand;
+
+/** The nine Stage routes ticketed on the same backend project transaction lane. */
+export type StageRendererTicketedCommand =
+  | "set_fixture_transform"
+  | "set_stage_map_config"
+  | "save_stage_map_preset"
+  | "apply_stage_map_preset"
+  | "remove_stage_map_preset"
+  | "import_stage_map_preset"
+  | "add_stage_object"
+  | "set_stage_object"
+  | "remove_stage_object";
+
+const stageRendererTicketedCommands: readonly string[] = [
+  "set_fixture_transform",
+  "set_stage_map_config",
+  "save_stage_map_preset",
+  "apply_stage_map_preset",
+  "remove_stage_map_preset",
+  "import_stage_map_preset",
+  "add_stage_object",
+  "set_stage_object",
+  "remove_stage_object",
+];
+
+export const isStageRendererTicketedCommand = (command: string): command is StageRendererTicketedCommand =>
+  stageRendererTicketedCommands.includes(command);
+
+type StageRoutePayloadFamily = "unit" | "stage_object_id" | "label";
+
+const stageRoutePayloadFamily = (
+  command: PatchRepairTransactionCommand,
+): StageRoutePayloadFamily | null => {
+  switch (command) {
+    case "set_fixture_transform":
+    case "set_stage_map_config":
+    case "apply_stage_map_preset":
+    case "remove_stage_map_preset":
+    case "set_stage_object":
+    case "remove_stage_object":
+      return "unit";
+    case "add_stage_object":
+      return "stage_object_id";
+    case "save_stage_map_preset":
+    case "import_stage_map_preset":
+      return "label";
+    default:
+      return null;
+  }
+};
 
 export const fixturePatchIdsAreExact = (value: unknown, expectedCount: number): value is number[] =>
   Array.isArray(value)
@@ -21,6 +79,23 @@ const hasExactOwnKeys = (value: object, keys: readonly string[]) => {
 const isCanonicalRequestDigest = (value: unknown): value is string =>
   typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 
+const expectedStagePresetLabel = (
+  command: StageRendererTicketedCommand,
+  args: Record<string, unknown>,
+): string | null => {
+  const rawLabel = command === "save_stage_map_preset"
+    ? args.label
+    : command === "import_stage_map_preset"
+      && args.preset
+      && typeof args.preset === "object"
+      && !Array.isArray(args.preset)
+      ? (args.preset as Record<string, unknown>).label
+      : null;
+  if (typeof rawLabel !== "string") return null;
+  const normalized = rawLabel.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
 export const projectTransactionCommandResultIsWellFormed = (
   value: unknown,
   command: PatchRepairTransactionCommand,
@@ -35,13 +110,80 @@ export const projectTransactionCommandResultIsWellFormed = (
       && isCanonicalRequestDigest(candidate.request_digest)
       && fixturePatchIdsAreExact(candidate.fixture_ids, expectedCount);
   }
-  return candidate.kind === "repair_fixture_profile"
-    && hasExactOwnKeys(candidate, ["kind", "request_digest", "fixture_id"])
-    && isCanonicalRequestDigest(candidate.request_digest)
-    && typeof candidate.fixture_id === "number"
-    && Number.isSafeInteger(candidate.fixture_id)
-    && candidate.fixture_id > 0
-    && candidate.fixture_id === args.fixtureId;
+  if (command === "repair_fixture_profile") {
+    return candidate.kind === "repair_fixture_profile"
+      && hasExactOwnKeys(candidate, ["kind", "request_digest", "fixture_id"])
+      && isCanonicalRequestDigest(candidate.request_digest)
+      && typeof candidate.fixture_id === "number"
+      && Number.isSafeInteger(candidate.fixture_id)
+      && candidate.fixture_id > 0
+      && candidate.fixture_id === args.fixtureId;
+  }
+  if (!isStageRendererTicketedCommand(command)) return false;
+  // A Stage receipt mirrors Rust's serde shape exactly: exact own keys, a
+  // stored command_name equal to the requested route, a canonical digest,
+  // an Applied/Unchanged outcome, and the route's payload invariant. Any
+  // future/extra field stays malformed so recovery holds instead of Cancel.
+  if (candidate.kind !== "stage_project_mutation") return false;
+  if (!hasExactOwnKeys(candidate, [
+    "kind",
+    "command_name",
+    "request_digest",
+    "outcome",
+    "stage_object_id",
+    "label",
+  ])) {
+    return false;
+  }
+  if (candidate.command_name !== command) return false;
+  if (!isCanonicalRequestDigest(candidate.request_digest)) return false;
+  if (candidate.outcome !== "applied" && candidate.outcome !== "unchanged") return false;
+  switch (stageRoutePayloadFamily(command)) {
+    case "unit":
+      return candidate.stage_object_id === null && candidate.label === null;
+    case "stage_object_id":
+      return typeof candidate.stage_object_id === "number"
+        && Number.isSafeInteger(candidate.stage_object_id)
+        && candidate.stage_object_id > 0
+        && candidate.label === null;
+    case "label":
+      const expectedLabel = expectedStagePresetLabel(command, args);
+      return candidate.stage_object_id === null
+        && typeof candidate.label === "string"
+        && expectedLabel !== null
+        && candidate.label === expectedLabel;
+    default:
+      return false;
+  }
+};
+
+/**
+ * Converts one recovered receipt back into the legacy reply shape its route's
+ * callers consume: PATCH/Repair keep exposing their full durable receipt,
+ * while Stage routes are narrowed to their pre-D4 shapes (`void` for unit
+ * routes, the allocated object ID for `add_stage_object`, and the preset
+ * label for save/import). Callers validate receipts first; a malformed
+ * result still fails loudly here so a future caller cannot adopt a silent
+ * `undefined` as a published legacy reply.
+ */
+export const publishedCommandLegacyReplyFromRecoveredResult = (
+  command: PatchRepairTransactionCommand,
+  result: ProjectTransactionCommandResult,
+  args: Record<string, unknown>,
+): unknown => {
+  if (!isStageRendererTicketedCommand(command)) return result;
+  if (!projectTransactionCommandResultIsWellFormed(result, command, args)) {
+    throw new Error(`Recovered ${command} result is malformed.`);
+  }
+  const receipt = result as ProjectTransactionStageCommandResult;
+  switch (stageRoutePayloadFamily(command)) {
+    case "stage_object_id":
+      return receipt.stage_object_id;
+    case "label":
+      return receipt.label;
+    default:
+      return null;
+  }
 };
 
 export type PublishedCommandRecoveryDecision =

@@ -1021,9 +1021,30 @@ export interface ProjectTransactionRepairFixtureProfileCommandResult {
   fixture_id: number;
 }
 
+/** Engine acknowledgement retained with a Stage receipt; mirrors the Rust enum. */
+export type ProjectTransactionStageMutationOutcome = "applied" | "unchanged";
+
+/**
+ * Durable published-command proof shared by every D4 Stage renderer-ticketed
+ * route. Mirrors Rust's `ProjectTransactionCommandResult::StageProjectMutation`
+ * serde shape exactly: `command_name` must equal the requested route, and each
+ * route keeps its payload invariant (`add_stage_object` retains its allocated
+ * positive object ID, save/import retain the preset label, unit routes carry
+ * both nulls). Legacy route replies stay `()`/number/string on the wire.
+ */
+export interface ProjectTransactionStageCommandResult {
+  kind: "stage_project_mutation";
+  command_name: string;
+  request_digest: string;
+  outcome: ProjectTransactionStageMutationOutcome;
+  stage_object_id: number | null;
+  label: string | null;
+}
+
 export type ProjectTransactionCommandResult =
   | ProjectTransactionPatchCommandResult
-  | ProjectTransactionRepairFixtureProfileCommandResult;
+  | ProjectTransactionRepairFixtureProfileCommandResult
+  | ProjectTransactionStageCommandResult;
 
 export type ProjectTransactionRecovery =
   | {
