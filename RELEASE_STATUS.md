@@ -27,6 +27,7 @@ independent review reported P0/P1/P2 zero. Exact commands, the narrow official
 GitHub-hosted Enterprise exception, invalid pre-Cargo attempts, and remaining
 native/CI/non-claims are recorded in
 [SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md](qa/SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md).
+The checkpoint source is pushed as `17b080b846bc08841e27a663c29672970b47a92f`.
 Product metadata remains `1.2.0-alpha.10`; D4 integration and the next native
 artifact are not claimed by this tooling checkpoint.
 

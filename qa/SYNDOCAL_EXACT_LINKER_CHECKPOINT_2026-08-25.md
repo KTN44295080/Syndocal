@@ -4,6 +4,7 @@
 
 - Branch: `codex/syndocal-v1.2`
 - Pre-checkpoint base HEAD: `4009e6313f3f0c68cc58e5fc268d408df8636fad`
+- Checkpoint source commit: `17b080b846bc08841e27a663c29672970b47a92f`
 - Upstream before the checkpoint: `origin/codex/syndocal-v1.2`, ahead/behind `0/0`
 - Product metadata remains `1.2.0-alpha.10`. This is a build-safety and QA-entrypoint checkpoint, not a distributed product artifact or release acceptance.
 
