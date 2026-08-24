@@ -1,7 +1,7 @@
 # M6 Release Validation
 
 > Historical evidence notice: the v1.0.0 artifacts below prove the named 2026-07
-> baseline only. The current product train is `1.2.0-alpha.10`; its release cannot
+> baseline only. The current product train is `1.2.0-alpha.11`; its release cannot
 > inherit these hashes, version metadata, signatures, clean-machine, ASIO, or current
 > source evidence. The post-alpha.10 pause request was rescinded before promotion;
 > follow `AGENTS.md` and the active

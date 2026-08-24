@@ -1,13 +1,15 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-25
-Branch: `codex/syndocal-v1.2` (current development branch)
+Branch: `codex/d4-stage-integration` (active alpha.11 integration branch)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
 > Current continuation note (resumed 2026-08-25): the requested pause after
-> `1.2.0-alpha.10` was rescinded before final promotion. The
+> `1.2.0-alpha.10` was rescinded before final promotion. The active integrated
+> product metadata is now `1.2.0-alpha.11`; alpha.10 remains the immutable source
+> checkpoint and historical artifact. The
 > [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md) is again the active
 > dependency-ordered work authority. The [post-alpha.10 snapshot](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md),
 > [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
@@ -16,6 +18,31 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > historical or domain gate/evidence records. Do not mark AI3 complete, advance
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
+
+## 2026-08-25 alpha.11 D4 integrated-source checkpoint (native acceptance pending)
+
+The D4 Stage transaction source is integrated on `codex/d4-stage-integration`.
+The engine lineage is `2ea64ff`, `887505f`, and `7804620`; backend, frontend,
+and checker integration commits are `0aa0b14`, `6bcd879`, and `d44f2b1`.
+`f45a760` advances synchronized product metadata to `1.2.0-alpha.11`, pins the
+Begin E/R/H -> reconcile -> R/H -> arm-H source order, and makes the Rust
+`include_str!` source tests and signed release fixture independent of Windows
+line-ending conversion. It is pushed with local/upstream divergence `0/0`.
+
+Focused evidence is green with zero first-party warning lines: engine D4 `6/6`
+plus preset-ID reservation `1/1`, backend D4 `7/7`, pane lifecycle `4/4`, and
+four line-boundary static Rust tests `4/4`. The production frontend build
+transformed 272 modules. Static inventories remain 480 registered commands,
+143 runtime commands, 133 renderer mutations, and 419 frontend invokes; the
+frozen command fingerprint remains
+`bea9db6c8cc249bc3f2bc55aaab6b20680bc6e91af882719da8a9f29731ecd44`.
+Release metadata and its 102-group self-test pass. Independent Ox and Terra
+reviews report no remaining code P0/P1.
+
+This is not native acceptance or a release claim. The required release build,
+exact executable launch/window proof, maximized 4K Stage QA, artifact hash and
+embedded version evidence remain pending. Windows ASIO, DJ-Link peer/hardware,
+and other physical/external gates remain open.
 
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 
