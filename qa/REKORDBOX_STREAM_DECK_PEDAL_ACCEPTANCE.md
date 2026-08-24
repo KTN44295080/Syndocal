@@ -287,3 +287,35 @@ real Master playback and switch, absolute Loop divisions, Release, disconnect
 and reconnect State Sync, Pedal/global-hotkey input, app restart/next-show reuse,
 and concurrent Art-Net/sACN traffic. No DJ/Pedal completion claim is made and the
 KDMX accepted denominator remains 19/71 (26.8%).
+
+## 2026-08-25 peer v1.1.1 software/package checkpoint
+
+The rekordbox-DJ-Link peer source is at `cdd90e1e` on `main`, with the matching
+`v1.1.1` tag and `origin/main` at `0` ahead / `0` behind. `npm test` passed
+`69/69`. The official `npm run build:hook` path first exposed the bundled
+TDM-GCC 10.3 `GetTickCount64` declaration failure; rerunning the same hook build
+through the Visual Studio 2022 x64 environment succeeded without a source
+change, and `npm run build:dist` completed with exit `0`. The rebuilt
+packaged executable is
+`C:\Users\kouty\Desktop\rb-output\dist\server.exe`, size `65,975,425` bytes,
+SHA-256
+`C966CE8AFAC4A54A9A8C818D75A829A2063EA92D3F434C8C31F1C0A8404BE36B`. The
+fallback package (Inno Setup was unavailable on this machine) is
+`C:\Users\kouty\Desktop\rb-output\dist\rb-output-20260825.zip`, size
+`62,462,263` bytes, SHA-256
+`6C89C727C51E7E45ACE4A850C0934906E5119D86641380BAA2E1BFF7CC855000`.
+
+An isolated packaged smoke run on port `8788` with
+`SYNDOCAL_WS_ADAPTER=syndocal-envelope-v1` and `DJ_AGENT_ENABLED=true` returned
+HTTP 200 from `/api/health`, the packaged root `/`, and
+`/api/dj-agent/status`; the health response reported version `1.1.1` and
+commit `cdd90e1e`, with no token exposure. The
+existing source service on port `8787` (PID `97208`) was not stopped. First-party
+compile warnings were `0`; PyInstaller platform/optional diagnostics were `256`,
+and the Node `ExperimentalWarning` count was `1`.
+
+Production must explicitly select `syndocal-envelope-v1`; the peer's default
+`generic-json` adapter is not the accepted production wire policy until that
+policy is deliberately changed and re-accepted. This checkpoint is software and
+packaging evidence only: no real hardware acceptance or Syndocal two-process
+acceptance is claimed, and all physical/wired-LAN gates above remain unchecked.

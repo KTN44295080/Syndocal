@@ -17,6 +17,29 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
+## 2026-08-25 continuation evidence checkpoint (pre-alpha.11)
+
+This is a documentation/tooling checkpoint on `codex/syndocal-v1.2`; product
+metadata remains `1.2.0-alpha.10`. It does not accept D4, ASIO, DJ hardware, or
+any other release gate.
+
+- The `rb-output` peer at `main` / `v1.1.1` / `cdd90e1e` was rebuilt and its
+  isolated packaged `syndocal-envelope-v1` smoke passed on port `8788` without
+  stopping the existing port `8787` source service. The exact EXE/ZIP hashes,
+  warning counts, adapter policy, and physical non-claims are recorded in
+  [REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md](qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md).
+- `tools/cleanup-stale-targets.ps1` and its focused test are now safe to track as
+  a disabled design harness: two independent runs passed `55/55`, and an Ox
+  adversarial review reported P0 `0` / P1 `0`. `-Execute` remains
+  unconditionally fail-closed before quarantine, move, delete, Git, or writer
+  mutation because a reviewed handle-pinned rename primitive does not yet
+  exist. No real workspace target was removed by the harness. The separately
+  verified `rb-output` build backup (40 entries, `220,809,897` bytes) was moved
+  to the Windows Recycle Bin and remains recoverable.
+- D4 Stage transaction integration and ASIO project-selection/capture-retirement
+  work continue in isolated worktrees. Their focused or native acceptance is not
+  claimed by this checkpoint.
+
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 
 Historical checkpoint: at this date, `1.2.0-alpha.5` was then the next
