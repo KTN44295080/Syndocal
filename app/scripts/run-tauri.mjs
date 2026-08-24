@@ -27,6 +27,162 @@ export function isWindowsNativeCargoCommand(args) {
   return command === "build" || command === "dev";
 }
 
+// The Windows native gate is pinned to the exact VS2022 Community MSVC
+// 14.44.35207 toolset. Cargo otherwise resolves a bare `link.exe` from PATH,
+// and Git for Windows ships usr/bin/link.exe, which accepts Unix arguments and
+// fails MSVC links, so the verified linker is always pinned explicitly and any
+// resolved VCToolsInstallDir/linker mismatch fails closed.
+export const REQUIRED_VCTOOLS_VERSION = "14.44.35207";
+export const REQUIRED_VCTOOLS_INSTALL_DIR =
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207";
+export const REQUIRED_MSVS_LINKER = path.win32.resolve(
+  REQUIRED_VCTOOLS_INSTALL_DIR,
+  "bin",
+  "Hostx64",
+  "x64",
+  "link.exe",
+);
+export const REQUIRED_VCVARS_BATCH =
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat";
+export const REQUIRED_VCVARS_ARGUMENTS = "-vcvars_ver=14.44";
+
+// GitHub's hosted windows-2022 image ships Visual Studio Enterprise rather
+// than Community.  Keep that edition-root difference explicit and narrowly
+// gated; the selected MSVC toolset, host/target architecture, absolute linker
+// pin, and where.exe-first requirement remain identical to the local gate.
+export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER =
+  "SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC";
+export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE =
+  "windows-2022-enterprise";
+export const REQUIRED_GITHUB_HOSTED_VCTOOLS_INSTALL_DIR =
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207";
+export const REQUIRED_GITHUB_HOSTED_MSVS_LINKER = path.win32.resolve(
+  REQUIRED_GITHUB_HOSTED_VCTOOLS_INSTALL_DIR,
+  "bin",
+  "Hostx64",
+  "x64",
+  "link.exe",
+);
+
+export function isGitHubHostedWindowsToolchain(environment = process.env) {
+  return environment?.GITHUB_ACTIONS === "true"
+    && environment?.RUNNER_OS === "Windows"
+    && environment?.RUNNER_ENVIRONMENT === "github-hosted"
+    && environment?.[GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER]
+      === GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE;
+}
+
+export function requiredMsvcToolchain(environment = process.env) {
+  if (isGitHubHostedWindowsToolchain(environment)) {
+    return {
+      edition: "Enterprise (GitHub-hosted windows-2022)",
+      installDir: REQUIRED_GITHUB_HOSTED_VCTOOLS_INSTALL_DIR,
+      linker: REQUIRED_GITHUB_HOSTED_MSVS_LINKER,
+    };
+  }
+  return {
+    edition: "Community",
+    installDir: REQUIRED_VCTOOLS_INSTALL_DIR,
+    linker: REQUIRED_MSVS_LINKER,
+  };
+}
+
+const normalizeWindowsPathKey = (candidate) =>
+  path.win32.normalize(String(candidate)).trim().toLowerCase();
+
+export function resolveMsvcHostLinker(vcToolsInstallDir) {
+  return path.win32.resolve(String(vcToolsInstallDir), "bin", "Hostx64", "x64", "link.exe");
+}
+
+export function requireExactMsvcToolset(environment, fileIsRegular = isRegularFile) {
+  const vcToolsInstallDir = environment?.VCToolsInstallDir?.trim();
+  const requiredToolchain = requiredMsvcToolchain(environment);
+  if (!vcToolsInstallDir) {
+    throw new Error(
+      `Refusing the Windows native build without VCToolsInstallDir. Initialize the exact x64 Visual Studio 2022 ${requiredToolchain.edition} environment for MSVC ${REQUIRED_VCTOOLS_VERSION}.`,
+    );
+  }
+  const resolvedLinker = resolveMsvcHostLinker(vcToolsInstallDir);
+  if (normalizeWindowsPathKey(resolvedLinker) !== normalizeWindowsPathKey(requiredToolchain.linker)) {
+    throw new Error(
+      `Refusing the Windows native build because the resolved MSVC toolset does not match the required Visual Studio 2022 ${requiredToolchain.edition} ${REQUIRED_VCTOOLS_VERSION} toolset. Resolved linker: ${resolvedLinker}. Required linker: ${requiredToolchain.linker}.`,
+    );
+  }
+  if (!fileIsRegular(resolvedLinker)) {
+    throw new Error(`Refusing the Windows native build because the asserted MSVC linker is missing: ${resolvedLinker}`);
+  }
+  return resolvedLinker;
+}
+
+export function parseCommandLineSetOutput(output) {
+  const parsedEnvironment = {};
+  for (const line of String(output).split(/\r?\n/)) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (!match) continue;
+    parsedEnvironment[match[1]] = match[2];
+  }
+  return Object.keys(parsedEnvironment).length > 0 ? parsedEnvironment : null;
+}
+
+export function captureRequiredVcvarsEnvironment(
+  initialEnvironment = process.env,
+  spawnCommandLine = spawnSync,
+) {
+  const result = spawnCommandLine(
+    "cmd.exe",
+    ["/d", "/s", "/c", `""${REQUIRED_VCVARS_BATCH}" ${REQUIRED_VCVARS_ARGUMENTS} && set"`],
+    {
+      encoding: "utf8",
+      env: initialEnvironment,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    },
+  );
+  if (result?.error || result?.status !== 0 || typeof result?.stdout !== "string") return null;
+  return parseCommandLineSetOutput(result.stdout);
+}
+
+export function locateLinkersWithWhere(
+  environment = process.env,
+  spawnWhere = spawnSync,
+) {
+  const result = spawnWhere("where.exe", ["link.exe"], {
+    encoding: "utf8",
+    env: environment,
+    windowsHide: true,
+  });
+  if (result?.error) throw result.error;
+  if (result?.status !== 0 || typeof result?.stdout !== "string") {
+    throw new Error(
+      `Refusing the Windows native build because where.exe link.exe failed (exit ${result?.status ?? "unknown"}).`,
+    );
+  }
+  return result.stdout
+    .split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
+}
+
+export function requireExactMsvcLinkerFirst(
+  environment,
+  locateLinkers = locateLinkersWithWhere,
+) {
+  const locatedLinkers = locateLinkers(environment);
+  const firstLinker = locatedLinkers[0];
+  const requiredLinker = requiredMsvcToolchain(environment).linker;
+  if (!firstLinker) {
+    throw new Error(
+      "Refusing the Windows native build because where.exe link.exe returned no linker.",
+    );
+  }
+  if (normalizeWindowsPathKey(firstLinker) !== normalizeWindowsPathKey(requiredLinker)) {
+    throw new Error(
+      `Refusing the Windows native build because where.exe link.exe resolves ${firstLinker} first; required first linker: ${requiredLinker}.`,
+    );
+  }
+  return locatedLinkers;
+}
+
 export function releaseExecutablePath(baseAppDir = appDir) {
   return path.resolve(baseAppDir, "..", "target", "release", "syndocal.exe");
 }
@@ -35,27 +191,20 @@ export function verifiedNativeBuildEnvironment(
   environment = process.env,
   platform = process.platform,
   fileIsRegular = isRegularFile,
+  locateLinkers = locateLinkersWithWhere,
 ) {
   if (platform !== "win32") return environment;
 
-  const vcToolsInstallDir = environment.VCToolsInstallDir?.trim();
-  if (!vcToolsInstallDir) {
-    throw new Error(
-      "Refusing the Windows native build without VCToolsInstallDir. Run it from an x64 Visual Studio Developer Shell.",
-    );
-  }
-  const linker = path.resolve(vcToolsInstallDir, "bin", "Hostx64", "x64", "link.exe");
-  if (!fileIsRegular(linker)) {
-    throw new Error(`Refusing the Windows native build because the asserted MSVC linker is missing: ${linker}`);
-  }
+  const linker = requireExactMsvcToolset(environment, fileIsRegular);
 
-  // Cargo otherwise resolves a bare `link.exe` from PATH. Git for Windows also
-  // ships usr/bin/link.exe, which accepts Unix arguments and fails MSVC links.
-  // Pin the target linker to the verified Visual C++ binary for every build.
-  return {
+  // Pin the target linker to the exact required Visual C++ binary for every
+  // build so child Cargo can never fall through to a Git usr/bin/link.exe.
+  const verifiedEnvironment = {
     ...environment,
     CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: linker,
   };
+  requireExactMsvcLinkerFirst(verifiedEnvironment, locateLinkers);
+  return verifiedEnvironment;
 }
 
 export function tauriCommandEnvironment(
@@ -63,10 +212,29 @@ export function tauriCommandEnvironment(
   environment = process.env,
   platform = process.platform,
   fileIsRegular = isRegularFile,
+  initializeVcvarsEnvironment = captureRequiredVcvarsEnvironment,
+  locateLinkers = locateLinkersWithWhere,
 ) {
-  return isWindowsNativeCargoCommand(args)
-    ? verifiedNativeBuildEnvironment(environment, platform, fileIsRegular)
-    : environment;
+  if (!isWindowsNativeCargoCommand(args)) return environment;
+  if (platform !== "win32") return environment;
+
+  try {
+    return verifiedNativeBuildEnvironment(environment, platform, fileIsRegular, locateLinkers);
+  } catch (ambientError) {
+    const ambientReason = ambientError instanceof Error ? ambientError.message : String(ambientError);
+    if (isGitHubHostedWindowsToolchain(environment)) {
+      throw new Error(
+        `${ambientReason} The GitHub-hosted windows-2022 MSVC preflight must initialize and verify the exact Enterprise toolchain before Tauri starts.`,
+      );
+    }
+    const capturedEnvironment = initializeVcvarsEnvironment(environment);
+    if (!capturedEnvironment) {
+      throw new Error(
+        `${ambientReason} Automatic vcvars64.bat -vcvars_ver=14.44 initialization failed; run pnpm from an x64 Visual Studio 2022 Community Developer Command Prompt.`,
+      );
+    }
+    return verifiedNativeBuildEnvironment(capturedEnvironment, platform, fileIsRegular, locateLinkers);
+  }
 }
 
 export function stopCheckoutReleaseExecutable(baseAppDir = appDir) {
@@ -143,6 +311,15 @@ export function runTauri(args, baseAppDir = appDir) {
   }
 
   const environment = tauriCommandEnvironment(args);
+
+  if (process.platform === "win32"
+      && environment.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER) {
+    const locatedLinkers = requireExactMsvcLinkerFirst(environment);
+    console.error(
+      `[syndocal-build] pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=${environment.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER}`,
+    );
+    console.error(`[syndocal-build] where.exe link.exe:\n${locatedLinkers.join("\n")}`);
+  }
 
   const tauriCli = path.join(
     baseAppDir,

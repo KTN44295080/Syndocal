@@ -138,6 +138,58 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          toolset: 14.44
+
+      - name: Pin exact Windows MSVC 14.44.35207 linker
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SYNDOCAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # GitHub's official windows-2022 image installs VS2022 Enterprise.
+          # Only the edition root differs from the local Community gate; the
+          # exact MSVC version and Hostx64/x64 linker remain fail-closed.
+          $expectedVcTools = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\'
+          if ($env:SYNDOCAL_RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw "The Visual Studio Enterprise edition-root exception is valid only on a GitHub-hosted runner, not '$env:SYNDOCAL_RUNNER_ENVIRONMENT'."
+          }
+          $actualVcTools = $env:VCToolsInstallDir
+          Write-Host "VCToolsInstallDir=$actualVcTools"
+          if ([string]::IsNullOrWhiteSpace($actualVcTools)) {
+            throw 'VCToolsInstallDir is not set; vcvars64.bat -vcvars_ver=14.44 did not initialize the x64 environment.'
+          }
+          $canonicalActual = [IO.Path]::GetFullPath($actualVcTools).TrimEnd('\')
+          $canonicalExpected = [IO.Path]::GetFullPath($expectedVcTools).TrimEnd('\')
+          $toolsetMatches = [StringComparer]::OrdinalIgnoreCase.Equals($canonicalActual, $canonicalExpected)
+          Write-Host "Exact MSVC 14.44.35207 VCToolsInstallDir matches: $toolsetMatches"
+          if (-not $toolsetMatches) {
+            throw "VCToolsInstallDir '$actualVcTools' does not match the required GitHub-hosted Visual Studio 2022 Enterprise MSVC 14.44.35207 toolset."
+          }
+          $expectedLinker = Join-Path $canonicalActual 'bin\Hostx64\x64\link.exe'
+          $linkerExists = Test-Path -LiteralPath $expectedLinker -PathType Leaf
+          Write-Host "Exact MSVC linker exists: $linkerExists ($expectedLinker)"
+          if (-not $linkerExists) {
+            throw "The required MSVC linker is missing: $expectedLinker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$expectedLinker" >> $env:GITHUB_ENV
+          "SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC=windows-2022-enterprise" >> $env:GITHUB_ENV
+          Write-Host "Pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER for following steps: $expectedLinker"
+          $resolvedLinkers = @(& where.exe link.exe)
+          if ($LASTEXITCODE -ne 0) { throw "where.exe link.exe failed with exit code $LASTEXITCODE." }
+          Write-Host 'where.exe link.exe resolution order:'
+          foreach ($resolved in $resolvedLinkers) { Write-Host "  $resolved" }
+          if ($resolvedLinkers.Count -eq 0 -or [string]::IsNullOrWhiteSpace($resolvedLinkers[0])) {
+            throw 'where.exe link.exe returned no linker.'
+          }
+          $exactLinkerFirst = [StringComparer]::OrdinalIgnoreCase.Equals(
+            [IO.Path]::GetFullPath($resolvedLinkers[0]),
+            [IO.Path]::GetFullPath($expectedLinker)
+          )
+          Write-Host "Exact required linker resolves first: $exactLinkerFirst"
+          if (-not $exactLinkerFirst) {
+            throw "where.exe link.exe resolves '$($resolvedLinkers[0])' first; refusing Cargo without the exact required linker first."
+          }
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2

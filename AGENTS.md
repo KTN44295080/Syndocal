@@ -2,7 +2,25 @@
 
 - Changes that affect the native UI or runtime are not complete after a frontend-only build.
 - Immediately before every native release build, find any running process whose resolved executable path is exactly this checkout's `target/release/syndocal.exe`, verify that exact path, and force-terminate only that process. Do this proactively so the linker can replace the executable; do not wait for an access-denied build failure. Never terminate Daslight or an unrelated `syndocal.exe` from another checkout.
-- Before every Windows Cargo/Tauri native build, enter an x64 Visual Studio Developer Shell, resolve and verify the exact `%VCToolsInstallDir%\bin\Hostx64\x64\link.exe`, and pin that absolute path in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`. Fail closed if it is missing, and never allow Cargo to fall through to Git for Windows' incompatible `usr\bin\link.exe`. Keep this invariant enforced by the Tauri build wrapper and its focused checker, not only by operator memory.
+- Before every Windows Cargo/Tauri native build or test, initialize
+  `vcvars64.bat -vcvars_ver=14.44`, require the resolved linker to be exactly
+  `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`, and pin that same absolute path in
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`. Print and verify both the pinned
+  variable and `where.exe link.exe` before Cargo starts; fail closed if the exact
+  linker is missing or not first, and never allow Cargo to fall through to Git
+  for Windows' incompatible `usr\bin\link.exe`. If a command launched the Git
+  linker, that entire gate attempt is invalid and must be rerun from the start.
+  The only edition-root exception is the official GitHub-hosted `windows-2022`
+  image, which installs Visual Studio 2022 Enterprise instead of Community. In
+  that marked CI context, require the exact corresponding Enterprise
+  `...\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`; do not relax the toolset,
+  architecture, absolute Cargo pin, or `where.exe`-first requirements. Never
+  apply this hosted-runner exception to a local or self-hosted invocation.
+  When a `cmd.exe` command mutates `PATH` after `vcvars64.bat`, use delayed
+  expansion (`cmd /v:on` and `!PATH!`); `%PATH%` is expanded before `vcvars64`
+  executes and can silently discard the MSVC additions. Keep this invariant
+  enforced by the Tauri build wrapper and its focused checker, not only by
+  operator memory.
 - Before handing off such changes, run `pnpm --dir app tauri build --no-bundle` successfully.
 - Launch `target/release/syndocal.exe` after the build and verify that exactly one responsive `Syndocal` window is available.
 - Before using UI automation or manual QA actions on Syndocal, verify the intended Syndocal window and maximize it. Perform Syndocal UI operations only while that verified target window is maximized, except when a test explicitly covers restore/minimize behavior.

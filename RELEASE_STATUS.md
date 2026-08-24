@@ -17,6 +17,19 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
+## 2026-08-25 exact Windows linker checkpoint
+
+All known Windows Cargo/Tauri entrypoints now fail closed on the exact supported
+MSVC toolset and linker before Cargo starts. The guarded wrapper passed 156
+assertions, the soak and ASIO no-Cargo suites passed 74 and 36 assertions, the
+real release warning gate completed with current warnings `0/0/0`, and the final
+independent review reported P0/P1/P2 zero. Exact commands, the narrow official
+GitHub-hosted Enterprise exception, invalid pre-Cargo attempts, and remaining
+native/CI/non-claims are recorded in
+[SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md](qa/SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md).
+Product metadata remains `1.2.0-alpha.10`; D4 integration and the next native
+artifact are not claimed by this tooling checkpoint.
+
 ## 2026-08-25 continuation evidence checkpoint (pre-alpha.11)
 
 This is a documentation/tooling checkpoint on `codex/syndocal-v1.2`; product

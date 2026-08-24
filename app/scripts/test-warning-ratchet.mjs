@@ -30,6 +30,11 @@ import {
   loadInventoryAtRef,
   normalizeRepoPath,
   parseCargoJsonLines,
+  GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER,
+  GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE,
+  PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY,
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
   resolveTrustedComparison,
   resolveExplicitAncestorComparison,
   runCargoConfiguration,
@@ -39,6 +44,7 @@ import {
   validateInventory,
   validateExpectedOutputMarkers,
   validateInventorySchema,
+  verifyExactWindowsMsvcCargoEnvironment,
   warningAffectingCargoConfigs,
   warningShapedStderr,
 } from "./warning-ratchet-lib.mjs";
@@ -158,6 +164,209 @@ for (const environment of [
 }
 assert.deepEqual(forbiddenWarningEnvironment({ RUST_LOG: "warn", PATH: "x" }), []);
 
+assert.equal(
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY,
+  ["CARGO", "TARGET", "X86_64", "PC", "WINDOWS", "MSVC", "LINKER"].join("_"),
+);
+assert.equal(
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+  `${["C:", "Program Files", "Microsoft Visual Studio", "2022", "Community", "VC", "Tools", "MSVC", "14.44.35207"].join("\\")}\\bin\\Hostx64\\x64\\link.exe`,
+);
+assert.equal(
+  PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+  `${["C:", "Program Files", "Microsoft Visual Studio", "2022", "Enterprise", "VC", "Tools", "MSVC", "14.44.35207"].join("\\")}\\bin\\Hostx64\\x64\\link.exe`,
+);
+assert.equal(GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE, "windows-2022-enterprise");
+const pinnedLinkerEntry = {
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+};
+assert.deepEqual(forbiddenWarningEnvironment(pinnedLinkerEntry), []);
+const preservedLinkerEnvironment = controlledChildEnvironment({ ...pinnedLinkerEntry, RUST_LOG: "warn" });
+assert.equal(
+  preservedLinkerEnvironment[PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY],
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+);
+assert.equal(
+  controlledGenericCommandEnvironment(pinnedLinkerEntry)[PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY],
+  PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+);
+const githubHostedPinnedLinkerEnvironment = {
+  GITHUB_ACTIONS: "true",
+  RUNNER_OS: "Windows",
+  RUNNER_ENVIRONMENT: "github-hosted",
+  [GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER]: GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE,
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+};
+assert.deepEqual(forbiddenWarningEnvironment(githubHostedPinnedLinkerEnvironment), []);
+assert.equal(
+  controlledChildEnvironment(githubHostedPinnedLinkerEnvironment)[PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY],
+  PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+);
+assert.ok(
+  forbiddenWarningEnvironment({
+    ...githubHostedPinnedLinkerEnvironment,
+    [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+  }).includes(PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY),
+  "the local Community pin must not be accepted inside GitHub Actions Windows",
+);
+for (const poisonedHostedEnvironment of [
+  {
+    ...githubHostedPinnedLinkerEnvironment,
+    [GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER]: undefined,
+  },
+  { ...githubHostedPinnedLinkerEnvironment, GITHUB_ACTIONS: "false" },
+  { ...githubHostedPinnedLinkerEnvironment, RUNNER_OS: "Linux" },
+  { ...githubHostedPinnedLinkerEnvironment, RUNNER_ENVIRONMENT: "self-hosted" },
+  { ...githubHostedPinnedLinkerEnvironment, [GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER]: "win25" },
+]) {
+  assert.ok(
+    forbiddenWarningEnvironment(poisonedHostedEnvironment).includes(PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY),
+  );
+  assert.throws(() => controlledChildEnvironment(poisonedHostedEnvironment), /forbidden/);
+}
+
+const toolsetDirectoryForTestLinker = (linker) => {
+  let directory = path.win32.dirname(linker);
+  for (let index = 0; index < 3; index += 1) directory = path.win32.dirname(directory);
+  return directory;
+};
+const localToolchainEnvironment = {
+  VCToolsInstallDir: `${toolsetDirectoryForTestLinker(PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE)}\\`,
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+};
+const passthroughToolchainInitialization = (environment) => environment;
+const localToolchainLogs = [];
+assert.equal(
+  verifyExactWindowsMsvcCargoEnvironment(localToolchainEnvironment, {
+    platform: "win32",
+    initializeEnvironment: passthroughToolchainInitialization,
+    fileIsRegular: (candidate) => candidate === PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+    locateLinkers: () => [
+      PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+      "C:\\Program Files\\Git\\usr\\bin\\link.exe",
+    ],
+    log: (message) => localToolchainLogs.push(message),
+  }),
+  localToolchainEnvironment,
+);
+assert.equal(localToolchainLogs.length, 3);
+assert.match(localToolchainLogs[0], /vcvars64\.bat -vcvars_ver=14\.44 initialized/);
+assert.match(localToolchainLogs[1], /pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=/);
+assert.match(localToolchainLogs[2], /where\.exe link\.exe:/);
+assert.equal(
+  verifyExactWindowsMsvcCargoEnvironment(localToolchainEnvironment, {
+    platform: "linux",
+    fileIsRegular: () => { throw new Error("non-Windows must not touch the filesystem"); },
+    locateLinkers: () => { throw new Error("non-Windows must not call where.exe"); },
+  }),
+  localToolchainEnvironment,
+);
+for (const [label, environment, options, pattern] of [
+  [
+    "vcvars initialization failure",
+    localToolchainEnvironment,
+    { initializeEnvironment: () => null, fileIsRegular: () => true, locateLinkers: () => [PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE] },
+    /could not initialize vcvars64\.bat/,
+  ],
+  [
+    "missing pin",
+    { VCToolsInstallDir: localToolchainEnvironment.VCToolsInstallDir },
+    { fileIsRegular: () => true, locateLinkers: () => [PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE] },
+    /requires exact CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER/,
+  ],
+  [
+    "stale toolset",
+    { ...localToolchainEnvironment, VCToolsInstallDir: localToolchainEnvironment.VCToolsInstallDir.replace("14.44.35207", "14.43.34808") },
+    { fileIsRegular: () => true, locateLinkers: () => [PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE] },
+    /VCToolsInstallDir does not match/,
+  ],
+  [
+    "missing linker",
+    localToolchainEnvironment,
+    { fileIsRegular: () => false, locateLinkers: () => [PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE] },
+    /required linker is missing/,
+  ],
+  [
+    "Git linker first",
+    localToolchainEnvironment,
+    { fileIsRegular: () => true, locateLinkers: () => ["C:\\Program Files\\Git\\usr\\bin\\link.exe", PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE] },
+    /resolves .*Git.* first/,
+  ],
+  [
+    "empty where result",
+    localToolchainEnvironment,
+    { fileIsRegular: () => true, locateLinkers: () => [] },
+    /returned no linker/,
+  ],
+]) {
+  assert.throws(
+    () => verifyExactWindowsMsvcCargoEnvironment(environment, {
+      platform: "win32",
+      initializeEnvironment: passthroughToolchainInitialization,
+      log: () => {},
+      ...options,
+    }),
+    pattern,
+    label,
+  );
+}
+const verifiedHostedEnvironment = {
+  ...githubHostedPinnedLinkerEnvironment,
+  VCToolsInstallDir: toolsetDirectoryForTestLinker(
+    PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+  ),
+};
+assert.equal(
+  verifyExactWindowsMsvcCargoEnvironment(verifiedHostedEnvironment, {
+    platform: "win32",
+    initializeEnvironment: passthroughToolchainInitialization,
+    fileIsRegular: (candidate) => candidate === PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+    locateLinkers: () => [PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE],
+    log: () => {},
+  }),
+  verifiedHostedEnvironment,
+);
+assert.throws(
+  () => verifyExactWindowsMsvcCargoEnvironment(
+    { ...verifiedHostedEnvironment, RUNNER_ENVIRONMENT: "self-hosted" },
+    {
+      platform: "win32",
+      initializeEnvironment: passthroughToolchainInitialization,
+      fileIsRegular: () => true,
+      locateLinkers: () => [PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE],
+      log: () => {},
+    },
+  ),
+  /VCToolsInstallDir does not match/,
+  "a self-hosted runner must not use the Enterprise edition-root exception",
+);
+for (const [rejectedKey, rejectedValue] of [
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, "C:\\Program Files\\Git\\usr\\bin\\link.exe"],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, "C:/Program Files/Git/usr/bin/link.exe"],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE.replace("14.44.35207", "14.43.34808")],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, "link.exe"],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, `${PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE}\\`],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, `${PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE}x`],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY, PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE.toLocaleLowerCase("en-US")],
+  [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY.toLocaleLowerCase("en-US"), PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE],
+  ["CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER", PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE],
+]) {
+  assert.ok(forbiddenWarningEnvironment({ [rejectedKey]: rejectedValue }).includes(rejectedKey), rejectedKey);
+  assert.throws(() => controlledChildEnvironment({ [rejectedKey]: rejectedValue }), /forbidden/);
+}
+assert.ok(
+  forbiddenWarningEnvironment({ [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: "" })
+    .includes(PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY),
+);
+assert.throws(
+  () => controlledChildEnvironment({ [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: "" }),
+  /forbidden/,
+);
+assert.deepEqual(
+  forbiddenWarningEnvironment({ ...pinnedLinkerEntry, RUSTFLAGS: "proxy", CARGO_HOME: "tainted" }),
+  ["CARGO_HOME", "RUSTFLAGS"],
+);
+
 const suppressionSamples = [
   "#[" + "allow(\n dead_code,\n unused_imports\n)]",
   "#[" + "expect(unused_variables, reason = \"temporary\")]",
@@ -214,6 +423,11 @@ for (const key of [["rust", "doc"].join(""), "target"]) {
   semanticBuildControlConfigs.push(["build.", key, " = \"controlled-value\"\n"].join(""));
   semanticBuildControlConfigs.push(["build = { \"", key, "\" = \"controlled-value\" }\n"].join(""));
 }
+const semanticTargetLinkerConfigs = [
+  "[target.'cfg(windows)']\nlinker = \"link.exe\"\n",
+  "target.\"x86_64-pc-windows-msvc\".linker = \"link.exe\"\n",
+  "target = { \"cfg(unix)\" = { linker = \"link.exe\" } }\n",
+];
 const semanticProfileConfigs = [
   ["[pro", "file.dev]\nopt-level = 0\n"].join(""),
   ["profile.release", " = { lto = false }\n"].join(""),
@@ -1256,6 +1470,14 @@ await assert.rejects(
   /warning-affecting environment is forbidden/,
 );
 await assert.rejects(
+  runCargoConfiguration(spoutConfiguration, repoRoot, {
+    ...process.env,
+    [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+    RUSTFLAGS: "-A" + "warnings",
+  }),
+  /warning-affecting environment is forbidden: RUSTFLAGS/,
+);
+await assert.rejects(
   runCargoConfiguration({
     ...spoutConfiguration,
     command: {
@@ -1295,6 +1517,7 @@ try {
   for (const configText of [
     ...semanticWarningFlagConfigs,
     ...semanticBuildControlConfigs,
+    ...semanticTargetLinkerConfigs,
     ...semanticProfileConfigs,
     ...semanticEnvironmentConfigs,
   ]) {
@@ -1313,7 +1536,7 @@ try {
   );
   writeFileSync(
     path.join(cargoConfigRoot, ".cargo", "config.toml"),
-    "[build]\njobs = 2\n[target.'cfg(windows)']\nlinker = \"link.exe\"\n[env]\nrustc_note = \"documentation only\"\nmy_rustc = { value = \"documentation only\" }\nCARGO_TARGET_DIR = \"target-alt\"\nMY_CARGO_PROFILE_RELEASE = \"documentation only\"\n",
+    "[build]\njobs = 2\n[target.'cfg(windows)']\nrustflags_note = \"documentation only\"\n[env]\nrustc_note = \"documentation only\"\nmy_rustc = { value = \"documentation only\" }\nCARGO_TARGET_DIR = \"target-alt\"\nMY_CARGO_PROFILE_RELEASE = \"documentation only\"\n",
   );
   assert.equal(warningAffectingCargoConfigs(cargoConfigRoot, {}).length, 0);
   writeFileSync(

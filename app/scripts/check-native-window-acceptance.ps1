@@ -497,7 +497,7 @@ try {
   Write-Host "NATIVE PRIMARY GATE: maximized client >= $MinimumMaximizedClient -> F11 fullscreen $ExpectedFullscreen -> Esc exact restore"
   Write-Host "Evidence: $EvidenceDir"
   $devProcess = Start-Process -FilePath $pnpm.Source `
-    -ArgumentList @("exec", "tauri", "dev", "--config", "src-tauri/tauri.native-acceptance.conf.json", "--no-watch") `
+    -ArgumentList @("tauri", "dev", "--config", "src-tauri/tauri.native-acceptance.conf.json", "--no-watch") `
     -WorkingDirectory $appRoot `
     -PassThru `
     -NoNewWindow

@@ -134,7 +134,7 @@ try {
   Write-Host "NATIVE WORKSPACE GATE: seven WebView2 pane windows with applied native placement"
   Write-Host "Evidence: $EvidenceDir"
   $devProcess = Start-Process -FilePath $pnpm.Source `
-    -ArgumentList @("exec", "tauri", "dev", "--config", "src-tauri/tauri.workspace-operator-acceptance.conf.json", "--no-watch") `
+    -ArgumentList @("tauri", "dev", "--config", "src-tauri/tauri.workspace-operator-acceptance.conf.json", "--no-watch") `
     -WorkingDirectory $appRoot `
     -PassThru `
     -NoNewWindow

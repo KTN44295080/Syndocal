@@ -113,6 +113,31 @@ between-phase browser recycling (fresh profile each time) isolates it.
 
 ## Bench launchers
 
-- `check-asio-build.ps1`, `ndi_studio_monitor_launcher.rs`,
+- `check-asio-build.ps1` — fail-closed gate for the isolated, non-default ASIO
+  bridge build (authoritative gates: `qa/ASIO_INPUT_ACCEPTANCE.md`). Every run
+  validates the explicit `CPAL_ASIO_DIR` SDK tree and `LIBCLANG_PATH`
+  `libclang.dll`, then the pinned MSVC toolchain: `VCToolsInstallDir` must
+  canonicalize (trailing separator/case only) to
+  `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207`,
+  that directory and its `bin\Hostx64\x64\link.exe` must exist,
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` must already pin exactly that
+  linker (the canonical spelling is repinned), and `where.exe link.exe` must
+  succeed non-empty with the pinned linker first — Git's `link.exe` anywhere
+  ahead fails the run. `-PreflightOnly` covers all of that and never invokes
+  Cargo; without the switch, the locked bridge check runs into
+  `target/asio-qa`. The harness deliberately fails closed instead of mutating
+  the parent shell or launching vcvars itself: enter the developer prompt first
+  with `vcvars64.bat -vcvars_ver=14.44`. If PATH surgery is needed after
+  vcvars (for example demoting Git's `link.exe`), do it with delayed expansion
+  (`cmd /v:on`, `!PATH!`); `%PATH%` expands at parse time and must never be
+  referenced after vcvars. Passing this harness proves toolchain wiring only,
+  not device enumeration, stream, soak, latency or license acceptance.
+
+  ```powershell
+  pwsh qa/harnesses/check-asio-build.ps1 -SelfTest
+  pwsh qa/harnesses/check-asio-build.ps1 -PreflightOnly
+  ```
+
+- `ndi_studio_monitor_launcher.rs`,
   `ndi_test_patterns_launcher.rs` — external I/O bench helpers (see
   `qa/M4_IO_VALIDATION.md`).

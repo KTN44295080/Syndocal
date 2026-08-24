@@ -39,7 +39,9 @@ CPAL 0.16's ASIO input path does not deliver the stream error callback needed by
 - Pin the official SDK version, archive filename and SHA-256 in `qa/ASIO_SDK_PIN.json`; archive acquisition remains manual.
 - Require explicit `CPAL_ASIO_DIR` and `LIBCLANG_PATH`; do not rely on an implicit build-time download.
 - Use an isolated target directory such as `target/asio-qa`.
-- Run the supported local build check as `& .\qa\harnesses\check-asio-build.ps1`; it validates the explicit local SDK and `libclang.dll` before Cargo can execute `asio-sys`'s download fallback.
+- Run the supported local build check as `& .\qa\harnesses\check-asio-build.ps1` from the pinned developer shell (`vcvars64.bat -vcvars_ver=14.44`); it validates the explicit local SDK and `libclang.dll` before Cargo can execute `asio-sys`'s download fallback.
+- Direct-Cargo P0 preflight (fail-closed, included in `-PreflightOnly`, which never invokes Cargo): `VCToolsInstallDir` must canonicalize (trailing separator/case only) to `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207`; that directory and its `bin\Hostx64\x64\link.exe` must exist; `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` must already be pinned to exactly that linker (the canonical spelling is repinned); and `where.exe link.exe` must succeed non-empty with the pinned linker first, even when Git's `link.exe` appears later in the resolution order. The harness fails closed instead of mutating the parent shell or launching vcvars; if PATH surgery is needed after vcvars, use delayed expansion (`cmd /v:on` with `!PATH!`), never `%PATH%`.
+- Deterministic no-Cargo proof: `pwsh qa/harnesses/check-asio-build.ps1 -SelfTest` (parser gate, source contract, linker-pin matrix). Preflight or cargo-check success proves toolchain wiring only, not driver enumeration, stream, soak, latency, or license acceptance.
 - Prove the regular cross-platform workflow never enables the ASIO feature.
 - Package ASIO notices and the selected license path with the ASIO artifact.
 
@@ -153,6 +155,7 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 
 - [x] Isolated non-default ASIO bridge, app integration and operator UI implemented.
 - [x] SDK version/archive/SHA pin recorded; local build requires explicit SDK and libclang paths.
+- [x] Direct-Cargo P0 closed: `-PreflightOnly` fail-closed MSVC toolset/linker-pin preflight implemented with parser/static/self-test proof. On 2026-08-25 the live preflight passed inside a fresh `vcvars64.bat -vcvars_ver=14.44` shell with `VCToolsInstallDir` exactly `14.44.35207`, the pinned Community `Hostx64\x64\link.exe` first and Git's `link.exe` second; the full ASIO Cargo check remains part of the next native checkpoint.
 - [x] One explicit working-driver short smoke with applied buffer and XRUN telemetry.
 - [x] Unavailable explicit driver fails without another-driver or WASAPI fallback.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.

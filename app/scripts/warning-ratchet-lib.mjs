@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { closeSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -50,6 +50,196 @@ const CARGO_CONFIG_ENV_KEYS = new Set([
   "RUSTDOC",
   "CARGO_HOME",
 ]);
+
+// Every Windows Cargo invocation must carry the exact MSVC link.exe pin from
+// the native build completion gate, so the ratchet accepts precisely this one
+// target-linker environment pair and preserves it into controlled child
+// environments. The only second value is the exact Enterprise edition-root
+// used by GitHub's official hosted windows-2022 image, and it is accepted only
+// in that wrapper-marked hosted context. Every other target linker key/value
+// stays fail-closed forbidden (Git usr/bin/link.exe, stale toolsets, bare names,
+// empty values, other triples), and Cargo config linker overrides stay forbidden.
+export const PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER";
+export const PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE = String.raw`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`;
+export const PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE =
+  String.raw`C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`;
+export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER =
+  "SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC";
+export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE =
+  "windows-2022-enterprise";
+const REQUIRED_LOCAL_VCVARS_BATCH =
+  String.raw`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat`;
+const REQUIRED_GITHUB_HOSTED_VCVARS_BATCH =
+  String.raw`C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat`;
+
+function isGitHubHostedWindowsToolchain(environment) {
+  return environment?.GITHUB_ACTIONS === "true"
+    && environment?.RUNNER_OS === "Windows"
+    && environment?.RUNNER_ENVIRONMENT === "github-hosted"
+    && environment?.[GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER]
+      === GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE;
+}
+
+function isGitHubActionsWindows(environment) {
+  return environment?.GITHUB_ACTIONS === "true"
+    && environment?.RUNNER_OS === "Windows";
+}
+
+function isPinnedWindowsMsvcTargetLinkerEntry(key, value, environment) {
+  if (key !== PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY) return false;
+  if (value === PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE) {
+    return !isGitHubActionsWindows(environment);
+  }
+  return value === PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE
+    && isGitHubHostedWindowsToolchain(environment);
+}
+
+function isTargetLinkerEnvironmentKey(key) {
+  return /^CARGO_TARGET_.+_LINKER$/i.test(key);
+}
+
+const normalizeWindowsPathKey = (candidate) =>
+  path.win32.normalize(String(candidate)).trim().replace(/[\\/]+$/, "").toLowerCase();
+
+const toolsetDirectoryForLinker = (linker) => {
+  let directory = path.win32.dirname(linker);
+  for (let index = 0; index < 3; index += 1) directory = path.win32.dirname(directory);
+  return directory;
+};
+
+function defaultFileIsRegular(candidate) {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function defaultLocateWindowsLinkers(environment) {
+  const output = execFileSync("where.exe", ["link.exe"], {
+    env: environment,
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return String(output)
+    .split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
+}
+
+function parseCommandLineSetOutput(output) {
+  const parsedEnvironment = {};
+  for (const line of String(output).split(/\r?\n/)) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (match) parsedEnvironment[match[1]] = match[2];
+  }
+  return Object.keys(parsedEnvironment).length > 0 ? parsedEnvironment : null;
+}
+
+function defaultInitializeWindowsMsvcEnvironment(environment) {
+  const vcvarsBatch = isGitHubHostedWindowsToolchain(environment)
+    ? REQUIRED_GITHUB_HOSTED_VCVARS_BATCH
+    : REQUIRED_LOCAL_VCVARS_BATCH;
+  try {
+    const output = execFileSync(
+      "cmd.exe",
+      ["/d", "/s", "/c", `""${vcvarsBatch}" -vcvars_ver=14.44 && set"`],
+      {
+        env: environment,
+        encoding: "utf8",
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    return parseCommandLineSetOutput(output);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fail closed before any warning-ratchet Cargo metadata/build/test process.
+ * Tests may inject platform/file/where seams, but production callers use the
+ * real process platform, filesystem, and where.exe resolution order.
+ */
+export function verifyExactWindowsMsvcCargoEnvironment(
+  environment = process.env,
+  {
+    platform = process.platform,
+    fileIsRegular = defaultFileIsRegular,
+    locateLinkers = defaultLocateWindowsLinkers,
+    initializeEnvironment = defaultInitializeWindowsMsvcEnvironment,
+    log = (message) => console.error(message),
+  } = {},
+) {
+  if (platform !== "win32") return environment;
+
+  const initializedEnvironment = initializeEnvironment(environment);
+  if (!initializedEnvironment) {
+    throw new Error(
+      "Windows warning-ratchet Cargo could not initialize vcvars64.bat -vcvars_ver=14.44",
+    );
+  }
+  const hosted = isGitHubHostedWindowsToolchain(initializedEnvironment);
+  const expectedLinker = hosted
+    ? PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE
+    : PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE;
+  const expectedToolsetDirectory = toolsetDirectoryForLinker(expectedLinker);
+  const actualToolsetDirectory = initializedEnvironment?.VCToolsInstallDir?.trim();
+  if (!actualToolsetDirectory) {
+    throw new Error("Windows warning-ratchet Cargo requires VCToolsInstallDir from the exact MSVC 14.44.35207 x64 environment");
+  }
+  if (normalizeWindowsPathKey(actualToolsetDirectory)
+      !== normalizeWindowsPathKey(expectedToolsetDirectory)) {
+    throw new Error(
+      `Windows warning-ratchet Cargo VCToolsInstallDir does not match the required exact toolset: ${actualToolsetDirectory}; required ${expectedToolsetDirectory}`,
+    );
+  }
+  if (initializedEnvironment?.[PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY] !== expectedLinker) {
+    throw new Error(
+      `Windows warning-ratchet Cargo requires exact ${PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY}=${expectedLinker}`,
+    );
+  }
+  if (!fileIsRegular(expectedLinker)) {
+    throw new Error(`Windows warning-ratchet Cargo required linker is missing: ${expectedLinker}`);
+  }
+
+  let locatedLinkers;
+  try {
+    locatedLinkers = locateLinkers(initializedEnvironment);
+  } catch (error) {
+    throw new Error(
+      `Windows warning-ratchet Cargo where.exe link.exe failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const firstLinker = locatedLinkers?.[0];
+  if (!firstLinker) {
+    throw new Error("Windows warning-ratchet Cargo where.exe link.exe returned no linker");
+  }
+  if (normalizeWindowsPathKey(firstLinker) !== normalizeWindowsPathKey(expectedLinker)) {
+    const pathKeyEvidence = Object.entries(initializedEnvironment)
+      .filter(([key]) => key.toLowerCase() === "path")
+      .map(([key, value]) => {
+        const expectedBin = normalizeWindowsPathKey(path.win32.dirname(expectedLinker));
+        const expectedBinIndex = String(value)
+          .split(";")
+          .findIndex((candidate) => normalizeWindowsPathKey(candidate) === expectedBin);
+        return `${key}:expected-bin-index=${expectedBinIndex}`;
+      })
+      .join(", ");
+    throw new Error(
+      `Windows warning-ratchet Cargo resolves ${firstLinker} first; required first linker: ${expectedLinker}; PATH evidence: ${pathKeyEvidence || "missing"}`,
+    );
+  }
+
+  log("[warning-ratchet] vcvars64.bat -vcvars_ver=14.44 initialized");
+  log(`[warning-ratchet] pinned ${PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY}=${expectedLinker}`);
+  log(`[warning-ratchet] where.exe link.exe:\n${locatedLinkers.join("\n")}`);
+  return initializedEnvironment;
+}
 
 const FORBIDDEN_WARNING_ENV = [
   /^RUSTFLAGS$/i,
@@ -291,7 +481,9 @@ export function parseCargoJsonLines(lines, configuration, context) {
 
 export function forbiddenWarningEnvironment(environment = process.env) {
   return Object.entries(environment)
-    .filter(([key, value]) => value !== undefined && value !== "" && FORBIDDEN_WARNING_ENV.some((pattern) => pattern.test(key)))
+    .filter(([key, value]) => (value !== undefined && value !== "" || isTargetLinkerEnvironmentKey(key))
+      && !isPinnedWindowsMsvcTargetLinkerEntry(key, value, environment)
+      && FORBIDDEN_WARNING_ENV.some((pattern) => pattern.test(key)))
     .map(([key]) => key)
     .sort();
 }
@@ -299,7 +491,9 @@ export function forbiddenWarningEnvironment(environment = process.env) {
 export function controlledChildEnvironment(environment = process.env) {
   const rejected = forbiddenWarningEnvironment(environment);
   if (rejected.length > 0) throw new Error(`warning-affecting environment is forbidden: ${rejected.join(", ")}`);
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !FORBIDDEN_WARNING_ENV.some((pattern) => pattern.test(key))));
+  return Object.fromEntries(Object.entries(environment).filter(([key, value]) =>
+    isPinnedWindowsMsvcTargetLinkerEntry(key, value, environment)
+    || !FORBIDDEN_WARNING_ENV.some((pattern) => pattern.test(key))));
 }
 
 export function forbiddenGenericCommandEnvironment(environment = process.env) {
@@ -358,6 +552,7 @@ export function inspectCargoConfigText(text) {
   if (targets && typeof targets === "object" && !Array.isArray(targets)) {
     for (const target of Object.values(targets)) {
       if (!target || typeof target !== "object" || Array.isArray(target)) continue;
+      if (Object.hasOwn(target, "linker")) findings.push("cargo-target-linker");
       for (const key of CARGO_WARNING_FLAG_KEYS) {
         if (Object.hasOwn(target, key)) findings.push(`cargo-target-${key}`);
       }
@@ -443,7 +638,7 @@ function metadataFor(repoRoot, args, environment, timeoutMs) {
   }));
 }
 
-export function readCargoMetadata(repoRoot, configuration, environment = process.env) {
+function readCargoMetadataFromVerifiedEnvironment(repoRoot, configuration, environment) {
   assertControlledCargoInputs(configuration, repoRoot, environment);
   const metadataSets = [metadataFor(repoRoot, ["metadata", "--format-version", "1", "--no-deps", "--locked"], environment, configuration.timeoutMs)];
   for (const manifest of configuration.firstPartyManifests ?? []) {
@@ -456,6 +651,24 @@ export function readCargoMetadata(repoRoot, configuration, environment = process
     for (const id of metadata.workspace_members) firstPartyPackageIds.add(id);
   }
   return { packageNames, firstPartyPackageIds };
+}
+
+export function readCargoMetadata(
+  repoRoot,
+  configuration,
+  environment = process.env,
+  nativeToolchainOptions = {},
+) {
+  assertControlledCargoInputs(configuration, repoRoot, environment);
+  const verifiedEnvironment = verifyExactWindowsMsvcCargoEnvironment(
+    environment,
+    nativeToolchainOptions,
+  );
+  return readCargoMetadataFromVerifiedEnvironment(
+    repoRoot,
+    configuration,
+    verifiedEnvironment,
+  );
 }
 
 export async function runProcessWithTimeout(executable, args, options) {
@@ -544,7 +757,12 @@ export function compareOutputMarkerCoverage(expected, output) {
   return { ok: missing.length === 0, missing, expected: markers };
 }
 
-export async function runCargoConfiguration(configuration, repoRoot, environment = process.env) {
+export async function runCargoConfiguration(
+  configuration,
+  repoRoot,
+  environment = process.env,
+  nativeToolchainOptions = {},
+) {
   if (configuration.command?.executable !== "cargo") throw new Error(`configuration ${configuration.id} must use cargo`);
   if (!Number.isInteger(configuration.timeoutMs) || configuration.timeoutMs < 1) throw new Error(`configuration ${configuration.id} timeoutMs is invalid`);
   const args = [...configuration.command.args];
@@ -552,11 +770,19 @@ export async function runCargoConfiguration(configuration, repoRoot, environment
     throw new Error(`configuration ${configuration.id} must request Cargo JSON diagnostics`);
   }
   assertControlledCargoInputs(configuration, repoRoot, environment);
-  const metadata = readCargoMetadata(repoRoot, configuration, environment);
+  const verifiedEnvironment = verifyExactWindowsMsvcCargoEnvironment(
+    environment,
+    nativeToolchainOptions,
+  );
+  const metadata = readCargoMetadataFromVerifiedEnvironment(
+    repoRoot,
+    configuration,
+    verifiedEnvironment,
+  );
   const lines = [];
   const processResult = await runProcessWithTimeout("cargo", args, {
     cwd: repoRoot,
-    env: controlledChildEnvironment(environment),
+    env: controlledChildEnvironment(verifiedEnvironment),
     timeoutMs: configuration.timeoutMs,
     forwardStderr: true,
     onStdoutLine: (line) => lines.push(line),
