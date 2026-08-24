@@ -1,9 +1,12 @@
 # M6 Release Validation
 
 > Historical evidence notice: the v1.0.0 artifacts below prove the named 2026-07
-> baseline only. The current product train is `1.2.0-alpha.1`; its release cannot
+> baseline only. The current product train is `1.2.0-alpha.10`; its release cannot
 > inherit these hashes, version metadata, signatures, clean-machine, ASIO, or current
-> source evidence. Follow `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`.
+> source evidence. After the bounded alpha.10 checkpoint, follow the sole
+> operational resume authority,
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The completion flow
+> and this file remain subordinate detailed release-gate/evidence records.
 
 Date: 2026-07-12  
 Release: Syndocal 1.0.0  
@@ -132,4 +135,4 @@ browser viewport gate switches to Japanese, verifies `html[lang=ja]` and
 translated Project menu controls, then checks 1366x768 containment before
 returning to English.
 
-The current inventory is 1913/1913 static labels and attributes (100%).
+The inventory at this historical v1.1 checkpoint was 1913/1913 static labels and attributes (100%).

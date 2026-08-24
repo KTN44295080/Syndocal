@@ -1,11 +1,12 @@
 # Syndocal complete product roadmap and frozen checkpoint
 
-> **Current execution notice (2026-08-19):** this file remains the detailed product
-> requirement and final-gate authority, but its frozen checkpoint, 75.5% planning
-> roll-up, and Media A1 resume instructions are historical. Use
-> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for the current dependency order,
-> `1.2.0-alpha.9` version train, warning ratchet, D2 acceptance/D3 resume point, and checkpoint
-> workflow. Do not compare old and current percentages without identical denominators.
+> **Operational notice (updated 2026-08-24):** this file remains a subordinate
+> detailed product-requirement and final-gate record. Its frozen checkpoint,
+> 75.5% planning roll-up, and Media A1 resume instructions are historical. After
+> the bounded `1.2.0-alpha.10` checkpoint, the sole operational resume authority
+> is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; use
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` as the dependency-ordered product
+> gate registry it indexes. Do not compare percentages with different denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
 > consent and its challenge IPC are removed from the product. Normal Enable is one
@@ -1995,9 +1996,15 @@ After each commit report:
 - updated overall and per-domain percentages;
 - next blocking boundary.
 
-## 24. Resume protocol
+## 24. Historical resume protocol — do not execute
 
-At the next session or agent handoff:
+This protocol records the 2026-08-13 checkpoint only. It is not a current
+resume entry and grants no implementation authority. Resume exclusively from
+`AGENTS.md` and `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; their
+current model hierarchy, ownership, validation, cleanup, and stop rules
+supersede the historical instructions below.
+
+At the next session or agent handoff at that historical checkpoint:
 
 1. Read this file completely.
 2. Read `AGENTS.md` completely.
@@ -2075,9 +2082,11 @@ The next truthful milestone is: **Critical Path B / Clip Slot T2 protocol schema
 
 ## 27. 2026-08-21 active-train override
 
-The historical resume sentence above is not the current train entrypoint. Current
-authority is `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` and the latest operational
-state is `qa/CODEX_HANDOFF_2026-08-19.md`.
+This section records the active-train override as it stood on 2026-08-21; it is
+not a current entrypoint. After the bounded alpha.10 checkpoint, the sole
+operational resume authority is
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The completion flow and
+the 2026-08-19 handoff are subordinate product-gate and historical evidence logs.
 
 - DJ Link integration on the Syndocal side is implemented and independently
   reviewed P0/P1/P2=0; the external DJ-Link repository and physical wired
@@ -2305,13 +2314,14 @@ MIDI, DJ Link plus Stream Deck Pedal, audible click/Guide, the remaining ASIO
 matrix/licensing/fault paths, and the integrated long soak. This checkpoint does
 not advance those hardware denominators or claim whole-product completion.
 
-## 37. 2026-08-23 intentional pause and exact resume point
+## 37. Historical 2026-08-23 pause/resume point — do not execute
 
-The exhaustive remaining-task inventory and dependency-ordered resume sequence are
-in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. It supersedes conversational status
-for the current dirty tree. Resume with the DJ transport fixed-hash review and
-integrated D3 gates; do not build alpha.8 or touch hardware before those are green.
-The accepted denominator remains 19/71 (26.8%).
+The then-current remaining-task inventory and dependency-ordered resume sequence
+were in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That file is now a historical
+checkpoint superseded by
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Its old DJ/D3/alpha.8
+resume order must not be used. The accepted denominator at that historical
+checkpoint remained 19/71 (26.8%).
 
 ## 38. 2026-08-24 pre-alpha.8 software/source closure checkpoint
 
@@ -2558,3 +2568,28 @@ area, let the upper workspace use the freed height in restored/maximized/
 fullscreen modes, retain explicit rejoin routes, and restore saved split ratios
 without shrinking existing targets. Stale generated build/cache trees are now a
 recurring checkpoint cleanup obligation after the owning commit/push.
+
+## 44. 2026-08-24 alpha.10 pane semantic correction — accepted and paused
+
+The preceding alpha.10 layout-P1 wording is **historical and superseded** for
+acceptance: it treated the upper workspace as the survivor and did not encode the
+real Stage/Sources topology. Alpha.7 and alpha.8 are immutable historical train
+evidence. Alpha.10 was subsequently committed/pushed as
+`5c7e19a72a97e20f5ece553594841103990a78a9`; its exact final evidence and pause
+state are recorded in the post-alpha.10 handoff.
+
+The current contract is exact. Integrated Control/LIVE has real Timeline above,
+real Stage/Groups lower-left, and Sources lower-right. Timeline detachment
+removes Timeline only, leaving real Stage/Groups plus Sources at full main-window
+height. Stage detachment removes Stage/Groups only, leaving Timeline plus Sources.
+With both detached, Sources fill the entire main workspace. Do not accept an
+empty lower band or a Timeline Preview as a Stage substitute.
+
+Required proof covers both detach orders and both reverse rejoin orders, native
+child-titlebar `X` closure, expand-before-detach and expand-before-rejoin,
+outer document/app scroll zero in every state, and preservation of Setup/Patch
+Groups. Setup, Edit, and Mixer must remain non-regressed. The final native
+measurement rows for maximized/restored/F11 classes and physical 3840x2160 at
+150% scaling passed on the corrected committed alpha.10 source with independent
+review. The later rebuild's distinct binary hash is recorded separately and is
+not used to relabel the same-source physical captures as proof of that exact hash.

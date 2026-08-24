@@ -1,5 +1,10 @@
 # Codex handoff: post-unification continuation
 
+> Historical handoff only. After the bounded `1.2.0-alpha.10` checkpoint, the
+> sole operational resume authority is
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; current operating rules
+> are in `AGENTS.md`.
+
 Date: 2026-08-11. Direction: Fable (supervisor) -> Codex. The user asked for a single
 consolidated handoff so Codex can carry the queue forward. Supervisor-exclusive items
 that Codex cannot perform are listed at the end and remain with Fable/the user.
@@ -57,10 +62,14 @@ separately from #11 as coherent units):
 4. Division of labor: Codex implements code; Fable does analysis/docs/spec drafting/
    verification/rulings/commits/native GUI. Reviews are never skipped and never
    downgraded.
-5. Model tiering for Codex jobs: default `--model gpt-5.6-luna --effort xhigh`; only
-   genuinely hard tasks (state machines, concurrency, perf-critical, large design
-   discretion) use Sol. Effort below high is never allowed. Claude side may freely use
-   Opus for reviews/heavy assists, Sonnet for light lanes.
+5. Historical model tiering (superseded on 2026-08-24): this handoff originally
+   made Luna the default. The active project rule is Sol > Ox-alpha
+   (`opencode/x-preview-f-free`) > Terra > Luna: Sol owns decomposition and
+   integration, Ox is the default delegate, Terra implementation requires an
+   independent Ox review, and Luna Max is restricted to small explicit
+   low-ambiguity units. Work is parallel by default and every safely independent
+   lane must be kept productive; only true dependencies, same-file ownership,
+   destructive actions, and exclusive native/UI operations are serialized.
 
 ## Verification discipline (supervisor contract — reproduce before any commit)
 

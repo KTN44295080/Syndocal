@@ -1,8 +1,10 @@
 # Syndocal historical release decision — 2026-08-12
 
-> This decision records the `1.1.0` checkpoint. The active product train is now
-> `1.2.0-alpha.1`; use `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current
-> completion, version, warning, ASIO, and release gates.
+> This decision records the `1.1.0` checkpoint and is historical evidence, not
+> current authority. The active product train is now `1.2.0-alpha.10`; after its
+> bounded checkpoint, use the sole operational resume authority
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The completion flow
+> remains its subordinate detailed product-gate registry.
 
 ## Decision
 
@@ -12,7 +14,7 @@ instead of an embedded 3D visualizer. This is not yet a production/venue or
 public-distribution sign-off. Those decisions require the external evidence
 listed below.
 
-## Current software evidence
+## Software evidence at this 2026-08-12 decision checkpoint (historical)
 
 - Daslight COLOR MAPPINGS routing is 68/68 with strict fail-closed boundaries
   documented per effect.

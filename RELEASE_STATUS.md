@@ -1,24 +1,36 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-22
+Updated: 2026-08-24
 Branch: `codex/syndocal-v1.2` (current development branch)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note: the active `1.2.0-alpha.5` train is not represented by the old v1.0 completion statement alone. Use the [current completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md), [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md), [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) as the current authorities. Do not mark AI3 complete, advance to AI4, or close the current Windows product release until their unchecked gates are closed.
+> Current continuation note (updated 2026-08-24): after the bounded
+> `1.2.0-alpha.10` checkpoint, the [post-alpha.10 pause handoff](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md)
+> is the sole operational resume authority. The [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md),
+> [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
+> [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and
+> [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) are subordinate historical
+> or domain gate/evidence records. Do not mark AI3 complete, advance to AI4, or
+> close the current Windows product release until the new handoff's indexed
+> unchecked gates are closed. Until that post-alpha.10 handoff explicitly
+> records its final commits/push and leaves preparation state, the
+> [2026-08-23 pause handoff](qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md) remains
+> the current resume record.
 
-## 2026-08-22 alpha.5 recovery-durability checkpoint
+## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 
-`1.2.0-alpha.5` is the next distributed-development ordinal; it is not beta, RC,
+Historical checkpoint: at this date, `1.2.0-alpha.5` was then the next
+distributed-development ordinal; it was not beta, RC,
 or release. E2 authority bundle/generation consistency and D1 cache read purity
-are reconciled as accepted. E3 automated production-path evidence is independently
+were reconciled as accepted. E3 automated production-path evidence was independently
 green at P0/P1/P2 zero: App and its driver share publication/startup/ACK consumers,
 and the registered Rust commands share the complete durable/lifecycle/publication
 service with the process-boundary test. All focused frontend, Rust, build, invoke,
-localization, format, diff, and warning gates pass with zero first-party warnings.
+localization, format, diff, and warning gates passed with zero first-party warnings.
 
-E3 is now accepted. The ordinary-off pause/trace implementation was independently
+E3 was accepted at that checkpoint. The ordinary-off pause/trace implementation was independently
 reviewed at P0/P1/P2 zero and passed `e3_` 6/6 with zero first-party Cargo warnings.
 The E3 crash-acceptance build produced a 56,461,824-byte executable with SHA-256
 `97C21F367A46375A2B6010CC6E9307E7D853CEC4EAF420150A06CA47AD9D4182` and
@@ -32,8 +44,8 @@ browser intent again survived the exact-path kill. A hook-free relaunch provided
 exactly one responsive, maximized `Syndocal` window at PID `44376`. Journal serial
 46 and SHA-256 `22E329110C96997CFEC893CFE6EF48D5F9F77A5A453C9DE64FC91ABACAF650F9`
 remained unchanged. The acknowledged recovery offer remained until a later
-coherent CleanSave, as specified. Phase 1 progress is 17/71. E4 Save durability is
-the next tranche; this does not complete AI3, physical I/O, ASIO, or the release.
+coherent CleanSave, as specified. Phase 1 progress was 17/71 at that checkpoint. E4 Save durability was
+the next tranche; this did not complete AI3, physical I/O, ASIO, or the release.
 
 Commit preflight removed five newly added `too_many_arguments` suppressions through
 an internal context refactor and strengthened the external-admission lock-order
@@ -43,9 +55,13 @@ suppressions are both zero. The final checkpoint-source native build passed in
 `8FDFD0EFB8D71D49BD1A137A4AA68F440F098B2C7B3BA253461F5C2AC14D6F19`.
 PID `113948` provided exactly one responsive, maximized `Syndocal` window.
 
-## 2026-08-22 alpha.4 development checkpoint
+## 2026-08-22 alpha.4 development checkpoint (historical)
 
-`1.2.0-alpha.4` is the current distributed-development metadata ordinal. It
+Scope note: all statements and evidence below describe only the 2026-08-22
+checkpoint and are not current-train authority.
+
+Historical checkpoint: `1.2.0-alpha.4` was then the current
+distributed-development metadata ordinal. It
 does not claim a release candidate. The sample-frame Timeline scheduler is
 independently frozen at protocol hash
 `48FF684AFD66680DC97F1AB5447F5FAFF920E63A5609D9ABF1FC6F6CF502BD1B` and Engine

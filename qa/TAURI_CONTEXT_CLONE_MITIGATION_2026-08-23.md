@@ -1,5 +1,13 @@
 # Tauri Context clone crash mitigation (2026-08-23)
 
+Current-train notice (2026-08-24): the active product train is
+`1.2.0-alpha.10`; after its bounded checkpoint the sole operational resume
+authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The
+completion flow is a subordinate product-gate registry. The alpha.7/alpha.8
+checkpoints below are historical checkpoint evidence; their hashes, paths,
+identifiers, counts, and results are preserved exactly as recorded and are not
+claims that those artifacts are the current Syndocal build or authority.
+
 ## Scope and incident
 
 The Windows `1.2.0-alpha.7` native artifact repeatedly terminated with
@@ -84,9 +92,10 @@ intentionally, regenerate `Cargo.lock`, and repeat the full native stress
 matrix. Do not silently delete this workaround while the workspace remains on
 `tauri-runtime-wry 2.6.0`.
 
-## 2026-08-24 pre-alpha.8 source verification checkpoint
+## 2026-08-24 pre-alpha.8 source verification checkpoint (historical alpha.7 evidence)
 
-The mitigation and its native command boundary are now source/compile accepted on
+At that checkpoint, the mitigation and its native command boundary were
+source/compile accepted on
 `codex/syndocal-v1.2` at base HEAD
 `23f350c366ede2fdffcfbf3232e18112eada51ea`. The integrated D3 fixed-hash review
 returned P0=0/P1=0/release-blocking P2=0; Engine 822 passed / 2 ignored, I/O 148
@@ -108,19 +117,21 @@ independently reviewed. Warning-ratchet hashes are
 `55D2388C3EA244F3C58B207E651E56F33DB10B6E76BD404A2943497E384926AA` and
 `3391F2F149ADCED3B5641E48E326680686B8D243389EAFC7E2DCC3799AEA7E55`;
 the exercised warning counts are total/first-party 0/0, and missing/overflowing or
-ambiguous Git/Cargo/scanner evidence fails closed. The source freeze will be recorded
-at `qa/artifacts/source-freeze/2026-08-24-alpha7-pre-alpha8-source-freeze.sha256`
-after checkpoint documents stabilize.
+ambiguous Git/Cargo/scanner evidence fails closed. The source freeze was then
+recorded at `qa/artifacts/source-freeze/2026-08-24-alpha7-pre-alpha8-source-freeze.sha256`
+after checkpoint documents stabilized.
 
 This section does not alter the native acceptance condition above. Product metadata
-remains `1.2.0-alpha.7`, the accepted denominator remains exactly 19/71 (26.8%),
-and no current native/WER/100-reload or one-hour soak result is claimed. Next is the
+at that checkpoint was `1.2.0-alpha.7`, the accepted denominator remained exactly
+19/71 (26.8%), and no native/WER/100-reload or one-hour soak result was claimed
+at that checkpoint. The planned next step was the
 synchronized alpha.8 ordinal and `check:release`, then an exact-path native build and
 the complete reload, maximize/F11, LAN/DJ-toggle, WER, and integrated soak matrix.
 
-## 2026-08-24 current-source alpha.8 native evidence
+## 2026-08-24 current-source alpha.8 native evidence (historical checkpoint)
 
-The source/compile mitigation is now exercised by the current synchronized
+The source/compile mitigation was exercised at this historical checkpoint by the
+then-current synchronized
 `1.2.0-alpha.8` artifact on `codex/syndocal-v1.2` at pre-commit base HEAD
 `23f350c366ede2fdffcfbf3232e18112eada51ea`. The final current-source frontend
 chain passed 25/25 in
@@ -131,11 +142,11 @@ checker hashes are `4974a2f828b8b8bd1c9fbe43390d97d5d6702179` and
 `73a43ecfb2c6f10c07fb638f84f50375de5213a0`; the Scene Matrix checker SHA-256 is
 `F164CD5B5C6C130E1D27B21C6A04CB1C361CEE3346F08FA9DFF77DE522C5FE11`.
 
-The authoritative staged-source inventory is
+The authoritative staged-source inventory at this historical checkpoint was
 `qa/artifacts/source-freeze/2026-08-24-alpha8-current-source-freeze.sha256`.
 It contains 103 payload records and excludes its own manifest envelope from the
 payload to avoid recursive self-hashing. The alpha.7 pre-alpha.8 manifest remains
-historical evidence and is not current alpha.8 source authority.
+historical evidence and is not that checkpoint's alpha.8 source authority.
 
 Only the exact checkout release executable was stopped before running the
 required `pnpm --dir app tauri build --no-bundle` from the Visual Studio Developer

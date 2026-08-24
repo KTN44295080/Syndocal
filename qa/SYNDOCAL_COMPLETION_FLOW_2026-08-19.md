@@ -1,4 +1,4 @@
-# Syndocal completion flow — current execution authority
+# Syndocal completion flow — subordinate product-gate registry
 
 Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
@@ -244,9 +244,12 @@ receipts, exact replay, final revalidation, and S0 Blackout remain mandatory.
 
 ## 1. Purpose and authority
 
-This is the current dependency-ordered execution and handoff authority from the
-present AI3 checkpoint to a truthful public release. It does not erase detailed
-requirements. The following documents remain normative for their domains:
+After the bounded `1.2.0-alpha.10` checkpoint, the sole operational resume
+authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. This file
+remains the dependency-ordered product-gate registry from the earlier AI3
+checkpoint to a truthful public release. It does not erase detailed requirements.
+The following documents remain normative within their domains and subordinate to
+the operational stop/resume state:
 
 - `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md`: complete product requirements,
   traceability, severity, hardware, distribution, and final integrated gate;
@@ -257,12 +260,13 @@ requirements. The following documents remain normative for their domains:
 - `qa/M4_IO_VALIDATION.md`, `qa/M5_RELIABILITY_VALIDATION.md`, and
   `qa/M6_RELEASE_VALIDATION.md`: physical I/O, soak, and release evidence;
 - `RELEASE_STATUS.md`: historical release evidence and external blockers;
-- `qa/CODEX_HANDOFF_2026-08-19.md`: exact current implementation checkpoint.
+- `qa/CODEX_HANDOFF_2026-08-19.md`: historical implementation checkpoint log.
 
 Older percentages, resume instructions, and v1.0/v1.1 completion statements are
-historical when they conflict with this file. In particular, the 2026-08-13 75.5%
-planning roll-up is not current release evidence, and its old Media A1 resume point
-must not replace the current AI3 resume point.
+historical when they conflict with the post-alpha.10 handoff, `AGENTS.md`, or this
+registry. In particular, the 2026-08-13 75.5% planning roll-up is not current
+release evidence, and its old Media A1 resume point must not replace the bounded
+residual selected through the current handoff.
 
 ## 2. Completion decision
 
@@ -290,17 +294,29 @@ all percentages.
 Every implementation tranche uses this flow. A later tranche may not consume an
 unreviewed or unverified predecessor.
 
-1. Read `AGENTS.md`, this file, the domain authority, and the current handoff fully.
+1. Read `AGENTS.md`, the post-alpha.10 handoff, this registry, and the selected
+   domain authority fully.
 2. Run `git status --short`, `git log -3 --oneline`, compare local/remote HEAD, and
    preserve all unrelated or user-owned changes.
 3. Write the requirement, non-goals, risk class, compatibility/migration boundary,
    file ownership, exact tests, native/hardware needs, and stop condition.
-4. Delegate material implementation to Luna Max by default; use Terra High/xHigh
-   for difficult implementation and Sol only when needed. Assign explicit files.
-5. Assign a separate adversarial reviewer. The reviewer is read-only until the
-   implementation owner reports a stable checkpoint.
-6. While agents/builds run, advance non-overlapping investigation, test planning,
-   documentation, or evidence work. Never let agents edit the same files.
+4. Keep decomposition, instructions, integration, and completion claims with Sol.
+   Use the capability hierarchy Sol > Ox-alpha (`opencode/x-preview-f-free`) >
+   Terra > Luna, make Ox the default delegate for bounded implementation,
+   investigation, and review, and assign explicit files. Use Luna Max only for
+   small, explicit, low-ambiguity units already decomposed by Sol. A Terra
+   implementation requires an independent Ox adversarial review before integration.
+5. Assign a separate adversarial reviewer, defaulting to an independent Ox session.
+   The reviewer is read-only until the implementation owner reports a stable
+   checkpoint; implementer self-review is never sufficient.
+6. Parallel execution and elimination of avoidable elapsed time are mandatory.
+   Continuously fill every safely independent available lane with a
+   capability-appropriate assignment. While agents/builds/external I/O run, advance
+   non-overlapping implementation, investigation, test planning, documentation, or
+   evidence work. Leave a lane idle only when no safe productive task exists and
+   record why at the next checkpoint. Serialize only true dependencies, exclusive
+   UI/native operations, destructive actions, or same-file ownership, and never let
+   agents edit the same files concurrently.
 7. Implement one bounded unit. Do not mix refactors, warning cleanup, schema change,
    UI change, and unrelated features in one commit unless they form one indivisible
    correctness boundary.
@@ -330,7 +346,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.9`. The branch name may remain historical; artifact metadata and tags
+`1.2.0-alpha.10`. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
@@ -397,7 +413,8 @@ platform configuration and classify every first-party diagnostic.
    modified file is a tranche blocker. Handoff records baseline/current/delta.
 3. **W2 removal:** use focused commits to remove unreachable compatibility code,
    narrow `cfg` boundaries, delete obsolete helpers, or add real production use.
-   Do not hide debt with crate-wide `allow(dead_code)`, `-Awarnings`, fake reads, or
+   Do not hide debt with crate-wide `allow(dead_code)`, rustc command-line
+   warning-allow flags, fake reads, or
    arbitrary Vite limit increases. A narrow allow requires justification, owner,
    upstream link when applicable, and expiry.
 4. **W3 zero gate:** before beta, all supported first-party configurations must pass
@@ -703,9 +720,11 @@ Stop and report rather than claiming completion if any command selects zero test
 any warning is unowned, any artifact differs from the evidence hash, any external
 gate is unavailable, or any claim exceeds the proven platform/hardware boundary.
 
-## 12. Exact resume point
+## 12. Historical exact resume point — do not execute
 
-Resume from the current Windows-first checkpoint in this order:
+This was the resume order at the 2026-08-21 Windows-first checkpoint. It is
+historical and must not be executed as a current plan. Resume only through
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` and `AGENTS.md`.
 
 1. preserve the zero-warning Windows/Linux rows and W1 ratchet; measure the two
    macOS rows before claiming W0, beta, or RC warning acceptance;
@@ -1382,11 +1401,12 @@ rows, and the integrated long soak remain mandatory before product completion.
 
 ## 29. 2026-08-23 intentional pause checkpoint
 
-Work stopped before alpha.8/native/hardware execution. The exhaustive stop state,
-partial D3 freeze, statically approved Tauri mitigation, current DJ transport
-freeze, exact resume order, and all remaining product tasks are recorded in
-`qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. The active accepted denominator remains
-19/71 (26.8%); no paused item advances it.
+Work stopped before alpha.8/native/hardware execution. The then-current stop state,
+partial D3 freeze, statically approved Tauri mitigation, DJ transport freeze, and
+resume order were recorded in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That file
+is historical and superseded by
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The accepted denominator
+at this historical checkpoint remained 19/71 (26.8%); no paused item advanced it.
 
 ## 30. 2026-08-24 pre-alpha.8 D3 and source-gate closure
 
@@ -1573,3 +1593,30 @@ ratio restoration, focused browser proof, and required native geometry proof.
 After each committed/pushed checkpoint, verified-regenerable stale build/cache
 output must be inventoried and removed while current release/QA evidence remains
 protected.
+
+## 35. 2026-08-24 alpha.10 pane semantic correction — accepted and paused
+
+The alpha.10 entry paragraph above is **historical and superseded** as an
+acceptance topology: its "upper-content expansion" wording did not require the
+real Stage and Sources. Alpha.7 and alpha.8 remain immutable historical train
+evidence. Alpha.10 was subsequently committed/pushed as
+`5c7e19a72a97e20f5ece553594841103990a78a9`; its exact focused/native/source-
+bound physical evidence and post-checkpoint stop state are indexed by the sole
+resume authority named in section 1.
+
+Control/LIVE must render the real Timeline above, real Stage/Groups lower-left,
+and Sources lower-right. With Timeline detached, only Timeline leaves and the
+main window's real Stage/Groups plus Sources use its full height. With Stage
+detached, only Stage/Groups leave and Timeline plus Sources remain. With both
+detached, Sources alone fill the entire main workspace. A sparse Timeline
+Preview or empty lower band is not an acceptable Stage replacement.
+
+The final focused and native acceptance must prove both detachment orders
+(Timeline then Stage; Stage then Timeline), both reverse rejoin orders, child
+titlebar `X` closure, expand-before-detach and expand-before-rejoin, and outer
+document/app scroll of zero in every state. Setup/Patch Groups remain available;
+Setup, Edit, and Mixer remain non-regressed. The final native record is reserved
+for maximized/restored/F11 classes and physical 3840x2160-at-150%-scaling
+measurements. Those alpha.10 rows passed on the corrected committed source and
+were independently reviewed; this does not close any of the 51 unchecked product
+rows, ASIO, DJ peer artifact, distribution, or hardware boundaries below.

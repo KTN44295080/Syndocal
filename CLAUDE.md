@@ -1,6 +1,17 @@
 # Syndocal Claude Code Handoff
 
-Start with `RELEASE_STATUS.md`. It is the concise, current v1.0 release disposition and supersedes stale future-work statements preserved in this historical log.
+> Historical log only. Current operating rules are in `AGENTS.md`. After the
+> `1.2.0-alpha.10` stop checkpoint, the sole operational resume authority is
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; current product gates
+> remain in the subordinate domain records it indexes. Any instruction below
+> that conflicts with those two documents is superseded. Until that handoff
+> explicitly records its final commits/push and promotes itself out of
+> preparation state, `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md` remains the
+> current resume record.
+
+Historical note only: this file once instructed readers to start with
+`RELEASE_STATUS.md`. Do not do so now; start with `AGENTS.md`, then use the
+authority-selection rule above to choose the current pause handoff.
 
 This workspace contains the completed Syndocal 1.0.0 release candidate, a Rust/Tauri/SolidJS DMX lighting + VJ control app. Historical implementation notes remain below for traceability.
 
@@ -10,10 +21,13 @@ This workspace contains the completed Syndocal 1.0.0 release candidate, a Rust/T
 - Developer / publisher: Seraf()のKTN.
 - Project files use `.sdc`. Keep legacy project-name and extension aliases out of user-facing files.
 - Platform support is a v1.0 release requirement: Windows 10+ and macOS 12+ are Tier 1; Linux (Ubuntu 22.04+) is Tier 2. Keep the shared engine, project format, network I/O, MIDI/OSC, UI, and wgpu video path portable. Isolate Spout, Syphon, serial timing, and thread-priority code behind platform modules/features so unavailable integrations never prevent startup.
-- The user prefers lightweight checks for small changes. Use full Tauri builds only at major milestones.
+- Historical preference only: the old "full Tauri builds only at major milestones"
+  rule is superseded. Follow the native build and launch gate in `AGENTS.md` for
+  every native UI/runtime change.
 - 3D visualization is deferred/external for now. Keep the app focused on the Setup 2D mapping visualizer unless the user asks otherwise.
 - The Setup UI should keep a DasLight-like operational feel: dense, dark, tabbed, grid-based, and tool-oriented.
-- README updates can lag implementation unless the user asks for docs. This file is the current handoff artifact.
+- Historical preference only: checkpoint documentation must follow `AGENTS.md`;
+  this file is not the current handoff artifact.
 
 ## Current Workspace State
 

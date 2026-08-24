@@ -4,6 +4,14 @@ Date: 2026-08-21
 Status: Required; Syndocal implementation in progress; DJ-Link peer implementation and hardware acceptance pending
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
+Current-train notice (2026-08-24): the active product train is
+`1.2.0-alpha.10`; after its bounded checkpoint the sole operational resume
+authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. This file
+remains the subordinate detailed DJ/pedal gate. The alpha.8 references in the
+2026-08-24 checkpoint below are historical evidence only, not a claim that
+alpha.8 is the current Syndocal artifact or authority. The live acceptance status
+remains `Required / Peer and hardware pending`.
+
 This document supersedes the earlier design in which a Pedal entered Syndocal first
 and Syndocal sent MIDI to rekordbox. That design must not be restored.
 
@@ -244,9 +252,9 @@ Until the separately developed DJ-Link peer exposes the fixed contract and both 
 pass the wired-LAN hardware matrix, this feature remains `Required / Peer and hardware
 pending`; Syndocal-side automated completion is not an end-to-end completion claim.
 
-## 2026-08-24 software/package checkpoint
+## 2026-08-24 software/package checkpoint (historical alpha.8-era evidence)
 
-The separately developed DJ-Link peer package `1.1.0` is now committed and pushed
+The separately developed DJ-Link peer package `1.1.0` was committed and pushed
 on `Beta` at `6c4f4328a6866d9d48022bd8ee20a7887c9de851`. Its package/runtime checks passed:
 54 tests, 16 Node syntax checks, and zero warnings. The packaged
 `C:\Users\kouty\Desktop\rb-output\dist\server.exe` is SHA-256
@@ -254,24 +262,24 @@ on `Beta` at `6c4f4328a6866d9d48022bd8ee20a7887c9de851`. Its package/runtime che
 closes only the peer software/package checkpoint; it does not promote any
 hardware or wired-LAN row.
 
-On the current Windows machine, rekordbox was not running and the Stream Deck
-Pedal was not detected during this checkpoint. The old peer process remained on
+At this checkpoint on this Windows machine, rekordbox was not running and the
+Stream Deck Pedal was not detected. The old peer process remained on
 UDP 22346/HTTP 8787; no production cutover was claimed, and the known Daslight
-and Ableton processes were left untouched. Syndocal's current alpha.8 native
-build/reload and completed five-display pane-route evidence are recorded
-separately in
+and Ableton processes were left untouched. Syndocal's then-current alpha.8
+native build/reload and completed five-display pane-route evidence (historical
+checkpoint) are recorded separately in
 `qa/artifacts/native-physical-acceptance/2026-08-24-alpha8-current-source-final/native-display-route-current-source.json`
 (SHA-256 `41F1D6E2528E7439657F8879F753255221E25F2DF0474139B56C1570E2C32C41`);
 neither substitutes for the DJ/rekordbox/State Sync/Pedal matrix.
 
-The alpha.8 staged-source authority is
+The alpha.8 staged-source authority at that historical checkpoint was
 `qa/artifacts/source-freeze/2026-08-24-alpha8-current-source-freeze.sha256`, with
 103 payload records and its own manifest envelope excluded to avoid recursive
 self-hashing. The alpha.7 pre-alpha.8 manifest is historical only. The display
 route accepts placement/maximize/containment only: all five pane captures still
 show the owner-registration status at six seconds, so transactional pane
-operation, warning-clean pane startup, and completed owner registration remain
-unaccepted alpha.9 work.
+operation, warning-clean pane startup, and completed owner registration remained
+unaccepted alpha.9 work at that checkpoint.
 
 Therefore the authoritative status remains `Required / Peer and hardware
 pending`. Still-open evidence includes wired-LAN HELLO/auth/session replacement,

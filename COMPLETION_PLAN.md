@@ -2,14 +2,21 @@
 
 作成日: 2026-07-10
 対象: Syndocal — Rust/Tauri/SolidJS 製 DMX 照明 + VJ 統合コントロールアプリ
-運用: この文書は「完成(v1.0)」までのロードマップと、Codex/Claude セッションへの標準作業指示を兼ねる。
-日々のスライス記録は従来どおり `CLAUDE.md` に追記する。定期的または意味のある進捗チェックポイントでは、関連するロードマップ/リリース/QA文書と引き継ぎを更新し、検証後にコミット・プッシュする。
+歴史的運用: この文書は当時の「完成(v1.0)」ロードマップと、当時の
+Codex/Claude セッション向け作業指示を保存する。現行指示として実行しない。
+当時は日々のスライス記録を `CLAUDE.md` に追記していた。現在の記録、
+検証、コミット、プッシュ、停止、再開は下記 Operational authority に従う。
 
-> **Current authority (2026-08-19):** this file preserves the historical v1.0
-> baseline. The dependency-ordered flow from the active `1.2.0-alpha.5` train to
-> truthful completion is `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. Its current
-> version, warning, commit/push, AI3, ASIO, native/hardware, legal, and clean-machine
-> gates override historical resume instructions in this file.
+> **Operational authority (updated 2026-08-24):** this file preserves the
+> historical v1.0 baseline only. After the bounded `1.2.0-alpha.10` checkpoint,
+> the sole resume authority is
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The dependency-ordered
+> product gates remain in `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` as a
+> subordinate detailed registry. Those documents override every historical
+> resume, version, warning, commit/push, AI, ASIO, native/hardware, legal, and
+> clean-machine statement below. Until the post-alpha.10 handoff explicitly
+> records its final commits/push and leaves preparation state,
+> `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md` remains the current resume record.
 
 ---
 
@@ -17,7 +24,7 @@
 
 以下がすべて満たされたとき、Syndocal v1.0 とする。
 
-**2026-07-12 時点の旧 v1.0 判定は完了。現在の拡張完成判定は未完了。** 追加された Media/VJ/Effects/Transition/Timeline 要件を含む現行の唯一の完遂基準は `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md` とする。実機DMX波形と署名/公証は、リポジトリ外の機材・資格情報を要する外部受入項目として `qa/M4_IO_VALIDATION.md` と `qa/M6_RELEASE_VALIDATION.md` に分離している。
+**2026-07-12 時点の旧 v1.0 判定は完了。現在の拡張完成判定は未完了。** Media/VJ/Effects/Transition/Timeline 要件を追加した当時の拡張ロードマップは `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md` であるが、現行の依存関係順の完遂基準は `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` を正とする。実機DMX波形と署名/公証は、リポジトリ外の機材・資格情報を要する外部受入項目として `qa/M4_IO_VALIDATION.md` と `qa/M6_RELEASE_VALIDATION.md` に分離している。
 
 ### 機能要件
 - [x] 照明: GDTF/カスタムプロファイルのパッチ → 2D マッピング → キュー/タイムライン/エフェクト → Art-Net / sACN / シリアル DMX 出力。ループバック、1時間ソーク、予算ゲートは合格。物理リグ受入は外部項目として記録。
@@ -61,7 +68,9 @@
 - `app/src/projectRecoveryStorage.ts` + `app/scripts/check-project-storage-helpers.mjs`: localStorage ベースのプロジェクト自動リカバリチェックポイント(`syndocal.projectRecovery.v1`)。
 - App.tsx / PatchFixtureFormPanel / WorkspaceChrome / styles.css / main.rs への対応配線。
 
-**→ 最初のアクション: この進行中スライスを検証して完結させ、コミットチェックポイントを切ること(§4 M0 参照)。**
+**歴史的な最初のアクション — 実行禁止:** 当時はこの進行中スライスを
+検証して完結させ、コミットチェックポイントを切る予定だった。現在は
+post-alpha.10 handoff 以外から再開しない。
 
 ### 未着手(v1.0 の主要残作業)
 1. ネイティブ wgpu ビデオ出力(現在は CPU リファレンスコンポジタ + プレビューウィンドウ)。

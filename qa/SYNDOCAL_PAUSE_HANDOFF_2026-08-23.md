@@ -1,15 +1,20 @@
 # Syndocal pause handoff — 2026-08-23
 
-This document is the authoritative resume point for the intentionally paused
-Windows completion run. It records both the immediate unfinished integration and
-the complete remaining product checklist. It does not mark unverified work as
-accepted.
+> Historical checkpoint only. It was the authoritative resume point for the
+> 2026-08-23 pause, but is superseded after the bounded alpha.10 checkpoint by
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Preserve the exact
+> evidence below; do not use its old resume order as current instructions.
+
+This document records the intentionally paused Windows completion run, its then
+unfinished integration, and its then-current product checklist. It does not mark
+unverified work as accepted.
 
 ## 1. Stop state
 
 - Branch: `codex/syndocal-v1.2`
 - HEAD: `23f350c366ede2fdffcfbf3232e18112eada51ea`
-- Current product metadata: `1.2.0-alpha.7`
+- Historical stop-state snapshot at this checkpoint: current product metadata was
+  `1.2.0-alpha.7`.
 - Next native development artifact: `1.2.0-alpha.8`; do not overwrite or relabel
   the crashing alpha.7 artifact.
 - Accepted active denominator before this pause: 19/71 (26.8%). D3, the Tauri
@@ -107,7 +112,7 @@ Modified/untracked scope at the stop:
   control-plane suite, no-default check, full fmt, warning-zero proof, and fixed-
   hash independent review were blocked while `remote_ws.rs` was moving.
 
-## 3. Exact resume order — immediate blockers
+## 3. Historical exact resume order — do not execute
 
 Do these in order. Do not start hardware or an alpha.8 build before steps 1-5 are
 green.
@@ -340,7 +345,7 @@ hardware run passes.
   exact-process native build/UI/accessibility; full physical/ASIO/performance soak;
   ShowClock/two-PC faults; migration/corruption/security; clean-machine release.
 
-## 7. Resume commands and operating constraints
+## 7. Historical resume commands — do not execute
 
 - First read this file, `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`,
   `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md`, and the latest handoff before editing.
@@ -370,7 +375,7 @@ hardware run passes.
 - Do not increase the accepted denominator beyond 19/71 without the corresponding
   accepted evidence.
 
-## 9. Resume checkpoint — 2026-08-23 supervisor continuation
+## 9. Historical resume checkpoint — 2026-08-23 supervisor continuation
 
 Branch/HEAD remain `codex/syndocal-v1.2` / `23f350c366ede2fdffcfbf3232e18112eada51ea`.
 The shared dirty tree was preserved; no reset, checkout, clean, commit, or push was
@@ -1146,3 +1151,226 @@ the unused band and expand the remaining content while keeping usable rejoin
 controls and saved split ratios. The user has now authorized ongoing deletion of
 verified-regenerable stale build/cache output; the alpha.9 commit/push is the
 safety boundary before that cleanup.
+
+The preceding collapse/remaining-content formulation is a historical alpha.10
+observation and is **superseded by §9.20**'s real Timeline/Stage/Groups/Sources
+semantic contract; it is not acceptance proof.
+
+### 9.17 2026-08-24 alpha.9 push, stale-target cleanup, and alpha.10 start
+
+The accepted alpha.9 checkpoint was committed as
+`e9209d6de60eb6307045426b5c1b6f8c595c957d`
+(`checkpoint: validate Syndocal 1.2.0-alpha.9`) and pushed successfully to
+`origin/codex/syndocal-v1.2`. Post-push HEAD equaled upstream with
+ahead/behind 0/0 before alpha.10 edits began.
+
+The user authorized recurring removal of old generated output. A fixed,
+fail-closed cleanup harness now lives at
+`tools/cleanup-stale-targets.ps1`. Its dry-run resolved exactly 26 absolute,
+non-reparse candidates beneath this checkout: 24 old Cargo target roots, the
+old `target/x86_64-pc-windows-msvc` release tree, and
+`target/debug/incremental`. It explicitly protects `target/release`,
+`target/qa`, `target/root-warning-review`, `target/vendor-wry-review`,
+`target/asio-qa`, `target/warning-capture`, source, and QA artifacts. At the
+alpha.9 execution recorded below, the harness required no
+Cargo/rustc/link/lld-link/mspdbsrv process and HEAD=upstream. That run predates
+the clean-worktree guard: post-review hardening now requires every future
+`-Execute` run to additionally have `git status --porcelain=v1` succeed with an
+empty result, so current Execute requires both HEAD=upstream and a clean
+index/worktree before any deletion. A later Ox P2 was also closed: the harness
+now repeats the exact HEAD/upstream/clean checkpoint immediately before every
+individual removal, alongside the existing per-path build-process recheck, so a
+state change between planning and deletion fails closed.
+An Ox adversarial review found no scope P0/P1. The post-delete zero-candidate
+dry-run exposed a StrictMode sum bug that the review had missed; this was fixed
+and reverified as `PLAN-SUMMARY paths=0 bytes=0`.
+
+The cleanup permanently removed 26 verified-regenerable paths totaling
+260,604,124,772 measured bytes (about 242.7 GiB). After cleanup, `target`
+measured 112,699,182,397 bytes (104.959 GiB) and C: free space measured
+439,990,702,080 bytes (409.773 GiB). The protected alpha.9 release remained
+`1.2.0-alpha.9` with unchanged SHA-256
+`BD4375D09EA09E099E6F24D74DC57B014E60F0C4C124401D1CBA6ACB1EE207FF`,
+and one exact responsive `Syndocal` process remained available. Deleted output
+does not use the Recycle Bin and is recoverable only by rebuilding.
+
+The working development train has advanced to `1.2.0-alpha.10` at the exact
+20/20 product-version coordinates. Release metadata, locked Cargo metadata, and
+the 65-group release self-test pass. Alpha.10 work is parallel: Ox owns the
+dual-detached pane reflow and focused checker, independent Codex lanes own native
+matrix/contract arbitration/display and DJ Link preflight, and Sol retains
+integration. The completion denominator remains 19/71; no new hardware,
+playback, ASIO, fault-matrix, or soak claim follows from cleanup or versioning.
+
+### 9.18 2026-08-24 alpha.10 parallel checkpoint — historical, closed
+
+The main checkout remains on `codex/syndocal-v1.2` at committed/pushed base
+`e9209d6de60eb6307045426b5c1b6f8c595c957d`; alpha.10 changes are intentionally
+uncommitted while focused review and native proof remain open. The permanent
+delegation policy is now synchronized in `AGENTS.md` and the completion flow:
+Sol owns decomposition/integration/completion claims, the capability order is
+Sol > Ox-alpha (`opencode/x-preview-f-free`) > Terra > Luna, Ox is the default
+bounded implementer/reviewer, Terra implementation requires independent Ox
+review, and Luna Max is restricted to small explicit low-ambiguity units.
+Eliminating avoidable elapsed time is an explicit obligation: every safely
+independent available lane stays assigned, with serialization only for true
+dependencies, exclusive native/UI work, destructive actions, or same-file
+ownership.
+
+The alpha.10 dual-detached-pane source now removes the entire lower workspace
+band only when both Stage and Timeline are detached, lets the upper workspace
+fill the released height, preserves Stage-only/Timeline-only behavior and saved
+ratios, and keeps the Workspaces Stage/Timeline controls as the always-mounted
+rejoin route. Focused results currently pass: TypeScript no-emit with zero
+  diagnostics, 28 workspace/operator assertions, the pane-reflow checker at
+1920x1080 and 1920x1032, and the pane-window checker at five viewports when run
+alone. A concurrent browser run demonstrated that Chromium/CDP gates sharing
+resources must be serialized; it is not a product failure. An independent Ox
+ARIA review found one EDIT-mode dangling `aria-controls` P1 in the intermediate
+diff. The integrated expression now points to the always-mounted LIVE inspector
+  while collapsed and omits the EDIT target until it is mounted. The base split
+  gate was already red before this tranche because it expected uppercase `Setup`
+  from a lowercase data attribute and required the collapsed LIVE target that the
+  base component omitted; alpha.10 corrects both the assertion and the ARIA
+  contract rather than silently deleting the failures. TypeScript no-emit reports
+  zero diagnostics, the Node/checker configurations report zero first-party
+  warnings, and the independent Ox pane review found P0=0/P1=0 and approved
+  integration subject to the native-only boundaries below.
+
+Two non-overlapping backend investigations run in parallel. The D4 Stage audit
+confirmed that nine frontend-ticketed mutations still lack one authoritative
+backend transaction/receipt boundary, with reply-loss recovery, Engine error
+propagation, and no-op history gaps still open. Its first Engine-only commit is
+assigned to an Ox implementer in the clean companion worktree
+`C:\Users\kouty\Documents\KDMX-d4-stage-transaction` on
+`codex/d4-stage-transaction`, owning only `crates/engine/src/lib.rs`; Tauri and
+frontend receipt work remain later serialized stages. ASIO persistence has a
+five-stage plan; Stage 1 ProjectFile v1-to-v2 migration is assigned to an Ox
+implementer in
+the clean companion worktree `C:\Users\kouty\Documents\KDMX-asio-persistence`
+on `codex/asio-persistence-v2`, owning only
+`crates/protocol/src/lib.rs` and `app/src-tauri/src/main.rs`. It must receive a
+separate Ox review before integration. The three old detached `.claude/worktrees`
+(`cranky-wright-6a0bf2`, `dazzling-spence-06b8ac`, and
+`eager-pasteur-c3e6f4`) passed exact-path deletion review: each was detached at
+the already-reachable `dd3f70b`, had zero tracked/untracked changes, was not a
+reparse point, and had no external process user. `git worktree remove --force`
+then removed their two ignored local settings files and worktree copies, reclaiming
+14,882,234 measured bytes, and `git branch -d` removed only the three confirmed-
+merged matching local branches. The commits remain reachable from the current
+history, but the ignored settings are not recoverable except from another copy.
+No alpha.10 native build, native pane matrix, new hardware acceptance, commit, or
+push is claimed at this in-progress checkpoint; the denominator remains
+**19/71 (26.8%)**.
+
+Correction of the earlier static claim in this section: the previously reported
+alpha.10 "Tauri window-scoped emit" P1 does not exist. Against the pinned Tauri
+2.5.1 source, `Emitter::emit` publishes to every event target even when called
+on a `WebviewWindow`; only the private `emit_to_window` helper scopes built-in
+window events to one target. The pre-alpha.10 single-line
+`window.emit("syndocal://pane-window-closed", pane)` in the child `Destroyed`
+callback therefore already reached the main renderer's placeholder-retirement
+listener, and `main.rs` has been restored to that exact base form with no
+behavior change. The two static workspace/operator assertions that required the
+app-handle form and rejected the window-local form encoded the false claim and
+were removed, restoring the gate to its accurate 28 assertions (27 base plus
+the alpha.10 `data-workspace-pane-toggle` selector). Because a browser cannot
+exercise real child windows, closing a detached pane with the native titlebar X
+and observing main-window placeholder retirement remains an open native
+acceptance test for this train; it is not proven by this correction. The
+accurate focused browser evidence is unchanged: the pane-reflow gate passes at
+exact 1920x1080 and 1920x1032 with the both-detached lower band measured at
+zero height and the upper pane at 968/920 px respectively, explicitly proving
+the zero-width context element stays present so the rectangle fallback cannot
+vacuously accept a missing selector, and the pane-window gate passes at all
+  five viewports when run alone. The fresh read-only Ox adversarial review
+  independently reproduced every focused gate and approved the source with only
+  P3 proof-strength/documentation follow-ups, now tightened to the deterministic
+  13-cell inspector, 88/88/28px view controls, and 33/32px surface headers. The
+  required release build,
+native child-X proof, both entry/rejoin orders, restored/F11 sizes, and physical
+3840x2160 at 150% remain open and therefore block the alpha.10 commit/push claim.
+
+### 9.19 2026-08-24 alpha.10 pane semantic correction — historical, closed
+
+The real native alpha.10 inspection invalidated the preceding dual-detached
+layout interpretation before any commit or push. In Control/LIVE, the actual
+Timeline is the upper `liveControlPanel`, Sources are the lower-right
+`TimelineSourceShelf`, and the lower-left slot is intended to host the 2D Stage.
+The current source instead overrides that Stage fallback with a sparse Timeline
+Preview. Timeline detachment then hides Sources while leaving both the main
+upper Timeline and the child Timeline visible; with the preview included, the
+same concept can appear in three places. The integrated Stage is therefore not
+failing to paint: its `MappingEditableStageShell` is not mounted in that mode.
+An independent read-only Ox-alpha trace reproduced all of these findings. It
+also proved that the previously green pane-reflow checker encoded the same
+inverted contract by requiring Source width zero and no real Stage.
+
+The corrected contract is now the alpha.10 blocker: integrated Control/LIVE
+must show Timeline above and real Stage plus Sources below; Timeline detachment
+must remove only the main Timeline and let Stage plus Sources use the full main
+workspace; Stage detachment must remove Stage plus Groups and expand Sources;
+both detached must leave Sources filling the main workspace. Timeline state
+must not collapse unrelated Setup/Edit/Mixer content, and a persisted Timeline
+expansion flag must not make the remaining band inert while its Timeline is in
+a child window. The focused checker is being rewritten to identify the real
+Stage, Timeline, and Source subtrees rather than accepting slot geometry alone.
+
+Operational checkpoint: branch `codex/syndocal-v1.2`, committed/pushed base
+`e9209d6de60eb6307045426b5c1b6f8c595c957d`; at that historical checkpoint,
+alpha.10 work was still uncommitted.
+The existing alpha.10 EXE is obsolete for this correction. Completion requires
+the focused browser gates, independent adversarial review, a fresh native build
+with the exact VS 14.44 Hostx64/x64 linker pinned instead of Git `link.exe`, and
+real maximized/restored/F11/physical-4K child-window entry, reverse-order rejoin,
+and titlebar-X proof. No new denominator item or native acceptance is claimed at
+this in-progress checkpoint.
+
+### 9.20 2026-08-24 alpha.10 pane semantic acceptance contract — accepted
+
+The old alpha.10 dual-detached geometry/topology claim in section 9.18 is
+**historical and superseded**: it described the upper slot as the surviving
+workspace and did not require the real Stage and Sources. Section 9.19's native
+trace remains the root-cause record, but its abbreviated layout wording is
+superseded for acceptance by the exact contract below. Alpha.7 and alpha.8 are
+immutable historical train evidence. The correction was subsequently committed
+and pushed as `5c7e19a72a97e20f5ece553594841103990a78a9`; the final native/source
+evidence and stop state are authoritative only in
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`.
+
+The required Control/LIVE semantics are:
+
+- **Integrated:** the real Timeline occupies the upper workspace; the real
+  Stage and Groups occupy lower-left; Sources occupy lower-right.
+- **Timeline detached:** only Timeline leaves the main window. The real
+  Stage/Groups and Sources remain, together using the main workspace's full
+  height.
+- **Stage detached:** only Stage/Groups leave the main window. Timeline and
+  Sources remain in the main workspace.
+- **Both detached:** Sources are the only main-workspace content and fill the
+  entire main workspace. No empty lower band or Timeline/Stage substitute is
+  accepted.
+
+Acceptance must exercise Timeline-then-Stage and Stage-then-Timeline detachment,
+then each corresponding reverse rejoin order; it must also prove child titlebar
+`X` closure, Timeline expand-before-detach and expand-before-rejoin behavior,
+and correct placeholder retirement/rejoin. Every state must keep outer document
+and app scroll at zero. Setup/Patch Groups must remain available, and Setup,
+Edit, and Mixer must not regress. These are real-content requirements, not slot
+or rectangle-only checks.
+
+#### Final alpha.10 native measurement record
+
+| Required native observation | Measurement/evidence | Status |
+| --- | --- | --- |
+| Maximized, restored, and F11 entry/rejoin at supported desktop classes | 1920x1032 / 1280x800 / 1920x1080; post-alpha.10 handoff section 2 | Pass |
+| Timeline/Stage detach and reverse rejoin orders, including titlebar `X` | Both orders and reverse orders; unique Stage/Timeline children; post-alpha.10 handoff section 2 | Pass |
+| Expand-before-detach and expand-before-rejoin | Preserved real Timeline state with no inert band; focused and native sequence | Pass |
+| Integrated/one-detached/both-detached real-content topology and outer-scroll-zero | Alpha.10 evidence 03-07; document/app scroll 0 | Pass |
+| Physical 3840x2160 display at 150% scaling | DISPLAY3, 3840x2088 work area, 2560x1392 CSS; evidence 12 | Pass on same committed source build |
+
+Closure: the corrected source, focused gates, exact-linker native build,
+maximized-window verification, independent adversarial review, and populated
+measurement record were completed. This historical handoff remains superseded;
+use the post-alpha.10 pause handoff for executable hashes, cleanup, residual work,
+and resume instructions.

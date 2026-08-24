@@ -1,12 +1,21 @@
 # Syndocal Codex handoff — 2026-08-19
 
-## Current checkpoint
+> Historical implementation log. After the bounded `1.2.0-alpha.10`
+> checkpoint, the sole operational resume authority is
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Preserve the exact
+> checkpoint evidence below, but do not follow an older resume instruction over
+> that handoff or `AGENTS.md`.
+
+## Historical current-at-the-time checkpoint — do not resume here
 
 - Branch: `codex/syndocal-v1.2`
 - Current implementation checkpoint: `0a3e91ab87d4be4735710234d1ba002e484375ef`
   (`feat: add sample-accurate timeline cue audio`). Push evidence is recorded by
   the documentation follow-up commit containing this line.
-- Current completion authority: `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train is `1.2.0-alpha.9`.
+- Historical current-at-the-time authority:
+  `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The active product train advanced
+  to `1.2.0-alpha.10`; after its explicit promotion, the post-alpha.10 handoff
+  above controls resumption.
 - **2026-08-22 Windows-only scope:** current completion targets this operator's
   Windows PC. macOS/Linux control/native/warning rows and the six distribution,
   legal, signing, SBOM, clean-machine, updater, and publication rows are deferred
@@ -358,8 +367,10 @@ not physical output, Raw Input confirmation, or ASIO acceptance.
 
 ### Exact next-slice contract: owner-incarnation output lease
 
-The next Codex should delegate implementation to Luna Max and keep an independent
-Terra High/xHigh reviewer read-only until a stable checkpoint. Do not extend the
+Delegation wording in this historical slice was superseded on 2026-08-24: use an
+Ox-alpha implementer and a separate independent Ox-alpha reviewer by default;
+the active capability and concurrency rules in `AGENTS.md` govern any exception.
+Do not extend the
 existing `MachineOutputRole` / `OutputOwnershipGate` status object into a hybrid
 lease. Add a distinct backend lease authority layer above that physical local gate.
 
@@ -509,8 +520,8 @@ hardware acceptance work.
 ## Persistent collaboration and checkpoint rules
 
 - Use a dedicated implementation agent and a separate read-only/adversarial reviewer for material implementation work.
-- Default implementation delegation is `gpt-5.6-luna` with maximum reasoning. Escalate difficult work to `gpt-5.6-terra` high/xhigh, then `gpt-5.6-sol` when needed. The supervising Sol agent owns integration and the final claim.
-- While an agent or build is running, advance non-overlapping investigation, test planning, documentation, or review work; do not idle.
+- The active capability hierarchy is Sol > Ox-alpha (`opencode/x-preview-f-free`) > Terra > Luna. The supervising Sol agent owns decomposition, integration, and the final claim; Ox is the default delegate for bounded implementation, investigation, and independent adversarial review. Terra implementation requires an independent Ox review, and Luna Max is limited to small, explicit, low-ambiguity units. This rule supersedes older Luna-default text retained in historical handoffs.
+- Work is parallel by default. Continuously fill every safely independent available lane and eliminate avoidable elapsed time; while an agent or build is running, advance non-overlapping implementation, investigation, test planning, documentation, or adversarial review. Serialize only true dependencies, same-file ownership, destructive actions, or exclusive native/UI operations.
 - At each meaningful verified checkpoint, update the roadmap/status/handoff documentation, commit with a descriptive message, and push the active branch. Never leave the only usable handoff in chat history.
 
 ## ASIO product requirement
@@ -1618,11 +1629,12 @@ and main
 
 ## 2026-08-23 intentional pause after D3/Tauri/DJ transport work
 
-The current dirty-tree state, exact partial hashes, completed evidence, immediate
-resume order, native/hardware matrix, and every remaining master-roadmap task are
-recorded in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. Treat that file as the
-authoritative resume point. D3, the new DJ transport hash, the Tauri native crash
-mitigation, alpha.8, and all hardware/soak rows remain unaccepted at this pause.
+The then-current dirty-tree state, exact partial hashes, completed evidence,
+immediate resume order, native/hardware matrix, and then-remaining master-roadmap
+tasks were recorded in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That resume
+point is historical and is superseded by the post-alpha.10 handoff named at the
+top of this file. D3, the new DJ transport hash, the Tauri native crash mitigation,
+alpha.8, and all hardware/soak rows were unaccepted at this pause.
 
 ## 2026-08-24 pre-alpha.8 software/source closure handoff
 
@@ -1821,5 +1833,8 @@ fault matrices, and soak remain pending.
 Delegation policy is now explicit: Sol retains decomposition/integration and
 completion authority; Ox `opencode/x-preview-f-free` is the default delegate;
 Terra implementation requires independent Ox review; Luna Max is limited to
-small, explicit parallel assignments. Stale generated artifacts are an ongoing
-checkpoint cleanup obligation.
+small, explicit parallel assignments. Parallel execution and elimination of
+avoidable elapsed time are mandatory: keep every safely independent lane assigned,
+and serialize only true dependencies, exclusive native/UI or destructive work, or
+same-file ownership. Stale generated artifacts are an ongoing checkpoint cleanup
+obligation.
