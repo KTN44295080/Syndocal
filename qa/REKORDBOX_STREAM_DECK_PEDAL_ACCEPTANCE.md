@@ -4,10 +4,10 @@ Date: 2026-08-21
 Status: Required; Syndocal implementation in progress; DJ-Link peer implementation and hardware acceptance pending
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-Current-train notice (2026-08-24): the active product train is
-`1.2.0-alpha.10`; after its bounded checkpoint the sole operational resume
-authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. This file
-remains the subordinate detailed DJ/pedal gate. The alpha.8 references in the
+Current-train notice (updated 2026-08-25): the active product train is
+`1.2.0-alpha.10`; its requested pause was rescinded before promotion. Follow
+`AGENTS.md` and `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current work.
+This file remains the detailed DJ/pedal gate. The alpha.8 references in the
 2026-08-24 checkpoint below are historical evidence only, not a claim that
 alpha.8 is the current Syndocal artifact or authority. The live acceptance status
 remains `Required / Peer and hardware pending`.

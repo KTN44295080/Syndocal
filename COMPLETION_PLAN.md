@@ -7,16 +7,15 @@ Codex/Claude セッション向け作業指示を保存する。現行指示と�
 当時は日々のスライス記録を `CLAUDE.md` に追記していた。現在の記録、
 検証、コミット、プッシュ、停止、再開は下記 Operational authority に従う。
 
-> **Operational authority (updated 2026-08-24):** this file preserves the
-> historical v1.0 baseline only. After the bounded `1.2.0-alpha.10` checkpoint,
-> the sole resume authority is
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The dependency-ordered
-> product gates remain in `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` as a
-> subordinate detailed registry. Those documents override every historical
+> **Operational authority (resumed 2026-08-25):** this file preserves the
+> historical v1.0 baseline only. The active dependency-ordered work authority is
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The requested post-alpha.10 pause
+> was rescinded before promotion;
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` remains an exact
+> alpha.10 evidence, cleanup, frozen-worktree, and residual snapshot rather than
+> a stop authority. `AGENTS.md` and the active flow override every historical
 > resume, version, warning, commit/push, AI, ASIO, native/hardware, legal, and
-> clean-machine statement below. Until the post-alpha.10 handoff explicitly
-> records its final commits/push and leaves preparation state,
-> `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md` remains the current resume record.
+> clean-machine statement below.
 
 ---
 

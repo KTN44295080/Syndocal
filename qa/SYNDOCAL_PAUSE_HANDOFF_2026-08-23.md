@@ -1,9 +1,10 @@
 # Syndocal pause handoff — 2026-08-23
 
 > Historical checkpoint only. It was the authoritative resume point for the
-> 2026-08-23 pause, but is superseded after the bounded alpha.10 checkpoint by
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Preserve the exact
-> evidence below; do not use its old resume order as current instructions.
+> 2026-08-23 pause. The later post-alpha.10 snapshot also became historical when
+> the operator rescinded that requested pause before promotion on 2026-08-25.
+> Preserve the exact evidence below; current work follows `AGENTS.md` and
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`.
 
 This document records the intentionally paused Windows completion run, its then
 unfinished integration, and its then-current product checklist. It does not mark
@@ -1335,7 +1336,7 @@ trace remains the root-cause record, but its abbreviated layout wording is
 superseded for acceptance by the exact contract below. Alpha.7 and alpha.8 are
 immutable historical train evidence. The correction was subsequently committed
 and pushed as `5c7e19a72a97e20f5ece553594841103990a78a9`; the final native/source
-evidence and stop state are authoritative only in
+evidence and transient requested-pause state are recorded in
 `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`.
 
 The required Control/LIVE semantics are:
@@ -1372,5 +1373,5 @@ or rectangle-only checks.
 Closure: the corrected source, focused gates, exact-linker native build,
 maximized-window verification, independent adversarial review, and populated
 measurement record were completed. This historical handoff remains superseded;
-use the post-alpha.10 pause handoff for executable hashes, cleanup, residual work,
-and resume instructions.
+use the post-alpha.10 snapshot for executable hashes, cleanup, and residual
+cross-checking, and use the active completion flow for current work.

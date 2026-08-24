@@ -1,9 +1,9 @@
 # Tauri Context clone crash mitigation (2026-08-23)
 
-Current-train notice (2026-08-24): the active product train is
-`1.2.0-alpha.10`; after its bounded checkpoint the sole operational resume
-authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The
-completion flow is a subordinate product-gate registry. The alpha.7/alpha.8
+Current-train notice (updated 2026-08-25): the active product train is
+`1.2.0-alpha.10`; its requested pause was rescinded before promotion. Follow
+`AGENTS.md` and the active `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The
+post-alpha.10 snapshot and the alpha.7/alpha.8
 checkpoints below are historical checkpoint evidence; their hashes, paths,
 identifiers, counts, and results are preserved exactly as recorded and are not
 claims that those artifacts are the current Syndocal build or authority.

@@ -1,10 +1,10 @@
 # Syndocal Codex handoff — 2026-08-19
 
-> Historical implementation log. After the bounded `1.2.0-alpha.10`
-> checkpoint, the sole operational resume authority is
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Preserve the exact
-> checkpoint evidence below, but do not follow an older resume instruction over
-> that handoff or `AGENTS.md`.
+> Historical implementation log. The post-alpha.10 pause request was rescinded on
+> 2026-08-25 before promotion. Current work follows `AGENTS.md` and
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`; use
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` only for its exact
+> alpha.10 evidence, cleanup, frozen-worktree, and residual snapshot.
 
 ## Historical current-at-the-time checkpoint — do not resume here
 

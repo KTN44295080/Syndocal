@@ -1,17 +1,16 @@
 # Syndocal Claude Code Handoff
 
-> Historical log only. Current operating rules are in `AGENTS.md`. After the
-> `1.2.0-alpha.10` stop checkpoint, the sole operational resume authority is
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; current product gates
-> remain in the subordinate domain records it indexes. Any instruction below
-> that conflicts with those two documents is superseded. Until that handoff
-> explicitly records its final commits/push and promotes itself out of
-> preparation state, `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md` remains the
-> current resume record.
+> Historical log only. Current operating rules are in `AGENTS.md`; the active
+> dependency-ordered work authority is
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The requested post-alpha.10 pause
+> was rescinded on 2026-08-25 before promotion, so
+> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` is an evidence/residual
+> snapshot, not a stop or resume authority. Any instruction below that conflicts
+> with `AGENTS.md` or the active flow is superseded.
 
 Historical note only: this file once instructed readers to start with
-`RELEASE_STATUS.md`. Do not do so now; start with `AGENTS.md`, then use the
-authority-selection rule above to choose the current pause handoff.
+`RELEASE_STATUS.md`. Do not do so now; start with `AGENTS.md`, then the active
+completion flow named above.
 
 This workspace contains the completed Syndocal 1.0.0 release candidate, a Rust/Tauri/SolidJS DMX lighting + VJ control app. Historical implementation notes remain below for traceability.
 

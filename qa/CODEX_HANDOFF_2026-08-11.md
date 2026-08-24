@@ -1,9 +1,8 @@
 # Codex handoff: post-unification continuation
 
-> Historical handoff only. After the bounded `1.2.0-alpha.10` checkpoint, the
-> sole operational resume authority is
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; current operating rules
-> are in `AGENTS.md`.
+> Historical handoff only. The post-alpha.10 pause request was rescinded on
+> 2026-08-25 before promotion. Current operating rules are in `AGENTS.md`, and the
+> active dependency order is `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`.
 
 Date: 2026-08-11. Direction: Fable (supervisor) -> Codex. The user asked for a single
 consolidated handoff so Codex can carry the queue forward. Supervisor-exclusive items

@@ -1,11 +1,11 @@
 # Syndocal post-alpha.10 pause handoff — 2026-08-24
 
-> Finalization state: the alpha.10 source, focused gates, native build, same-HEAD
-> physical evidence, cleanup, and exhaustive residual registry are captured
-> below. This file becomes the sole resume authority only after its documentation
-> checkpoint is committed/pushed and a final promotion edit records the stopped
-> process and upstream state. Until that edit, the 2026-08-23 pause handoff is the
-> current record.
+> Historical alpha.10 checkpoint snapshot. The operator rescinded the requested
+> pause on 2026-08-25 before this file's final authority promotion, so this file
+> never became the sole operational resume authority. Preserve its alpha.10
+> evidence, cleanup record, frozen-worktree state, and exhaustive residual
+> inventory. For current work, read `AGENTS.md` and follow
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`.
 
 ## 1. Requested stop boundary
 
@@ -161,14 +161,28 @@ F11/Esc, responsive-window identity, or physical-4K evidence.
 
 ## 3. Final Git, process, and artifact state
 
-At this evidence checkpoint the pushed code HEAD and upstream are both
-`5c7e19a72a97e20f5ece553594841103990a78a9` with ahead/behind 0/0. The only
-remaining main-checkout changes are the bounded rules, release/QA evidence, and
-pause documents being committed from this file; the unfinished cleanup harness
-is deliberately excluded. The final promotion edit must replace this paragraph
-with the documentation commit, stopped PID 107500 disposition, final
-`HEAD == upstream`, and exact residual `git status --short` before this file is
-the resume authority.
+The following is the exact alpha.10 checkpoint/process transition, not a current
+project stop:
+
+- branch: `codex/syndocal-v1.2`;
+- accepted code checkpoint:
+  `5c7e19a72a97e20f5ece553594841103990a78a9`;
+- pushed rules/evidence/pause checkpoint:
+  `e9c6512e3a669eb3bd2d056a74ded102d77521d5`;
+- native QA PID 107500 was resolved exactly to
+  `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, force-stopped at
+  `2026-08-25T02:57:32.9613547+09:00`, and the follow-up exact-path process count
+  was 0. This concluded the alpha.10 QA process; it is not an instruction to keep
+  the application or project stopped;
+- immediately after the pushed evidence checkpoint, the residual main-checkout
+  `git status --short` was only
+  `?? tools/cleanup-stale-targets.ps1` and `?? tools/tests/`. Both are the
+  unfinished, protected cleanup harness described in section 6; neither belongs
+  to an accepted checkpoint;
+- before final pause promotion, the operator explicitly instructed continued
+  work. Subsequent commits and process state therefore supersede this transient
+  snapshot; verify live branch, upstream, worktrees, stashes, and processes rather
+  than treating this section as a stop lock.
 
 Preserved stashes:
 
@@ -421,10 +435,12 @@ must not disappear merely because it is outside the 51-row count:
 
 ## 8. Resume order
 
-This section records a future safe order; it grants no implementation authority.
-Without a new explicit user instruction, do not select a residual, start an agent,
-advance to alpha.11, or execute any step below. After such an instruction, resume
-only in this order:
+This section records the safe order that existed at the requested pause boundary.
+The required new explicit instruction arrived on 2026-08-25: the operator rescinded
+the pause and directed work to continue. This section no longer blocks execution;
+use the live dependency order and checkpoint status in
+`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. Its preserved ordering remains useful
+where it does not conflict with newer accepted work:
 
 1. verify this document's final main HEAD/upstream/status/stash/process facts;
 2. run no implementation until ownership of each frozen dirty diff is confirmed;
@@ -442,7 +458,7 @@ only in this order:
    `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`; fail closed rather than falling
    through to Git for Windows' `usr/bin/link.exe`.
 
-## 9. Claims prohibited at the pause
+## 9. Completion claims still prohibited by this checkpoint
 
 Do not claim beta/RC/release completion, ASIO completion, D4 completion, current
 DJ peer artifact acceptance, hardware acceptance not explicitly captured in

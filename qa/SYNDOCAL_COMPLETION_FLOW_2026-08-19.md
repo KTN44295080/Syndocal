@@ -1,4 +1,4 @@
-# Syndocal completion flow — subordinate product-gate registry
+# Syndocal completion flow — active dependency-ordered work authority
 
 Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
@@ -244,12 +244,12 @@ receipts, exact replay, final revalidation, and S0 Blackout remain mandatory.
 
 ## 1. Purpose and authority
 
-After the bounded `1.2.0-alpha.10` checkpoint, the sole operational resume
-authority is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. This file
-remains the dependency-ordered product-gate registry from the earlier AI3
-checkpoint to a truthful public release. It does not erase detailed requirements.
-The following documents remain normative within their domains and subordinate to
-the operational stop/resume state:
+The operator rescinded the requested post-`1.2.0-alpha.10` pause on 2026-08-25
+before its final authority promotion. This file is again the active
+dependency-ordered work authority from the earlier AI3 checkpoint to a truthful
+public release. `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` remains an
+exact alpha.10 evidence, cleanup, frozen-worktree, and residual snapshot; it is not
+a current stop. The following documents remain normative within their domains:
 
 - `qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md`: complete product requirements,
   traceability, severity, hardware, distribution, and final integrated gate;
@@ -723,8 +723,9 @@ gate is unavailable, or any claim exceeds the proven platform/hardware boundary.
 ## 12. Historical exact resume point — do not execute
 
 This was the resume order at the 2026-08-21 Windows-first checkpoint. It is
-historical and must not be executed as a current plan. Resume only through
-`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` and `AGENTS.md`.
+historical and must not be executed as a current plan. Follow `AGENTS.md` and the
+current phase status in this flow; consult the post-alpha.10 snapshot for exact
+checkpoint evidence and frozen companion ownership only.
 
 1. preserve the zero-warning Windows/Linux rows and W1 ratchet; measure the two
    macOS rows before claiming W0, beta, or RC warning acceptance;
@@ -1404,9 +1405,10 @@ rows, and the integrated long soak remain mandatory before product completion.
 Work stopped before alpha.8/native/hardware execution. The then-current stop state,
 partial D3 freeze, statically approved Tauri mitigation, DJ transport freeze, and
 resume order were recorded in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That file
-is historical and superseded by
-`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The accepted denominator
-at this historical checkpoint remained 19/71 (26.8%); no paused item advanced it.
+is historical. The later post-alpha.10 snapshot preserves the next exact evidence
+boundary, but its requested pause was rescinded before promotion. The accepted
+denominator at this historical checkpoint remained 19/71 (26.8%); no paused item
+advanced it.
 
 ## 30. 2026-08-24 pre-alpha.8 D3 and source-gate closure
 
@@ -1594,15 +1596,15 @@ After each committed/pushed checkpoint, verified-regenerable stale build/cache
 output must be inventoried and removed while current release/QA evidence remains
 protected.
 
-## 35. 2026-08-24 alpha.10 pane semantic correction — accepted and paused
+## 35. 2026-08-24 alpha.10 pane semantic correction — accepted
 
 The alpha.10 entry paragraph above is **historical and superseded** as an
 acceptance topology: its "upper-content expansion" wording did not require the
 real Stage and Sources. Alpha.7 and alpha.8 remain immutable historical train
 evidence. Alpha.10 was subsequently committed/pushed as
 `5c7e19a72a97e20f5ece553594841103990a78a9`; its exact focused/native/source-
-bound physical evidence and post-checkpoint stop state are indexed by the sole
-resume authority named in section 1.
+bound physical evidence and the transient requested-pause snapshot are indexed by
+`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`.
 
 Control/LIVE must render the real Timeline above, real Stage/Groups lower-left,
 and Sources lower-right. With Timeline detached, only Timeline leaves and the
@@ -1620,3 +1622,18 @@ for maximized/restored/F11 classes and physical 3840x2160-at-150%-scaling
 measurements. Those alpha.10 rows passed on the corrected committed source and
 were independently reviewed; this does not close any of the 51 unchecked product
 rows, ASIO, DJ peer artifact, distribution, or hardware boundaries below.
+
+## 36. 2026-08-25 continuation after alpha.10
+
+The operator explicitly rescinded the requested stop before its final authority
+promotion and directed work to continue. No alpha.10 source or acceptance evidence
+was rolled back. The pushed rules/evidence checkpoint is
+`e9c6512e3a669eb3bd2d056a74ded102d77521d5`; the exact alpha.10 QA process was
+stopped after capture, so any further native operation must relaunch only a newly
+verified exact-checkout executable and obey the linker/native gate in `AGENTS.md`.
+
+Resume the dependency order from the first unfinished accepted-boundary work: audit
+and integrate the frozen D4 Stage transaction lane, independently audit the frozen
+ASIO persistence lane without claiming real-device acceptance, then continue the
+remaining 51 rows in section 6. The post-alpha.10 snapshot is evidence and an
+exhaustive residual cross-check, not a prohibition on this explicit continuation.

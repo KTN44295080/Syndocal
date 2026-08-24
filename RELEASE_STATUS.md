@@ -1,23 +1,21 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 Branch: `codex/syndocal-v1.2` (current development branch)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note (updated 2026-08-24): after the bounded
-> `1.2.0-alpha.10` checkpoint, the [post-alpha.10 pause handoff](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md)
-> is the sole operational resume authority. The [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md),
+> Current continuation note (resumed 2026-08-25): the requested pause after
+> `1.2.0-alpha.10` was rescinded before final promotion. The
+> [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md) is again the active
+> dependency-ordered work authority. The [post-alpha.10 snapshot](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md),
 > [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
 > [AI control-plane roadmap](qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md), and
-> [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) are subordinate historical
-> or domain gate/evidence records. Do not mark AI3 complete, advance to AI4, or
-> close the current Windows product release until the new handoff's indexed
-> unchecked gates are closed. Until that post-alpha.10 handoff explicitly
-> records its final commits/push and leaves preparation state, the
-> [2026-08-23 pause handoff](qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md) remains
-> the current resume record.
+> [ASIO input acceptance](qa/ASIO_INPUT_ACCEPTANCE.md) remain exact subordinate
+> historical or domain gate/evidence records. Do not mark AI3 complete, advance
+> to AI4, or close the current Windows product release until the flow's indexed
+> unchecked gates are closed.
 
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 

@@ -3,10 +3,10 @@
 > Historical evidence notice: the v1.0.0 artifacts below prove the named 2026-07
 > baseline only. The current product train is `1.2.0-alpha.10`; its release cannot
 > inherit these hashes, version metadata, signatures, clean-machine, ASIO, or current
-> source evidence. After the bounded alpha.10 checkpoint, follow the sole
-> operational resume authority,
-> `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The completion flow
-> and this file remain subordinate detailed release-gate/evidence records.
+> source evidence. The post-alpha.10 pause request was rescinded before promotion;
+> follow `AGENTS.md` and the active
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The post-alpha.10 snapshot and this
+> file remain detailed checkpoint/release-gate evidence records.
 
 Date: 2026-07-12  
 Release: Syndocal 1.0.0  

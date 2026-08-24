@@ -1,12 +1,13 @@
 # Syndocal complete product roadmap and frozen checkpoint
 
-> **Operational notice (updated 2026-08-24):** this file remains a subordinate
+> **Operational notice (updated 2026-08-25):** this file remains a subordinate
 > detailed product-requirement and final-gate record. Its frozen checkpoint,
-> 75.5% planning roll-up, and Media A1 resume instructions are historical. After
-> the bounded `1.2.0-alpha.10` checkpoint, the sole operational resume authority
-> is `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; use
-> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` as the dependency-ordered product
-> gate registry it indexes. Do not compare percentages with different denominators.
+> 75.5% planning roll-up, and Media A1 resume instructions are historical. The
+> post-alpha.10 pause request was rescinded before promotion on 2026-08-25; use
+> `AGENTS.md` and `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for active work.
+> Consult `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md` for exact
+> alpha.10 checkpoint evidence and residual cross-checking. Do not compare
+> percentages with different denominators.
 
 > **OutputControl supersession (2026-08-21):** physical six-digit/Raw Input/Enter
 > consent and its challenge IPC are removed from the product. Normal Enable is one
@@ -1999,10 +2000,10 @@ After each commit report:
 ## 24. Historical resume protocol — do not execute
 
 This protocol records the 2026-08-13 checkpoint only. It is not a current
-resume entry and grants no implementation authority. Resume exclusively from
-`AGENTS.md` and `qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`; their
-current model hierarchy, ownership, validation, cleanup, and stop rules
-supersede the historical instructions below.
+resume entry and grants no implementation authority. Follow `AGENTS.md` and the
+active completion flow; consult the post-alpha.10 snapshot for checkpoint evidence
+and frozen ownership only. Their current model hierarchy, ownership, validation,
+cleanup, and continuation rules supersede the historical instructions below.
 
 At the next session or agent handoff at that historical checkpoint:
 
@@ -2083,10 +2084,10 @@ The next truthful milestone is: **Critical Path B / Clip Slot T2 protocol schema
 ## 27. 2026-08-21 active-train override
 
 This section records the active-train override as it stood on 2026-08-21; it is
-not a current entrypoint. After the bounded alpha.10 checkpoint, the sole
-operational resume authority is
-`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. The completion flow and
-the 2026-08-19 handoff are subordinate product-gate and historical evidence logs.
+not a current entrypoint. The post-alpha.10 pause request was later rescinded
+before promotion. `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` is the active work
+authority; the post-alpha.10 snapshot and 2026-08-19 handoff are checkpoint and
+historical evidence logs.
 
 - DJ Link integration on the Syndocal side is implemented and independently
   reviewed P0/P1/P2=0; the external DJ-Link repository and physical wired
@@ -2317,10 +2318,10 @@ not advance those hardware denominators or claim whole-product completion.
 ## 37. Historical 2026-08-23 pause/resume point — do not execute
 
 The then-current remaining-task inventory and dependency-ordered resume sequence
-were in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That file is now a historical
-checkpoint superseded by
-`qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md`. Its old DJ/D3/alpha.8
-resume order must not be used. The accepted denominator at that historical
+were in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-23.md`. That file and the later
+post-alpha.10 requested-pause snapshot are historical checkpoint evidence after
+the operator's 2026-08-25 continuation instruction. Their old DJ/D3/alpha.8
+resume orders must not be used. The accepted denominator at that historical
 checkpoint remained 19/71 (26.8%).
 
 ## 38. 2026-08-24 pre-alpha.8 software/source closure checkpoint
