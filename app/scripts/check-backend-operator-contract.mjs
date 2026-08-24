@@ -235,6 +235,41 @@ assert.match(
   /isStageRendererTicketedCommand\(command\)\s*\?\s*command\s*:\s*null/,
   "all nine Stage commands must join the shared published-command recovery query",
 );
+const beginProjectTransactionBackend = section(
+  backend,
+  "fn begin_project_transaction_for_window_label(",
+  "#[tauri::command]\nfn commit_project_transaction(",
+);
+const orderedBeginFenceNeedles = [
+  "ensure_project_epoch_matches(&coordinator, expected_epoch)?;",
+  "if coordinator.revision != expected_revision {",
+  "ensure_project_checkpoint_hash_matches(&coordinator, &expected_checkpoint_hash)?;",
+  "reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;",
+  "if coordinator.revision != expected_revision {",
+  "ensure_project_checkpoint_hash_matches(&coordinator, &expected_checkpoint_hash)?;",
+  "arm_project_transaction_and_capture_baseline(",
+  "if before.hash != expected_checkpoint_hash {",
+];
+let beginFenceCursor = 0;
+for (const needle of orderedBeginFenceNeedles) {
+  const needleIndex = beginProjectTransactionBackend.indexOf(needle, beginFenceCursor);
+  assert.notEqual(
+    needleIndex,
+    -1,
+    `Begin must preserve pre-H -> reconcile -> post-R/H -> arm-H order; missing: ${needle}`,
+  );
+  beginFenceCursor = needleIndex + needle.length;
+}
+assert.equal(
+  (beginProjectTransactionBackend.match(/if coordinator\.revision != expected_revision \{/g) ?? []).length,
+  2,
+  "Begin must retain exactly the pre- and post-reconcile revision fences before arming",
+);
+assert.equal(
+  (beginProjectTransactionBackend.match(/ensure_project_checkpoint_hash_matches\(&coordinator, &expected_checkpoint_hash\)\?;/g) ?? []).length,
+  2,
+  "Begin must retain exactly the pre- and post-reconcile checkpoint-hash fences before arming",
+);
 assert.match(
   app,
   /requestedExpectedEpoch[\s\S]*?requestedExpectedEpoch !== currentEpoch[\s\S]*?nothing was applied/,
