@@ -123,6 +123,15 @@ is marked complete:
     57,888,768 bytes, SHA-256
     `1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`,
     ProductVersion/FileVersion `1.2.0-alpha.11`.
+  - Retained raw evidence: the same NTFS File ID is also hardlinked at
+    `target/qa/retained-native/d4-alpha11-real4k-63cf795d/syndocal-1B010C40242A5C7D.exe`.
+    Source and retained paths independently re-hashed to the value above and
+    reported identical 57,888,768-byte length and `1.2.0-alpha.11` version.
+    The tracked retention contract is
+    `qa/artifacts/native-executables/d4-alpha11-real4k-63cf795d.sha256`; the
+    binary itself remains in the protected, untracked QA store rather than Git
+    history. Retain it until a later main artifact repeats and explicitly
+    supersedes this real-4K D4 acceptance.
 - [x] Launch the built `target/release/syndocal.exe`, verify exactly one
   responsive Syndocal window, maximize the verified window, and perform the
   manual Stage transaction QA sequence.

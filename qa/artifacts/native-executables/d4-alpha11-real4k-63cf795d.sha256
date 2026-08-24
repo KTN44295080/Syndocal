@@ -1,0 +1,10 @@
+# Syndocal D4 alpha.11 real-4K native evidence retention manifest
+# Accepted source: 63cf795d17846602419d63a007db9f3a95cfce7b
+# D4 integration tip: 0bfc1c03451373f4cb34eebbfab4c5c257878fe0
+# Bytes: 57888768
+# ProductVersion/FileVersion: 1.2.0-alpha.11
+# Authenticode: NotSigned
+# Original acceptance: qa/SYNDOCAL_ALPHA11_D4_HANDOFF_2026-08-25.md
+# Storage: protected local target/qa hardlink; the binary is intentionally not tracked by Git.
+# Retain until a later main artifact repeats and explicitly supersedes the same real-4K D4 acceptance.
+1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B *target/qa/retained-native/d4-alpha11-real4k-63cf795d/syndocal-1B010C40242A5C7D.exe

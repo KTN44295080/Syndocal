@@ -196,9 +196,12 @@ targets remain present.
 The separately audited
 `C:\Users\kouty\Documents\kdmx-d4-integration\target` remains intentionally
 untouched: its release executable is still the raw artifact referenced by the
-authoritative D4 real-4K acceptance record. It may be deleted only after that
-exact executable is hash-verified into an approved evidence store or the QA
-contract is explicitly lowered and committed.
+authoritative D4 real-4K acceptance record. The exact executable now also has a
+same-File-ID, same-hash hardlink in the protected
+`target/qa/retained-native/d4-alpha11-real4k-63cf795d` store, governed by the
+tracked `qa/artifacts/native-executables/d4-alpha11-real4k-63cf795d.sha256`
+retention contract. The integration target may be deleted only after this
+manifest is committed and pushed, followed by a fresh retained-path hash check.
 
 ## Boundary and next action
 
