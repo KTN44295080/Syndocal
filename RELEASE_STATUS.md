@@ -88,6 +88,26 @@ DJ-Link peer/hardware, fixture/hardware-specific Stage behavior, and other
 physical/external gates remain open. Next action: ASIO alpha12 authoring route
 repair/verification plus the ongoing physical-device boundaries.
 
+## 2026-08-25 DJ-Link peer v1.1.1 re-audit update (peer-only; no Syndocal change)
+
+The separately developed DJ-Link peer at `C:\Users\kouty\Desktop\rb-output` was
+re-audited read-only on 2026-08-25. The checkout is clean `main`/`origin/main`
+at tag `v1.1.1`, commit `cdd90e1`. The diff from the previously audited
+`616c897` is only package/package-lock/installer/README/Hook DLL source
+display-version changes, with no server/dj-agent/syndocalClient.js/config/wire
+changes. The current flat `/dj-link` generic-json and optional
+`syndocal-envelope-v1` contracts remain statically compatible. Peer gates:
+`npm test` 69/69 and envelope-focused 9/9 pass; `git diff --check` passes;
+the only observed warning is the Node MockTimers ExperimentalWarning.
+`dist/server.exe` exists (SHA-256
+`C966CE8AFAC4A54A9A8C818D75A829A2063EA92D3F434C8C31F1C0A8404BE36B`) but the
+peer build does not embed Git SHA/fingerprint, so it must NOT be claimed to
+belong to `cdd90e1`. The identity-bound peer artifact and the physical
+wired-LAN matrix remain open. No Syndocal implementation change is required;
+the alpha.11 D4 acceptance above and all of its non-claims are unchanged.
+Detailed record: the 2026-08-25 section of
+`qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`.
+
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 
 Historical checkpoint: at this date, `1.2.0-alpha.5` was then the next

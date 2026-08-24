@@ -10,7 +10,8 @@ Current-train notice (updated 2026-08-25): the active product train is
 This file remains the detailed DJ/pedal gate. The alpha.8 references in the
 2026-08-24 checkpoint below are historical evidence only, not a claim that
 alpha.8 is the current Syndocal artifact or authority. The live acceptance status
-remains `Required / Peer and hardware pending`.
+remains `Required / Peer and hardware pending`. The 2026-08-25 updated peer
+source/package audit is recorded in its own section below.
 
 This document supersedes the earlier design in which a Pedal entered Syndocal first
 and Syndocal sent MIDI to rekordbox. That design must not be restored.
@@ -287,3 +288,31 @@ real Master playback and switch, absolute Loop divisions, Release, disconnect
 and reconnect State Sync, Pedal/global-hotkey input, app restart/next-show reuse,
 and concurrent Art-Net/sACN traffic. No DJ/Pedal completion claim is made and the
 KDMX accepted denominator remains 19/71 (26.8%).
+
+## 2026-08-25 updated DJ-Link peer audit (peer source/package checkpoint)
+
+Read-only re-audit of the separately developed DJ-Link peer at
+`C:\Users\kouty\Desktop\rb-output`: the checkout is clean on `main`, matching
+`origin/main` and tag `v1.1.1`, at commit `cdd90e1`. The diff from the
+previously audited `616c89792016a1c17c94ebd20e8cf8de3aea5ece` contains only
+package/package-lock/installer/README/Hook DLL source display-version changes; there
+are no server/dj-agent/`syndocalClient.js`/config/wire changes.
+
+Static interop is unchanged: the current flat `/dj-link` generic-json contract
+and the optional `syndocal-envelope-v1` contract remain statically compatible
+with Syndocal's dedicated `/dj-link` role/path and envelope semantics.
+
+Peer-side gates rerun green: `npm test` passes 69/69, the envelope-focused
+tests pass 9/9, and `git diff --check` passes; the only observed warning is
+the Node MockTimers ExperimentalWarning.
+
+A `dist/server.exe` exists with SHA-256
+`C966CE8AFAC4A54A9A8C818D75A829A2063EA92D3F434C8C31F1C0A8404BE36B`, but the
+peer build does not embed Git SHA/fingerprint, so this executable must NOT be
+claimed to belong to `cdd90e1`.
+
+This audit requires no Syndocal implementation change. It closes only the peer
+source/package re-review row. An identity-bound peer artifact (build-time
+HEAD/fingerprint binding) and the physical wired-LAN matrix remain open, so the
+authoritative status stays `Required / Peer and hardware pending`; no
+end-to-end DJ/Pedal completion claim is made by this record.

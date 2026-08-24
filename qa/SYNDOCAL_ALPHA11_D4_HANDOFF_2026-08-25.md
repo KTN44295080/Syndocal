@@ -195,6 +195,26 @@ is marked complete:
 - AI3 durable terminal recovery, replacement-output retirement/re-Arm, and the
   remaining post-D4 roadmap are outside this D4 acceptance boundary.
 
+## 2026-08-25 updated DJ-Link peer audit (recorded at this handoff)
+
+After the D4 checkpoint above, the separately developed DJ-Link peer at
+`C:\Users\kouty\Desktop\rb-output` was re-audited read-only on 2026-08-25.
+The checkout is clean `main`/`origin/main` at tag `v1.1.1`, commit `cdd90e1`.
+The diff from the previously audited `616c897` contains only
+package/package-lock/installer/README/Hook DLL source display-version changes, with
+no server/dj-agent/syndocalClient.js/config/wire changes. The current flat
+`/dj-link` generic-json contract and the optional `syndocal-envelope-v1`
+contract remain statically compatible. Peer gates: `npm test` 69/69 and
+envelope-focused 9/9 pass; `git diff --check` passes; the only observed
+warning is the Node MockTimers ExperimentalWarning. `dist/server.exe` exists
+(SHA-256
+`C966CE8AFAC4A54A9A8C818D75A829A2063EA92D3F434C8C31F1C0A8404BE36B`) but the
+peer build does not embed Git SHA/fingerprint, so it must NOT be claimed to
+belong to `cdd90e1`. The identity-bound peer artifact and the physical
+wired-LAN matrix remain open. This audit requires no Syndocal implementation
+change; the D4 acceptance state and every explicit non-claim above are
+preserved unchanged.
+
 ## Next safe action
 
 Commit and push the reviewed FFmpeg acceptance hardening and this cleanup
