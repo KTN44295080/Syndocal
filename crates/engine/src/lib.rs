@@ -9580,6 +9580,20 @@ impl EngineHandle {
                         observe_stage_object_allocator_sources(&mut maxima, stage_objects);
                     }
                 }
+                StageProjectMutation::ApplyStageMapPreset { label } => {
+                    let label = label.trim();
+                    if !label.is_empty() {
+                        if let Some(stage_objects) = self
+                            .snapshot()
+                            .stage_map_presets
+                            .iter()
+                            .find(|preset| preset.label == label)
+                            .and_then(|preset| preset.stage_objects.as_deref())
+                        {
+                            observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                        }
+                    }
+                }
                 _ => {}
             },
             EngineCommand::SaveStageMapPreset {
@@ -68291,6 +68305,34 @@ mod tests {
                 "allocator inventory omitted {domain:?}"
             );
         }
+    }
+
+    #[test]
+    fn stage_project_apply_preset_reserves_high_stage_object_ids_before_auto_allocation() {
+        let preset_object_id = 41;
+        let snapshot = Arc::new(RwLock::new(EngineSnapshot {
+            stage_map_presets: vec![published_stage_map_preset(
+                "High Stage Layout",
+                preset_object_id,
+            )],
+            ..EngineSnapshot::default()
+        }));
+        let engine = allocator_test_handle(snapshot);
+        let (ack, _receiver) =
+            mpsc::sync_channel::<Result<StageProjectMutationOutcome, String>>(1);
+
+        engine
+            .send(EngineCommand::StageProjectMutationPublished {
+                mutation: StageProjectMutation::ApplyStageMapPreset {
+                    label: "High Stage Layout".to_string(),
+                },
+                expires_at: allocator_expiry(),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack,
+            })
+            .unwrap();
+
+        assert_eq!(engine.allocate_stage_object_id(), preset_object_id + 1);
     }
 
     #[test]
