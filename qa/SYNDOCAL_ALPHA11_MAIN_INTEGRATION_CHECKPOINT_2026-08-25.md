@@ -120,6 +120,86 @@ C: free-space delta was `-1,687,552` bytes, so no physical disk-space recovery
 is claimed. The active release artifact, the full `target/debug` tree, current
 QA evidence, and D4/ASIO worktrees were not removed.
 
+### Rebuildable-cache cleanup tranche 2
+
+At `2026-08-25 08:20 +09:00`, the independently audited second cleanup set was
+revalidated immediately before deletion. The main checkout was clean at
+upstream divergence `0/0`; every exact file count, logical-byte total, and
+newest timestamp matched the audit; no build process or process executable
+referenced a candidate; and no WSL distribution was running before the
+WSL-only cache was removed. These five exact, rebuildable directories were then
+permanently deleted:
+
+- `target/warning-capture`: 10,105 files, `4,454,450,485` logical bytes;
+- `target/vendor-wry-review`: 1,851 files, `505,783,503` logical bytes;
+- `target/root-warning-review`: 394 files, `179,393,546` logical bytes;
+- `target/asio-qa`: 662 files, `267,558,263` logical bytes; and
+- `target/wsl-node`: 6,189 files, `247,273,102` logical bytes.
+
+Total: 19,201 files and `5,654,458,899` logical bytes (5.266 GiB). The direct
+`Remove-Item` command was operator-reported as blocked, and no deletion is
+attributed to it. The same already-reviewed absolute paths were then deleted
+one by one through PowerShell's `.NET Directory.Delete` API. All five paths
+were absent afterward. This was permanent deletion, not a Recycle Bin
+operation, and the removed caches must be treated as unrecoverable.
+
+Before deleting `warning-capture`, the four retained-in-document raw-log
+fingerprints were recorded as follows:
+
+- `windows-asio.jsonl`: `3B01D68CE7D6C038665FC9C9A7B1645B65D8EDD39E2B08BAE17EB1DBDF8B79C4`;
+- `windows-asio.stderr`: `FB7DCAF8E29B544B12B73D6780B91400199A091D5FDE9AA5CF4CBB0BF9780355`;
+- `windows-ndi.jsonl`: `EC687F60FF35568D2396BFC9B82BAD82F87CA18B42A8873144088F6BC8EC9DCC`;
+- `windows-ndi.stderr`: `04EF181BC137645D732145B74A7456BE213DD94D6D2BF3F764BA60C1D54613C7`.
+
+Tracked warning evidence remains in `qa/warnings/warning-inventory.json` and
+the acceptance/checkpoint documents. C: free space rose from
+`399,815,106,560` to `405,225,672,704` bytes, an observed physical gain of
+`5,410,566,144` bytes (5.039 GiB). The active `target/release/syndocal.exe`,
+`target/asio-sdk-2.3.4`, `C:\Program Files\LLVM`, source trees, and all worktrees
+were positively rechecked and retained.
+
+The deletion timestamp, pre-delete counts/bytes, process and WSL checks, API,
+hash capture, and free-space before/after values in this tranche are
+operator-recorded execution evidence; their raw terminal transcript and the
+deleted cache inputs are not retained in the workspace. The independently
+re-verifiable post-state is limited to the five source paths being absent and
+the protected tracked evidence, SDK, LLVM, release executable, and worktrees
+remaining present.
+
+### Rebuildable-cache cleanup tranche 3
+
+At `2026-08-25 08:22 +09:00`, the separately audited
+`C:\Users\kouty\Documents\KDMX-d4-stage-transaction\target` was revalidated as
+15,257 files and `15,289,402,815` logical bytes, with no root or descendant
+reparse points and no process referencing the target. Its owning worktree was
+clean on `codex/d4-stage-transaction` at
+`854b518175f193b4b75d1f9b1f17e364f144de66`, upstream divergence `0/0`; the
+source branch and its six main-external commits remain on origin. No tracked QA
+document referred to an executable inside this target, and no release
+`syndocal.exe` existed there.
+
+The exact target directory alone was permanently deleted through
+`.NET Directory.Delete`; its source path was absent afterward. C: free space
+rose from `404,245,049,344` to `417,714,548,736` bytes, an observed physical
+gain of `13,469,499,392` bytes (12.544 GiB). The owning source/worktree, branch,
+commits, main target, ASIO target/SDK, and running main-checkout Syndocal were
+not touched. This deletion is irreversible and makes no product-acceptance
+claim.
+
+The deletion timestamp, pre-delete inventory/process/reparse checks, API, and
+free-space before/after values in this tranche are operator-recorded execution
+evidence; their raw terminal transcript and deleted target contents are not
+retained in the workspace. The independently re-verifiable post-state is the
+exact target path being absent while the source worktree/branch and protected
+targets remain present.
+
+The separately audited
+`C:\Users\kouty\Documents\kdmx-d4-integration\target` remains intentionally
+untouched: its release executable is still the raw artifact referenced by the
+authoritative D4 real-4K acceptance record. It may be deleted only after that
+exact executable is hash-verified into an approved evidence store or the QA
+contract is explicitly lowered and committed.
+
 ## Boundary and next action
 
 This closes the alpha.11 D4 merge/build/launch checkpoint only. It is not a

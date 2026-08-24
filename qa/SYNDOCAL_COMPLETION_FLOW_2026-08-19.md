@@ -1762,6 +1762,31 @@ not be relied on; no C: physical free-space recovery is claimed.
 The active release, broad `target/debug`, current QA evidence, and active D4/
 ASIO worktrees were preserved.
 
+A second exact-path cleanup tranche then permanently removed five
+independently audited rebuildable caches: `target/warning-capture`,
+`target/vendor-wry-review`, `target/root-warning-review`, `target/asio-qa`, and
+`target/wsl-node`. Their matched pre-delete inventory was 19,201 files and
+5,654,458,899 logical bytes. All five paths were absent afterward; C: free
+space increased by 5,410,566,144 measured bytes. The warning-log SHA-256 values,
+irreversible deletion boundary, and retained ASIO SDK/LLVM/release protections
+are recorded in the alpha.11 main integration checkpoint. This cleanup is a
+capacity recovery result only and creates no runtime, warning, ASIO, DJ-Link,
+or release acceptance claim. The execution-time inventory, deletion API, and
+free-space measurements are operator-recorded because their raw terminal
+transcript and deleted inputs are not retained; current re-verification proves
+only source-path absence and protected-artifact presence.
+
+The exact D4 stage-transaction build target was also deleted after an
+independent audit and immediate revalidation: 15,257 files and 15,289,402,815
+logical bytes. The source worktree stayed clean on its pushed branch and the
+branch's six main-external commits remain preserved. The path was absent after
+deletion and C: free space increased by 13,469,499,392 measured bytes. The D4
+integration target was deliberately retained because its release executable
+remains the raw artifact cited by the authoritative real-4K acceptance record.
+The execution-time inventory/API/free-space values are operator-recorded; the
+current workspace independently proves the deleted target's absence and the
+protected source/evidence targets' presence.
+
 This checkpoint closes D4 integration/build/launch, not the release. The exact
 record is
 `qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md`. Next action is
