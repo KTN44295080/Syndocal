@@ -146,6 +146,21 @@ Next action: commit and push that reviewed integration, rebuild and launch the
 main-checkout alpha.11 native artifact, then continue the ASIO alpha12
 authoring-route repair/verification and physical-device boundaries.
 
+That action is complete. Merge commit
+`b4a5b62ad48c7e3e58f78c66cf2914e0f53a46f5` is pushed with divergence `0/0`.
+The main checkout rebuilt successfully through the exact-linker Tauri wrapper;
+the resulting 57,888,768-byte alpha.11 executable has SHA-256
+`522074E96A235310C9D39D3200E2A9D9B5C68429F0160E92318B568A0FE5AEE2` and
+launched as exactly one responsive maximized Syndocal window. The same
+checkpoint moved 36 exact obsolete/rebuildable targets totaling
+1,184,114,966 logical bytes out of their source paths through the Windows
+Recycle Bin API. Matching recovery metadata was not found afterward, so the
+set must be treated as unrecoverable and no physical free-space gain is
+claimed. Detailed
+commands, warning count, window evidence, deletion boundaries, and remaining
+non-claims are in
+[`qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md`](qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md).
+
 ## 2026-08-25 DJ-Link peer v1.1.1 re-audit update (peer-only; no Syndocal change)
 
 The separately developed DJ-Link peer at `C:\Users\kouty\Desktop\rb-output` was

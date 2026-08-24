@@ -1,0 +1,133 @@
+# Syndocal alpha.11 main integration checkpoint
+
+Status: **ACCEPTED — D4 merged, pushed, and rebuilt from the active checkout**
+
+Date: 2026-08-25
+
+## Git identity
+
+- Branch: `codex/syndocal-v1.2`
+- Merge commit: `b4a5b62ad48c7e3e58f78c66cf2914e0f53a46f5`
+- Merge parents:
+  - `3067720c253af06e9fb2c59a5831f4c38a2916dc`
+  - `0bfc1c03451373f4cb34eebbfab4c5c257878fe0`
+- Push: `origin/codex/syndocal-v1.2`
+- Divergence after push: `0/0`
+- Final staged-merge review: P0/P1/P2 `0/0/0`
+
+Only `RELEASE_STATUS.md` and
+`qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md` conflicted. No source file
+conflicted. The resolution preserved the exact-linker alpha.10 history, the
+complete alpha.11 D4 payload, and the unbound historical v1.1.1 DJ artifact
+non-claim.
+
+## Post-merge gates
+
+Before the merge commit, the resolved index passed:
+
+- release metadata and the 102-group release self-test;
+- backend inventories `480/310/133`;
+- D2 patch transaction, project transaction, and project authority checks;
+- frontend routing inventories `133/29/30/407`;
+- exact-linker wrapper `156` assertions;
+- production frontend build, `272` modules;
+- engine D4 focused Cargo tests `6/6`;
+- backend D4 focused Cargo tests `7/7`;
+- pane lifecycle focused Cargo tests `4/4`; and
+- `git diff --cached --check`.
+
+The focused Cargo runs used the exact VS2022 Community 14.44 linker and emitted
+zero first-party warning lines. Independent final review found no unmerged
+entries, conflict markers, source loss, or weakened exact-linker gate.
+
+## Main-checkout native rebuild and launch
+
+Immediately before the native build, the exact main-checkout executable
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` was confirmed not
+running. The still-running D4 QA executable belonged to the distinct path
+`C:\Users\kouty\Documents\kdmx-d4-integration\target\release\syndocal.exe`
+and was preserved throughout the build. Daslight was not stopped or modified.
+
+The required command completed successfully:
+
+```powershell
+pnpm --dir app tauri build --no-bundle
+```
+
+The guarded wrapper initialized VS2022 Community with
+`vcvars64.bat -vcvars_ver=14.44`, pinned
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and printed `where.exe link.exe` with that exact linker first and Git's
+`C:\Program Files\Git\usr\bin\link.exe` second before Cargo began. The
+frontend transformed 272 modules and the Rust release profile finished in
+3 minutes 16 seconds. The build emitted zero first-party compiler warning
+lines.
+
+Artifact:
+
+- path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- size: `57,888,768` bytes
+- ProductVersion/FileVersion: `1.2.0-alpha.11`
+- SHA-256:
+  `522074E96A235310C9D39D3200E2A9D9B5C68429F0160E92318B568A0FE5AEE2`
+
+After the build, the exact D4 QA process was closed by its independently
+verified executable path. The new main-checkout executable launched as PID
+`114780`. Exactly one targetable top-level window titled `Syndocal` existed;
+the process reported responsive, and a fresh native state capture showed the
+window maximized over the 1920x1032 Windows work area. The prior D4 checkpoint
+remains the authoritative real-4K 3840x2160-at-150% Stage/Timeline detachment
+evidence; this post-merge launch proves the merged main artifact and does not
+replace or inflate that 4K claim.
+
+Evidence-retention boundary: the wrapper stdout and native state capture were
+observed directly during this checkpoint but were not persisted as a raw log
+or image in the workspace. Therefore the 3-minute-16-second duration, zero
+warning-line observation, PID, and maximized-window geometry above are
+operator-recorded evidence. The Git identity and artifact path, size, version,
+and hash remain independently re-verifiable; do not cite this paragraph as a
+retained raw capture.
+
+## Verified cleanup checkpoint
+
+After the build finished and the merge was pushed, two independent read-only
+reviews identified a high-confidence, rebuildable cleanup set. Immediately
+before execution, all exact paths were re-resolved, all expected group byte
+totals matched, no reparse points were present, and no
+`cargo`/`rustc`/`link`/`cl`/`mspdbsrv`/`msiexec` or matching browser writer was
+running.
+
+The following exact set was submitted to the Windows Recycle Bin API and was
+removed from its source paths:
+
+- corrupt retired PDB:
+  `target/debug/deps/syndocal-a9ff2c31091f28c9.pdb.corrupt-20260813-0531`
+  — `358,215,680` bytes;
+- obsolete unpacked `target/qa/msi-image-1.0.0` — `285,692,928` bytes;
+- 33 old UI/browser scratch directories listed by the cleanup audit —
+  `14,447,077` bytes; and
+- `C:\temp\opencode\mustuse-test\crate\target` — `525,759,281` bytes.
+
+Execution result: 36 exact targets, 2,245 files, `1,184,114,966` logical bytes
+removed from their source paths. All 36 source paths were absent afterward.
+However, the independent post-operation audit found no matching current-user
+`$I` metadata entry or Shell Recycle Bin item. One unrelated SYSTEM SID recycle
+store was inaccessible, so permanent deletion cannot be proven either, but
+recoverability is **not verified and must not be relied on**. Treat the removed
+set as unrecoverable unless it is later found by exact metadata. The measured
+C: free-space delta was `-1,687,552` bytes, so no physical disk-space recovery
+is claimed. The active release artifact, the full `target/debug` tree, current
+QA evidence, and D4/ASIO worktrees were not removed.
+
+## Boundary and next action
+
+This closes the alpha.11 D4 merge/build/launch checkpoint only. It is not a
+beta, RC, tag, release, or whole-product completion claim. DJ-Link v1.1.2
+provenance/package work, live wired-LAN acceptance, ASIO persistence
+integration, real-device ASIO completion, and the remaining physical/soak/
+distribution rows stay open.
+
+Next dependency-ordered action: finish and independently review the DJ peer,
+create and push its exact `beta-v1.1.2` branch, then run the confirmed wired-LAN
+acceptance. Continue the independently reviewed ASIO alpha.12 lane in parallel.

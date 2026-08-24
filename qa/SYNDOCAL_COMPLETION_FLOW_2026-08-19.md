@@ -1729,3 +1729,41 @@ committed and pushed, the exact main-checkout alpha.11 executable must be
 rebuilt, launched, and verified as exactly one responsive maximized Syndocal
 window. ASIO, DJ-Link live LAN, and every other physical-device boundary remain
 open until their dedicated acceptance runs.
+
+## 39. 2026-08-25 alpha.11 active-branch native checkpoint
+
+The reviewed merge was committed as
+`b4a5b62ad48c7e3e58f78c66cf2914e0f53a46f5`, pushed to
+`origin/codex/syndocal-v1.2`, and left at upstream divergence `0/0`. The exact
+main-checkout native build then passed through
+`pnpm --dir app tauri build --no-bundle`. Before Cargo, the wrapper printed the
+required VS2022 Community 14.44 linker first and Git's linker second and pinned
+the exact VS linker in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`. The
+frontend transformed 272 modules; the release profile finished in 3 minutes
+16 seconds with zero first-party compiler warning lines.
+
+The resulting `target/release/syndocal.exe` is 57,888,768 bytes,
+ProductVersion/FileVersion `1.2.0-alpha.11`, SHA-256
+`522074E96A235310C9D39D3200E2A9D9B5C68429F0160E92318B568A0FE5AEE2`.
+It launched from the exact active checkout as PID 114780. Exactly one
+targetable responsive Syndocal window existed and a fresh capture showed it
+maximized over the 1920x1032 Windows work area. Section 37's committed D4
+artifact remains the authoritative real-4K Stage/Timeline detachment evidence;
+this main-checkout launch proves merge parity without overstating a new 4K run.
+
+After the build, 36 independently reviewed obsolete/rebuildable targets (2,245
+files, 1,184,114,966 logical bytes) were submitted by exact path to the Windows
+Recycle Bin API and disappeared from their source paths. This set was limited
+to one corrupt retired PDB, one obsolete
+unpacked 1.0.0 MSI image, 33 old UI/browser scratch directories, and one
+standalone OpenCode test-crate target. The post-operation audit found no
+matching current-user Recycle Bin metadata, so recovery is unverified and must
+not be relied on; no C: physical free-space recovery is claimed.
+The active release, broad `target/debug`, current QA evidence, and active D4/
+ASIO worktrees were preserved.
+
+This checkpoint closes D4 integration/build/launch, not the release. The exact
+record is
+`qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md`. Next action is
+the peer `beta-v1.1.2` commit/push and live wired-LAN acceptance, with ASIO
+alpha.12 integration continuing in parallel.
