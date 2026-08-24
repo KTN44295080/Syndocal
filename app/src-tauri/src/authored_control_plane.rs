@@ -1742,9 +1742,13 @@ mod tests {
             .unwrap()
             .get(PRIMARY_WINDOW)
             .expect("seeded owner incarnation");
-        let (expected_epoch, expected_revision) = {
+        let (expected_epoch, expected_revision, expected_checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let begin_label = "Retiring Begin".to_string();
         let begin_coalesce_key = "retiring:begin".to_string();
@@ -1799,6 +1803,7 @@ mod tests {
                                 coalesce_key: begin_coalesce_for_thread,
                                 expected_epoch,
                                 expected_revision,
+                                expected_checkpoint_hash,
                                 owner_id: begin_owner,
                                 client_operation_id: "project-op:99:e1-retiring-gap".to_string(),
                                 shape_fingerprint: begin_shape_for_thread,
