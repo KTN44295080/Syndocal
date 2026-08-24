@@ -24,7 +24,8 @@ use engine::{
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, FixturePatchPublicationFailure, MediaAssetImportCandidate,
-    MediaAssetTransaction, OutputOwnershipActivation, VideoClipSlotImportAndAssignCandidate,
+    MediaAssetTransaction, OutputOwnershipActivation, StageProjectMutation,
+    StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
     VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
@@ -18059,6 +18060,32 @@ enum ProjectTransactionCommandResult {
         request_digest: String,
         fixture_id: FixtureId,
     },
+    /// D4 Stage mutations share the retained generic project-transaction
+    /// receipt. This stays private to the backend: legacy route return shapes
+    /// remain `()`, `StageObjectId`, or `String` as applicable.
+    StageProjectMutation {
+        command_name: String,
+        request_digest: String,
+        outcome: StageProjectMutationReceiptOutcome,
+        stage_object_id: Option<StageObjectId>,
+        label: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StageProjectMutationReceiptOutcome {
+    Applied,
+    Unchanged,
+}
+
+impl From<StageProjectMutationOutcome> for StageProjectMutationReceiptOutcome {
+    fn from(outcome: StageProjectMutationOutcome) -> Self {
+        match outcome {
+            StageProjectMutationOutcome::Applied => Self::Applied,
+            StageProjectMutationOutcome::Unchanged => Self::Unchanged,
+        }
+    }
 }
 
 fn project_transaction_command_request_digest<T: Serialize>(
@@ -18837,8 +18864,19 @@ fn is_full_lock_correlated_terminal_recovery_runtime_route(command: &str) -> boo
         .is_ok()
 }
 
-const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 2] =
-    ["patch_fixtures", "repair_fixture_profile"];
+const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 11] = [
+    "add_stage_object",
+    "apply_stage_map_preset",
+    "import_stage_map_preset",
+    "patch_fixtures",
+    "remove_stage_map_preset",
+    "remove_stage_object",
+    "repair_fixture_profile",
+    "save_stage_map_preset",
+    "set_fixture_transform",
+    "set_stage_map_config",
+    "set_stage_object",
+];
 
 fn is_self_admitted_renderer_ticketed_route(command: &str) -> bool {
     RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES
@@ -19294,6 +19332,23 @@ fn ensure_project_epoch_matches(
     }
 }
 
+/// Begin's checkpoint fence compares the caller's canonical hash against the
+/// coordinator's reconciled cache, so a stale frontend can never reserve a
+/// baseline it did not actually observe.
+fn ensure_project_checkpoint_hash_matches(
+    coordinator: &ProjectCoordinator,
+    expected_checkpoint_hash: &str,
+) -> Result<(), String> {
+    if coordinator.checkpoint_hash == expected_checkpoint_hash {
+        Ok(())
+    } else {
+        Err(format!(
+            "Project changed before this edit began (expected checkpoint hash {expected_checkpoint_hash}, current checkpoint hash {})",
+            coordinator.checkpoint_hash,
+        ))
+    }
+}
+
 fn ensure_optional_project_epoch_matches(
     coordinator: &ProjectCoordinator,
     expected_epoch: Option<u64>,
@@ -19519,6 +19574,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetStageMapConfig(..)
         | EngineCommand::SaveStageMapPreset { .. }
         | EngineCommand::UpsertStageMapPresetPublished { .. }
+        | EngineCommand::StageProjectMutationPublished { .. }
         | EngineCommand::ApplyStageMapPreset { .. }
         | EngineCommand::RemoveStageMapPreset { .. }
         | EngineCommand::UpsertStageObject(..)
@@ -22954,20 +23010,41 @@ fn set_group_park(
 
 #[tauri::command]
 fn set_fixture_transform(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     fixture_id: FixtureId,
     position: Vec3,
     rotation: Rotation3,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<(), String> {
     validate_fixture_transform(&position, &rotation)?;
-    state
-        .engine
-        .send(EngineCommand::SetFixtureTransform {
-            fixture_id,
-            position,
-            rotation,
-        })
-        .map_err(|error| error.to_string())
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "set_fixture_transform",
+            },
+            |_| Ok((fixture_id, position, rotation)),
+            |_, (fixture_id, position, rotation)| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SetFixtureTransform {
+                        fixture_id,
+                        position,
+                        rotation,
+                    },
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "set_fixture_transform",
+    )
 }
 
 #[tauri::command]
@@ -44945,6 +45022,7 @@ fn begin_project_transaction(
         coalesce_key: String => "coalesceKey",
         expected_epoch: u64 => "expectedEpoch",
         expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
         owner_id: String => "ownerId",
         client_operation_id: String => "clientOperationId",
         shape_fingerprint: String => "shapeFingerprint",
@@ -44959,6 +45037,7 @@ fn begin_project_transaction(
             coalesce_key,
             expected_epoch,
             expected_revision,
+            expected_checkpoint_hash,
             owner_id,
             client_operation_id,
             shape_fingerprint,
@@ -44973,6 +45052,7 @@ struct BeginProjectTransactionRequest {
     coalesce_key: String,
     expected_epoch: u64,
     expected_revision: u64,
+    expected_checkpoint_hash: String,
     owner_id: String,
     client_operation_id: String,
     shape_fingerprint: String,
@@ -44982,12 +45062,13 @@ struct BeginProjectTransactionRequest {
 
 #[cfg(test)]
 macro_rules! begin_project_transaction_request {
-    ($label:expr, $coalesce_key:expr, $expected_epoch:expr, $expected_revision:expr, $owner_id:expr, $client_operation_id:expr, $shape_fingerprint:expr, $command_name:expr, $schema_version:expr) => {
+    ($label:expr, $coalesce_key:expr, $expected_epoch:expr, $expected_revision:expr, $expected_checkpoint_hash:expr, $owner_id:expr, $client_operation_id:expr, $shape_fingerprint:expr, $command_name:expr, $schema_version:expr) => {
         BeginProjectTransactionRequest {
             label: $label.to_string(),
             coalesce_key: $coalesce_key.to_string(),
             expected_epoch: $expected_epoch,
             expected_revision: $expected_revision,
+            expected_checkpoint_hash: $expected_checkpoint_hash.to_string(),
             owner_id: $owner_id.to_string(),
             client_operation_id: $client_operation_id.to_string(),
             shape_fingerprint: $shape_fingerprint.to_string(),
@@ -45007,6 +45088,7 @@ fn begin_project_transaction_for_window_label(
         coalesce_key,
         expected_epoch,
         expected_revision,
+        expected_checkpoint_hash,
         owner_id,
         client_operation_id,
         shape_fingerprint,
@@ -45017,6 +45099,11 @@ fn begin_project_transaction_for_window_label(
     let client_operation_id =
         validate_project_transaction_client_operation_id(&client_operation_id)?;
     let command_name = validate_project_transaction_command_name(&command_name)?;
+    // The checkpoint fence is required camelCase IPC and must already be in
+    // the canonical published-authority form. Blank or malformed tokens are
+    // rejected here so they can never fall through to a revision-only match.
+    let expected_checkpoint_hash =
+        validate_project_transaction_expected_checkpoint_hash(&expected_checkpoint_hash)?;
     let normalized_label = label.trim().chars().take(80).collect::<String>();
     let normalized_coalesce_key = coalesce_key.trim().chars().take(240).collect::<String>();
     let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
@@ -45075,6 +45162,19 @@ fn begin_project_transaction_for_window_label(
                 owner_incarnation,
             },
         )?;
+        // An exact reply-lost duplicate recovers the retained receipt only
+        // against the receipt's own stored epoch/revision/checkpoint baseline.
+        // The same client operation identity with a changed fence must reject
+        // instead of silently replaying an operation whose world moved on;
+        // this comparison is intentionally against the retained baseline and
+        // not the live coordinator, so a Committed/Cancelled receipt remains
+        // recoverable after the project legitimately advanced past it.
+        ensure_project_transaction_receipt_baseline_matches(
+            receipt,
+            expected_epoch,
+            expected_revision,
+            &expected_checkpoint_hash,
+        )?;
         return Ok(match &receipt.state {
             ProjectTransactionReceiptState::Pending => ProjectTransactionTicket {
                 transaction_id: receipt.transaction_id,
@@ -45131,6 +45231,11 @@ fn begin_project_transaction_for_window_label(
             coordinator.revision
         ));
     }
+    // Reject a stale H before reconciliation can advance revision, clear
+    // history, or publish a new authority generation. The post-reconcile and
+    // post-arm comparisons below remain required because the persistence image
+    // can move independently of this cached coordinator token.
+    ensure_project_checkpoint_hash_matches(&coordinator, &expected_checkpoint_hash)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     // Admission is live, so reconcile any persistence command that completed
     // before Begin before reserving Begin's own observable history change.
@@ -45143,6 +45248,11 @@ fn begin_project_transaction_for_window_label(
             coordinator.revision
         ));
     }
+    // Reconcile made the cached checkpoint authoritative, so this comparison
+    // is against the exact current canonical project image and not merely the
+    // revision counter. A same-epoch/same-revision wrong hash can never arm a
+    // reservation.
+    ensure_project_checkpoint_hash_matches(&coordinator, &expected_checkpoint_hash)?;
     let unacknowledged_terminal_count = receipts
         .values()
         .filter(|receipt| {
@@ -45179,6 +45289,19 @@ fn begin_project_transaction_for_window_label(
         arm_project_transaction_and_capture_baseline(&state.project_transaction_active, || {
             project_checkpoint_for_coordinator(state, &coordinator)
         })?;
+    // The reservation itself is fenced: a live external command that landed
+    // between reconcile and this capture would produce a baseline hash that
+    // never matched the caller's expectation. Disarm and reject before any
+    // pending/receipt/lane state exists.
+    if before.hash != expected_checkpoint_hash {
+        state
+            .project_transaction_active
+            .store(false, Ordering::Release);
+        return Err(format!(
+            "Project changed before this edit began (expected checkpoint hash {expected_checkpoint_hash}, reserved checkpoint hash {})",
+            before.hash
+        ));
+    }
     let before_revision = before.revision;
     coordinator.next_transaction_id = transaction_id;
     let pending = PendingProjectTransaction {
@@ -45662,6 +45785,19 @@ fn validate_project_transaction_client_operation_id(
     Ok(value.to_string())
 }
 
+/// Begin's required checkpoint fence must arrive in the exact canonical form
+/// every published authority token uses: 64 lowercase hex digits. There is no
+/// compatibility fallback for missing or blank hashes.
+fn validate_project_transaction_expected_checkpoint_hash(
+    expected_checkpoint_hash: &str,
+) -> Result<String, String> {
+    validate_project_publication_shape_hash(expected_checkpoint_hash).map_err(|_| {
+        "Project transaction Begin requires a canonical expectedCheckpointHash of 64 hex digits"
+            .to_string()
+    })?;
+    Ok(expected_checkpoint_hash.to_string())
+}
+
 fn project_transaction_operation_sequence(client_operation_id: &str) -> Result<u64, String> {
     let mut parts = client_operation_id.split(':');
     let prefix = parts.next();
@@ -45921,6 +46057,16 @@ fn project_transaction_existing_command_result(
                 ..
             },
         ) => stored == request_digest,
+        (
+            command_name,
+            ProjectTransactionCommandResult::StageProjectMutation {
+                command_name: stored_command_name,
+                request_digest: stored,
+                ..
+            },
+        ) if is_stage_project_transaction_command(command_name) => {
+            stored_command_name == command_name && stored == request_digest
+        }
         _ => false,
     };
     if !matches {
@@ -46244,6 +46390,28 @@ fn project_transaction_receipt_matches_request(
     {
         return Err(
             "Project transaction receipt belongs to a different renderer window incarnation"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// A reply-lost Begin recovers its retained receipt only against the receipt's
+/// stored epoch/revision/checkpoint baseline. The same client operation
+/// identity with a changed project authority fence must reject rather than
+/// silently recover.
+fn ensure_project_transaction_receipt_baseline_matches(
+    receipt: &ProjectTransactionReceipt,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: &str,
+) -> Result<(), String> {
+    if receipt.project_epoch != expected_epoch
+        || receipt.project_revision != expected_revision
+        || receipt.checkpoint_hash != expected_checkpoint_hash
+    {
+        return Err(
+            "Project transaction client operation ID was reused with a different project authority baseline"
                 .to_string(),
         );
     }
@@ -48108,22 +48276,46 @@ fn cancel_pending_project_transaction_locked(
 
 fn project_transaction_requires_command_result(command_name: &str) -> bool {
     matches!(command_name, "patch_fixtures" | "repair_fixture_profile")
+        || is_stage_project_transaction_command(command_name)
+}
+
+fn is_stage_project_transaction_command(command_name: &str) -> bool {
+    matches!(
+        command_name,
+        "set_fixture_transform"
+            | "set_stage_map_config"
+            | "save_stage_map_preset"
+            | "apply_stage_map_preset"
+            | "remove_stage_map_preset"
+            | "import_stage_map_preset"
+            | "add_stage_object"
+            | "set_stage_object"
+            | "remove_stage_object"
+    )
 }
 
 fn project_transaction_command_result_matches_name(
     command_name: &str,
     result: &ProjectTransactionCommandResult,
 ) -> bool {
-    matches!(
-        (command_name, result),
-        (
-            "patch_fixtures",
-            ProjectTransactionCommandResult::PatchFixtures { .. }
-        ) | (
+    match (command_name, result) {
+        ("patch_fixtures", ProjectTransactionCommandResult::PatchFixtures { .. })
+        | (
             "repair_fixture_profile",
-            ProjectTransactionCommandResult::RepairFixtureProfile { .. }
-        )
-    )
+            ProjectTransactionCommandResult::RepairFixtureProfile { .. },
+        ) => true,
+        (
+            command_name,
+            ProjectTransactionCommandResult::StageProjectMutation {
+                command_name: stored_command_name,
+                ..
+            },
+        ) => {
+            is_stage_project_transaction_command(command_name)
+                && stored_command_name == command_name
+        }
+        _ => false,
+    }
 }
 
 /// Complete one already-admitted transaction from either the renderer Commit
@@ -59574,13 +59766,249 @@ async fn get_snapshot_delta(
     .map_err(|error| format!("Snapshot delta query worker failed: {error}"))?
 }
 
+struct StageProjectTransactionRequest {
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+    window_label: String,
+    command_name: &'static str,
+}
+
+struct PreparedStageProjectMutation {
+    mutation: StageProjectMutation,
+    stage_object_id: Option<StageObjectId>,
+    label: Option<String>,
+}
+
+/// The D4 Stage adapter over the existing ProjectTransactionReceipt lane.
+/// Every route computes its normalized payload while its ticket is admitted,
+/// replays the exact stored command result before reaching the engine, and
+/// persists the Engine's explicit Applied/Unchanged acknowledgement before its
+/// legacy-shaped reply is reconstructed by the caller.
+fn apply_stage_project_mutation_in_project_transaction<C>(
+    state: &AppState,
+    request: StageProjectTransactionRequest,
+    canonical_request: impl FnOnce(&AppState) -> Result<C, String>,
+    build_mutation: impl FnOnce(&AppState, C) -> Result<PreparedStageProjectMutation, String>,
+) -> Result<ProjectTransactionCommandResult, String>
+where
+    C: Serialize,
+{
+    apply_stage_project_mutation_in_project_transaction_with_publish(
+        state,
+        request,
+        canonical_request,
+        build_mutation,
+        |engine, mutation| engine.apply_stage_project_mutation_published(mutation),
+    )
+}
+
+fn apply_stage_project_mutation_in_project_transaction_with_publish<C>(
+    state: &AppState,
+    request: StageProjectTransactionRequest,
+    canonical_request: impl FnOnce(&AppState) -> Result<C, String>,
+    build_mutation: impl FnOnce(&AppState, C) -> Result<PreparedStageProjectMutation, String>,
+    publish: impl FnOnce(
+        &EngineHandle,
+        StageProjectMutation,
+    ) -> Result<StageProjectMutationOutcome, FixturePatchPublicationFailure>,
+) -> Result<ProjectTransactionCommandResult, String>
+where
+    C: Serialize,
+{
+    let StageProjectTransactionRequest {
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        window_label,
+        command_name,
+    } = request;
+    let window_label = window_label.as_str();
+    let (_external_admission, mut coordinator, transaction_admission) =
+        lock_renderer_ticketed_project_mutation(
+            state,
+            window_label,
+            command_name,
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+        )?;
+    // Saving a Stage preset intentionally captures the current canonical Stage
+    // objects only after the ticket boundary is live. The same closure is also
+    // how every other route proves its normalized request before allocation or
+    // publication.
+    let canonical_request = canonical_request(state)?;
+    let request_digest =
+        project_transaction_command_request_digest(command_name, &canonical_request)?;
+    let pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    if let Some(result) =
+        project_transaction_existing_command_result(&pending, command_name, &request_digest)?
+    {
+        return Ok(result);
+    }
+
+    // Add allocates only after the exact user-intent digest has missed the
+    // receipt. The generated ID therefore never changes the digest or turns a
+    // reply-loss retry into a second allocation.
+    let prepared = build_mutation(state, canonical_request)?;
+    let prepared_result_publication =
+        prepare_project_transaction_command_result_publication(state, &coordinator, &pending)?;
+    let outcome = match publish(&state.engine, prepared.mutation) {
+        Ok(outcome) => outcome,
+        Err(FixturePatchPublicationFailure::Definitive(error)) => return Err(error),
+        Err(FixturePatchPublicationFailure::Indeterminate(error)) => {
+            return Err(mark_project_transaction_publication_indeterminate(
+                state,
+                &mut coordinator,
+                prepared_result_publication,
+                error,
+            ));
+        }
+    };
+    let result = ProjectTransactionCommandResult::StageProjectMutation {
+        command_name: command_name.to_string(),
+        request_digest,
+        outcome: outcome.into(),
+        stage_object_id: prepared.stage_object_id,
+        label: prepared.label,
+    };
+    prepared_result_publication.commit(&mut coordinator, result.clone());
+    drop(transaction_admission);
+    Ok(result)
+}
+
+fn stage_project_transaction_unit_result(
+    result: ProjectTransactionCommandResult,
+    command_name: &str,
+) -> Result<(), String> {
+    match result {
+        ProjectTransactionCommandResult::StageProjectMutation {
+            command_name: stored_command_name,
+            ..
+        } if stored_command_name == command_name => Ok(()),
+        _ => Err("Stage project transaction receipt did not match its unit route".to_string()),
+    }
+}
+
+fn stage_project_transaction_stage_object_id_result(
+    result: ProjectTransactionCommandResult,
+    command_name: &str,
+) -> Result<StageObjectId, String> {
+    match result {
+        ProjectTransactionCommandResult::StageProjectMutation {
+            command_name: stored_command_name,
+            stage_object_id: Some(stage_object_id),
+            ..
+        } if stored_command_name == command_name => Ok(stage_object_id),
+        _ => {
+            Err("Stage project transaction receipt did not retain the added object ID".to_string())
+        }
+    }
+}
+
+fn stage_project_transaction_label_result(
+    result: ProjectTransactionCommandResult,
+    command_name: &str,
+) -> Result<String, String> {
+    match result {
+        ProjectTransactionCommandResult::StageProjectMutation {
+            command_name: stored_command_name,
+            label: Some(label),
+            ..
+        } if stored_command_name == command_name => Ok(label),
+        _ => Err("Stage project transaction receipt did not retain its label result".to_string()),
+    }
+}
+
+fn canonical_stage_project_objects(
+    objects: Vec<StageObjectSummary>,
+) -> Result<Vec<StageObjectSummary>, String> {
+    let mut objects = objects
+        .into_iter()
+        .map(normalize_stage_object)
+        .collect::<Result<Vec<_>, _>>()?;
+    objects.sort_by_key(|object| object.id);
+    validate_project_stage_objects(&objects)?;
+    Ok(objects)
+}
+
+#[derive(Clone, Serialize)]
+struct StageObjectAddIntent {
+    label: String,
+    kind: StageObjectKind,
+    x: f32,
+    z: f32,
+    width: f32,
+    depth: f32,
+    rotation_deg: f32,
+    color: Option<String>,
+}
+
+fn normalize_stage_object_add_intent(
+    intent: StageObjectAddIntent,
+) -> Result<StageObjectAddIntent, String> {
+    // A non-zero sentinel exercises precisely the same normalization and
+    // validation as the eventual allocated object without allowing the ID to
+    // enter the canonical user-intent digest.
+    let object = normalize_stage_object(StageObjectSummary {
+        id: 1,
+        label: intent.label,
+        kind: intent.kind,
+        x: intent.x,
+        z: intent.z,
+        width: intent.width,
+        depth: intent.depth,
+        rotation_deg: intent.rotation_deg,
+        color: intent.color,
+    })?;
+    Ok(StageObjectAddIntent {
+        label: object.label,
+        kind: object.kind,
+        x: object.x,
+        z: object.z,
+        width: object.width,
+        depth: object.depth,
+        rotation_deg: object.rotation_deg,
+        color: object.color,
+    })
+}
+
 #[tauri::command]
-fn set_stage_map_config(state: State<'_, AppState>, config: StageMapConfig) -> Result<(), String> {
+fn set_stage_map_config(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    config: StageMapConfig,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
     validate_stage_map_config(&config)?;
-    state
-        .engine
-        .send(EngineCommand::SetStageMapConfig(config))
-        .map_err(|error| error.to_string())
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "set_stage_map_config",
+            },
+            |_| Ok(config),
+            |_, config| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SetStageMapConfig(config),
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "set_stage_map_config",
+    )
 }
 
 #[tauri::command]
@@ -59594,43 +60022,121 @@ fn set_touch_surface(
 
 #[tauri::command]
 fn save_stage_map_preset(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     config: StageMapConfig,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<String, String> {
     let label = normalize_stage_map_preset_label(label)?;
     validate_stage_map_config(&config)?;
-    state
-        .engine
-        .send(EngineCommand::SaveStageMapPreset {
-            label: label.clone(),
-            config,
-            stage_objects: Some(state.engine.snapshot().stage_objects),
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(label)
+    stage_project_transaction_label_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "save_stage_map_preset",
+            },
+            |state| {
+                Ok(StageMapPresetSummary {
+                    label,
+                    config,
+                    stage_objects: Some(canonical_stage_project_objects(
+                        state.engine.snapshot().stage_objects,
+                    )?),
+                })
+            },
+            |_, preset| {
+                let label = preset.label.clone();
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SaveStageMapPreset {
+                        label,
+                        config: preset.config,
+                        stage_objects: preset.stage_objects,
+                    },
+                    stage_object_id: None,
+                    label: Some(preset.label),
+                })
+            },
+        )?,
+        "save_stage_map_preset",
+    )
 }
 
 #[tauri::command]
-fn apply_stage_map_preset(state: State<'_, AppState>, label: String) -> Result<(), String> {
+fn apply_stage_map_preset(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    label: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
     let label = normalize_stage_map_preset_label(label)?;
-    state
-        .engine
-        .send(EngineCommand::ApplyStageMapPreset { label })
-        .map_err(|error| error.to_string())
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "apply_stage_map_preset",
+            },
+            |_| Ok(label),
+            |_, label| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::ApplyStageMapPreset { label },
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "apply_stage_map_preset",
+    )
 }
 
 #[tauri::command]
-fn remove_stage_map_preset(state: State<'_, AppState>, label: String) -> Result<(), String> {
+fn remove_stage_map_preset(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    label: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
     let label = normalize_stage_map_preset_label(label)?;
-    state
-        .engine
-        .send(EngineCommand::RemoveStageMapPreset { label })
-        .map_err(|error| error.to_string())
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "remove_stage_map_preset",
+            },
+            |_| Ok(label),
+            |_, label| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::RemoveStageMapPreset { label },
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "remove_stage_map_preset",
+    )
 }
 
 #[tauri::command]
 fn add_stage_object(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     args: FlatInvokeArgs<Value>,
 ) -> Result<StageObjectId, String> {
@@ -59643,10 +60149,11 @@ fn add_stage_object(
         depth: f32 => "depth",
         rotation_deg: f32 => "rotationDeg",
         color: Option<String> => "color",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
     );
-    let object_id = state.engine.allocate_stage_object_id();
-    let object = normalize_stage_object(StageObjectSummary {
-        id: object_id,
+    let intent = normalize_stage_object_add_intent(StageObjectAddIntent {
         label,
         kind,
         x,
@@ -59656,28 +60163,103 @@ fn add_stage_object(
         rotation_deg,
         color,
     })?;
-    state
-        .engine
-        .send(EngineCommand::UpsertStageObject(object))
-        .map_err(|error| error.to_string())?;
-    Ok(object_id)
+    stage_project_transaction_stage_object_id_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "add_stage_object",
+            },
+            |_| Ok(intent),
+            |state, intent| {
+                let stage_object_id = state.engine.allocate_stage_object_id();
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::AddStageObject(StageObjectSummary {
+                        id: stage_object_id,
+                        label: intent.label,
+                        kind: intent.kind,
+                        x: intent.x,
+                        z: intent.z,
+                        width: intent.width,
+                        depth: intent.depth,
+                        rotation_deg: intent.rotation_deg,
+                        color: intent.color,
+                    }),
+                    stage_object_id: Some(stage_object_id),
+                    label: None,
+                })
+            },
+        )?,
+        "add_stage_object",
+    )
 }
 
 #[tauri::command]
-fn set_stage_object(state: State<'_, AppState>, object: StageObjectSummary) -> Result<(), String> {
+fn set_stage_object(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    object: StageObjectSummary,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
     let object = normalize_stage_object(object)?;
-    state
-        .engine
-        .send(EngineCommand::UpsertStageObject(object))
-        .map_err(|error| error.to_string())
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "set_stage_object",
+            },
+            |_| Ok(object),
+            |_, object| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SetStageObject(object),
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "set_stage_object",
+    )
 }
 
 #[tauri::command]
-fn remove_stage_object(state: State<'_, AppState>, object_id: StageObjectId) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::RemoveStageObject(object_id))
-        .map_err(|error| error.to_string())
+fn remove_stage_object(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    object_id: StageObjectId,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<(), String> {
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "remove_stage_object",
+            },
+            |_| Ok(object_id),
+            |_, object_id| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::RemoveStageObject(object_id),
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "remove_stage_object",
+    )
 }
 
 #[tauri::command]
@@ -59731,25 +60313,37 @@ fn load_stage_map_preset_file(
 fn import_stage_map_preset(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    mut preset: StageMapPresetSummary,
+    preset: StageMapPresetSummary,
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
 ) -> Result<String, String> {
-    let _external_admission = lock_project_external_command_admission_for_display_finalize(&state)?;
-    let coordinator = lock_project_coordinator(&state)?;
-    let pending = project_transaction_for_owner_epoch(
-        &coordinator,
-        project_transaction_id,
-        expected_epoch,
-        &owner_id,
-    )?;
-    ensure_project_transaction_pending_binding(&state, &pending, window.label(), &owner_id)?;
-    let _transaction_admission = admit_project_transaction_command(&state, &pending)?;
-    preset = prepare_stage_map_preset_import(preset)?;
-    let label = preset.label.clone();
-    state.engine.upsert_stage_map_preset_published(preset)?;
-    Ok(label)
+    // Picker/read/parse remain outside this backend route. This normalization
+    // is also intentionally before the expected-epoch ticket fence; the
+    // authoritative mutation itself is entirely inside the helper below.
+    let preset = prepare_stage_map_preset_import(preset)?;
+    stage_project_transaction_label_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "import_stage_map_preset",
+            },
+            |_| Ok(preset),
+            |_, preset| {
+                let label = preset.label.clone();
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::UpsertStageMapPreset(preset),
+                    stage_object_id: None,
+                    label: Some(label),
+                })
+            },
+        )?,
+        "import_stage_map_preset",
+    )
 }
 
 fn prepare_stage_map_preset_import(
@@ -59758,12 +60352,7 @@ fn prepare_stage_map_preset_import(
     preset.label = normalize_stage_map_preset_label(preset.label)?;
     validate_stage_map_config(&preset.config)?;
     if let Some(objects) = preset.stage_objects.take() {
-        preset.stage_objects = Some(
-            objects
-                .into_iter()
-                .map(normalize_stage_object)
-                .collect::<Result<Vec<_>, _>>()?,
-        );
+        preset.stage_objects = Some(canonical_stage_project_objects(objects)?);
     }
     validate_project_stage_map_presets(std::slice::from_ref(&preset))?;
     Ok(preset)
@@ -75968,21 +76557,66 @@ pub(crate) mod tests {
 
     #[test]
     fn self_admitted_renderer_routes_are_exact_and_preserve_reply_loss_retry() {
-        const ROUTE_ADMISSION_TARGETS: [(&str, &str, &str); 2] = [
+        const ROUTE_ADMISSION_TARGETS: [(&str, &str, &str); 11] = [
+            (
+                "add_stage_object",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "apply_stage_map_preset",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "import_stage_map_preset",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
             (
                 "patch_fixtures",
                 "patch_fixtures_in_project_transaction",
                 "patch_fixtures_in_project_transaction_with_resolve_and_publish",
             ),
             (
+                "remove_stage_map_preset",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "remove_stage_object",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
                 "repair_fixture_profile",
                 "repair_fixture_profile_for_window_label_with_resolve_observer",
                 "repair_fixture_profile_for_window_label_with_resolve_and_publish",
             ),
+            (
+                "save_stage_map_preset",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "set_fixture_transform",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "set_stage_map_config",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "set_stage_object",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
         ];
 
         fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
-            let signature = format!("fn {name}(");
+            let signature = format!("fn {name}");
             let start = source
                 .find(&signature)
                 .unwrap_or_else(|| panic!("missing function {name}"));
@@ -78238,9 +78872,13 @@ pub(crate) mod tests {
         let harness = MediaAssetA6CommandHarness::new();
         let state = Arc::clone(&harness.state);
         let query = ControlPlaneQueryState::new().expect("query state initializes");
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = lock_project_coordinator(&state).unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let label = "No-query pending retirement";
         let coalesce_key = "retiring:no-query";
@@ -78252,6 +78890,7 @@ pub(crate) mod tests {
                 coalesce_key,
                 epoch,
                 revision,
+                checkpoint_hash,
                 MEDIA_ASSET_A6_OWNER,
                 "project-op:98:e1-no-query-retirement",
                 canonical_project_transaction_shape("no_query_retirement", label, coalesce_key),
@@ -86204,9 +86843,13 @@ pub(crate) mod tests {
             owner_id.to_string(),
         )
         .unwrap();
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let shape =
             canonical_project_transaction_shape("create_fixture_group", "Create fixture group", "");
@@ -86218,6 +86861,7 @@ pub(crate) mod tests {
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 "project-op:9101:recovered-fixture",
                 shape.clone(),
@@ -86336,9 +86980,13 @@ pub(crate) mod tests {
         assert_eq!(state.engine.snapshot().video.outputs[0].id, 1);
 
         let begin_route = |command_name: &str, label: &str, sequence: u64| {
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = state.project_coordinator.lock().unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             let shape = canonical_project_transaction_shape(command_name, label, "");
             let ticket = begin_project_transaction_for_window_label(
@@ -86349,6 +86997,7 @@ pub(crate) mod tests {
                     "",
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     format!("project-op:{sequence}:{command_name}"),
                     shape.clone(),
@@ -86511,9 +87160,13 @@ pub(crate) mod tests {
         );
 
         let policy = sample_operator_policy();
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let set_shape =
             canonical_project_transaction_shape("set_operator_policy", "Set operator policy", "");
@@ -86525,6 +87178,7 @@ pub(crate) mod tests {
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 "project-op:9108:recovered-operator-set",
                 set_shape.clone(),
@@ -86582,9 +87236,13 @@ pub(crate) mod tests {
             },
         );
 
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let clear_shape = canonical_project_transaction_shape(
             "clear_operator_policy",
@@ -86599,6 +87257,7 @@ pub(crate) mod tests {
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 "project-op:9109:recovered-operator-clear",
                 clear_shape.clone(),
@@ -89937,9 +90596,13 @@ pub(crate) mod tests {
         let window_label = "media-asset-a6";
         let owner_id = MEDIA_ASSET_A6_OWNER;
         let begin = |operation_id: &str, label: &str, coalesce_key: &str| {
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = lock_project_coordinator(&state).unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             begin_project_transaction_for_window_label(
                 &state,
@@ -89949,6 +90612,7 @@ pub(crate) mod tests {
                     coalesce_key,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id,
                     canonical_project_transaction_shape(
@@ -90008,6 +90672,7 @@ pub(crate) mod tests {
                 "fixture:e1",
                 ticket.project_epoch,
                 ticket.project_revision,
+                ticket.project_checkpoint_hash,
                 owner_id,
                 ticket.client_operation_id,
                 conflicting_shape,
@@ -90132,9 +90797,13 @@ pub(crate) mod tests {
                 coordinator.ancillary.operator_policy = Some(policy);
             }
             harness.authority();
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = state.project_coordinator.lock().unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             let retry_label = "Operator lock retry";
             let retry_coalesce = "operator:retry";
@@ -90152,6 +90821,7 @@ pub(crate) mod tests {
                     retry_coalesce,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     retry_operation.clone(),
                     retry_shape.clone(),
@@ -90175,6 +90845,7 @@ pub(crate) mod tests {
                     retry_coalesce,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     retry_operation.clone(),
                     retry_shape.clone(),
@@ -90233,6 +90904,7 @@ pub(crate) mod tests {
                     new_coalesce,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     new_operation,
                     new_shape,
@@ -90292,9 +90964,13 @@ pub(crate) mod tests {
         let window_label = "media-asset-a6";
         let owner_id = MEDIA_ASSET_A6_OWNER;
         let begin = |operation_id: &str, schema_version: u16| {
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = lock_project_coordinator(&state).unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             let label = "E1 commit recovery";
             let coalesce = "fixture:e1-commit";
@@ -90306,6 +90982,7 @@ pub(crate) mod tests {
                     coalesce,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id,
                     canonical_project_transaction_shape(
@@ -90491,9 +91168,13 @@ pub(crate) mod tests {
         )
         .unwrap();
         let begin_for = |window_label: &str, owner_id: &str, operation_id: &str| {
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = lock_project_coordinator(&state).unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             let label = format!("Retirement {window_label}");
             let coalesce = format!("retirement:{window_label}");
@@ -90505,6 +91186,7 @@ pub(crate) mod tests {
                     coalesce,
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id,
                     canonical_project_transaction_shape("retirement_test", &label, &coalesce),
@@ -101709,6 +102391,1629 @@ f 1 2 3
         }
     }
 
+    fn d4_stage_object(id: StageObjectId, label: &str) -> StageObjectSummary {
+        StageObjectSummary {
+            id,
+            label: label.to_string(),
+            kind: StageObjectKind::Truss,
+            x: 1.0,
+            z: -2.0,
+            width: 6.0,
+            depth: 0.4,
+            rotation_deg: 0.0,
+            color: Some("#55CCFF".to_string()),
+        }
+    }
+
+    fn d4_reconcile_stage_authority(state: &AppState) {
+        let _external = lock_project_external_command_admission(state).unwrap();
+        let mut coordinator = lock_project_coordinator(state).unwrap();
+        reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
+    }
+
+    fn d4_begin_stage_ticket(
+        state: &AppState,
+        window_label: &str,
+        owner_id: &str,
+        command_name: &'static str,
+        sequence: u64,
+    ) -> ProjectTransactionTicket {
+        d4_reconcile_stage_authority(state);
+        let (epoch, revision, checkpoint_hash) = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
+        };
+        let label = format!("D4 {command_name}");
+        let shape = canonical_project_transaction_shape(command_name, &label, "");
+        begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            begin_project_transaction_request!(
+                label,
+                "",
+                epoch,
+                revision,
+                checkpoint_hash,
+                owner_id,
+                format!("project-op:{}:d4-stage", 70_000 + sequence),
+                shape,
+                command_name,
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
+        )
+        .unwrap()
+    }
+
+    fn d4_commit_stage_ticket(
+        state: &AppState,
+        window_label: &str,
+        owner_id: &str,
+        command_name: &str,
+        ticket: &ProjectTransactionTicket,
+    ) {
+        commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            commit_project_transaction_request!(
+                ticket.transaction_id,
+                ticket.project_epoch,
+                ticket.client_operation_id,
+                ticket.shape_fingerprint,
+                command_name,
+                ticket.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap();
+    }
+
+    fn d4_apply_stage_mutation(
+        state: &AppState,
+        window_label: &str,
+        owner_id: &str,
+        command_name: &'static str,
+        ticket: &ProjectTransactionTicket,
+        canonical: Value,
+        mutation: StageProjectMutation,
+        stage_object_id: Option<StageObjectId>,
+        label: Option<String>,
+        build_calls: &AtomicU64,
+    ) -> Result<ProjectTransactionCommandResult, String> {
+        apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name,
+            },
+            |_| Ok(canonical),
+            move |_, _| {
+                build_calls.fetch_add(1, Ordering::AcqRel);
+                Ok(PreparedStageProjectMutation {
+                    mutation,
+                    stage_object_id,
+                    label,
+                })
+            },
+        )
+    }
+
+    fn d4_stage_result_outcome(
+        result: &ProjectTransactionCommandResult,
+        command_name: &str,
+    ) -> StageProjectMutationReceiptOutcome {
+        match result {
+            ProjectTransactionCommandResult::StageProjectMutation {
+                command_name: stored_command_name,
+                outcome,
+                ..
+            } if stored_command_name == command_name => *outcome,
+            other => panic!("unexpected D4 Stage result for {command_name}: {other:?}"),
+        }
+    }
+
+    fn d4_seed_stage_fixture(state: &AppState) {
+        let mut request = sample_patch_request(0, 1);
+        let mut profile = sample_patch_profile();
+        // The test only needs an addressable fixture for transform coverage;
+        // do not make this direct engine seed depend on ancillary custom
+        // profile persistence.
+        profile.source_path = "fixture://d4-stage-fixture".to_string();
+        request.profile_path = profile.source_path.clone();
+        state
+            .engine
+            .patch_fixtures_published(vec![engine::FixturePatchCandidate {
+                fixture_id: 1,
+                request,
+                profile,
+            }])
+            .unwrap();
+        d4_reconcile_stage_authority(state);
+    }
+
+    #[test]
+    fn d4_stage_all_nine_routes_persist_applied_reply_loss_results_and_reject_mismatches() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-all-window";
+        let owner_id = "d4-stage-all-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_seed_stage_fixture(state);
+
+        let applied_config = StageMapConfig {
+            locked: true,
+            min_x: -24.0,
+            max_x: 24.0,
+            min_z: -12.0,
+            max_z: 12.0,
+        };
+        let preset_config = StageMapConfig {
+            locked: false,
+            min_x: -40.0,
+            max_x: 40.0,
+            min_z: -20.0,
+            max_z: 20.0,
+        };
+        state
+            .engine
+            .upsert_stage_map_preset_published(StageMapPresetSummary {
+                label: "Apply D4".to_string(),
+                config: preset_config,
+                stage_objects: Some(Vec::new()),
+            })
+            .unwrap();
+        state
+            .engine
+            .upsert_stage_map_preset_published(StageMapPresetSummary {
+                label: "Remove D4".to_string(),
+                config: StageMapConfig::default(),
+                stage_objects: None,
+            })
+            .unwrap();
+        d4_reconcile_stage_authority(state);
+
+        let stage_object_id = state.engine.allocate_stage_object_id();
+        let added_object = d4_stage_object(stage_object_id, "Added D4");
+        let mut updated_object = added_object.clone();
+        updated_object.label = "Updated D4".to_string();
+        let commands = vec![
+            (
+                "set_fixture_transform",
+                StageProjectMutation::SetFixtureTransform {
+                    fixture_id: 1,
+                    position: Vec3 {
+                        x: 3.0,
+                        y: 4.0,
+                        z: -5.0,
+                    },
+                    rotation: Rotation3 {
+                        pitch: 10.0,
+                        yaw: 20.0,
+                        roll: 30.0,
+                    },
+                },
+                None,
+                None,
+            ),
+            (
+                "set_stage_map_config",
+                StageProjectMutation::SetStageMapConfig(applied_config),
+                None,
+                None,
+            ),
+            (
+                "save_stage_map_preset",
+                StageProjectMutation::SaveStageMapPreset {
+                    label: "Saved D4".to_string(),
+                    config: applied_config,
+                    stage_objects: Some(Vec::new()),
+                },
+                None,
+                Some("Saved D4".to_string()),
+            ),
+            (
+                "apply_stage_map_preset",
+                StageProjectMutation::ApplyStageMapPreset {
+                    label: "Apply D4".to_string(),
+                },
+                None,
+                None,
+            ),
+            (
+                "remove_stage_map_preset",
+                StageProjectMutation::RemoveStageMapPreset {
+                    label: "Remove D4".to_string(),
+                },
+                None,
+                None,
+            ),
+            (
+                "add_stage_object",
+                StageProjectMutation::AddStageObject(added_object),
+                Some(stage_object_id),
+                None,
+            ),
+            (
+                "set_stage_object",
+                StageProjectMutation::SetStageObject(updated_object),
+                None,
+                None,
+            ),
+            (
+                "remove_stage_object",
+                StageProjectMutation::RemoveStageObject(stage_object_id),
+                None,
+                None,
+            ),
+            (
+                "import_stage_map_preset",
+                StageProjectMutation::UpsertStageMapPreset(StageMapPresetSummary {
+                    label: "Imported D4".to_string(),
+                    config: StageMapConfig::default(),
+                    stage_objects: Some(Vec::new()),
+                }),
+                None,
+                Some("Imported D4".to_string()),
+            ),
+        ];
+
+        for (index, (command_name, mutation, stage_object_id, label)) in
+            commands.into_iter().enumerate()
+        {
+            let ticket =
+                d4_begin_stage_ticket(state, window_label, owner_id, command_name, index as u64);
+            let canonical = json!({ "command": command_name, "request": index });
+            let build_calls = AtomicU64::new(0);
+            let result = d4_apply_stage_mutation(
+                state,
+                window_label,
+                owner_id,
+                command_name,
+                &ticket,
+                canonical.clone(),
+                mutation.clone(),
+                stage_object_id,
+                label.clone(),
+                &build_calls,
+            )
+            .unwrap();
+            assert_eq!(
+                d4_stage_result_outcome(&result, command_name),
+                StageProjectMutationReceiptOutcome::Applied,
+                "{command_name} must persist the Engine Applied outcome"
+            );
+            match command_name {
+                "add_stage_object" => assert_eq!(
+                    stage_project_transaction_stage_object_id_result(result.clone(), command_name)
+                        .unwrap(),
+                    stage_object_id.unwrap()
+                ),
+                "save_stage_map_preset" | "import_stage_map_preset" => assert_eq!(
+                    stage_project_transaction_label_result(result.clone(), command_name).unwrap(),
+                    label.clone().unwrap()
+                ),
+                _ => stage_project_transaction_unit_result(result.clone(), command_name).unwrap(),
+            }
+            let after_first =
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+
+            let retried = d4_apply_stage_mutation(
+                state,
+                window_label,
+                owner_id,
+                command_name,
+                &ticket,
+                canonical,
+                mutation.clone(),
+                stage_object_id,
+                label,
+                &build_calls,
+            )
+            .unwrap();
+            assert_eq!(
+                retried, result,
+                "{command_name} reply-loss retry must return B"
+            );
+            assert_eq!(
+                build_calls.load(Ordering::Acquire),
+                1,
+                "{command_name} retry must not construct or republish a second B"
+            );
+            assert_eq!(
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+                after_first,
+                "{command_name} reply-loss retry must leave the persisted project unchanged"
+            );
+
+            let mismatch = d4_apply_stage_mutation(
+                state,
+                window_label,
+                owner_id,
+                command_name,
+                &ticket,
+                json!({ "command": command_name, "request": "different" }),
+                mutation,
+                stage_object_id,
+                None,
+                &build_calls,
+            )
+            .unwrap_err();
+            assert!(
+                mismatch.contains("different published-command request"),
+                "{command_name} mismatch must reject rather than replay: {mismatch}"
+            );
+            let recovery = query_project_transaction_for_window_label(
+                state,
+                window_label,
+                ticket.client_operation_id.clone(),
+                ticket.shape_fingerprint.clone(),
+                command_name.to_string(),
+                ticket.schema_version,
+                owner_id.to_string(),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(matches!(
+                recovery,
+                ProjectTransactionRecovery::Pending {
+                    command_result: Some(stored),
+                    command_indeterminate_error: None,
+                    ..
+                } if stored == result
+            ));
+            d4_commit_stage_ticket(state, window_label, owner_id, command_name, &ticket);
+        }
+    }
+
+    #[test]
+    fn d4_stage_add_digests_user_intent_before_one_time_allocation() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-add-window";
+        let owner_id = "d4-stage-add-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_reconcile_stage_authority(state);
+
+        let intent = normalize_stage_object_add_intent(StageObjectAddIntent {
+            label: "  D4 Allocated Truss  ".to_string(),
+            kind: StageObjectKind::Truss,
+            x: 2.0,
+            z: -3.0,
+            width: 8.0,
+            depth: 0.4,
+            rotation_deg: 15.0,
+            color: Some(" #77CCFF ".to_string()),
+        })
+        .unwrap();
+        let expected_digest =
+            project_transaction_command_request_digest("add_stage_object", &intent).unwrap();
+        let ticket = d4_begin_stage_ticket(state, window_label, owner_id, "add_stage_object", 60);
+        let allocations = AtomicU64::new(0);
+        let result = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name: "add_stage_object",
+            },
+            |_| Ok(intent.clone()),
+            |state, intent| {
+                allocations.fetch_add(1, Ordering::AcqRel);
+                let stage_object_id = state.engine.allocate_stage_object_id();
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::AddStageObject(StageObjectSummary {
+                        id: stage_object_id,
+                        label: intent.label,
+                        kind: intent.kind,
+                        x: intent.x,
+                        z: intent.z,
+                        width: intent.width,
+                        depth: intent.depth,
+                        rotation_deg: intent.rotation_deg,
+                        color: intent.color,
+                    }),
+                    stage_object_id: Some(stage_object_id),
+                    label: None,
+                })
+            },
+        )
+        .unwrap();
+        let ProjectTransactionCommandResult::StageProjectMutation {
+            request_digest,
+            stage_object_id: Some(stage_object_id),
+            outcome: StageProjectMutationReceiptOutcome::Applied,
+            ..
+        } = result.clone()
+        else {
+            panic!("add must retain its Applied receipt and allocated ID");
+        };
+        assert_eq!(request_digest, expected_digest);
+        assert_eq!(allocations.load(Ordering::Acquire), 1);
+        assert!(state
+            .engine
+            .snapshot()
+            .stage_objects
+            .iter()
+            .any(|object| object.id == stage_object_id));
+
+        let replay = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name: "add_stage_object",
+            },
+            |_| Ok(intent.clone()),
+            |_, _| panic!("exact add replay must not allocate a second StageObjectId"),
+        )
+        .unwrap();
+        assert_eq!(replay, result);
+        assert_eq!(allocations.load(Ordering::Acquire), 1);
+
+        let mismatch = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: ticket.transaction_id,
+                expected_epoch: ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name: "add_stage_object",
+            },
+            |_| {
+                normalize_stage_object_add_intent(StageObjectAddIntent {
+                    label: "Different allocated Truss".to_string(),
+                    ..intent.clone()
+                })
+            },
+            |_, _| panic!("different add payload must reject before allocation"),
+        )
+        .unwrap_err();
+        assert!(mismatch.contains("different published-command request"));
+        assert_eq!(allocations.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn d4_stage_unchanged_outcomes_are_receipt_backed_without_synthetic_history() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-unchanged-window";
+        let owner_id = "d4-stage-unchanged-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_seed_stage_fixture(state);
+
+        let object_id = state.engine.allocate_stage_object_id();
+        let unchanged_object = d4_stage_object(object_id, "Unchanged D4");
+        state
+            .engine
+            .apply_stage_project_mutation_published(StageProjectMutation::AddStageObject(
+                unchanged_object.clone(),
+            ))
+            .unwrap();
+        for preset in [
+            StageMapPresetSummary {
+                label: "Save unchanged D4".to_string(),
+                config: StageMapConfig::default(),
+                stage_objects: Some(Vec::new()),
+            },
+            StageMapPresetSummary {
+                label: "Import unchanged D4".to_string(),
+                config: StageMapConfig::default(),
+                stage_objects: Some(Vec::new()),
+            },
+            StageMapPresetSummary {
+                label: "Apply unchanged D4".to_string(),
+                config: StageMapConfig::default(),
+                stage_objects: Some(vec![unchanged_object.clone()]),
+            },
+        ] {
+            state
+                .engine
+                .upsert_stage_map_preset_published(preset)
+                .unwrap();
+        }
+        d4_reconcile_stage_authority(state);
+
+        let unchanged_cases = vec![
+            (
+                "set_fixture_transform",
+                StageProjectMutation::SetFixtureTransform {
+                    fixture_id: 1,
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+            ),
+            (
+                "set_stage_map_config",
+                StageProjectMutation::SetStageMapConfig(StageMapConfig::default()),
+            ),
+            (
+                "save_stage_map_preset",
+                StageProjectMutation::SaveStageMapPreset {
+                    label: "Save unchanged D4".to_string(),
+                    config: StageMapConfig::default(),
+                    stage_objects: Some(Vec::new()),
+                },
+            ),
+            (
+                "apply_stage_map_preset",
+                StageProjectMutation::ApplyStageMapPreset {
+                    label: "Apply unchanged D4".to_string(),
+                },
+            ),
+            (
+                "set_stage_object",
+                StageProjectMutation::SetStageObject(unchanged_object),
+            ),
+            (
+                "import_stage_map_preset",
+                StageProjectMutation::UpsertStageMapPreset(StageMapPresetSummary {
+                    label: "Import unchanged D4".to_string(),
+                    config: StageMapConfig::default(),
+                    stage_objects: Some(Vec::new()),
+                }),
+            ),
+        ];
+
+        for (index, (command_name, mutation)) in unchanged_cases.into_iter().enumerate() {
+            // Honest lifecycle accounting: a Begin reservation and its Commit
+            // each advance the exposed history generation exactly once, even
+            // when the Engine acknowledges the command as Unchanged. Every
+            // other authoritative field (revision, checkpoint hash, Undo/Redo
+            // depths, entry IDs, labels, and the whole persistence image)
+            // must survive the cycle unchanged.
+            let generation_before = { lock_project_coordinator(state).unwrap().history_generation };
+            let ticket = d4_begin_stage_ticket(
+                state,
+                window_label,
+                owner_id,
+                command_name,
+                80 + index as u64,
+            );
+            let image_before =
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+            let status_pending_begin = {
+                let coordinator = lock_project_coordinator(state).unwrap();
+                project_history_status_for_coordinator(&coordinator)
+            };
+            assert_eq!(
+                status_pending_begin.history_generation,
+                generation_before + 1,
+                "{command_name} Begin advances exactly one reservation generation"
+            );
+            let result = d4_apply_stage_mutation(
+                state,
+                window_label,
+                owner_id,
+                command_name,
+                &ticket,
+                json!({ "unchanged": command_name }),
+                mutation,
+                None,
+                None,
+                &AtomicU64::new(0),
+            )
+            .unwrap();
+            assert_eq!(
+                d4_stage_result_outcome(&result, command_name),
+                StageProjectMutationReceiptOutcome::Unchanged,
+                "{command_name} must retain the Engine Unchanged acknowledgement"
+            );
+            d4_commit_stage_ticket(state, window_label, owner_id, command_name, &ticket);
+            let image_after =
+                project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+            let status_after = {
+                let coordinator = lock_project_coordinator(state).unwrap();
+                project_history_status_for_coordinator(&coordinator)
+            };
+            assert_eq!(
+                image_after, image_before,
+                "{command_name} unchanged acknowledgement must leave the persisted project unchanged"
+            );
+            assert_eq!(
+                lock_project_coordinator(state).unwrap().revision,
+                status_pending_begin.project_revision,
+                "{command_name} unchanged acknowledgement must not manufacture history B"
+            );
+            // Everything except the two documented lifecycle generations is
+            // byte-identical across the committed operation.
+            let mut expected = status_pending_begin;
+            expected.history_generation += 1;
+            assert_eq!(status_after.history_generation, expected.history_generation);
+            assert_eq!(
+                status_after, expected,
+                "{command_name} unchanged commit may only advance the lifecycle generation"
+            );
+        }
+    }
+
+    #[test]
+    fn d4_stage_begin_rejects_wrong_checkpoint_hash_before_reservation_and_fences_duplicates() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-hash-fence-window";
+        let owner_id = "d4-stage-hash-fence-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_seed_stage_fixture(state);
+        d4_reconcile_stage_authority(state);
+
+        let (epoch, revision, checkpoint_hash) = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
+        };
+        let command_name = "set_fixture_transform";
+        let label = "D4 hash fence";
+        let shape = canonical_project_transaction_shape(command_name, label, "");
+        let operation_id = "project-op:71000:d4-hash-fence".to_string();
+        // Canonical 64-hex form so only the value is wrong.
+        let wrong_hash = format!("{:064x}", 0xdead_beef_u64);
+        let begin_with =
+            |hash: &str, request_epoch: u64, request_revision: u64, request_operation: &str| {
+                begin_project_transaction_for_window_label(
+                    state,
+                    window_label,
+                    begin_project_transaction_request!(
+                        label,
+                        "",
+                        request_epoch,
+                        request_revision,
+                        hash,
+                        owner_id,
+                        request_operation,
+                        shape.clone(),
+                        command_name,
+                        PROJECT_TRANSACTION_SCHEMA_VERSION
+                    ),
+                )
+            };
+
+        let image_before = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let status_before = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            project_history_status_for_coordinator(&coordinator)
+        };
+
+        // A blank fence fails closed before any lock, reconcile, or reservation
+        // side effect; there is no compatibility fallback for missing hashes.
+        let blank = begin_with("", epoch, revision, &operation_id).unwrap_err();
+        assert!(
+            blank.contains("canonical expectedCheckpointHash"),
+            "unexpected blank-hash error: {blank}"
+        );
+
+        // A well-formed but wrong hash rejects against the exact current
+        // checkpoint even with the correct epoch and revision.
+        let mismatched = begin_with(&wrong_hash, epoch, revision, &operation_id).unwrap_err();
+        assert!(
+            mismatched.contains("expected checkpoint hash")
+                && mismatched.contains("current checkpoint hash"),
+            "unexpected wrong-hash error: {mismatched}"
+        );
+
+        // No reservation artifact exists and no authoritative surface moved.
+        assert!(!state
+            .project_transaction_receipts
+            .lock()
+            .unwrap()
+            .contains_key(&operation_id));
+        assert!(!state
+            .project_transaction_lanes
+            .lock()
+            .unwrap()
+            .contains_key(&operation_id));
+        assert!(lock_project_coordinator(state)
+            .unwrap()
+            .history
+            .pending
+            .is_empty());
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            image_before,
+            "a rejected Begin must leave the persisted project untouched"
+        );
+        let status_after_rejections = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            project_history_status_for_coordinator(&coordinator)
+        };
+        assert_eq!(
+            status_after_rejections, status_before,
+            "a rejected Begin must not advance revision, history stacks, or lifecycle generations"
+        );
+
+        // The authoritative Begin carries the exact current E/R/H triple.
+        let ticket = begin_with(&checkpoint_hash, epoch, revision, &operation_id).unwrap();
+        assert_eq!(ticket.project_epoch, epoch);
+        assert_eq!(ticket.project_revision, revision);
+        assert_eq!(ticket.project_checkpoint_hash, checkpoint_hash);
+
+        // An exact reply-lost duplicate recovers the retained Pending receipt.
+        let duplicate = begin_with(&checkpoint_hash, epoch, revision, &operation_id).unwrap();
+        assert_eq!(duplicate.transaction_id, ticket.transaction_id);
+        assert_eq!(duplicate.client_operation_id, ticket.client_operation_id);
+        assert_eq!(duplicate.shape_fingerprint, ticket.shape_fingerprint);
+        assert_eq!(duplicate.project_checkpoint_hash, checkpoint_hash);
+
+        // The same client operation identity under a changed fence rejects
+        // instead of silently recovering.
+        let changed_hash = begin_with(&wrong_hash, epoch, revision, &operation_id).unwrap_err();
+        assert!(
+            changed_hash.contains("different project authority baseline"),
+            "unexpected changed-hash duplicate error: {changed_hash}"
+        );
+        let changed_epoch = begin_with(
+            &checkpoint_hash,
+            epoch.checked_add(1).unwrap(),
+            revision,
+            &operation_id,
+        )
+        .unwrap_err();
+        assert!(
+            changed_epoch.contains("different project authority baseline"),
+            "unexpected changed-epoch duplicate error: {changed_epoch}"
+        );
+        let changed_revision = begin_with(
+            &checkpoint_hash,
+            epoch,
+            revision.checked_add(1).unwrap(),
+            &operation_id,
+        )
+        .unwrap_err();
+        assert!(
+            changed_revision.contains("different project authority baseline"),
+            "unexpected changed-revision duplicate error: {changed_revision}"
+        );
+
+        // The retained receipt keeps its exact original baseline.
+        {
+            let receipts = state.project_transaction_receipts.lock().unwrap();
+            let receipt = receipts.get(&operation_id).unwrap();
+            assert_eq!(receipt.project_epoch, epoch);
+            assert_eq!(receipt.project_revision, revision);
+            assert_eq!(receipt.checkpoint_hash, checkpoint_hash);
+            assert!(matches!(
+                receipt.state,
+                ProjectTransactionReceiptState::Pending
+            ));
+        }
+
+        // The ticket stayed safe: the production Stage helper admits exactly
+        // the one intended mutation and nothing else ever reached the engine.
+        let build_calls = AtomicU64::new(0);
+        let applied = d4_apply_stage_mutation(
+            state,
+            window_label,
+            owner_id,
+            command_name,
+            &ticket,
+            json!({ "fixture": 1 }),
+            StageProjectMutation::SetFixtureTransform {
+                fixture_id: 1,
+                position: Vec3 {
+                    x: 6.0,
+                    y: 0.0,
+                    z: -1.0,
+                },
+                rotation: Rotation3 {
+                    pitch: 0.0,
+                    yaw: 45.0,
+                    roll: 0.0,
+                },
+            },
+            None,
+            None,
+            &build_calls,
+        )
+        .unwrap();
+        assert_eq!(
+            d4_stage_result_outcome(&applied, command_name),
+            StageProjectMutationReceiptOutcome::Applied
+        );
+        d4_commit_stage_ticket(state, window_label, owner_id, command_name, &ticket);
+        assert_eq!(
+            build_calls.load(Ordering::Acquire),
+            1,
+            "rejected Begins must never construct or publish a Stage mutation"
+        );
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert!(lock_project_coordinator(state)
+            .unwrap()
+            .history
+            .pending
+            .is_empty());
+        let fixtures = state.engine.persistence_snapshot().unwrap().fixtures;
+        assert_eq!(fixtures.len(), 1);
+        assert_eq!(
+            fixtures[0].position,
+            Vec3 {
+                x: 6.0,
+                y: 0.0,
+                z: -1.0
+            }
+        );
+        assert_eq!(
+            fixtures[0].rotation,
+            Rotation3 {
+                pitch: 0.0,
+                yaw: 45.0,
+                roll: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn d4_stage_begin_rejects_stale_hash_before_unreconciled_persistence_side_effects() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-pre-reconcile-hash-window";
+        let owner_id = "d4-stage-pre-reconcile-hash-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_seed_stage_fixture(state);
+
+        let (epoch, revision, cached_hash, status_before) = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                project_history_status_for_coordinator(&coordinator),
+            )
+        };
+
+        // Simulate an admitted non-transaction engine command that changed the
+        // persistence image but has not yet reconciled the coordinator cache.
+        state
+            .engine
+            .upsert_stage_map_preset_published(StageMapPresetSummary {
+                label: "Unreconciled D4 preset".to_string(),
+                config: StageMapConfig {
+                    locked: true,
+                    min_x: -31.0,
+                    max_x: 31.0,
+                    min_z: -17.0,
+                    max_z: 17.0,
+                },
+                stage_objects: Some(vec![d4_stage_object(91, "Unreconciled truss")]),
+            })
+            .unwrap();
+        let drifted_image = project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let drifted_hash = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            let checkpoint = project_checkpoint_for_coordinator(state, &coordinator).unwrap();
+            assert_ne!(checkpoint.hash, cached_hash);
+            assert_eq!(
+                project_history_status_for_coordinator(&coordinator),
+                status_before,
+                "the direct persistence drift must still be unreconciled"
+            );
+            checkpoint.hash
+        };
+
+        let command_name = "set_fixture_transform";
+        let label = "D4 pre-reconcile hash fence";
+        let shape = canonical_project_transaction_shape(command_name, label, "");
+        let operation_id = "project-op:71001:d4-pre-reconcile-hash";
+        let error = begin_project_transaction_for_window_label(
+            state,
+            window_label,
+            begin_project_transaction_request!(
+                label,
+                "",
+                epoch,
+                revision,
+                drifted_hash,
+                owner_id,
+                operation_id,
+                shape,
+                command_name,
+                PROJECT_TRANSACTION_SCHEMA_VERSION
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("expected checkpoint hash") && error.contains("current checkpoint hash"),
+            "unexpected pre-reconcile hash error: {error}"
+        );
+
+        // A stale H must fail before reconciliation advances R, clears history,
+        // or publishes an authority generation. It also must not arm any
+        // transaction artifact or touch the already-drifted persistence image.
+        let status_after = {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            assert!(coordinator.history.pending.is_empty());
+            project_history_status_for_coordinator(&coordinator)
+        };
+        assert_eq!(status_after, status_before);
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            drifted_image
+        );
+        assert!(!state
+            .project_transaction_receipts
+            .lock()
+            .unwrap()
+            .contains_key(operation_id));
+        assert!(!state
+            .project_transaction_lanes
+            .lock()
+            .unwrap()
+            .contains_key(operation_id));
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn d4_stage_applied_transactions_undo_redo_round_trip_is_exact_through_production_paths() {
+        struct D4HistoryPlatform;
+        impl ProjectReplacementPlatform for D4HistoryPlatform {
+            fn advance_recovery_authority(
+                &self,
+                _state: &AppState,
+                coordinator: &mut ProjectCoordinator,
+                transition: ProjectRecoveryAuthorityTransition,
+            ) -> Result<u64, String> {
+                advance_project_recovery_authority_serial_with_persist(
+                    coordinator,
+                    transition,
+                    |_, _| Ok(()),
+                )
+            }
+            fn fence_and_retire_outputs(&self, _state: &AppState) -> Result<(), String> {
+                Ok(())
+            }
+            fn emit_authority_event(
+                &self,
+                _coordinator_effect: ProjectReplacementCoordinatorEffect,
+                _result: &ProjectLoadResult,
+            ) {
+            }
+        }
+
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-history-window";
+        let owner_id = "d4-stage-history-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        d4_seed_stage_fixture(state);
+        state
+            .engine
+            .upsert_stage_map_preset_published(StageMapPresetSummary {
+                label: "Roundtrip D4".to_string(),
+                config: StageMapConfig {
+                    locked: false,
+                    min_x: -40.0,
+                    max_x: 40.0,
+                    min_z: -20.0,
+                    max_z: 20.0,
+                },
+                stage_objects: Some(Vec::new()),
+            })
+            .unwrap();
+        d4_reconcile_stage_authority(state);
+
+        let d4_image = || project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let d4_status = || {
+            let coordinator = lock_project_coordinator(state).unwrap();
+            project_history_status_for_coordinator(&coordinator)
+        };
+        // prepare_project_load canonicalizes every embedded fixture profile to
+        // the snapshot identity the Engine publishes on reload. Normalize both
+        // sides with that one documented spelling so restored A/B snapshots
+        // compare exactly across Undo/Redo boundaries.
+        let d4_reload_form = |image: EngineSnapshot| {
+            let mut reloaded = project_snapshot_for_save(image);
+            for fixture in &mut reloaded.fixtures {
+                fixture.profile_source_path = format!("snapshot://fixture/{}", fixture.id);
+            }
+            reloaded
+        };
+        let navigate = |undo: bool,
+                        expected_epoch: u64,
+                        entry_id: Option<u64>,
+                        checkpoint_hash: Option<String>,
+                        label: &str| {
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            navigate_project_history_with_coordinator(
+                state,
+                &mut coordinator,
+                undo,
+                Some(expected_epoch),
+                entry_id,
+                checkpoint_hash,
+                |state, prepared, coordinator| {
+                    replace_prepared_project_snapshot_with_coordinator_and_platform(
+                        state,
+                        prepared,
+                        coordinator,
+                        project_replacement_plan!(
+                            ProjectReplacementCoordinatorEffect::RevisionMutation,
+                            false,
+                            no_project_replacement_validation,
+                            no_project_replacement_capture,
+                            None
+                        ),
+                        &D4HistoryPlatform,
+                    )
+                    .map(|(result, (), _)| result)
+                },
+            )
+            .unwrap_or_else(|error| panic!("{label} navigation failed: {error}"))
+        };
+
+        let image_a = d4_image();
+        let status_a = d4_status();
+
+        // Transaction 1: set_fixture_transform moves A to B through the
+        // production Begin/helper/Commit paths.
+        let t1 = d4_begin_stage_ticket(state, window_label, owner_id, "set_fixture_transform", 300);
+        assert_eq!(t1.project_epoch, status_a.project_epoch);
+        assert_eq!(t1.project_revision, status_a.project_revision);
+        assert_eq!(t1.project_checkpoint_hash, status_a.checkpoint_hash);
+        let r1 = d4_apply_stage_mutation(
+            state,
+            window_label,
+            owner_id,
+            "set_fixture_transform",
+            &t1,
+            json!({ "fixture": 1 }),
+            StageProjectMutation::SetFixtureTransform {
+                fixture_id: 1,
+                position: Vec3 {
+                    x: 3.0,
+                    y: 4.0,
+                    z: -5.0,
+                },
+                rotation: Rotation3 {
+                    pitch: 10.0,
+                    yaw: 20.0,
+                    roll: 30.0,
+                },
+            },
+            None,
+            None,
+            &AtomicU64::new(0),
+        )
+        .unwrap();
+        assert_eq!(
+            d4_stage_result_outcome(&r1, "set_fixture_transform"),
+            StageProjectMutationReceiptOutcome::Applied
+        );
+        let committed1 = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            commit_project_transaction_request!(
+                t1.transaction_id,
+                t1.project_epoch,
+                t1.client_operation_id,
+                t1.shape_fingerprint,
+                "set_fixture_transform",
+                t1.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap();
+        let status_b = committed1.history_status;
+        assert_eq!(status_b, d4_status(), "commit status must be authoritative");
+        assert_eq!(status_b.project_epoch, status_a.project_epoch);
+        assert_eq!(status_b.project_revision, status_a.project_revision + 1);
+        assert_ne!(status_b.checkpoint_hash, status_a.checkpoint_hash);
+        assert_eq!(status_b.undo_depth, status_a.undo_depth + 1);
+        assert_eq!(status_b.undo_entry_id, Some(t1.transaction_id));
+        assert_eq!(status_b.redo_depth, 0);
+        assert!(!status_b.can_redo);
+        assert_eq!(
+            status_b.history_generation,
+            status_a.history_generation + 2,
+            "one Begin reservation plus one Commit lifecycle generation"
+        );
+        let image_b = d4_image();
+        assert_ne!(image_b, image_a);
+        assert_eq!(image_b.fixtures[0].position.x, 3.0);
+
+        // Undo returns the exact A persistence snapshot.
+        let undone1 = navigate(
+            true,
+            status_b.project_epoch,
+            status_b.undo_entry_id,
+            Some(status_b.checkpoint_hash.clone()),
+            "Undo 1",
+        );
+        let status_a2 = undone1.history_status;
+        assert_eq!(status_a2, d4_status(), "Undo status must be authoritative");
+        assert_eq!(status_a2.project_revision, status_b.project_revision + 1);
+        assert_eq!(
+            status_a2.history_generation,
+            status_b.history_generation + 1
+        );
+        assert!(!status_a2.can_undo);
+        assert!(status_a2.can_redo);
+        assert_eq!(status_a2.undo_depth, 0);
+        assert_eq!(status_a2.undo_entry_id, None);
+        assert_eq!(status_a2.redo_depth, 1);
+        assert_eq!(status_a2.redo_entry_id, Some(t1.transaction_id));
+        assert_ne!(
+            status_a2.checkpoint_hash, status_b.checkpoint_hash,
+            "the reloaded A image uses the canonical snapshot profile spelling"
+        );
+        assert_eq!(
+            d4_reload_form(d4_image()),
+            d4_reload_form(image_a.clone()),
+            "Undo must restore the exact A persistence snapshot"
+        );
+
+        // Redo restores the exact B persistence snapshot.
+        let redone1 = navigate(
+            false,
+            status_a2.project_epoch,
+            status_a2.redo_entry_id,
+            Some(status_a2.redo_checkpoint_hash.clone().unwrap()),
+            "Redo 1",
+        );
+        let status_b2 = redone1.history_status;
+        assert_eq!(status_b2, d4_status(), "Redo status must be authoritative");
+        assert_eq!(status_b2.project_revision, status_a2.project_revision + 1);
+        assert_eq!(
+            status_b2.history_generation,
+            status_a2.history_generation + 1
+        );
+        assert!(status_b2.can_undo);
+        assert!(!status_b2.can_redo);
+        assert_eq!(status_b2.undo_depth, 1);
+        assert_eq!(status_b2.undo_entry_id, Some(t1.transaction_id));
+        assert_eq!(status_b2.redo_depth, 0);
+        assert_eq!(status_b2.redo_entry_id, None);
+        assert_eq!(
+            d4_reload_form(d4_image()),
+            d4_reload_form(image_b.clone()),
+            "Redo must restore the exact B persistence snapshot"
+        );
+
+        // Transaction 2: apply_stage_map_preset moves B to C through the same
+        // production paths.
+        let t2 =
+            d4_begin_stage_ticket(state, window_label, owner_id, "apply_stage_map_preset", 301);
+        assert_eq!(t2.project_epoch, status_b2.project_epoch);
+        assert_eq!(t2.project_revision, status_b2.project_revision);
+        assert_eq!(t2.project_checkpoint_hash, status_b2.checkpoint_hash);
+        let r2 = d4_apply_stage_mutation(
+            state,
+            window_label,
+            owner_id,
+            "apply_stage_map_preset",
+            &t2,
+            json!({ "preset": "Roundtrip D4" }),
+            StageProjectMutation::ApplyStageMapPreset {
+                label: "Roundtrip D4".to_string(),
+            },
+            None,
+            None,
+            &AtomicU64::new(0),
+        )
+        .unwrap();
+        assert_eq!(
+            d4_stage_result_outcome(&r2, "apply_stage_map_preset"),
+            StageProjectMutationReceiptOutcome::Applied
+        );
+        let committed2 = commit_project_transaction_for_window_label(
+            state,
+            window_label,
+            commit_project_transaction_request!(
+                t2.transaction_id,
+                t2.project_epoch,
+                t2.client_operation_id,
+                t2.shape_fingerprint,
+                "apply_stage_map_preset",
+                t2.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap();
+        let status_c = committed2.history_status;
+        assert_eq!(status_c, d4_status(), "commit status must be authoritative");
+        assert_eq!(status_c.project_revision, status_b2.project_revision + 1);
+        assert_eq!(
+            status_c.history_generation,
+            status_b2.history_generation + 2
+        );
+        assert_ne!(status_c.checkpoint_hash, status_b2.checkpoint_hash);
+        assert_eq!(status_c.undo_depth, 2);
+        assert_eq!(status_c.undo_entry_id, Some(t2.transaction_id));
+        assert_eq!(status_c.redo_depth, 0);
+        let image_c = d4_image();
+        assert_ne!(image_c, image_b);
+
+        // Undo 2 lands on B again with the identical published checkpoint hash
+        // it had after Redo 1: the same canonical content hashes equally.
+        let undone2 = navigate(
+            true,
+            status_c.project_epoch,
+            status_c.undo_entry_id,
+            Some(status_c.checkpoint_hash.clone()),
+            "Undo 2",
+        );
+        let status_b3 = undone2.history_status;
+        assert_eq!(status_b3, d4_status(), "Undo status must be authoritative");
+        assert_eq!(status_b3.project_revision, status_c.project_revision + 1);
+        assert_eq!(
+            status_b3.history_generation,
+            status_c.history_generation + 1
+        );
+        assert_eq!(status_b3.undo_depth, 1);
+        assert_eq!(status_b3.undo_entry_id, Some(t1.transaction_id));
+        assert_eq!(status_b3.redo_depth, 1);
+        assert_eq!(status_b3.redo_entry_id, Some(t2.transaction_id));
+        assert_eq!(
+            status_b3.checkpoint_hash, status_b2.checkpoint_hash,
+            "Undo 2 republishes the exact B checkpoint hash"
+        );
+        assert_eq!(
+            d4_reload_form(d4_image()),
+            d4_reload_form(image_b.clone()),
+            "Undo 2 must restore the exact B persistence snapshot"
+        );
+
+        // Redo 2 lands on C again with its exact committed checkpoint hash.
+        let redone2 = navigate(
+            false,
+            status_b3.project_epoch,
+            status_b3.redo_entry_id,
+            Some(status_b3.redo_checkpoint_hash.clone().unwrap()),
+            "Redo 2",
+        );
+        let status_c2 = redone2.history_status;
+        assert_eq!(status_c2, d4_status(), "Redo status must be authoritative");
+        assert_eq!(status_c2.project_revision, status_b3.project_revision + 1);
+        assert_eq!(status_c2.undo_depth, 2);
+        assert_eq!(status_c2.undo_entry_id, Some(t2.transaction_id));
+        assert_eq!(status_c2.redo_depth, 0);
+        assert_eq!(
+            status_c2.checkpoint_hash, status_c.checkpoint_hash,
+            "Redo 2 republishes the exact committed C checkpoint hash"
+        );
+        assert_eq!(
+            d4_reload_form(d4_image()),
+            d4_reload_form(image_c.clone()),
+            "Redo 2 must restore the exact C persistence snapshot"
+        );
+    }
+
+    #[test]
+    fn d4_stage_admission_rejects_invalid_epoch_owner_window_and_locks_and_latches_indeterminate() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let window_label = "d4-stage-admission-window";
+        let owner_id = "d4-stage-admission-owner";
+        register_project_transaction_owner_for_window_label(
+            state,
+            window_label,
+            owner_id.to_string(),
+        )
+        .unwrap();
+        let config = StageMapConfig {
+            locked: true,
+            min_x: -30.0,
+            max_x: 30.0,
+            min_z: -15.0,
+            max_z: 15.0,
+        };
+
+        // No stale epoch, owner, or window binding may reach the engine or
+        // construct a retained B result. The real ticket remains cancellable.
+        let admission_ticket =
+            d4_begin_stage_ticket(state, window_label, owner_id, "set_stage_map_config", 200);
+        let before_admission_rejections =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let stale = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: admission_ticket.transaction_id,
+                expected_epoch: admission_ticket.project_epoch.saturating_add(1),
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name: "set_stage_map_config",
+            },
+            |_| Ok(json!({ "config": "stale" })),
+            |_, _| panic!("stale epoch must reject before Stage mutation construction"),
+        )
+        .unwrap_err();
+        assert!(
+            stale.contains("epoch") || stale.contains("replaced project"),
+            "unexpected stale-epoch error: {stale}"
+        );
+        let wrong_owner = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: admission_ticket.transaction_id,
+                expected_epoch: admission_ticket.project_epoch,
+                owner_id: "d4-stage-other-owner".to_string(),
+                window_label: window_label.to_string(),
+                command_name: "set_stage_map_config",
+            },
+            |_| Ok(json!({ "config": "wrong-owner" })),
+            |_, _| panic!("wrong owner must reject before Stage mutation construction"),
+        )
+        .unwrap_err();
+        assert!(
+            wrong_owner.contains("owner")
+                || wrong_owner.contains("registered")
+                || wrong_owner.contains("another renderer session"),
+            "unexpected wrong-owner error: {wrong_owner}"
+        );
+        let wrong_window = apply_stage_project_mutation_in_project_transaction(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: admission_ticket.transaction_id,
+                expected_epoch: admission_ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: "d4-stage-other-window".to_string(),
+                command_name: "set_stage_map_config",
+            },
+            |_| Ok(json!({ "config": "wrong-window" })),
+            |_, _| panic!("wrong window must reject before Stage mutation construction"),
+        )
+        .unwrap_err();
+        assert!(
+            wrong_window.contains("window") || wrong_window.contains("registered"),
+            "unexpected wrong-window error: {wrong_window}"
+        );
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_admission_rejections
+        );
+        cancel_project_transaction_for_window_label(
+            state,
+            project_transaction_cancel_request!(
+                window_label,
+                admission_ticket.transaction_id,
+                admission_ticket.project_epoch,
+                admission_ticket.client_operation_id,
+                admission_ticket.shape_fingerprint,
+                "set_stage_map_config",
+                admission_ticket.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap();
+
+        // Missing Set targets are definitive: Set never recreates a Stage
+        // object and the receipt remains result-free/cancellable.
+        let missing_ticket =
+            d4_begin_stage_ticket(state, window_label, owner_id, "set_stage_object", 201);
+        let before_missing =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let missing = d4_apply_stage_mutation(
+            state,
+            window_label,
+            owner_id,
+            "set_stage_object",
+            &missing_ticket,
+            json!({ "object": "missing" }),
+            StageProjectMutation::SetStageObject(d4_stage_object(9_999, "Missing D4")),
+            None,
+            None,
+            &AtomicU64::new(0),
+        )
+        .unwrap_err();
+        assert!(
+            missing.contains("was not found"),
+            "unexpected missing Set error: {missing}"
+        );
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_missing
+        );
+        let recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            missing_ticket.client_operation_id.clone(),
+            missing_ticket.shape_fingerprint.clone(),
+            "set_stage_object".to_string(),
+            missing_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: None,
+                command_indeterminate_error: None,
+                ..
+            }
+        ));
+        cancel_project_transaction_for_window_label(
+            state,
+            project_transaction_cancel_request!(
+                window_label,
+                missing_ticket.transaction_id,
+                missing_ticket.project_epoch,
+                missing_ticket.client_operation_id,
+                missing_ticket.shape_fingerprint,
+                "set_stage_object",
+                missing_ticket.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap();
+
+        // Both Operator modes reject an already-ticketed, not-yet-published
+        // Stage command. This proves the final server-side admission rather
+        // than merely a frontend control lock.
+        for (offset, mode) in [OperatorLockMode::Partial, OperatorLockMode::Full]
+            .into_iter()
+            .enumerate()
+        {
+            let ticket = d4_begin_stage_ticket(
+                state,
+                window_label,
+                owner_id,
+                "set_stage_map_config",
+                210 + offset as u64,
+            );
+            {
+                let mut coordinator = lock_project_coordinator(state).unwrap();
+                let mut policy = sample_operator_policy();
+                policy.lock_mode = mode;
+                policy.lock_on_load = true;
+                coordinator.ancillary.operator_policy = Some(policy);
+            }
+            let blocked = d4_apply_stage_mutation(
+                state,
+                window_label,
+                owner_id,
+                "set_stage_map_config",
+                &ticket,
+                json!({ "lock": format!("{mode:?}") }),
+                StageProjectMutation::SetStageMapConfig(config),
+                None,
+                None,
+                &AtomicU64::new(0),
+            )
+            .unwrap_err();
+            assert!(
+                blocked.contains("Operator") && blocked.contains("Lock"),
+                "{mode:?} must block Stage mutation: {blocked}"
+            );
+            {
+                let mut coordinator = lock_project_coordinator(state).unwrap();
+                coordinator.ancillary.operator_policy = None;
+                state.project_operator_sessions.lock().unwrap().clear();
+            }
+            cancel_project_transaction_for_window_label(
+                state,
+                project_transaction_cancel_request!(
+                    window_label,
+                    ticket.transaction_id,
+                    ticket.project_epoch,
+                    ticket.client_operation_id,
+                    ticket.shape_fingerprint,
+                    "set_stage_map_config",
+                    ticket.schema_version,
+                    owner_id
+                ),
+            )
+            .unwrap();
+        }
+
+        // An admitted ACK disconnect is never treated as cancellation-safe.
+        // The fault latches, exact query retains the ambiguity, and both
+        // terminal cancellation and unrelated new Stage work fail closed.
+        let indeterminate_ticket =
+            d4_begin_stage_ticket(state, window_label, owner_id, "set_stage_map_config", 220);
+        let before_indeterminate =
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+        let indeterminate_error = apply_stage_project_mutation_in_project_transaction_with_publish(
+            state,
+            StageProjectTransactionRequest {
+                project_transaction_id: indeterminate_ticket.transaction_id,
+                expected_epoch: indeterminate_ticket.project_epoch,
+                owner_id: owner_id.to_string(),
+                window_label: window_label.to_string(),
+                command_name: "set_stage_map_config",
+            },
+            |_| Ok(json!({ "config": "indeterminate" })),
+            |_, _| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SetStageMapConfig(config),
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+            |_, _| {
+                Err(FixturePatchPublicationFailure::Indeterminate(
+                    "injected Stage ACK disconnect".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(indeterminate_error, "injected Stage ACK disconnect");
+        assert_eq!(
+            project_snapshot_for_save(state.engine.persistence_snapshot().unwrap()),
+            before_indeterminate
+        );
+        assert!(state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+        let recovery = query_project_transaction_for_window_label(
+            state,
+            window_label,
+            indeterminate_ticket.client_operation_id.clone(),
+            indeterminate_ticket.shape_fingerprint.clone(),
+            "set_stage_map_config".to_string(),
+            indeterminate_ticket.schema_version,
+            owner_id.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            recovery,
+            ProjectTransactionRecovery::Pending {
+                command_result: None,
+                command_indeterminate_error: Some(ref error),
+                ..
+            } if error == "injected Stage ACK disconnect"
+        ));
+        let cancellation = cancel_project_transaction_for_window_label(
+            state,
+            project_transaction_cancel_request!(
+                window_label,
+                indeterminate_ticket.transaction_id,
+                indeterminate_ticket.project_epoch,
+                indeterminate_ticket.client_operation_id,
+                indeterminate_ticket.shape_fingerprint,
+                "set_stage_map_config",
+                indeterminate_ticket.schema_version,
+                owner_id
+            ),
+        )
+        .unwrap_err();
+        assert!(cancellation.contains("indeterminate"));
+    }
+
     #[test]
     fn d2_patch_production_transaction_is_one_publication_and_reply_loss_is_idempotent() {
         let harness = MediaAssetA6CommandHarness::new();
@@ -101726,9 +104031,13 @@ f 1 2 3
             let mut coordinator = state.project_coordinator.lock().unwrap();
             reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
         }
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let shape =
             canonical_project_transaction_shape("patch_fixtures", "PATCH fixture batch", "");
@@ -101741,6 +104050,7 @@ f 1 2 3
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 operation_id.clone(),
                 shape.clone(),
@@ -101892,9 +104202,13 @@ f 1 2 3
             .ancillary
             .custom_profiles
             .clone();
-        let (repair_epoch, repair_revision) = {
+        let (repair_epoch, repair_revision, repair_checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let repair_shape = canonical_project_transaction_shape(
             "repair_fixture_profile",
@@ -101910,6 +104224,7 @@ f 1 2 3
                 "",
                 repair_epoch,
                 repair_revision,
+                repair_checkpoint_hash,
                 owner_id,
                 repair_operation_id.clone(),
                 repair_shape.clone(),
@@ -102217,11 +104532,12 @@ f 1 2 3
                     let mut coordinator = state.project_coordinator.lock().unwrap();
                     reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
                 }
-                let (epoch, revision, before_undo_depth) = {
+                let (epoch, revision, checkpoint_hash, before_undo_depth) = {
                     let coordinator = state.project_coordinator.lock().unwrap();
                     (
                         coordinator.epoch,
                         coordinator.revision,
+                        coordinator.checkpoint_hash.clone(),
                         coordinator.history.undo.len(),
                     )
                 };
@@ -102244,6 +104560,7 @@ f 1 2 3
                         "",
                         epoch,
                         revision,
+                        checkpoint_hash,
                         owner_id,
                         operation_id.clone(),
                         shape.clone(),
@@ -102367,11 +104684,12 @@ f 1 2 3
                 let mut coordinator = state.project_coordinator.lock().unwrap();
                 reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
             }
-            let (epoch, revision, before_history) = {
+            let (epoch, revision, checkpoint_hash, before_history) = {
                 let coordinator = state.project_coordinator.lock().unwrap();
                 (
                     coordinator.epoch,
                     coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
                     project_history_status_for_coordinator(&coordinator),
                 )
             };
@@ -102386,6 +104704,7 @@ f 1 2 3
                     "",
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id.clone(),
                     shape.clone(),
@@ -102463,11 +104782,12 @@ f 1 2 3
             let mut coordinator = state.project_coordinator.lock().unwrap();
             reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
         }
-        let (epoch, revision, before_history) = {
+        let (epoch, revision, checkpoint_hash, before_history) = {
             let coordinator = state.project_coordinator.lock().unwrap();
             (
                 coordinator.epoch,
                 coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
                 project_history_status_for_coordinator(&coordinator),
             )
         };
@@ -102482,6 +104802,7 @@ f 1 2 3
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 operation_id.clone(),
                 shape.clone(),
@@ -102687,11 +105008,12 @@ f 1 2 3
             let mut coordinator = state.project_coordinator.lock().unwrap();
             reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
         }
-        let (epoch, revision, before_history, before_profiles) = {
+        let (epoch, revision, checkpoint_hash, before_history, before_profiles) = {
             let coordinator = state.project_coordinator.lock().unwrap();
             (
                 coordinator.epoch,
                 coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
                 project_history_status_for_coordinator(&coordinator),
                 coordinator.ancillary.custom_profiles.clone(),
             )
@@ -102712,6 +105034,7 @@ f 1 2 3
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 operation_id.clone(),
                 shape.clone(),
@@ -102814,9 +105137,13 @@ f 1 2 3
             let mut coordinator = state.project_coordinator.lock().unwrap();
             reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
         }
-        let (epoch, revision) = {
+        let (epoch, revision, checkpoint_hash) = {
             let coordinator = state.project_coordinator.lock().unwrap();
-            (coordinator.epoch, coordinator.revision)
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+            )
         };
         let shape = canonical_project_transaction_shape("patch_fixtures", "Slow PATCH", "");
         let operation_id = "project-op:62021:d2-inflight".to_string();
@@ -102828,6 +105155,7 @@ f 1 2 3
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 operation_id.clone(),
                 shape.clone(),
@@ -102936,11 +105264,12 @@ f 1 2 3
             let mut coordinator = state.project_coordinator.lock().unwrap();
             reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
         }
-        let (epoch, revision, before_history, before_profiles) = {
+        let (epoch, revision, checkpoint_hash, before_history, before_profiles) = {
             let coordinator = state.project_coordinator.lock().unwrap();
             (
                 coordinator.epoch,
                 coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
                 project_history_status_for_coordinator(&coordinator),
                 coordinator.ancillary.custom_profiles.clone(),
             )
@@ -102958,6 +105287,7 @@ f 1 2 3
                 "",
                 epoch,
                 revision,
+                checkpoint_hash,
                 owner_id,
                 operation_id.clone(),
                 shape.clone(),
@@ -103106,9 +105436,13 @@ f 1 2 3
                 let mut coordinator = state.project_coordinator.lock().unwrap();
                 reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
             }
-            let (epoch, revision) = {
+            let (epoch, revision, checkpoint_hash) = {
                 let coordinator = state.project_coordinator.lock().unwrap();
-                (coordinator.epoch, coordinator.revision)
+                (
+                    coordinator.epoch,
+                    coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
+                )
             };
             let label = format!("Indeterminate {command_name}");
             let shape = canonical_project_transaction_shape(command_name, &label, "");
@@ -103121,6 +105455,7 @@ f 1 2 3
                     "",
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id.clone(),
                     shape.clone(),
@@ -103282,11 +105617,12 @@ f 1 2 3
                 let mut coordinator = state.project_coordinator.lock().unwrap();
                 reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).unwrap();
             }
-            let (epoch, revision, before_history, before_profiles) = {
+            let (epoch, revision, checkpoint_hash, before_history, before_profiles) = {
                 let coordinator = state.project_coordinator.lock().unwrap();
                 (
                     coordinator.epoch,
                     coordinator.revision,
+                    coordinator.checkpoint_hash.clone(),
                     project_history_status_for_coordinator(&coordinator),
                     coordinator.ancillary.custom_profiles.clone(),
                 )
@@ -103302,6 +105638,7 @@ f 1 2 3
                     "",
                     epoch,
                     revision,
+                    checkpoint_hash,
                     owner_id,
                     operation_id.clone(),
                     shape,

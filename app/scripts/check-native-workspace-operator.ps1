@@ -46,6 +46,133 @@ public static class SyndocalWorkspaceWindow {
 }
 "@
 
+function Test-FfmpegSdkRoot {
+  param([Parameter(Mandatory = $true)][string]$Root)
+
+  $missing = [Collections.Generic.List[string]]::new()
+  $resolvedRoot = $null
+  try {
+    $resolvedRoot = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).Path
+  } catch {
+    $missing.Add("SDK root does not exist")
+  }
+
+  if ($null -eq $resolvedRoot -or -not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+    if ($missing.Count -eq 0) { $missing.Add("SDK root is not a directory") }
+  } else {
+    $includeDir = Join-Path $resolvedRoot "include"
+    $libDir = Join-Path $resolvedRoot "lib"
+    $binDir = Join-Path $resolvedRoot "bin"
+    foreach ($directory in @(@("include", $includeDir), @("lib", $libDir), @("bin", $binDir))) {
+      if (-not (Test-Path -LiteralPath $directory[1] -PathType Container)) {
+        $missing.Add("$($directory[0]) directory")
+      }
+    }
+
+    if (Test-Path -LiteralPath $includeDir -PathType Container) {
+      foreach ($header in @(
+        "libavcodec/avcodec.h",
+        "libavformat/avformat.h",
+        "libavutil/avutil.h",
+        "libswscale/swscale.h"
+      )) {
+        $headerPath = Join-Path $includeDir $header
+        $headerItem = Get-Item -LiteralPath $headerPath -ErrorAction SilentlyContinue
+        if ($null -eq $headerItem -or $headerItem.Length -le 0) {
+          $missing.Add("header $header")
+        }
+      }
+    }
+
+    if (Test-Path -LiteralPath $libDir -PathType Container) {
+      foreach ($library in @("avcodec", "avformat", "avutil", "swscale")) {
+        $importLibrary = Join-Path $libDir "$library.lib"
+        $importLibraryItem = Get-Item -LiteralPath $importLibrary -ErrorAction SilentlyContinue
+        if ($null -eq $importLibraryItem -or $importLibraryItem.Length -le 0) {
+          $missing.Add("import library $library.lib")
+        }
+      }
+    }
+
+    if (Test-Path -LiteralPath $binDir -PathType Container) {
+      foreach ($library in @("avcodec", "avformat", "avutil", "swscale")) {
+        $definitionFiles = @(Get-ChildItem -LiteralPath $libDir -File -Filter "$library-*.def" -ErrorAction SilentlyContinue)
+        $expectedRuntimeNames = @($definitionFiles | ForEach-Object { "$($_.BaseName).dll" })
+        if ($expectedRuntimeNames.Count -gt 0) {
+          $runtimeDescription = $expectedRuntimeNames -join " or "
+          $runtimeCandidates = @($expectedRuntimeNames | ForEach-Object {
+            Get-Item -LiteralPath (Join-Path $binDir $_) -ErrorAction SilentlyContinue
+          })
+        } else {
+          $runtimeDescription = "$library*.dll"
+          $runtimeCandidates = @(Get-ChildItem -LiteralPath $binDir -File -Filter $runtimeDescription -ErrorAction SilentlyContinue)
+        }
+        $runtimeDll = @($runtimeCandidates | Where-Object { $null -ne $_ -and $_.Length -gt 0 })
+        if ($runtimeDll.Count -eq 0) {
+          $missing.Add("runtime DLL $runtimeDescription")
+        }
+      }
+    }
+  }
+
+  [pscustomobject]@{
+    Root = if ($null -ne $resolvedRoot) { $resolvedRoot } else { $Root }
+    Valid = $missing.Count -eq 0
+    Missing = @($missing)
+  }
+}
+
+function Resolve-FfmpegSdkRoot {
+  $explicitRoot = [Environment]::GetEnvironmentVariable("FFMPEG_DIR")
+  if (-not [string]::IsNullOrWhiteSpace($explicitRoot)) {
+    $validation = Test-FfmpegSdkRoot -Root $explicitRoot.Trim()
+    if (-not $validation.Valid) {
+      throw "FFMPEG_DIR '$explicitRoot' is incomplete or invalid. Missing: $($validation.Missing -join ', '). Required: FFmpeg headers, MSVC import libraries, and runtime DLLs for avcodec/avformat/avutil/swscale."
+    }
+    return $validation.Root
+  }
+
+  $candidates = [Collections.Generic.List[string]]::new()
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $wingetRoot = Join-Path $localAppData "Microsoft\WinGet\Packages"
+  if (Test-Path -LiteralPath $wingetRoot -PathType Container) {
+    foreach ($package in @(Get-ChildItem -LiteralPath $wingetRoot -Directory -Filter "Gyan.FFmpeg.Shared_*" -ErrorAction SilentlyContinue |
+      Sort-Object -Property @{ Expression = "LastWriteTime"; Descending = $true }, @{ Expression = "Name"; Descending = $true })) {
+      if ((Test-Path -LiteralPath (Join-Path $package.FullName "include") -PathType Container) -and
+          (Test-Path -LiteralPath (Join-Path $package.FullName "lib") -PathType Container) -and
+          (Test-Path -LiteralPath (Join-Path $package.FullName "bin") -PathType Container)) {
+        $candidates.Add($package.FullName)
+      }
+      foreach ($sdk in @(Get-ChildItem -LiteralPath $package.FullName -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "ffmpeg-*-full_build-shared*" } |
+        Sort-Object -Property @{ Expression = "LastWriteTime"; Descending = $true }, @{ Expression = "Name"; Descending = $true })) {
+        $candidates.Add($sdk.FullName)
+      }
+    }
+  }
+
+  $localSdkRoot = "C:\temp\ffmpeg-n8.1-lgpl-shared"
+  if (Test-Path -LiteralPath $localSdkRoot -PathType Container) {
+    $candidates.Add($localSdkRoot)
+    foreach ($sdk in @(Get-ChildItem -LiteralPath $localSdkRoot -Directory -Filter "ffmpeg-n8.1-*-win64-lgpl-shared*" -ErrorAction SilentlyContinue |
+      Sort-Object -Property @{ Expression = "LastWriteTime"; Descending = $true }, @{ Expression = "Name"; Descending = $true })) {
+      $candidates.Add($sdk.FullName)
+    }
+  }
+
+  $diagnostics = [Collections.Generic.List[string]]::new()
+  foreach ($candidate in @($candidates | Select-Object -Unique)) {
+    $validation = Test-FfmpegSdkRoot -Root $candidate
+    if ($validation.Valid) {
+      return $validation.Root
+    }
+    $diagnostics.Add("$candidate [$($validation.Missing -join ', ')]")
+  }
+
+  $checked = if ($diagnostics.Count -eq 0) { "no candidate SDK directories" } else { $diagnostics -join "; " }
+  throw "No complete shared FFmpeg SDK was found. Set FFMPEG_DIR to a valid SDK root, or install the Gyan FFmpeg Shared SDK. Checked: $checked"
+}
+
 function Get-VisibleWindows {
   $windows = [Collections.Generic.List[object]]::new()
   $callback = [SyndocalWorkspaceEnumProc]{
@@ -103,22 +230,7 @@ $pnpm = Get-Command pnpm.cmd -ErrorAction Stop
 $oldTargetDir = $env:CARGO_TARGET_DIR
 $oldFfmpegDir = $env:FFMPEG_DIR
 $oldPath = $env:PATH
-$ffmpegDir = $env:FFMPEG_DIR
-if ([string]::IsNullOrWhiteSpace($ffmpegDir)) {
-  $sdkRoot = "C:\temp\ffmpeg-n8.1-lgpl-shared"
-  if (Test-Path $sdkRoot) {
-    $ffmpegDir = Get-ChildItem $sdkRoot -Directory -Filter "ffmpeg-n8.1-*-win64-lgpl-shared*" |
-      Select-Object -First 1 -ExpandProperty FullName
-  }
-}
-if (
-  [string]::IsNullOrWhiteSpace($ffmpegDir) -or
-  -not (Test-Path (Join-Path $ffmpegDir "include")) -or
-  -not (Test-Path (Join-Path $ffmpegDir "lib")) -or
-  -not (Test-Path (Join-Path $ffmpegDir "bin"))
-) {
-  throw "Set FFMPEG_DIR to the LGPL shared SDK root before native workspace acceptance."
-}
+$ffmpegDir = Resolve-FfmpegSdkRoot
 
 $env:FFMPEG_DIR = $ffmpegDir
 $env:PATH = "$(Join-Path $ffmpegDir 'bin');$oldPath"

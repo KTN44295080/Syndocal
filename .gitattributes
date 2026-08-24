@@ -1,2 +1,5 @@
 qa/specimens/*.dvc -text
 app/src/keyboard-shortcut-source-manifest.json text eol=lf
+app/src-tauri/src/main.rs text eol=lf
+app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin -text
+app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin.sig -text

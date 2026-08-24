@@ -236,6 +236,8 @@ import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSyn
 import {
   createPatchRepairSingleflight,
   fixturePatchIdsAreExact,
+  isStageRendererTicketedCommand,
+  publishedCommandLegacyReplyFromRecoveredResult,
   publishedCommandRecoveryDisposition,
   projectTransactionCommandResultIsWellFormed,
   waitForPublishedCommandRecovery,
@@ -1401,6 +1403,9 @@ const invoke = async <T,>(
   const requestedExpectedRevision = typeof args?.__expectedProjectRevision === "number"
     ? args.__expectedProjectRevision
     : null;
+  const requestedExpectedCheckpointHash = typeof args?.__expectedCheckpointHash === "string"
+    ? args.__expectedCheckpointHash
+    : null;
   const onProjectTransactionOpened = typeof args?.__onProjectTransactionOpened === "function"
     ? args.__onProjectTransactionOpened as () => void
     : null;
@@ -1423,6 +1428,7 @@ const invoke = async <T,>(
   const commandArgs = { ...(args ?? {}) };
   delete commandArgs.__expectedProjectEpoch;
   delete commandArgs.__expectedProjectRevision;
+  delete commandArgs.__expectedCheckpointHash;
   // Renderer-only lifecycle hooks for staged long-I/O helpers. Never let a
   // closure cross the Tauri boundary. Begin/Commit/Cancel all use the same
   // operation receipt and recovery lane, including transport reply loss.
@@ -1439,11 +1445,23 @@ const invoke = async <T,>(
   const currentEpoch = authoredEffectFencePrepared || projectMappingsFencePrepared
     ? requestedExpectedEpoch ?? 0
     : await flushProjectControlMappingsBeforeProjectMutation?.() ?? 0;
+  // Dialog-fenced mutations captured the full authority token before their
+  // dialog opened. Compare every captured member against the post-flush
+  // current authority BEFORE Begin so a project replacement while the dialog
+  // was open fails closed with nothing applied.
   if (requestedExpectedEpoch !== null && requestedExpectedEpoch !== currentEpoch) {
+    throw new Error("Project changed while the operation dialog was open; nothing was applied.");
+  }
+  if (requestedExpectedRevision !== null && requestedExpectedRevision !== projectTransactionAuthorityRevision) {
+    throw new Error("Project changed while the operation dialog was open; nothing was applied.");
+  }
+  if (requestedExpectedCheckpointHash !== null && requestedExpectedCheckpointHash !== projectTransactionAuthorityCheckpointHash) {
     throw new Error("Project changed while the operation dialog was open; nothing was applied.");
   }
   const expectedEpoch = requestedExpectedEpoch ?? currentEpoch;
   const expectedRevision = requestedExpectedRevision ?? projectTransactionAuthorityRevision;
+  const expectedCheckpointHash = requestedExpectedCheckpointHash
+    ?? projectTransactionAuthorityCheckpointHash;
   if (shouldAbortProjectMutation?.()) {
     throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
   }
@@ -1479,6 +1497,7 @@ const invoke = async <T,>(
     coalesceKey: transactionCoalesceKey,
     expectedEpoch,
     expectedRevision,
+    expectedCheckpointHash,
     ...transactionIdentity,
   };
   let transaction: ProjectTransactionTicket;
@@ -1519,11 +1538,16 @@ const invoke = async <T,>(
       ? command
       : command === "repair_fixture_profile"
         ? command
-        : null;
+        : isStageRendererTicketedCommand(command)
+          ? command
+          : null;
     let result: T;
     try {
       const replied = await tauriInvoke<T>(command, ticketedArgs);
-      if (publishedCommand && !projectTransactionCommandResultIsWellFormed(replied, publishedCommand, commandArgs)) {
+      // Stage routes keep their legacy reply shapes on the happy path; only
+      // PATCH/Repair expose and validate their receipt there.
+      if (publishedCommand && !isStageRendererTicketedCommand(publishedCommand)
+        && !projectTransactionCommandResultIsWellFormed(replied, publishedCommand, commandArgs)) {
         throw new Error(`${publishedCommand} returned a malformed published-command receipt.`);
       }
       result = replied;
@@ -1536,7 +1560,12 @@ const invoke = async <T,>(
       );
       const disposition = publishedCommandRecoveryDisposition(recovered);
       if (disposition === "commit" && recovered.kind === "published") {
-        result = recovered.result as T;
+        // Only a recovered Stage receipt is converted back to its legacy shape.
+        result = publishedCommandLegacyReplyFromRecoveredResult(
+          publishedCommand,
+          recovered.result,
+          commandArgs,
+        ) as T;
       } else if (disposition === "hold") {
         // A command can finish publishing after its Tauri reply is lost.  No
         // cancel/replay is safe until the backend's receipt says otherwise.
@@ -1636,14 +1665,14 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
 };
 
 class ProjectTransactionPublicationUnconfirmedError extends Error {
-  constructor(command: "patch_fixtures" | "repair_fixture_profile") {
+  constructor(command: PatchRepairTransactionCommand) {
     super(`${command} may still be publishing; its terminal receipt was not confirmed. Do not retry yet.`);
     this.name = "ProjectTransactionPublicationUnconfirmedError";
   }
 }
 
 class ProjectTransactionPublicationIndeterminateError extends Error {
-  constructor(command: "patch_fixtures" | "repair_fixture_profile", detail: string) {
+  constructor(command: PatchRepairTransactionCommand, detail: string) {
     super(`${command} publication is indeterminate; restart is required before retrying. ${detail}`);
     this.name = "ProjectTransactionPublicationIndeterminateError";
   }
@@ -2051,6 +2080,10 @@ const projectTransactionOwnerId = typeof crypto !== "undefined" && "randomUUID" 
 
 let projectTransactionOperationSequence = 0;
 let projectTransactionAuthorityRevision = 0;
+// Current-authority mirror of the checkpoint hash. It is assigned beside every
+// `projectTransactionAuthorityRevision` assignment so dialog-fenced mutations
+// can compare the full E/R/H token against the post-mapping-flush authority.
+let projectTransactionAuthorityCheckpointHash = "";
 const projectTransactionOperationId = () => typeof crypto !== "undefined" && "randomUUID" in crypto
   ? `project-op:${++projectTransactionOperationSequence}:${crypto.randomUUID()}`
   : `project-op:${++projectTransactionOperationSequence}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -2082,7 +2115,7 @@ type PublishedProjectTransactionCommandRecovery =
 
 const recoverPublishedProjectTransactionCommandResult = async (
   identity: ProjectTransactionIdentity,
-  command: "patch_fixtures" | "repair_fixture_profile",
+  command: PatchRepairTransactionCommand,
   commandArgs: Record<string, unknown>,
 ): Promise<PublishedProjectTransactionCommandRecovery> => {
   const decision = await waitForPublishedCommandRecovery(
@@ -13512,7 +13545,7 @@ export default function App() {
     importStageMapPreset,
   } = createStageMapController({
     invoke,
-    projectEpoch: () => projectMappingsAuthority().project_epoch,
+    currentProjectAuthority: captureProjectAuthorityIdentity,
     snapshot,
     refreshSnapshot,
     setMessage,
@@ -14015,6 +14048,7 @@ export default function App() {
     }
     abortMediaAssetOperationsForAuthorityChange(next);
     projectTransactionAuthorityRevision = next.project_revision;
+    projectTransactionAuthorityCheckpointHash = next.checkpoint_hash;
     setProjectMappingsAuthority(next);
     setProjectMappingsAuthorityReady(true);
     return true;
@@ -14074,6 +14108,7 @@ export default function App() {
     setDmxMappings(prepared.dmx);
     setDjTrackTriggers(prepared.dj);
     projectTransactionAuthorityRevision = prepared.token.project_revision;
+    projectTransactionAuthorityCheckpointHash = prepared.token.checkpoint_hash;
     setProjectMappingsAuthority(prepared.token);
     setProjectMappingsAuthorityReady(true);
     if (prepared.dmx.length > 0) {
@@ -15378,6 +15413,7 @@ export default function App() {
             // request is scheduled below against this exact C token.
             abortMediaAssetOperationsForAuthorityChange(candidateToken);
             projectTransactionAuthorityRevision = candidateToken.project_revision;
+            projectTransactionAuthorityCheckpointHash = candidateToken.checkpoint_hash;
             setProjectMappingsAuthority(candidateToken);
             setProjectMappingsAuthorityReady(true);
           }

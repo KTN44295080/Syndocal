@@ -1,13 +1,15 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-25
-Branch: `codex/syndocal-v1.2` (current development branch)
+Branch: `codex/syndocal-v1.2` (current integrated alpha.11 branch)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
 > Current continuation note (resumed 2026-08-25): the requested pause after
-> `1.2.0-alpha.10` was rescinded before final promotion. The
+> `1.2.0-alpha.10` was rescinded before final promotion. The active integrated
+> product metadata is now `1.2.0-alpha.11`; alpha.10 remains the immutable source
+> checkpoint and historical artifact. The
 > [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md) is again the active
 > dependency-ordered work authority. The [post-alpha.10 snapshot](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md),
 > [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
@@ -28,8 +30,8 @@ GitHub-hosted Enterprise exception, invalid pre-Cargo attempts, and remaining
 native/CI/non-claims are recorded in
 [SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md](qa/SYNDOCAL_EXACT_LINKER_CHECKPOINT_2026-08-25.md).
 The checkpoint source is pushed as `17b080b846bc08841e27a663c29672970b47a92f`.
-Product metadata remains `1.2.0-alpha.10`; D4 integration and the next native
-artifact are not claimed by this tooling checkpoint.
+At that checkpoint product metadata remained `1.2.0-alpha.10`; it did not claim
+the later D4 integration or alpha.11 native artifact recorded below.
 
 ## 2026-08-25 continuation evidence checkpoint (pre-alpha.11)
 
@@ -51,8 +53,118 @@ any other release gate.
   verified `rb-output` build backup (40 entries, `220,809,897` bytes) was moved
   to the Windows Recycle Bin and remains recoverable.
 - D4 Stage transaction integration and ASIO project-selection/capture-retirement
-  work continue in isolated worktrees. Their focused or native acceptance is not
-  claimed by this checkpoint.
+  work continued in isolated worktrees at that checkpoint. Their later results
+  are recorded separately and are not retroactively claimed by it.
+
+## 2026-08-25 alpha.11 D4 integrated-source/native acceptance checkpoint (accepted)
+
+The D4 Stage transaction source is integrated on `codex/d4-stage-integration`.
+The engine lineage is `2ea64ff`, `887505f`, and `7804620`; backend, frontend,
+and checker integration commits are `0aa0b14`, `6bcd879`, and `d44f2b1`.
+`f45a760` advances synchronized product metadata to `1.2.0-alpha.11`, pins the
+Begin E/R/H -> reconcile -> R/H -> arm-H source order, and makes the Rust
+`include_str!` source tests and signed release fixture independent of Windows
+line-ending conversion. It is pushed with local/upstream divergence `0/0`.
+
+Focused evidence is green with zero first-party warning lines: engine D4 `6/6`
+plus preset-ID reservation `1/1`, backend D4 `7/7`, pane lifecycle `4/4`, and
+four line-boundary static Rust tests `4/4`. The production frontend build
+transformed 272 modules. Static inventories remain 480 registered commands,
+143 runtime commands, 133 renderer mutations, and 419 frontend invokes; the
+frozen command fingerprint remains
+`bea9db6c8cc249bc3f2bc55aaab6b20680bc6e91af882719da8a9f29731ecd44`.
+Release metadata and its 102-group self-test pass. Independent Ox and Terra
+reviews report no remaining code P0/P1.
+
+Native acceptance is now recorded from direct evidence on committed checkpoint
+HEAD `63cf795d17846602419d63a007db9f3a95cfce7b` (before concurrent uncommitted
+FFmpeg script/doc changes, which remain preserved).
+`pnpm --dir app run check:warnings -- --configuration windows-native-release`
+passed and internally ran `pnpm --dir app tauri build --no-bundle` successfully
+with the exact VS2022 x64 linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+pinned (file version 14.44.35225.0, SHA-256
+`1523A87532C2EB737DD7B7BCFC652CE5687A4F16048A45D1A5A0E8F6451AD49E`) and the
+complete shared SDK root as `FFMPEG_DIR`
+(`C:\Users\kouty\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build-shared`).
+Warning totals were current/baseline 0/0 with zero first-party and zero
+third-party warnings. The artifact is a 57,888,768-byte
+`target/release/syndocal.exe`, SHA-256
+`1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`,
+ProductVersion/FileVersion `1.2.0-alpha.11`.
+
+The exact executable launched as PID 117672; after integrated-state cleanup
+exactly one responsive top-level `Syndocal` window remained and the intended
+window was maximized before UI operations. Real 4K `DISPLAY3` measured
+3840x2160 @ 240 Hz at Windows scale 150% (bounds `(-3840,-429)`, work area
+3840x2088); the app client covered 3840x2088 physical / 2560x1392 CSS. With
+Timeline and Stage detached, Sources expanded through the available workspace
+with no blank lower reserved pane; closing the detached Timeline reintegrated
+one fully drawn Timeline while the detached Stage stayed separate with Sources
+below it; closing the detached Stage reintegrated Stage lower-left and Sources
+lower-right beneath Timeline, after which `list_windows` contained only one
+Syndocal window, no duplicate Timeline existed, and the integrated Stage was
+visibly drawn. This directly resolves the reported blank-space,
+duplicate-Timeline, and missing-integrated-Stage concerns.
+
+Manual D4 QA ran in that verified maximized native 4K window: stage object
+`D4 QA alpha11 20260825-0540` appeared on map and panel; Project-menu Undo
+removed it completely, enabled Redo, and Redo restored the exact label/map
+object (`Redid Add Stage Object`); stage map preset
+`D4 QA alpha11 preset 20260825-0550` saved with 1 object; X maximum changed
+10.0 -> 10.1 via native spin control (`Updated 2D stage map`); applying the
+preset restored X maximum exactly to 10.0 with the object retained
+(`Applied stage map preset ... (1 object)`); the QA preset was then removed.
+The fixture transform A/B step was not performed because the launched Untitled
+project had zero patched fixtures; that fixture/hardware-specific boundary
+remains explicitly unverified and is not a D4 stage-object/preset blocker.
+
+Alpha.11 D4 software/native integration is therefore accepted. This is still
+not a beta/RC/tag/release or whole-product claim: Windows ASIO completion,
+DJ-Link peer/hardware, fixture/hardware-specific Stage behavior, and other
+physical/external gates remain open.
+
+The accepted D4 branch was then staged for a no-fast-forward integration into
+the active `codex/syndocal-v1.2` branch. The two parents before the merge were
+`3067720c253af06e9fb2c59a5831f4c38a2916dc` (exact-linker checkpoint and
+documentation) and `0bfc1c03451373f4cb34eebbfab4c5c257878fe0` (accepted D4
+branch). Only `RELEASE_STATUS.md` and
+`qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md` required conflict resolution;
+the resolution preserved the alpha.10 exact-linker history, the alpha.11 D4
+payload, and the explicit unbound-v1.1.1 DJ artifact non-claim. Post-resolution
+gates passed: release metadata and its 102-group self-test; backend inventories
+480/310/133; D2 patch, project transaction, and authority checks; frontend
+routing inventories 133/29/30/407; exact-linker wrapper 156 assertions; and a
+272-module production frontend build. Exact-linker focused Rust runs passed
+engine D4 6/6, backend D4 7/7, and pane lifecycle 4/4 with zero first-party
+warnings. The final staged-diff review reported P0/P1/P2 `0/0/0`, no conflict
+markers, no unmerged index entries, and a clean `git diff --cached --check`.
+The resulting merge commit and a main-checkout native rebuild are recorded by
+the immediately following checkpoint rather than inferred here.
+
+Next action: commit and push that reviewed integration, rebuild and launch the
+main-checkout alpha.11 native artifact, then continue the ASIO alpha12
+authoring-route repair/verification and physical-device boundaries.
+
+## 2026-08-25 DJ-Link peer v1.1.1 re-audit update (peer-only; no Syndocal change)
+
+The separately developed DJ-Link peer at `C:\Users\kouty\Desktop\rb-output` was
+re-audited read-only on 2026-08-25. The checkout is clean `main`/`origin/main`
+at tag `v1.1.1`, commit `cdd90e1`. The diff from the previously audited
+`616c897` is only package/package-lock/installer/README/Hook DLL source
+display-version changes, with no server/dj-agent/syndocalClient.js/config/wire
+changes. The current flat `/dj-link` generic-json and optional
+`syndocal-envelope-v1` contracts remain statically compatible. Peer gates:
+`npm test` 69/69 and envelope-focused 9/9 pass; `git diff --check` passes;
+the only observed warning is the Node MockTimers ExperimentalWarning.
+`dist/server.exe` exists (SHA-256
+`C966CE8AFAC4A54A9A8C818D75A829A2063EA92D3F434C8C31F1C0A8404BE36B`) but the
+peer build does not embed Git SHA/fingerprint, so it must NOT be claimed to
+belong to `cdd90e1`. The identity-bound peer artifact and the physical
+wired-LAN matrix remain open. No Syndocal implementation change is required;
+the alpha.11 D4 acceptance above and all of its non-claims are unchanged.
+Detailed record: the 2026-08-25 section of
+`qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`.
 
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 

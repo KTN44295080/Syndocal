@@ -1,8 +1,8 @@
 # Syndocal historical release decision — 2026-08-12
 
 > This decision records the `1.1.0` checkpoint and is historical evidence, not
-> current authority. The active product train is now `1.2.0-alpha.10`; its pause
-> request was rescinded before promotion on 2026-08-25. Use `AGENTS.md` and
+> current authority. The active product train is now `1.2.0-alpha.11`; the
+> alpha.10 pause request was rescinded before promotion on 2026-08-25. Use `AGENTS.md` and
 > `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current work. The post-alpha.10
 > snapshot remains checkpoint evidence only.
 
