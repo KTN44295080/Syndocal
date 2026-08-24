@@ -83,7 +83,12 @@ const SUPPORTED_COMMAND_EXECUTABLES = new Set(["cargo", "pnpm"]);
 export const GENERIC_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
 const SUPPRESSION_PATTERNS = [
-  { id: "rust-command-line-allow", pattern: /(?:^|[\s'",\[])(?:-A\s+(?:warnings|[a-zA-Z_][\w-]*)|-A(?:warnings|unused|dead_code|[a-zA-Z][\w-]*_[\w-]+))(?:$|[\s'",\]])/m },
+  // A separated rustc lint level is a same-command-line token pair. Restrict
+  // the separator to horizontal whitespace so an unrelated command ending in
+  // `-A` cannot consume the first word of the next line (for example the
+  // common `git add -A` followed by `git commit`). Glued rustc forms retain
+  // their existing coverage in the second alternative.
+  { id: "rust-command-line-allow", pattern: /(?:^|[\s'",\[])(?:-A[ \t]+(?:warnings|[a-zA-Z_][\w-]*)|-A(?:warnings|unused|dead_code|[a-zA-Z][\w-]*_[\w-]+))(?:$|[\s'",\]])/m },
   { id: "rust-cap-lints-allow", pattern: /--cap-lints(?:=|\s+)allow\b/i },
   { id: "cargo-rustflags-config", pattern: /\brustdocflags\s*=|\brustflags\s*=/i },
   {

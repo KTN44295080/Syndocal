@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.9**
+- 製品名: **Syndocal 1.2.0-alpha.10**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -43,7 +43,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 ## 画面構成
 
 - **Setup**: Lighting / Video / Mapping / I/Oを分離し、パッチ、灯体プロファイル、出力、投影補正を設定
-- **Control**: 上段のライブ/キューデスクと、左下の常設2D Stage、右下のLive Edit / Timeline / Mixer
+- **Control**: LIVEでは上段Timeline、左下の常設2D Stage / Groups、右下のSourcesを配置。Stage / Timelineは個別ウィンドウに分離でき、メイン側の残った領域は空白なく再配分。EDIT / MIXERでは同じ一画面枠内で編集・ミキサー面へ切り替え
 - **Touch**: タブレットやタッチ操作向けのキュー、灯体、映像操作
 
 アプリ本体は一画面内に固定されます。長い灯体ライブラリやリストだけが各パネル内部でスクロールします。
@@ -52,7 +52,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.9_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.9_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.10_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.10_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
@@ -130,7 +130,7 @@ pnpm --dir app tauri build --ci --bundles nsis,msi
 
 Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがステージされ、MSI/NSISへ同梱されます。NDIを有効にする場合は別途NDI SDKを導入し、`--features ndi`とSDKのライセンス条件に従ってください。
 
-ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。bridge/build、短時間smoke、100-cycle、native UIに加え、第二vendor、rate／buffer／channel matrix、hot-plug／recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyの実機QAが終わるまで完了扱いにしません。現時点では一台の短時間smoke・100-cycle・native UIは通過していますが、配布ライセンス、第二vendor、長時間・復旧・物理遅延などは未完了です。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。GPLv3版として分離するかSteinberg proprietary agreementを締結するまで、通常installerへASIO bridgeを同梱しません。
+ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。bridge/build、短時間smoke、100-cycle、native UIと第二vendor（HOTONE）の明示stream／100-cycleは通過しました。残る配布ライセンス、advertised rate／buffer／channel matrix、hot-plug／fault recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyの実機QAが終わるまで完了扱いにしません。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。GPLv3版として分離するかSteinberg proprietary agreementを締結するまで、通常installerへASIO bridgeを同梱しません。
 
 ```powershell
 & .\qa\harnesses\check-asio-build.ps1
@@ -151,8 +151,8 @@ ASIOは既定buildへ含めませんが、Windows製品のリリース完了条�
 - Live-audio viewport gateはDOMを直接改変せず、Tauri invoke mockから実Solid stateを駆動する。5解像度×英日でRefresh、generation ID再対応、同名曖昧時の再選択ロック、capability、192kHz／8192-frame／stereo pair Start request、42/58/76% meter、live telemetry、Stop／clear-pendingまで検証する
 - Windows native live-audio acceptance: 最大化したcurrent-source buildでsystem defaultのWASAPI shared入力を48kHz monoでStart／Stopし、実callback 480/480/480 frames、capture-to-workerの採取時点current 0.1ms／max 10.1ms、OVR 0 chunks／0 frames、queue current/high-water/capacity 0/1/4を確認した。この1構成の測定をASIOや長時間・他deviceの性能証明には読み替えない
 - Windows ASIO short smoke: 分離bridgeとapp loaderから`TOPPING Pro USB Audio Device`を明示指定し、48kHz／2ch／i32／requested・applied 128 framesでStart／Stopした。7 callbacks／896 frames、max capture delay 4166.7us、XRUN 0、nonfinite 0、terminal event 0。`Realtek ASIO`はhardware unavailableとして失敗し、別driverやWASAPIへfallbackしなかった。これは1台・短時間の構成確認であり、第二の正常driver、1時間soak、物理pixel latency、TouchDesigner同条件A/Bを満たさない
-- Windows ASIO 100-cycle: bridgeのignored hardware testを`--locked --offline`で実行し、明示ID `asio:TOPPING Pro USB Audio Device`、48kHz／2ch／i32／128 framesを27.6767468秒で100回Start／Stop／Freeした。actual bufferは全回128、callback 200（各回2以上）、Stop 100、Free 100、warning／terminal／XRUN event・API／nonfinite／frame mismatchは全て0で、別driver／WASAPIへのfallbackも0だった。これは反復open/close gateの合格であり、第二の正常vendor、1時間soak、hot-plug、物理pixel latency、TouchDesigner同条件A/B、配布licenseの合格ではない
-- Windows ASIO native UI: current-source QA buildを最大化し、F11で実1920x1080へ移行してから、VJ DeskでASIO／`TOPPING Pro USB Audio Device`／48.0kHz／128 frames／Average All→monoを明示選択した。Startで`ACTIVE`、OVR 0/0、XRUN 0、Stopで`READY`を確認し、Escで最大化windowへ復帰した。full native operator pathは合格だが、1時間soak、第二vendor、hot-plug、物理pixel latency、TouchDesigner同条件A/B、配布licenseは未合格である
+- Windows ASIO 100-cycle: bridgeのignored hardware testを`--locked --offline`で実行し、明示ID `asio:TOPPING Pro USB Audio Device`、48kHz／2ch／i32／128 framesを27.6767468秒で100回Start／Stop／Freeした。actual bufferは全回128、callback 200（各回2以上）、Stop 100、Free 100、warning／terminal／XRUN event・API／nonfinite／frame mismatchは全て0で、別driver／WASAPIへのfallbackも0だった。第二vendorの`HOTONE AUDIO USB Audio Device`も44.1kHz／2ch／i32／128 framesで100 clean cyclesを通過した。これは二vendorの反復open/close gateであり、advertised matrix、1時間soak、hot-plug／fault recovery、物理pixel latency、TouchDesigner同条件A/B、配布licenseの合格ではない
+- Windows ASIO native UI: current-source QA buildを最大化し、F11で実1920x1080へ移行してから、VJ DeskでASIO／`TOPPING Pro USB Audio Device`／48.0kHz／128 frames／Average All→monoを明示選択した。Startで`ACTIVE`、OVR 0/0、XRUN 0、Stopで`READY`を確認し、Escで最大化windowへ復帰した。full native operator pathと第二vendorのbridge trialは合格だが、advertised matrix、1時間soak、hot-plug／fault recovery、物理pixel latency、TouchDesigner同条件A/B、配布licenseは未合格である
 - Auto VJ: CLOCKまたはLIVE INPUTのonsetをsourceに、seed／show revision／ordered candidateから再現可能なTakeを生成する。手動Take、Hold、blackoutを優先し、Program Audioはbackend coordinatorが世代token付きで一度だけ切り替えるため、device openやdecodeでTake操作を待たせない
 
 検証記録:
@@ -173,7 +173,7 @@ ASIOは既定buildへ含めませんが、Windows製品のリリース完了条�
 
 - v1.0以降の外部映像I/OはDisplay、feature-gated NDI、Windows x86_64のSpoutに対応しています。Syphonはwgpu世代差とmacOS実装環境が必要なため未実装です。
 - HAP Q Alpha、HAP R/BC7のGPU直接sampling + CPU fallback、安全境界付き最大8段のordered single-pass ISF stackは実装済みです。1 stackのsource合計は512 KiB、1段16 control、project内ISF source合計16 MiB、`.sdc`全体64 MiBに制限します。ISF multipass／persistent buffer／imported resource／audio input、100種級library、shared texture／任意node graph、headless readback後のnative別device再upload解消、4K multi-layer／実会場long soakは未対応または未受入です。
-- Live FFT入力はCPALのdevice catalogとcapabilityを読み、Windowsの既定buildではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phase、centroid／density／kick／snareを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Compiled Audio Reactive Rackは任意の対応照明属性／映像parameterへこれらを割り当て、Auto VJはCLOCKまたはLIVE INPUTのonsetを選び、seed／show revision／candidate順から決定的にTakeします。非既定のWindows ASIO featureは独立bridgeを動的loadし、明示driver／rate／channel／native format／fixed bufferをStart時に再検証、実buffer framesとbackend XRUNを表示します。TOPPINGの短時間実機smoke、100回Start／Stop／FreeとF11 1920x1080のfull native UI gateは通過しましたが、ASIOの配布ライセンス選択、第二の正常driver、同一device hot-plug自動復帰、engine出力適用ack、実機1時間／物理pixel latency／TouchDesigner同条件比較は未完です。通常MIT installerへASIO bridgeは同梱しません。
+- Live FFT入力はCPALのdevice catalogとcapabilityを読み、Windowsの既定buildではWASAPI sharedのsystem defaultまたは列挙device、sample rate、requested buffer、全channel平均／単一channel／stereo pair downmixを選べます。選択rateごとにchannel数／sample format／buffer capabilityを`resolved_config`として先に確定し、Startでも同じ構成を再検証します。更新世代に結び付くopaque device IDを使い、古い／未知IDや非対応構成は別device・rate・bufferへ黙ってfallbackせずStartを拒否します。全11種のCPAL PCM sample formatを正規化し、通常data callbackは4本×2048-frameの事前確保slotへallocation-freeで格納します。workerは16対数band、RMS／Peak、spectral flux、適応onset、60–200 BPM／confidence／beat phase、centroid／density／kick／snareを生成し、同じframeから旧Node Graph用B/M/Hを派生します。Compiled Audio Reactive Rackは任意の対応照明属性／映像parameterへこれらを割り当て、Auto VJはCLOCKまたはLIVE INPUTのonsetを選び、seed／show revision／candidate順から決定的にTakeします。非既定のWindows ASIO featureは独立bridgeを動的loadし、明示driver／rate／channel／native format／fixed bufferをStart時に再検証、実buffer framesとbackend XRUNを表示します。TOPPINGの短時間実機smoke、100回Start／Stop／Free、F11 1920x1080のfull native UI gate、および第二vendor HOTONEの44.1kHz／2ch／i32／128 frames・100-cycleは通過しました。ASIOの配布ライセンス選択、advertised rate／buffer／channel matrix、hot-plug／fault recovery、engine出力適用ack、実機1時間／物理pixel latency／TouchDesigner同条件比較は未完です。通常MIT installerへASIO bridgeは同梱しません。
 - Device Refresh後はbackendとdevice名が新旧catalogueの双方で一意な場合だけ明示選択を新IDへ引き継ぎます。曖昧・消失時はsystem defaultへ黙って落とさず、再選択するまでcapabilityを破棄してStartをロックします。
 - 3Dビジュアライザは本体UIへ戻さず、`visualizer`データ境界から外部実装へ接続します。標準UIは2D Stage Mapです。
 - Enttec Open DMXはOS/USBドライバ依存のbreak timingがあるため、最終現場ではUSB PRO系を推奨します。

@@ -76,6 +76,7 @@ assert.match(tauriSource, /pane_placement_intersects_monitor/);
 assert.match(tauriSource, /Templates are reusable creation aids, not credential carriers/);
 assert.match(operationsSource, /Local to this device/);
 assert.match(operationsSource, /Show-operation guard, not operating-system security/);
+assert.match(operationsSource, /data-workspace-pane-toggle=\{pane\}/);
 assert.match(overlaySource, /Emergency blackout controls/);
 
-console.log("workspace and operator policy: 27 assertions passed");
+console.log("workspace and operator policy: 28 assertions passed");

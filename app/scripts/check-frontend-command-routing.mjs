@@ -305,10 +305,10 @@ const backendRendererMutations = rustClassification(
   "is_renderer_ticketed_project_mutation",
   "#[derive(Debug, Clone, PartialEq, Eq)]",
 );
-// The two atomic batch routes intentionally advance the backend inventory
-// from 476/131 to 478/133 and the used-by-frontend manifest from 415 to 417.
-// The legacy single-operation routes stay registered.
-assert.equal(manifest.length, 417, "frontend Tauri manifest count drifted");
+// The two correlated pane-window lifecycle routes intentionally advance the
+// used-by-frontend manifest from 417 to 419. The renderer-ticketed project
+// mutation inventory remains unchanged at 133.
+assert.equal(manifest.length, 419, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 133, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 29, "backend authoritative classification count drifted");
 assert.deepEqual(

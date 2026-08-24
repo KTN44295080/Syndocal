@@ -50,6 +50,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 480;
+const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
+    "bea9db6c8cc249bc3f2bc55aaab6b20680bc6e91af882719da8a9f29731ecd44";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -80,9 +83,8 @@ static TAURI_ROUTE_ADMISSION_CLASSES: LazyLock<
 > = LazyLock::new(|| {
     let registered = registered_tauri_command_names_from_source(MAIN_RS_SOURCE)?;
     let inventory_fingerprint = format!("{:x}", Sha256::digest(registered.join("\n").as_bytes()));
-    if registered.len() != 478
-        || inventory_fingerprint
-            != "79104a83edc9dd8608c29f2c99de26102fb0a107c19ea70e2c604a9ef03f7f7c"
+    if registered.len() != FROZEN_TAURI_ROUTE_ADMISSION_COUNT
+        || inventory_fingerprint != FROZEN_TAURI_ROUTE_ADMISSION_SHA256
     {
         return Err(ControlPlaneRegistryError::MissingRegistryDescriptor(
             format!(
@@ -264,6 +266,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_operator_policy"
             | "get_operator_selection_context"
             | "get_output_ownership_status"
+            | "get_pending_pane_window_close"
             | "get_project_authority_bundle"
             | "get_project_checkpoint"
             | "get_project_checkpoint_bundle"
@@ -342,6 +345,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "arm_output_control_v2"
             | "begin_media_asset_preview"
             | "bootstrap_vj_show"
+            | "cancel_pane_window_close"
             | "cancel_queued_video_clip_slot_authoritative"
             | "clear_cue_live_modifier"
             | "clear_fixture_flags"
@@ -1824,13 +1828,57 @@ mod tests {
     #[test]
     fn tauri_route_admission_table_is_exact_and_fail_closed() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
+        let fingerprint = format!("{:x}", Sha256::digest(names.join("\n").as_bytes()));
+        assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
+        assert_eq!(fingerprint, FROZEN_TAURI_ROUTE_ADMISSION_SHA256);
+        let classes = TAURI_ROUTE_ADMISSION_CLASSES
+            .as_ref()
+            .unwrap_or_else(|error| panic!("D3 admission inventory must validate: {error}"));
+        assert_eq!(classes.len(), names.len());
+        assert_eq!(
+            classes.keys().cloned().collect::<BTreeSet<_>>(),
+            names.iter().cloned().collect::<BTreeSet<_>>()
+        );
+        for (route, expected) in [
+            (
+                "register_project_transaction_owner",
+                TauriRouteAdmissionClass::RecoveryMaintenance,
+            ),
+            (
+                "open_pane_window",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "close_pane_window",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "capture_pane_window_placements",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "get_pending_pane_window_close",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "cancel_pane_window_close",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+        ] {
+            assert_eq!(classes.get(route).copied(), Some(expected), "{route}");
+            assert_eq!(
+                tauri_route_admission_class(route),
+                Some(expected),
+                "{route}"
+            );
+        }
         let mut counts = std::collections::BTreeMap::new();
         for name in &names {
             let class = tauri_route_admission_class(name)
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 478);
+        assert_eq!(names.len(), 480);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
             133
@@ -1839,10 +1887,10 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             29
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 86);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 87);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 142);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 143);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
@@ -1873,7 +1921,7 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 478);
+        assert_eq!(names.len(), 480);
         const ENGINE_COMMAND_COUNT: usize = 263;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -1896,16 +1944,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 417;
+        const FRONTEND_INVOKE_COUNT: usize = 419;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            478 + ENGINE_COMMAND_COUNT
+            480 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1480);
+        assert_eq!(registry.operations.len(), 1484);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -1915,7 +1963,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            465 + ENGINE_COMMAND_COUNT
+            467 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1946,7 +1994,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 465);
+        assert_eq!(tauri_unavailable.clone().count(), 467);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2209,19 +2257,19 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 478;
+        const TAURI_COUNT: usize = 480;
         const ENGINE_COUNT: usize = 263;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 417;
+        const FRONTEND_COUNT: usize = 419;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1480);
-        assert_eq!(SOURCE_TOTAL, 1513);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1484);
+        assert_eq!(SOURCE_TOTAL, 1517);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 31);
 
@@ -2530,7 +2578,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1060);
+        assert_eq!(unclassified.len(), 1062);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3166,11 +3214,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1480);
+        assert_eq!(legacy.operations.len(), 1484);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1480);
+        assert_eq!(operations.len(), 1484);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

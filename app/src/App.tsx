@@ -182,6 +182,19 @@ import {
   type PaneWindowPlacement,
 } from "./workspaceProfiles";
 import {
+  PANE_WINDOW_TERMINAL_EVENT,
+  createPaneWindowLifecycleController,
+  isValidPaneOpaqueId,
+  paneWindowTerminalEventFromUnknown,
+  startPendingCloseReconciliationProbes,
+} from "./paneWindowLifecycle";
+import type {
+  PaneCloseWaiterRejection,
+  PaneWindowOpenResult,
+  PaneWindowPendingCloseContext,
+  PaneWindowStatusReport,
+} from "./paneWindowLifecycle";
+import {
   createOperatorPolicy,
   operatorCommandAllowed,
   operatorPolicyFromUnknown,
@@ -1085,6 +1098,16 @@ const mediaAssetTerminalRecoveryCommands = new Set([
   "get_timeline_follow_operation_terminal_result",
 ]);
 
+// A child can only reach these commands after the main window has armed an
+// exact pane identity/request pair. Keep that correlated terminal path alive
+// even if Full Lock is enabled while the native close confirmation is open;
+// otherwise the parent can wait forever for a cancel/destroy terminal. The
+// backend still rejects main-window callers and mismatched identities.
+const paneWindowTerminalRecoveryCommands = new Set([
+  "get_pending_pane_window_close",
+  "cancel_pane_window_close",
+]);
+
 // Availability reads only inspect the local machine's copies of project media.
 // They carry the backend's owner/E/R/H fence but never begin a project mutation,
 // so Full/Partial operator locks keep them available for diagnosis.
@@ -1344,7 +1367,8 @@ const invoke = async <T,>(
   const rendererTicketedMutation = projectMutationCommands.has(command);
   const serverAuthoritativeMutation = serverAuthoritativeProjectMutationCommands.has(command);
   const projectMutation = rendererTicketedMutation || serverAuthoritativeMutation;
-  const terminalRecovery = mediaAssetTerminalRecoveryCommands.has(command);
+  const terminalRecovery = mediaAssetTerminalRecoveryCommands.has(command)
+    || paneWindowTerminalRecoveryCommands.has(command);
   const mediaAssetAvailabilityReadOnly = mediaAssetAvailabilityReadOnlyCommands.has(command);
   if (!terminalRecovery && !mediaAssetAvailabilityReadOnly
     && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)) {
@@ -3462,84 +3486,306 @@ export default function App() {
       return next;
     });
   };
+  type PaneWindowOperationPhase = "opening" | "closing";
+  // Continuous bounded-rate reconciliation while a close waits for its exact
+  // terminal. Probes only ask the backend sweep to redeliver a lost terminal;
+  // they never settle the waiter, never overlap, and stop only when the exact
+  // wait ends or the returned canceller runs.
+  const PANE_WINDOW_CLOSE_RECONCILIATION_PROBE_INTERVAL_MS = 250;
   let paneWindowEventsReady: Promise<boolean> = Promise.resolve(true);
-  const openPaneWindow = async (pane: PaneWindowKind, placement: PaneWindowPlacement | null = null) => {
-    if (isTauriRuntime()) {
-      if (!await paneWindowEventsReady) {
-        setMessage("Pane window events are unavailable.");
-        return;
+  const paneLifecycleController = createPaneWindowLifecycleController();
+  const [pendingPaneWindowOperations, setPendingPaneWindowOperations] =
+    createSignal<Partial<Record<PaneWindowKind, PaneWindowOperationPhase>>>({});
+  const [workspaceApplyBusy, setWorkspaceApplyBusy] = createSignal(false);
+  let paneLifecycleNotifyScheduled = false;
+  const syncPaneLifecycleView = () => {
+    if (paneLifecycleNotifyScheduled) return;
+    paneLifecycleNotifyScheduled = true;
+    queueMicrotask(() => {
+      paneLifecycleNotifyScheduled = false;
+      const view = paneLifecycleController.view();
+      const pending: Partial<Record<PaneWindowKind, PaneWindowOperationPhase>> = {};
+      for (const pane of paneWindowKinds) {
+        const transition = view[pane];
+        if (!transition || transition.phase === "open") continue;
+        pending[pane] = transition.phase;
       }
-      markPaneWindowOpen(pane);
-      try {
-        await invoke("open_pane_window", { pane, placement });
-      } catch (error) {
-        acknowledgePaneWindowClosed(pane);
+      batch(() => {
+        setPendingPaneWindowOperations(pending);
+        setWorkspaceApplyBusy(paneLifecycleController.isWorkspaceApplyActive());
+      });
+    });
+  };
+  const unsubscribePaneLifecycleView = paneLifecycleController.subscribe(syncPaneLifecycleView);
+  syncPaneLifecycleView();
+  // Rapid repeated toggles raced open against close because each invoke ran
+  // independently. Per-pane serialization keeps frontend state, the native
+  // lifecycle registry, and the child window strictly ordered.
+  const paneWindowOperationQueues = new Map<PaneWindowKind, Promise<void>>();
+  const enqueuePaneWindowOperation = (
+    pane: PaneWindowKind,
+    operation: () => Promise<void>,
+  ): Promise<void> => {
+    const previous = paneWindowOperationQueues.get(pane) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    paneWindowOperationQueues.set(pane, next);
+    return next;
+  };
+  const openPaneWindowCore = async (
+    pane: PaneWindowKind,
+    placement: PaneWindowPlacement | null,
+    requestedInstanceId?: string,
+  ): Promise<boolean> => {
+    const existing = paneLifecycleController.transitionOf(pane);
+    if (existing && existing.phase !== "open") return false;
+    if (existing && requestedInstanceId && existing.instanceId !== requestedInstanceId) {
+      setMessage(`Pane window ${pane} has a conflicting live identity.`);
+      return false;
+    }
+    const intent = existing
+      ? { pane, instanceId: existing.instanceId }
+      : paneLifecycleController.beginOpen(pane, requestedInstanceId);
+    if (!intent) return false;
+    let receipt: PaneWindowOpenResult;
+    try {
+      receipt = await invoke<PaneWindowOpenResult>("open_pane_window", {
+        pane,
+        placement,
+        instanceId: intent.instanceId,
+      });
+    } catch (error) {
+      if (!existing) {
+        paneLifecycleController.failOpen(pane, intent.instanceId);
         setMessage(`Pane window failed: ${error}`);
-        return;
+        return false;
       }
-      return;
-    } else {
-      const params = new URLSearchParams(window.location.search);
-      params.set("syndocalPaneWindow", pane);
-      params.delete("syndocalPoppedPanes");
-      window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
+      // An adopted rejection leaves lifecycle truth untouched. One advisory
+      // main-only capture lets the backend sweep redeliver a terminal whose
+      // emission was lost for a tracked-but-native-missing incarnation; it
+      // never synthesizes terminals and never mints or switches identities.
+      let reconciliationError: string | null = null;
+      try {
+        await invoke("capture_pane_window_placements");
+      } catch (reconciliation) {
+        reconciliationError = String(reconciliation);
+      }
+      paneLifecycleController.restoreOpenAfterFailedReposition(pane, intent.instanceId);
+      setMessage(
+        reconciliationError === null
+          ? `Pane window failed: ${error}`
+          : `Pane window failed: ${error}; placement reconciliation failed: ${reconciliationError}`,
+      );
+      return false;
+    }
+    if (!existing) paneLifecycleController.confirmOpen(pane, intent.instanceId);
+    const confirmed = paneLifecycleController.transitionOf(pane);
+    if (!confirmed || confirmed.phase !== "open" || confirmed.instanceId !== intent.instanceId) {
+      setMessage(`Pane window ${pane} closed before its open operation completed.`);
+      return false;
     }
     markPaneWindowOpen(pane);
+    if (receipt.warning) setMessage(`Pane window warning: ${receipt.warning}`);
+    // Benign show/focus warnings keep placement truth; only a failed native
+    // placement means the prepared workspace state is not authoritative.
+    return receipt.placement_applied;
   };
-  const closePaneWindow = async (pane: PaneWindowKind) => {
+  const closePaneWindowCore = async (pane: PaneWindowKind): Promise<boolean> => {
+    // The waiter exists before the invoke so a synchronous missing-window
+    // terminal can never be lost between arming and dispatch.
+    const arm = paneLifecycleController.armClose(pane);
+    if (!arm) return false;
+    const terminalOutcome = arm.terminalPromise.then(
+      () => ({ destroyed: true as const, rejection: null }),
+      (rejection: PaneCloseWaiterRejection) => ({ destroyed: false as const, rejection }),
+    );
+    try {
+      await invoke("close_pane_window", { pane, instanceId: arm.instanceId, requestId: arm.requestId });
+    } catch (error) {
+      // The close invoke rejected, but the backend may have reinserted the
+      // exact armed pending request after losing its terminal emission. One
+      // advisory main-only capture runs the backend sweep so any redeliverable
+      // arrival still reaches the waiter that was attached before the invoke.
+      // The attempt is fully caught: it never settles or fakes an outcome,
+      // never mints identities, and adds no timeout to the correlated wait.
+      let reconciliationError: string | null = null;
+      try {
+        await invoke("capture_pane_window_placements");
+      } catch (reconciliation) {
+        reconciliationError = String(reconciliation);
+      }
+      paneLifecycleController.settleArmInvokeFailure(pane, arm.requestId, String(error));
+      const caughtOutcome = await terminalOutcome;
+      if (caughtOutcome.destroyed) {
+        // A sweep-redelivered retirement outranks the invoke failure.
+        acknowledgePaneWindowClosed(pane);
+        return true;
+      }
+      const closeFailureMessage = `Pane window close failed: ${error}`;
+      setMessage(
+        reconciliationError === null
+          ? closeFailureMessage
+          : `${closeFailureMessage}; placement reconciliation failed: ${reconciliationError}`,
+      );
+      return false;
+    }
+    // While the exact terminal is outstanding, a continuous bounded-rate
+    // probe loop lets the backend sweep redeliver a terminal whose emission
+    // was lost, for as long as this exact wait is pending. Probes never
+    // settle the waiter and are always cancelled in the finally below.
+    const stopReconciliationProbes = startPendingCloseReconciliationProbes({
+      stillWaiting: () => {
+        const closing = paneLifecycleController.transitionOf(pane);
+        return closing !== null
+          && closing.phase === "closing"
+          && closing.requestId === arm.requestId;
+      },
+      probe: () => invoke("capture_pane_window_placements").then(() => undefined),
+      intervalMs: PANE_WINDOW_CLOSE_RECONCILIATION_PROBE_INTERVAL_MS,
+    });
+    let outcome: Awaited<typeof terminalOutcome>;
+    try {
+      outcome = await terminalOutcome;
+    } finally {
+      stopReconciliationProbes();
+    }
+    if (!outcome.destroyed) {
+      const info = outcome.rejection;
+      if (info?.reason === "canceled") {
+        setMessage("Pane window close was canceled by the pane window.");
+      } else {
+        setMessage(`Pane window close aborted: ${info?.message ?? String(info)}`);
+      }
+      return false;
+    }
+    acknowledgePaneWindowClosed(pane);
+    return true;
+  };
+  const openPaneWindow = async (
+    pane: PaneWindowKind,
+    placement: PaneWindowPlacement | null = null,
+    options?: { instanceId?: string },
+  ): Promise<boolean> => {
     if (isTauriRuntime()) {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
-        return;
+        return false;
       }
-      try {
-        await invoke("close_pane_window", { pane });
-      } catch (error) {
-        setMessage(`Pane window close failed: ${error}`);
-        return;
+      let result = false;
+      await enqueuePaneWindowOperation(pane, async () => {
+        result = await openPaneWindowCore(pane, placement, options?.instanceId);
+      });
+      return result;
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.set("syndocalPaneWindow", pane);
+    params.delete("syndocalPoppedPanes");
+    window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
+    markPaneWindowOpen(pane);
+    return true;
+  };
+  const closePaneWindow = async (pane: PaneWindowKind): Promise<boolean> => {
+    if (isTauriRuntime()) {
+      if (!await paneWindowEventsReady) {
+        setMessage("Pane window events are unavailable.");
+        return false;
       }
-      // The child may prevent CloseRequested while it owns unsaved editor
-      // drafts. Keep the main-window placeholder until Rust confirms the
-      // actual Destroyed event through syndocal://pane-window-closed.
-      return;
+      let result = false;
+      await enqueuePaneWindowOperation(pane, async () => {
+        result = await closePaneWindowCore(pane);
+      });
+      return result;
     }
     acknowledgePaneWindowClosed(pane);
+    return true;
   };
   const togglePaneWindow = (pane: PaneWindowKind) => {
+    if (workspaceApplyBusy() || paneLifecycleController.isWorkspaceApplyActive()) {
+      setMessage("A workspace layout change is running; wait for it to finish.");
+      return;
+    }
+    const transition = paneLifecycleController.transitionOf(pane);
+    if (transition && transition.phase !== "open") return;
     void (poppedPanes().includes(pane) ? closePaneWindow(pane) : openPaneWindow(pane));
   };
+  const paneWindowOperationPending = (pane: "stage" | "timeline") =>
+    Boolean(pendingPaneWindowOperations()[pane]);
+  let disposePaneWindowEvents = () => undefined;
   if (isTauriRuntime() && !paneWindow) {
     let listenerDisposed = false;
-    let unlistenPaneWindowClosed: (() => void) | undefined;
-    paneWindowEventsReady = listen<string>("syndocal://pane-window-closed", ({ payload }) => {
-      acknowledgePaneWindowClosed(payload);
+    let unlistenPaneWindowTerminal: (() => void) | undefined;
+    const restorePoppedPaneWindows = async () => {
+      const panes = poppedPanes();
+      if (panes.length === 0) return;
+      let statuses: PaneWindowStatusReport[] = [];
+      try {
+        statuses = await invoke<PaneWindowStatusReport[]>("capture_pane_window_placements");
+      } catch (error) {
+        // Fail closed: native children may still be alive, so local popped
+        // records are retained for retry instead of being bulk-cleared.
+        setMessage(`Pane window restore failed; panes kept for retry: ${error}`);
+        return;
+      }
+      for (const pane of panes) {
+        const status = statuses.find((candidate) => candidate.pane === pane);
+        if (status && !status.instance_id) {
+          setMessage(
+            `Pane window restore failed: ${pane} exists without a tracked lifecycle identity. Restart before retrying.`,
+          );
+          continue;
+        }
+        if (status?.instance_id && !paneLifecycleController.adoptOpen(pane, status.instance_id)) {
+          setMessage(`Pane window restore failed: ${pane} has a conflicting lifecycle identity.`);
+          continue;
+        }
+        // Reload-safe restore adopts and repositions the exact live identity;
+        // only a genuinely missing native window mints a fresh instance id.
+        // Restore runs inside paneWindowEventsReady's own then callback, so
+        // the public wrapper's readiness await could never settle while this
+        // callback is still running. Bypass only that readiness wrapper and
+        // queue the core open on the same per-pane operation queue that
+        // serializes every later public toggle against this restore.
+        let restored = false;
+        await enqueuePaneWindowOperation(pane, async () => {
+          restored = await openPaneWindowCore(pane, null, status?.instance_id ?? undefined);
+        });
+        if (!restored && !paneLifecycleController.transitionOf(pane)) {
+          acknowledgePaneWindowClosed(pane);
+        }
+      }
+    };
+    paneWindowEventsReady = listen<unknown>(PANE_WINDOW_TERMINAL_EVENT, ({ payload }) => {
+      const handled = paneLifecycleController.applyTerminal(payload);
+      const terminal = paneWindowTerminalEventFromUnknown(payload);
+      if (terminal?.terminal !== "destroyed") return;
+      if (handled || paneLifecycleController.transitionOf(terminal.pane) === null) {
+        acknowledgePaneWindowClosed(terminal.pane);
+      }
     })
       .then(async (unlisten) => {
         if (listenerDisposed) {
           unlisten();
           return false;
         }
-        unlistenPaneWindowClosed = unlisten;
-        await Promise.all(poppedPanes().map(async (pane) => {
-          try {
-            await invoke("open_pane_window", { pane, placement: null });
-          } catch (error) {
-            acknowledgePaneWindowClosed(pane);
-            setMessage(`Pane window restore failed: ${error}`);
-          }
-        }));
+        unlistenPaneWindowTerminal = unlisten;
+        await restorePoppedPaneWindows();
         return true;
       })
       .catch((error) => {
         for (const pane of poppedPanes()) acknowledgePaneWindowClosed(pane);
+        paneLifecycleController.dispose(String(error));
         setMessage(`Pane window listener failed: ${error}`);
         return false;
       });
-    onCleanup(() => {
+    disposePaneWindowEvents = () => {
       listenerDisposed = true;
-      unlistenPaneWindowClosed?.();
-    });
+      unlistenPaneWindowTerminal?.();
+    };
   }
+  onCleanup(() => {
+    disposePaneWindowEvents();
+    unsubscribePaneLifecycleView();
+    paneLifecycleController.dispose("Pane window lifecycle was disposed.");
+  });
   if (isTauriRuntime() && !paneWindow && autoOpenPaneWindows) {
     void paneWindowEventsReady.then(async (ready) => {
       if (!ready) return;
@@ -3567,7 +3813,15 @@ export default function App() {
   }
   const capturePaneWindowPlacements = async (): Promise<PaneWindowPlacement[]> => {
     if (isTauriRuntime()) {
-      return invoke<PaneWindowPlacement[]>("capture_pane_window_placements");
+      const statuses = await invoke<PaneWindowStatusReport[]>("capture_pane_window_placements");
+      return statuses.map((status) => ({
+        pane: status.pane,
+        x: status.x,
+        y: status.y,
+        width: status.width,
+        height: status.height,
+        maximized: status.maximized,
+      }));
     }
     return poppedPanes().map((pane, index) => ({
       pane,
@@ -3591,25 +3845,61 @@ export default function App() {
       setMessage(`Workspace save failed: ${String(error)}`);
     }
   };
+  const paneWindowHumanLabels: Record<PaneWindowKind, string> = {
+    stage: "Stage",
+    timeline: "Timeline",
+    programmer: "Programmer",
+    setup: "Setup",
+    live: "Live",
+    mixer: "Mixer",
+    touch: "Touch",
+  };
   const applyNamedWorkspace = async (profile: NamedWorkspaceProfile) => {
     if (operatorLockMode() !== null) {
       setMessage("Unlock operator mode before changing the workspace layout.");
       return;
     }
+    if (!paneLifecycleController.tryBeginWorkspaceApply()) {
+      setMessage("A pane transition or workspace apply is already running; wait for it to finish.");
+      return;
+    }
     try {
-      applyWorkspaceLayout(profile.layout);
       const desired = new Map(profile.pane_windows.map((placement) => [placement.pane, placement]));
-      await Promise.all(poppedPanes()
-        .filter((pane) => !desired.has(pane))
-        .map((pane) => closePaneWindow(pane)));
-      await Promise.all(profile.pane_windows.map((placement) => openPaneWindow(placement.pane, placement)));
+      const failures: string[] = [];
+      // Prepare every desired window first so a partial failure never removes
+      // the operator's currently useful panes before replacements are ready.
+      for (const placement of profile.pane_windows) {
+        if (!await openPaneWindow(placement.pane, placement)) {
+          failures.push(`${paneWindowHumanLabels[placement.pane]} could not be prepared`);
+        }
+      }
+      for (const pane of poppedPanes().filter((candidate) => !desired.has(candidate))) {
+        if (!await closePaneWindow(pane)) {
+          failures.push(`${paneWindowHumanLabels[pane]} stayed open`);
+        }
+      }
+      const actual = poppedPanes();
       const desiredPanes = profile.pane_windows.map((placement) => placement.pane);
-      setPoppedPanes(desiredPanes);
-      persistPoppedPanes(desiredPanes);
-      setSelectedNamedWorkspaceId(profile.id);
-      setMessage(`Applied local workspace ${profile.name}.`);
+      const reconciled = actual.length === desiredPanes.length
+        && desiredPanes.every((pane) => actual.includes(pane));
+      if (failures.length === 0 && reconciled) {
+        applyWorkspaceLayout(profile.layout);
+        setSelectedNamedWorkspaceId(profile.id);
+        setMessage(`Applied local workspace ${profile.name}.`);
+      } else {
+        // The actual pane state is authoritative; never force-set the desired
+        // list over an incomplete reconciliation.
+        const actualLabel = actual.length > 0 ? actual.map((pane) => paneWindowHumanLabels[pane]).join(", ") : "none";
+        setSelectedNamedWorkspaceId(null);
+        setMessage(
+          `Workspace ${profile.name} applied partially; current pane windows: ${actualLabel}.`
+            + (failures.length > 0 ? ` Failed: ${failures.join("; ")}.` : ""),
+        );
+      }
     } catch (error) {
       setMessage(`Workspace restore failed: ${String(error)}`);
+    } finally {
+      paneLifecycleController.endWorkspaceApply();
     }
   };
   const deleteNamedWorkspace = (profile: NamedWorkspaceProfile) => {
@@ -8949,7 +9239,7 @@ export default function App() {
         data-live-desk-view-action="status"
         aria-controls={liveStatusExpanded()
           ? controlMode() === "edit" ? "lighting-status-inspector" : "live-status-inspector"
-          : undefined}
+          : controlMode() === "live" ? "live-status-inspector" : undefined}
         aria-expanded={liveStatusExpanded()}
         aria-label={controlMode() === "edit"
           ? liveStatusExpanded() ? "Hide lighting status details" : "Show lighting status details"
@@ -23780,7 +24070,12 @@ export default function App() {
   let closeRequestListenerDisposed = false;
   let unlistenCloseRequested: (() => void) | undefined;
   type ProtectedCloseRequest =
-    | { pane: "timeline"; reason: "timeline-dirty" }
+    | {
+        pane: "timeline";
+        reason: "timeline-dirty";
+        pendingClose: PaneWindowPendingCloseContext | null;
+        pendingCloseQueryFailed: boolean;
+      }
     | {
         pane: "main";
         reason: "dirty-only" | "runtime-only" | "dirty-and-runtime" | "output-state-unknown";
@@ -23790,6 +24085,32 @@ export default function App() {
       };
   type MainProtectedCloseRequest = Extract<ProtectedCloseRequest, { pane: "main" }>;
   const [protectedCloseRequest, setProtectedCloseRequest] = createSignal<ProtectedCloseRequest | null>(null);
+  const queryOwnPanePendingCloseContext = async (): Promise<PaneWindowPendingCloseContext | null> => {
+    if (!paneWindow || !isTauriRuntime()) return null;
+    const context = await invoke<PaneWindowPendingCloseContext | null>("get_pending_pane_window_close");
+    if (context === null) return null;
+    if (
+      context.pane !== paneWindow
+      || !isValidPaneOpaqueId(context.instance_id)
+      || !isValidPaneOpaqueId(context.request_id)
+    ) {
+      throw new Error("Pane window pending-close context was malformed or belonged to another pane.");
+    }
+    return context;
+  };
+  const cancelOwnPanePendingClose = async (context: PaneWindowPendingCloseContext) => {
+    if (!paneWindow) return false;
+    try {
+      await invoke("cancel_pane_window_close", {
+        instanceId: context.instance_id,
+        requestId: context.request_id,
+      });
+      return true;
+    } catch (error) {
+      setMessage(`Pane window close cancel failed: ${error}`);
+      return false;
+    }
+  };
   const clearNativeCloseApproval = () => {
     nativeCloseApproved = false;
     if (nativeCloseApprovalResetTimer !== undefined) {
@@ -23838,7 +24159,12 @@ export default function App() {
   const protectedCloseRequestForCurrentState = (current: EngineSnapshot = latestEngineSnapshot): ProtectedCloseRequest | null => {
     if (paneWindow === "timeline") {
       return timelineEditorDirty()
-        ? { pane: "timeline", reason: "timeline-dirty" }
+        ? {
+            pane: "timeline",
+            reason: "timeline-dirty",
+            pendingClose: null,
+            pendingCloseQueryFailed: false,
+          }
         : null;
     }
     if (paneWindow) return null;
@@ -23922,7 +24248,12 @@ export default function App() {
       return {
         eyebrow: translateUiText("UNSAVED TIMELINE", uiLocale()),
         title: translateUiText("Close Timeline window?", uiLocale()),
-        detail: translateUiText("Timeline edits will be discarded.", uiLocale()),
+        detail: request?.pendingClose
+          ? translateUiText(
+              "Timeline edits will be discarded. The main window is waiting for this Timeline window.",
+              uiLocale(),
+            )
+          : translateUiText("Timeline edits will be discarded.", uiLocale()),
         cancel: translateUiText("Keep Timeline Open", uiLocale()),
         confirm: translateUiText("Discard and Close", uiLocale()),
       };
@@ -23964,7 +24295,25 @@ export default function App() {
       confirm: translateUiText("Discard and Close", uiLocale()),
     };
   };
-  const cancelProtectedClose = () => {
+  const cancelProtectedClose = async () => {
+    const request = protectedCloseRequest();
+    if (request?.pane === "timeline") {
+      let pendingContext = request.pendingClose;
+      if (request.pendingCloseQueryFailed || pendingContext === null) {
+        try {
+          pendingContext = await queryOwnPanePendingCloseContext();
+        } catch (error) {
+          setProtectedCloseRequest({ ...request, pendingCloseQueryFailed: true });
+          setMessage(`Pane window close status could not be verified: ${error}`);
+          return;
+        }
+      }
+      if (pendingContext) {
+      // A parent-armed close must be canceled natively so the correlated
+      // canceled terminal reaches the main window; direct-X closes stay local.
+        if (!await cancelOwnPanePendingClose(pendingContext)) return;
+      }
+    }
     setProtectedCloseRequest(null);
     setMessage("Close canceled.");
   };
@@ -24068,7 +24417,23 @@ export default function App() {
             return;
           }
           event.preventDefault();
-          setProtectedCloseRequest(closeRequest);
+          // Attach the armed parent-close context (if any) so Keep Open can
+          // cancel the exact correlated request instead of only hiding the
+          // modal while the main window keeps waiting.
+          let pendingContext: PaneWindowPendingCloseContext | null = null;
+          let pendingCloseQueryFailed = false;
+          try {
+            pendingContext = await queryOwnPanePendingCloseContext();
+          } catch (error) {
+            pendingCloseQueryFailed = true;
+            setMessage(`Pane window close status could not be verified: ${error}`);
+          }
+          if (closeRequestListenerDisposed) return;
+          setProtectedCloseRequest({
+            ...closeRequest,
+            pendingClose: pendingContext,
+            pendingCloseQueryFailed,
+          });
           return;
         }
         if (protectedCloseRefreshInFlight || protectedCloseRequest() !== null) {
@@ -24175,22 +24540,29 @@ export default function App() {
         controlLearnBusy={controlLearnBusy()}
         controlLearnTargetLabel={controlLearnTargetLabel()}
         operations={
-          <WorkspaceOperationsMenu
-            profiles={namedWorkspaces()}
-            selectedProfileId={selectedNamedWorkspaceId()}
-            poppedPanes={poppedPanes()}
-            operatorPolicy={operatorPolicy()}
-            operatorLockMode={operatorLockMode()}
-            onSelectProfile={setSelectedNamedWorkspaceId}
-            onSaveProfile={saveNamedWorkspace}
-            onApplyProfile={applyNamedWorkspace}
-            onDeleteProfile={deleteNamedWorkspace}
-            onTogglePane={togglePaneWindow}
-            onConfigurePolicy={configureOperatorPolicy}
-            onClearPolicy={clearOperatorPolicy}
-            onLock={setOperatorSessionLock}
-            onUnlock={unlockOperator}
-          />
+          // Pane children run main-only open/close/capture commands that
+          // reject them, so they must never render the operations menu or its
+          // popout toggles at all.
+          paneWindow ? null : (
+            <WorkspaceOperationsMenu
+              profiles={namedWorkspaces()}
+              selectedProfileId={selectedNamedWorkspaceId()}
+              poppedPanes={poppedPanes()}
+              paneTransitions={pendingPaneWindowOperations()}
+              workspaceBusy={workspaceApplyBusy()}
+              operatorPolicy={operatorPolicy()}
+              operatorLockMode={operatorLockMode()}
+              onSelectProfile={setSelectedNamedWorkspaceId}
+              onSaveProfile={saveNamedWorkspace}
+              onApplyProfile={applyNamedWorkspace}
+              onDeleteProfile={deleteNamedWorkspace}
+              onTogglePane={togglePaneWindow}
+              onConfigurePolicy={configureOperatorPolicy}
+              onClearPolicy={clearOperatorPolicy}
+              onLock={setOperatorSessionLock}
+              onUnlock={unlockOperator}
+            />
+          )
         }
         onWorkspaceTab={selectWorkspaceTab}
         onSetupSubTab={selectSetupMode}
@@ -24488,19 +24860,21 @@ export default function App() {
             <h2>Timeline</h2>
             <div class="controlContextHeaderTools">
               {renderTimelineDeskHeaderTools()}
-              <button
-                type="button"
-                class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
-                data-timeline-pane-expand-toggle
-                title={timelinePaneActionLabel()}
-                aria-label={timelinePaneActionLabel()}
-                aria-expanded={timelinePaneExpanded()}
-                onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
-                </svg>
-              </button>
+              <Show when={!paneWindow}>
+                <button
+                  type="button"
+                  class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
+                  data-timeline-pane-expand-toggle
+                  title={timelinePaneActionLabel()}
+                  aria-label={timelinePaneActionLabel()}
+                  aria-expanded={timelinePaneExpanded()}
+                  onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
+                  </svg>
+                </button>
+              </Show>
             </div>
           </header>
           <div
@@ -25725,6 +26099,7 @@ export default function App() {
           timelinePaneExpanded={timelinePaneExpanded()}
           selectionsDrawerOpen={selectionsDrawerOpen()}
           onTogglePaneWindow={togglePaneWindow}
+          paneOperationPending={paneWindowOperationPending}
           onLowerSplitRatio={setLowerSplitRatio}
           onSelectionsDrawerOpen={setSelectionsDrawerOpen}
           onOpenMapping={() => {
@@ -25744,17 +26119,6 @@ export default function App() {
                     <span data-no-localize>{asset().source.path ?? asset().source.name ?? asset().source.kind}</span>
                   </div>}
                 </Show>
-              </section>
-            ) : paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "live" ? (
-              <section class="panel editTimelinePreviewPane" data-edit-timeline-preview aria-label="Timeline transport preview">
-                <header class="panelHeader"><h2>Timeline Preview</h2><span data-no-localize>{timelineTrack()}</span></header>
-                <div class="editTimelinePreviewTransport">
-                  <strong>{Math.round(activeTimeline().position_ms / 1000)}s</strong>
-                  <button type="button" onClick={() => void (activeTimeline().playing ? pauseTimeline() : playTimeline())}>
-                    {activeTimeline().playing ? "Pause" : "Play"}
-                  </button>
-                  <button type="button" onClick={() => seekTimeline(0)}>Start</button>
-                </div>
               </section>
             ) : undefined
           }

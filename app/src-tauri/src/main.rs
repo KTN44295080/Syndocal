@@ -425,6 +425,11 @@ const MAX_PROJECT_PUBLICATION_TERMINALS: usize = 64;
 const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
 const MAX_SHOW_LAN_INTERFACES: usize = 32;
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
+/// Correlation-safe pane window lifecycle terminal. The payload is always
+/// `{ pane, instance_id, request_id, terminal }` with `terminal` one of
+/// `"destroyed" | "canceled"`; `request_id` is `null` for closes that were not
+/// armed through `close_pane_window` (for example a direct titlebar X).
+const PANE_WINDOW_TERMINAL_EVENT: &str = "syndocal://pane-window-terminal";
 const PRINT_UPDATER_RELEASE_IDENTITY_ARG: &str = "--print-updater-release-identity";
 const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
 const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
@@ -18818,6 +18823,20 @@ fn ensure_project_operator_runtime_mutation_allowed(
     Err("Operator Full Lock blocks runtime mutations for this renderer session".to_string())
 }
 
+// These routes cannot begin new runtime work. They only settle an exact,
+// already-armed lifecycle request whose caller/instance/request correlation is
+// validated again by the command handler. Full Lock must not strand the
+// parent waiting for that terminal, while the ordinary open/close routes stay
+// subject to the normal runtime-mutation lock gate.
+const FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES: [&str; 1] =
+    ["cancel_pane_window_close"];
+
+fn is_full_lock_correlated_terminal_recovery_runtime_route(command: &str) -> bool {
+    FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES
+        .binary_search(&command)
+        .is_ok()
+}
+
 const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 2] =
     ["patch_fixtures", "repair_fixture_profile"];
 
@@ -18916,6 +18935,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "arm_output_control_v2",
     "begin_media_asset_preview",
     "bootstrap_vj_show",
+    "cancel_pane_window_close",
     "cancel_queued_video_clip_slot_authoritative",
     "close_open_video_output_windows",
     "close_pane_window",
@@ -19023,7 +19043,7 @@ fn runtime_route_dispatch_policy(command: &str) -> Option<RuntimeInvokeDispatchP
 /// App-command admission is intentionally outside the generated Tauri
 /// dispatcher so raw `window.__TAURI_INTERNALS__.invoke` calls cross the same
 /// authority seam as facade calls. Plugin IPC is routed by Tauri before this
-/// application handler and is not part of the frozen 478-command inventory.
+/// application handler and is not part of the frozen 480-command inventory.
 fn admit_tauri_app_invoke<R: tauri::Runtime>(
     invoke: &tauri::ipc::Invoke<R>,
 ) -> Result<Option<ProjectTransactionLaneGuard>, String> {
@@ -19105,7 +19125,7 @@ fn admit_tauri_app_invoke<R: tauri::Runtime>(
     project_transaction_owner_binding_for_window(&state, window_label, &owner_id)?;
     if class == Class::FileExportMutation {
         ensure_project_operator_authoritative_mutation_allowed(&state, &coordinator, &owner_id)?;
-    } else {
+    } else if !is_full_lock_correlated_terminal_recovery_runtime_route(command) {
         ensure_project_operator_runtime_mutation_allowed(&state, &coordinator, &owner_id)?;
     }
     drop(coordinator);
@@ -67902,11 +67922,34 @@ fn apply_pane_window_placement(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct PaneWindowStatusReport {
+    #[serde(flatten)]
+    placement: PaneWindowPlacement,
+    instance_id: Option<String>,
+    pending_close_request_id: Option<String>,
+}
+
 #[tauri::command]
 fn capture_pane_window_placements(
     app: tauri::AppHandle,
-) -> Result<Vec<PaneWindowPlacement>, String> {
-    let mut placements = Vec::new();
+    window: tauri::WebviewWindow,
+) -> Result<Vec<PaneWindowStatusReport>, String> {
+    ensure_pane_window_caller_is_main(window.label())?;
+    // Every main capture doubles as a reconciliation pass: tracked identities
+    // whose native window is gone get their exact terminal retried before the
+    // report is built, so pending-close waiters never depend on a single
+    // emission attempt.
+    reconcile_missing_pane_windows(&app)?;
+    let registry = app.state::<PaneWindowLifecycleRegistry>();
+    let tracked_entries = {
+        let entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        entries.clone()
+    };
+    let mut reports = Vec::new();
     for pane in PANE_WINDOW_KINDS {
         let label = pane_window_label(pane);
         let Some(window) = app.webview_windows().get(&label).cloned() else {
@@ -67914,16 +67957,26 @@ fn capture_pane_window_placements(
         };
         let position = window.outer_position().map_err(|error| error.to_string())?;
         let size = window.inner_size().map_err(|error| error.to_string())?;
-        placements.push(PaneWindowPlacement {
-            pane: pane.to_string(),
-            x: position.x,
-            y: position.y,
-            width: size.width,
-            height: size.height,
-            maximized: window.is_maximized().map_err(|error| error.to_string())?,
+        let tracked = tracked_entries.get(pane);
+        reports.push(PaneWindowStatusReport {
+            placement: PaneWindowPlacement {
+                pane: pane.to_string(),
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+                maximized: window.is_maximized().map_err(|error| error.to_string())?,
+            },
+            instance_id: tracked.map(|entry| entry.instance_id.clone()),
+            pending_close_request_id: tracked.and_then(|entry| {
+                entry
+                    .pending_close
+                    .as_ref()
+                    .map(|pending| pending.request_id.clone())
+            }),
         });
     }
-    Ok(placements)
+    Ok(reports)
 }
 
 /// T12: open a pane as its own WebView window (multi-display workspaces). The
@@ -67931,24 +67984,499 @@ fn capture_pane_window_placements(
 /// command/snapshot path works unchanged; a root class collapses the shell to
 /// the one pane. Window placement is machine-specific, so persistence lives in
 /// frontend localStorage rather than the .sdc project.
+const PANE_WINDOW_OPAQUE_ID_MAX_BYTES: usize = 128;
+
+fn validate_pane_window_opaque_id(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("Pane window {field} must not be empty"));
+    }
+    if value.len() > PANE_WINDOW_OPAQUE_ID_MAX_BYTES {
+        return Err(format!(
+            "Pane window {field} exceeds {PANE_WINDOW_OPAQUE_ID_MAX_BYTES} bytes"
+        ));
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!(
+            "Pane window {field} must be bounded ASCII [A-Za-z0-9_-]"
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_pane_window_caller_is_main(caller_label: &str) -> Result<(), String> {
+    if caller_label == "main" {
+        Ok(())
+    } else {
+        Err(format!(
+            "Pane window open/close requests are main-window scoped; caller '{caller_label}' is not allowed"
+        ))
+    }
+}
+
+fn ensure_pane_window_caller_label_matches_pane(
+    caller_label: &str,
+    pane: &str,
+) -> Result<(), String> {
+    let expected = pane_window_label(pane);
+    if caller_label == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "Pane window pending-close access is caller-scoped to '{expected}'; caller '{caller_label}' may not touch pane '{pane}'"
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PaneWindowOpenResult {
+    placement_applied: bool,
+    warning: Option<String>,
+}
+
+fn pane_window_kind_for_child_caller(caller_label: &str) -> Result<String, String> {
+    let pane = caller_label
+        .strip_prefix("pane-")
+        .ok_or_else(|| format!("Caller '{caller_label}' is not a pane window"))?;
+    let pane = normalize_pane_window_kind(pane)?;
+    ensure_pane_window_caller_label_matches_pane(caller_label, &pane)?;
+    Ok(pane)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneWindowPendingClose {
+    request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneWindowLifecycleEntry {
+    instance_id: String,
+    pending_close: Option<PaneWindowPendingClose>,
+}
+
+/// Narrow managed registry keyed by pane. It is deliberately separate from
+/// `AppState`: pane windows never touch engine/project authority, so their
+/// identity bookkeeping stays isolated, poison-isolated, and unit-testable
+/// without a Tauri runtime.
+#[derive(Debug, Default)]
+struct PaneWindowLifecycleRegistry {
+    entries: Mutex<HashMap<String, PaneWindowLifecycleEntry>>,
+}
+
+/// Test-only retirement receipt: the production close path retires through
+/// the recoverable `retire_destroyed_pane_window_identity`, so this exact
+/// removal result is now exercised exclusively by registry unit tests.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneWindowRetiredIdentity {
+    instance_id: String,
+    request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneWindowEstablishIdentity {
+    AdoptedExact,
+    CreatedFresh,
+}
+
+impl PaneWindowLifecycleRegistry {
+    fn establish_identity(
+        entries: &mut HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+        native_window_exists: bool,
+        instance_id: &str,
+    ) -> Result<PaneWindowEstablishIdentity, String> {
+        match entries.get(pane) {
+            Some(entry) => {
+                if entry.pending_close.is_some() {
+                    return Err(format!(
+                        "Pane '{pane}' has a pending close in flight; it cannot be opened until its terminal arrives"
+                    ));
+                }
+                if entry.instance_id != instance_id {
+                    return Err(format!(
+                        "Pane '{pane}' already tracks a conflicting window identity; adopt the live instance instead of forcing a new one"
+                    ));
+                }
+                if !native_window_exists {
+                    return Err(format!(
+                        "Pane '{pane}' tracks instance '{instance_id}' while its native window is still unavailable; concurrent creation is rejected"
+                    ));
+                }
+                Ok(PaneWindowEstablishIdentity::AdoptedExact)
+            }
+            None => {
+                if native_window_exists {
+                    return Err(format!(
+                        "Native pane window '{pane}' exists without lifecycle identity; fail closed instead of silently adopting it"
+                    ));
+                }
+                entries.insert(
+                    pane.to_string(),
+                    PaneWindowLifecycleEntry {
+                        instance_id: instance_id.to_string(),
+                        pending_close: None,
+                    },
+                );
+                Ok(PaneWindowEstablishIdentity::CreatedFresh)
+            }
+        }
+    }
+
+    /// Test-only exact removal: production closes retire through the
+    /// recoverable `retire_destroyed_pane_window_identity` instead, so this
+    /// direct variant is exercised exclusively by registry unit tests.
+    #[cfg(test)]
+    fn retire_identity(
+        entries: &mut HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+        instance_id: &str,
+    ) -> Result<PaneWindowRetiredIdentity, String> {
+        let entry = entries
+            .get(pane)
+            .ok_or_else(|| format!("Pane '{pane}' has no tracked lifecycle identity to retire"))?;
+        if entry.instance_id != instance_id {
+            return Err(format!(
+                "Pane '{pane}' tracks instance '{}' but the close claimed '{instance_id}'",
+                entry.instance_id
+            ));
+        }
+        let entry = entries.remove(pane).expect("entry verified above");
+        Ok(PaneWindowRetiredIdentity {
+            instance_id: entry.instance_id,
+            request_id: entry.pending_close.map(|pending| pending.request_id),
+        })
+    }
+
+    fn arm_pending_close(
+        entries: &mut HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+        instance_id: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        let entry = entries.get_mut(pane).ok_or_else(|| {
+            format!("Pane '{pane}' has no tracked lifecycle identity for closing")
+        })?;
+        if entry.instance_id != instance_id {
+            return Err(format!(
+                "Pane '{pane}' tracks instance '{}' but the close claimed '{instance_id}'",
+                entry.instance_id
+            ));
+        }
+        if entry.pending_close.is_some() {
+            return Err(format!(
+                "Pane '{pane}' already has exactly one pending close armed"
+            ));
+        }
+        entry.pending_close = Some(PaneWindowPendingClose {
+            request_id: request_id.to_string(),
+        });
+        Ok(())
+    }
+
+    fn rollback_pending_close(
+        entries: &mut HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+        instance_id: &str,
+        request_id: &str,
+    ) -> bool {
+        if let Some(entry) = entries.get_mut(pane) {
+            if entry.instance_id == instance_id
+                && entry
+                    .pending_close
+                    .as_ref()
+                    .is_some_and(|pending| pending.request_id == request_id)
+            {
+                entry.pending_close = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn query_pending_close_context(
+        entries: &HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+    ) -> Option<PaneWindowPendingCloseContext> {
+        let entry = entries.get(pane)?;
+        let pending = entry.pending_close.as_ref()?;
+        Some(PaneWindowPendingCloseContext {
+            pane: pane.to_string(),
+            instance_id: entry.instance_id.clone(),
+            request_id: pending.request_id.clone(),
+        })
+    }
+
+    fn cancel_pending_close(
+        entries: &mut HashMap<String, PaneWindowLifecycleEntry>,
+        pane: &str,
+        expected_instance_id: &str,
+        expected_request_id: &str,
+    ) -> Result<(String, String), String> {
+        let entry = entries
+            .get_mut(pane)
+            .ok_or_else(|| format!("Pane '{pane}' has no tracked lifecycle identity to cancel"))?;
+        if entry.instance_id != expected_instance_id {
+            return Err(format!(
+                "Pane '{pane}' tracks instance '{}' but the cancel claimed '{expected_instance_id}'",
+                entry.instance_id
+            ));
+        }
+        let pending = entry
+            .pending_close
+            .as_ref()
+            .ok_or_else(|| format!("Pane '{pane}' has no pending close to cancel"))?;
+        if pending.request_id != expected_request_id {
+            return Err(format!(
+                "Pane '{pane}' pending close '{}' does not match the cancel request '{expected_request_id}'",
+                pending.request_id
+            ));
+        }
+        let request_id = entry
+            .pending_close
+            .take()
+            .expect("verified above")
+            .request_id;
+        Ok((entry.instance_id.clone(), request_id))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct PaneWindowPendingCloseContext {
+    pane: String,
+    instance_id: String,
+    request_id: String,
+}
+
+fn pane_window_terminal_payload(
+    pane: &str,
+    instance_id: Option<&str>,
+    request_id: Option<&str>,
+    terminal: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "pane": pane,
+        "instance_id": instance_id,
+        "request_id": request_id,
+        "terminal": terminal,
+    })
+}
+
+fn emit_pane_window_terminal(
+    app: &tauri::AppHandle,
+    pane: &str,
+    instance_id: Option<&str>,
+    request_id: Option<&str>,
+    terminal: &str,
+) -> Result<(), String> {
+    app.emit(
+        PANE_WINDOW_TERMINAL_EVENT,
+        pane_window_terminal_payload(pane, instance_id, request_id, terminal),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Retires exactly one tracked pane identity after its native Destroyed event
+/// and emits the correlated app-global terminal. The exact entry (including
+/// its pending close) is removed only while the terminal is in flight; if the
+/// emission fails, it is reinserted verbatim unless a newer identity took the
+/// slot, so delivery stays recoverable by the main-window reconciliation
+/// sweep instead of wedging a waiting parent close forever. Returns whether a
+/// tracked identity was retired and delivered.
+fn retire_destroyed_pane_window_identity(
+    app: &tauri::AppHandle,
+    pane: &str,
+    instance_id: &str,
+) -> Result<bool, String> {
+    let retired = {
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        let Some(entry) = entries.get(pane) else {
+            return Ok(false);
+        };
+        if entry.instance_id != instance_id {
+            return Ok(false);
+        }
+        let retired = entries
+            .remove(pane)
+            .expect("exact pane instance verified above");
+        drop(entries);
+        retired
+    };
+    let request_id = retired
+        .pending_close
+        .as_ref()
+        .map(|pending| pending.request_id.clone());
+    if let Err(error) = emit_pane_window_terminal(
+        app,
+        pane,
+        Some(&retired.instance_id),
+        request_id.as_deref(),
+        "destroyed",
+    ) {
+        // Recoverable failure: restore the exact incarnation with its exact
+        // pending close only while no newer identity occupies the slot.
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        entries
+            .entry(pane.to_string())
+            .or_insert(PaneWindowLifecycleEntry {
+                instance_id: retired.instance_id,
+                pending_close: retired.pending_close,
+            });
+        return Err(format!(
+            "Pane window '{pane}' terminal emission failed for instance '{instance_id}'; the exact identity stays recoverable for reconciliation: {error}"
+        ));
+    }
+    Ok(true)
+}
+
+/// Main-window reconciliation sweep: a tracked pane identity whose native
+/// window is already gone must still deliver its exact correlated terminal,
+/// even when the Destroyed observer's emission was lost or never ran. Live
+/// windows are never touched, a newer identity is never overwritten, and
+/// elapsed time alone never fakes a terminal; every sweep retries the exact
+/// retirement until emission succeeds.
+fn reconcile_missing_pane_windows(app: &tauri::AppHandle) -> Result<(), String> {
+    let tracked_instances: Vec<(String, String)> = {
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        PANE_WINDOW_KINDS
+            .iter()
+            .filter_map(|pane| {
+                entries
+                    .get(*pane)
+                    .map(|entry| ((*pane).to_string(), entry.instance_id.clone()))
+            })
+            .collect()
+    };
+    let mut failures = Vec::new();
+    for (pane, instance_id) in tracked_instances {
+        if app
+            .webview_windows()
+            .contains_key(&pane_window_label(&pane))
+        {
+            continue;
+        }
+        if let Err(error) = retire_destroyed_pane_window_identity(app, &pane, &instance_id) {
+            failures.push(format!("{pane}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Pane window reconciliation left undelivered terminals: {}",
+            failures.join("; ")
+        ))
+    }
+}
+
+fn install_pane_window_destroyed_observer(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    pane: &str,
+    instance_id: &str,
+) {
+    let observer_app = app.clone();
+    let observer_pane = pane.to_string();
+    let observer_instance_id = instance_id.to_string();
+    window.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Destroyed) {
+            return;
+        }
+        let callback_app = observer_app.clone();
+        let callback_pane = observer_pane.clone();
+        let callback_instance_id = observer_instance_id.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = retire_destroyed_pane_window_identity(
+                &callback_app,
+                &callback_pane,
+                &callback_instance_id,
+            ) {
+                eprintln!(
+                    "Destroyed pane window '{callback_pane}' terminal failed for instance '{callback_instance_id}': {error}"
+                );
+            }
+        });
+    });
+}
+
 #[tauri::command]
 async fn open_pane_window(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     pane: String,
+    instance_id: String,
     placement: Option<PaneWindowPlacement>,
-) -> Result<(), String> {
+) -> Result<PaneWindowOpenResult, String> {
     let pane = normalize_pane_window_kind(&pane)?;
+    validate_pane_window_opaque_id("instanceId", &instance_id)?;
     if let Some(placement) = placement.as_ref() {
         validate_pane_window_placement(&pane, placement)?;
     }
+    ensure_pane_window_caller_is_main(window.label())?;
     let label = pane_window_label(&pane);
-    if let Some(window) = app.webview_windows().get(&label).cloned() {
-        if let Some(placement) = placement.as_ref() {
-            apply_pane_window_placement(&app, &window, placement)?;
+    let existing_window = app.webview_windows().get(&label).cloned();
+    let establish = {
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        PaneWindowLifecycleRegistry::establish_identity(
+            &mut entries,
+            &pane,
+            existing_window.is_some(),
+            &instance_id,
+        )?
+    };
+    let rollback_created_identity = |app: &tauri::AppHandle| -> Result<(), String> {
+        if establish != PaneWindowEstablishIdentity::CreatedFresh {
+            return Ok(());
         }
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        if let Some(entry) = entries.get(&pane) {
+            if entry.instance_id == instance_id && entry.pending_close.is_none() {
+                entries.remove(&pane);
+            }
+        }
+        Ok(())
+    };
+    if let Some(existing_window) = existing_window.as_ref() {
+        let mut warnings = Vec::new();
+        let mut placement_applied = true;
+        if let Some(placement) = placement.as_ref() {
+            if let Err(error) = apply_pane_window_placement(&app, existing_window, placement) {
+                placement_applied = false;
+                warnings.push(format!("placement: {error}"));
+            }
+        }
+        if let Err(error) = existing_window.show() {
+            warnings.push(format!("show: {error}"));
+        }
+        if let Err(error) = existing_window.set_focus() {
+            warnings.push(format!("focus: {error}"));
+        }
+        return Ok(PaneWindowOpenResult {
+            placement_applied,
+            warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
+        });
     }
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
@@ -67957,7 +68485,8 @@ async fn open_pane_window(
     )
     .title(pane_window_title(&pane))
     .inner_size(1280.0, 720.0)
-    .resizable(true);
+    .resizable(true)
+    .visible(false);
     if let Some(placement) = placement.as_ref() {
         builder = builder
             .maximized(false)
@@ -67966,25 +68495,174 @@ async fn open_pane_window(
             builder = builder.position(placement.x as f64, placement.y as f64);
         }
     }
-    let window = builder.build().map_err(|error| error.to_string())?;
+    let new_window = match builder.build() {
+        Ok(window) => window,
+        Err(error) => {
+            rollback_created_identity(&app)?;
+            return Err(error.to_string());
+        }
+    };
+    install_pane_window_destroyed_observer(&app, &new_window, &pane, &instance_id);
+    let retire_failed_newborn = |error: String, placement_applied: bool| {
+        match new_window.destroy() {
+            Ok(()) => {
+                // Retire synchronously as well as from the exact observer. The
+                // observer becomes a harmless no-op if this wins the race.
+                retire_destroyed_pane_window_identity(&app, &pane, &instance_id)?;
+                Err(error)
+            }
+            Err(destroy_error) => Ok(PaneWindowOpenResult {
+                placement_applied,
+                warning: Some(format!(
+                    "{error}; newborn window destroy also failed: {destroy_error}"
+                )),
+            }),
+        }
+    };
     if let Some(placement) = placement.as_ref() {
-        apply_pane_window_placement(&app, &window, placement)?;
+        if let Err(error) = apply_pane_window_placement(&app, &new_window, placement) {
+            return retire_failed_newborn(format!("placement: {error}"), false);
+        }
     }
+    if let Err(error) = new_window.show() {
+        return retire_failed_newborn(format!("show: {error}"), true);
+    }
+    if let Err(error) = new_window.set_focus() {
+        return retire_failed_newborn(format!("focus: {error}"), true);
+    }
+    Ok(PaneWindowOpenResult {
+        placement_applied: true,
+        warning: None,
+    })
+}
+
+#[tauri::command]
+async fn close_pane_window(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    pane: String,
+    instance_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    let pane = normalize_pane_window_kind(&pane)?;
+    ensure_pane_window_caller_is_main(window.label())?;
+    validate_pane_window_opaque_id("instanceId", &instance_id)?;
+    validate_pane_window_opaque_id("requestId", &request_id)?;
+    let label = pane_window_label(&pane);
+    let lock_error = || "Pane window lifecycle registry was poisoned".to_string();
+    {
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry.entries.lock().map_err(|_| lock_error())?;
+        PaneWindowLifecycleRegistry::arm_pending_close(
+            &mut entries,
+            &pane,
+            &instance_id,
+            &request_id,
+        )?;
+    }
+    let Some(target) = app.webview_windows().get(&label).cloned() else {
+        // The waiter was armed before checking the native target, so the exact
+        // synchronous missing-window terminal cannot be lost by the frontend.
+        // The recoverable retirement removes the exact entry, emits the
+        // correlated terminal synchronously, and on emission failure reinserts
+        // the exact identity plus its armed request, so the main-window sweep
+        // keeps retrying delivery instead of stranding the waiting close. A
+        // Destroyed observer that already won the race is a harmless false.
+        retire_destroyed_pane_window_identity(&app, &pane, &instance_id)?;
+        return Ok(());
+    };
+    if let Err(error) = target.close() {
+        let rolled_back = {
+            let registry = app.state::<PaneWindowLifecycleRegistry>();
+            let mut entries = registry.entries.lock().map_err(|_| lock_error())?;
+            PaneWindowLifecycleRegistry::rollback_pending_close(
+                &mut entries,
+                &pane,
+                &instance_id,
+                &request_id,
+            )
+        };
+        if !rolled_back {
+            // The exact Destroyed observer won the race and already retired
+            // this incarnation. Its terminal is authoritative, so the native
+            // close command is complete even if the stale handle reports an
+            // error afterward.
+            return Ok(());
+        }
+        return Err(error.to_string());
+    }
+    // Completion is announced only by the exact-incarnation Destroyed observer
+    // or by a child-originated correlated cancellation terminal.
     Ok(())
 }
 
 #[tauri::command]
-async fn close_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
-    let pane = normalize_pane_window_kind(&pane)?;
-    let label = pane_window_label(&pane);
-    if let Some(window) = app.webview_windows().get(&label).cloned() {
-        window.close().map_err(|error| error.to_string())?;
-    } else {
-        // Keep the frontend's Destroyed event as the only close acknowledgement.
-        // A missing window is already closed, so emit the same acknowledgement
-        // instead of leaving a stale popped-pane placeholder in localStorage.
-        app.emit("syndocal://pane-window-closed", pane)
-            .map_err(|error| error.to_string())?;
+fn get_pending_pane_window_close(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<PaneWindowPendingCloseContext>, String> {
+    let pane = pane_window_kind_for_child_caller(window.label())?;
+    let registry = app.state::<PaneWindowLifecycleRegistry>();
+    let entries = registry
+        .entries
+        .lock()
+        .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+    Ok(PaneWindowLifecycleRegistry::query_pending_close_context(
+        &entries, &pane,
+    ))
+}
+
+#[tauri::command]
+fn cancel_pane_window_close(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    instance_id: String,
+    request_id: String,
+) -> Result<(), String> {
+    let pane = pane_window_kind_for_child_caller(window.label())?;
+    validate_pane_window_opaque_id("instanceId", &instance_id)?;
+    validate_pane_window_opaque_id("requestId", &request_id)?;
+    let (canceled_instance_id, canceled_request_id) = {
+        let registry = app.state::<PaneWindowLifecycleRegistry>();
+        let mut entries = registry
+            .entries
+            .lock()
+            .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+        PaneWindowLifecycleRegistry::cancel_pending_close(
+            &mut entries,
+            &pane,
+            &instance_id,
+            &request_id,
+        )?
+    };
+    if let Err(error) = emit_pane_window_terminal(
+        &app,
+        &pane,
+        Some(&canceled_instance_id),
+        Some(&canceled_request_id),
+        "canceled",
+    ) {
+        let rollback = {
+            let registry = app.state::<PaneWindowLifecycleRegistry>();
+            let mut entries = registry
+                .entries
+                .lock()
+                .map_err(|_| "Pane window lifecycle registry was poisoned".to_string())?;
+            PaneWindowLifecycleRegistry::arm_pending_close(
+                &mut entries,
+                &pane,
+                &canceled_instance_id,
+                &canceled_request_id,
+            )
+        };
+        return match rollback {
+            Ok(()) => Err(format!(
+                "Pane window close cancellation terminal failed and its exact pending request was restored: {error}"
+            )),
+            Err(rollback_error) => Err(format!(
+                "Pane window close cancellation terminal failed: {error}; exact pending request could not be restored: {rollback_error}"
+            )),
+        };
     }
     Ok(())
 }
@@ -75441,6 +76119,21 @@ pub(crate) mod tests {
                 );
             }
         }
+        assert_eq!(
+            runtime_route_dispatch_policy("cancel_pane_window_close"),
+            Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
+        );
+        assert!(FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        assert!(is_full_lock_correlated_terminal_recovery_runtime_route(
+            "cancel_pane_window_close"
+        ));
+        for blocked_initial_operation in ["open_pane_window", "close_pane_window"] {
+            assert!(!is_full_lock_correlated_terminal_recovery_runtime_route(
+                blocked_initial_operation
+            ));
+        }
 
         assert!(PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES
             .windows(2)
@@ -75453,7 +76146,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 142);
+        assert_eq!(runtime_routes.len(), 143);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -95557,6 +96250,255 @@ f 1 2 3
         assert!(validate_pane_window_placement("timeline", &invalid)
             .unwrap_err()
             .contains("coordinates"));
+    }
+
+    #[test]
+    fn pane_window_opaque_ids_fail_closed_on_unbounded_or_hostile_values() {
+        validate_pane_window_opaque_id("instanceId", "pane-timeline-0F7dX-_9").unwrap();
+        assert!(validate_pane_window_opaque_id("instanceId", "").is_err());
+        assert!(validate_pane_window_opaque_id(
+            "instanceId",
+            &"a".repeat(PANE_WINDOW_OPAQUE_ID_MAX_BYTES + 1)
+        )
+        .is_err());
+        assert!(validate_pane_window_opaque_id("requestId", "close 42").is_err());
+        assert!(validate_pane_window_opaque_id("requestId", "close\n42").is_err());
+        assert!(validate_pane_window_opaque_id("requestId", "閉じる").is_err());
+        ensure_pane_window_caller_is_main("main").unwrap();
+        assert!(ensure_pane_window_caller_is_main("pane-timeline").is_err());
+        ensure_pane_window_caller_label_matches_pane("pane-timeline", "timeline").unwrap();
+        assert!(ensure_pane_window_caller_label_matches_pane("pane-stage", "timeline").is_err());
+        assert!(ensure_pane_window_caller_label_matches_pane("main", "timeline").is_err());
+    }
+
+    #[test]
+    fn pane_window_lifecycle_registry_correlates_identity_closes_and_terminals() {
+        let mut entries = HashMap::new();
+
+        assert_eq!(
+            PaneWindowLifecycleRegistry::establish_identity(
+                &mut entries,
+                "timeline",
+                false,
+                "inst-1"
+            )
+            .unwrap(),
+            PaneWindowEstablishIdentity::CreatedFresh
+        );
+        assert_eq!(
+            PaneWindowLifecycleRegistry::establish_identity(
+                &mut entries,
+                "timeline",
+                true,
+                "inst-1"
+            )
+            .unwrap(),
+            PaneWindowEstablishIdentity::AdoptedExact
+        );
+        assert!(PaneWindowLifecycleRegistry::establish_identity(
+            &mut entries,
+            "timeline",
+            false,
+            "inst-2"
+        )
+        .unwrap_err()
+        .contains("conflicting window identity"));
+
+        PaneWindowLifecycleRegistry::arm_pending_close(&mut entries, "timeline", "inst-1", "req-1")
+            .unwrap();
+        assert!(PaneWindowLifecycleRegistry::arm_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-2"
+        )
+        .unwrap_err()
+        .contains("exactly one pending close"));
+        assert!(PaneWindowLifecycleRegistry::arm_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-2",
+            "req-2"
+        )
+        .unwrap_err()
+        .contains("claimed 'inst-2'"));
+        assert!(PaneWindowLifecycleRegistry::establish_identity(
+            &mut entries,
+            "timeline",
+            false,
+            "inst-1"
+        )
+        .unwrap_err()
+        .contains("pending close"));
+
+        let context =
+            PaneWindowLifecycleRegistry::query_pending_close_context(&entries, "timeline")
+                .expect("pending context");
+        assert_eq!(
+            context,
+            PaneWindowPendingCloseContext {
+                pane: "timeline".to_string(),
+                instance_id: "inst-1".to_string(),
+                request_id: "req-1".to_string(),
+            }
+        );
+        assert_eq!(
+            PaneWindowLifecycleRegistry::query_pending_close_context(&entries, "stage"),
+            None
+        );
+
+        assert!(PaneWindowLifecycleRegistry::cancel_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-9"
+        )
+        .unwrap_err()
+        .contains("does not match"));
+        let (canceled_instance, canceled_request) =
+            PaneWindowLifecycleRegistry::cancel_pending_close(
+                &mut entries,
+                "timeline",
+                "inst-1",
+                "req-1",
+            )
+            .unwrap();
+        assert_eq!(canceled_instance, "inst-1");
+        assert_eq!(canceled_request, "req-1");
+        assert!(PaneWindowLifecycleRegistry::cancel_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-1"
+        )
+        .unwrap_err()
+        .contains("no pending close"));
+
+        PaneWindowLifecycleRegistry::arm_pending_close(&mut entries, "timeline", "inst-1", "req-2")
+            .unwrap();
+        assert!(
+            PaneWindowLifecycleRegistry::retire_identity(&mut entries, "timeline", "inst-9")
+                .unwrap_err()
+                .contains("claimed 'inst-9'")
+        );
+        let retired =
+            PaneWindowLifecycleRegistry::retire_identity(&mut entries, "timeline", "inst-1")
+                .unwrap();
+        assert_eq!(retired.instance_id, "inst-1");
+        assert_eq!(retired.request_id.as_deref(), Some("req-2"));
+        assert!(entries.get("timeline").is_none());
+        assert!(
+            PaneWindowLifecycleRegistry::retire_identity(&mut entries, "timeline", "inst-1")
+                .unwrap_err()
+                .contains("no tracked lifecycle identity")
+        );
+
+        assert!(PaneWindowLifecycleRegistry::arm_pending_close(
+            &mut entries,
+            "mixer",
+            "inst-m",
+            "req-m"
+        )
+        .unwrap_err()
+        .contains("no tracked lifecycle identity"));
+        assert!(PaneWindowLifecycleRegistry::establish_identity(
+            &mut entries,
+            "stage",
+            true,
+            "inst-s"
+        )
+        .unwrap_err()
+        .contains("without lifecycle identity"));
+    }
+
+    #[test]
+    fn pane_window_pending_close_rollback_succeeds_exactly_and_treats_mismatches_as_no_ops() {
+        let mut entries = HashMap::new();
+        PaneWindowLifecycleRegistry::establish_identity(&mut entries, "timeline", false, "inst-1")
+            .unwrap();
+
+        // Before anything is armed, an exact-looking rollback is still a
+        // harmless no-op.
+        assert!(!PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-1"
+        ));
+        assert!(entries.contains_key("timeline"));
+
+        PaneWindowLifecycleRegistry::arm_pending_close(&mut entries, "timeline", "inst-1", "req-1")
+            .unwrap();
+
+        // A wrong instance never clears another incarnation's armed request.
+        assert!(!PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-other",
+            "req-1"
+        ));
+        assert_eq!(
+            PaneWindowLifecycleRegistry::query_pending_close_context(&entries, "timeline")
+                .expect("armed context survives instance mismatch")
+                .request_id,
+            "req-1"
+        );
+
+        // A wrong request never clears the exact armed request.
+        assert!(!PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-stale"
+        ));
+        assert_eq!(
+            PaneWindowLifecycleRegistry::query_pending_close_context(&entries, "timeline")
+                .expect("armed context survives request mismatch")
+                .request_id,
+            "req-1"
+        );
+
+        // Unknown panes are no-ops too.
+        assert!(!PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "stage",
+            "inst-1",
+            "req-1"
+        ));
+
+        // The exact instance plus exact request rolls back only the pending
+        // close; the tracked identity itself survives for retries.
+        assert!(PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-1"
+        ));
+        assert!(
+            PaneWindowLifecycleRegistry::query_pending_close_context(&entries, "timeline")
+                .is_none(),
+            "a successful rollback leaves no pending request"
+        );
+        let entry = entries.get("timeline").expect("identity survives rollback");
+        assert_eq!(entry.instance_id, "inst-1");
+        assert_eq!(entry.pending_close, None);
+
+        // Rolling the same arm back twice is a no-op the second time.
+        assert!(!PaneWindowLifecycleRegistry::rollback_pending_close(
+            &mut entries,
+            "timeline",
+            "inst-1",
+            "req-1"
+        ));
+
+        // The identity stays fully reusable: re-arming and retiring still work.
+        PaneWindowLifecycleRegistry::arm_pending_close(&mut entries, "timeline", "inst-1", "req-2")
+            .unwrap();
+        let retired =
+            PaneWindowLifecycleRegistry::retire_identity(&mut entries, "timeline", "inst-1")
+                .unwrap();
+        assert_eq!(retired.instance_id, "inst-1");
+        assert_eq!(retired.request_id.as_deref(), Some("req-2"));
     }
 
     #[test]
@@ -118434,6 +119376,7 @@ fn main() {
             native_video_output_metrics: Mutex::new(HashMap::new()),
             native_video_output_workers: Mutex::new(HashMap::new()),
         })
+        .manage(PaneWindowLifecycleRegistry::default())
         .manage(control_plane_query_state)
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -118444,13 +119387,6 @@ fn main() {
                     window.label(),
                 ) {
                     eprintln!("Destroyed window authority was fail-closed: {error}");
-                }
-                if let Some(pane) = window
-                    .label()
-                    .strip_prefix("pane-")
-                    .filter(|pane| PANE_WINDOW_KINDS.contains(pane))
-                {
-                    let _ = window.emit("syndocal://pane-window-closed", pane);
                 }
             }
         })
@@ -118648,6 +119584,8 @@ fn main() {
             set_group_color,
             open_pane_window,
             close_pane_window,
+            get_pending_pane_window_close,
+            cancel_pane_window_close,
             capture_pane_window_placements,
             move_cue,
             move_cue_between_scene_banks_batch,

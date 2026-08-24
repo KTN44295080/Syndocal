@@ -32,6 +32,7 @@ type MappingPersistentWorkspaceBandProps = {
   selection: MappingSelectionPanelProps;
   hotkeyHelpOpen: boolean;
   poppedPanes: string[];
+  paneOperationPending: (pane: "stage" | "timeline") => boolean;
   lowerSplitRatio: number;
   timelinePaneExpanded: boolean;
   selectionsDrawerOpen: boolean;
@@ -62,15 +63,22 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
     }
   });
 
+  const stagePanePopped = () => props.poppedPanes.includes("stage");
+  const timelinePanePopped = () => props.poppedPanes.includes("timeline");
+  // Expansion only owns the shell while the real Timeline still lives in the
+  // upper arranger; a detached Timeline child must never suppress the band.
+  const timelinePaneEffectivelyExpanded = () =>
+    props.timelinePaneExpanded && !timelinePanePopped();
+
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${props.timelinePaneExpanded ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
-      data-timeline-pane-expanded={props.timelinePaneExpanded ? "true" : "false"}
+      class={`mappingPersistentWorkspaceBand${timelinePaneEffectivelyExpanded() ? " timelinePaneExpanded" : ""}${stagePanePopped() ? " stagePanePopped" : ""}${timelinePanePopped() ? " timelinePanePopped" : ""}${stagePanePopped() && timelinePanePopped() ? " stageAndTimelinePanesPopped" : ""}`}
+      data-timeline-pane-expanded={timelinePaneEffectivelyExpanded() ? "true" : "false"}
       data-control-stage-chrome={props.workspace !== "setup" ? "true" : undefined}
       data-workspace-pane="lower"
       aria-label="Persistent workspace band"
-      aria-hidden={props.timelinePaneExpanded ? "true" : undefined}
-      inert={props.timelinePaneExpanded ? true : undefined}
+      aria-hidden={timelinePaneEffectivelyExpanded() ? "true" : undefined}
+      inert={timelinePaneEffectivelyExpanded() ? true : undefined}
     >
       <div
         class="mappingPersistentWorkspaceGrid"
@@ -87,21 +95,6 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           onRecolorGroup={props.filters.onRecolorGroup}
           controlChrome={props.workspace !== "setup"}
         />
-        <Show when={props.poppedPanes.includes("timeline")}>
-          <button
-            type="button"
-            class="paneRejoinToggle"
-            data-pane-rejoin-toggle="timeline"
-            title="Close Timeline window"
-            aria-label="Close Timeline window"
-            onClick={() => props.onTogglePaneWindow("timeline")}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M2 4h8v8H2zM6 2h8v8M6 10h4" />
-            </svg>
-            <span>Timeline</span>
-          </button>
-        </Show>
         <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
           <Show when={props.lowerLeftContent} fallback={<>
           <section
@@ -206,7 +199,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           defaultRatio={defaultWorkspaceLayout.lower_split_ratio}
           minFirstPx={430}
           minSecondPx={480}
-          label={props.workspace === "touch" ? "Resize Mapping and Faders panes" : "Resize Stage and Timeline panes"}
+          label={props.workspace === "touch" ? "Resize Mapping and Faders panes" : "Resize Stage and Source panes"}
           splitter="lower-left-right"
           onCommit={props.onLowerSplitRatio}
         />
@@ -235,7 +228,11 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                         title={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
                         aria-label={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
                         aria-pressed={props.poppedPanes.includes("stage")}
-                        onClick={() => props.onTogglePaneWindow("stage")}
+                        aria-busy={props.paneOperationPending("stage") ? "true" : undefined}
+                        disabled={props.paneOperationPending("stage")}
+                        onClick={() => {
+                          if (!props.paneOperationPending("stage")) props.onTogglePaneWindow("stage");
+                        }}
                       >
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M3 5h7v8H3zM6 5V3h7v8h-2" />
@@ -248,7 +245,11 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                         title={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
                         aria-label={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
                         aria-pressed={props.poppedPanes.includes("timeline")}
-                        onClick={() => props.onTogglePaneWindow("timeline")}
+                        aria-busy={props.paneOperationPending("timeline") ? "true" : undefined}
+                        disabled={props.paneOperationPending("timeline")}
+                        onClick={() => {
+                          if (!props.paneOperationPending("timeline")) props.onTogglePaneWindow("timeline");
+                        }}
                       >
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />

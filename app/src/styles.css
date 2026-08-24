@@ -2484,20 +2484,17 @@ h3 {
 
 .editDomainUpperPanel,
 .editVideoPreviewPane,
-.editTimelinePreviewPane,
 .editVideoInspectorPane {
   min-height: 0;
 }
 
-.editVideoPreviewPane,
-.editTimelinePreviewPane {
+.editVideoPreviewPane {
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 .editVideoPreviewContent,
-.editTimelinePreviewTransport,
 .editVideoInspectorContent {
   display: grid;
   gap: 10px;
@@ -2514,11 +2511,6 @@ h3 {
   min-height: 120px;
   object-fit: contain;
   background: #12171b;
-}
-
-.editTimelinePreviewTransport {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
 }
 
 .editVideoInspectorContent dl {
@@ -27429,37 +27421,6 @@ h3 {
   font-size: 11px;
 }
 
-.paneRejoinToggle {
-  z-index: 9;
-  display: inline-flex;
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  min-height: 25px;
-  align-self: center;
-  align-items: center;
-  justify-self: end;
-  gap: 5px;
-  margin-right: 4px;
-  border-color: #62584d;
-  background: #201c18;
-  padding: 2px 7px;
-  color: #e0d8cf;
-  font-size: 11px;
-}
-
-.paneRejoinToggle svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-}
-
-.mappingPersistentWorkspaceBand.timelinePanePopped .mappingGroupStrip {
-  padding-right: 112px;
-}
-
 .mappingPersistentWorkspaceGrid {
   display: grid;
   grid-template-columns:
@@ -31211,8 +31172,7 @@ h3 {
 .app.paneWindow-timeline .workspaceSplitHandle-vertical,
 .app.paneWindow-programmer .mappingGroupStrip,
 .app.paneWindow-programmer .mappingWorkspaceLeftPane,
-.app.paneWindow-programmer .workspaceSplitHandle-vertical,
-.app.paneWindow .paneRejoinToggle {
+.app.paneWindow-programmer .workspaceSplitHandle-vertical {
   display: none;
 }
 
@@ -31265,7 +31225,9 @@ h3 {
   grid-row: 1 !important;
 }
 
-/* Main-window compaction while the stage lives in its own window. */
+/* Main-window compaction while the stage lives in its own window. The real
+   Stage and Groups leave the band and Source fills it; the upper Timeline
+   stays mounted in Control/LIVE. */
 .mappingPersistentWorkspaceBand.stagePanePopped .mappingGroupStrip,
 .mappingPersistentWorkspaceBand.stagePanePopped .mappingWorkspaceLeftPane,
 .mappingPersistentWorkspaceBand.stagePanePopped .workspaceSplitHandle-vertical {
@@ -31282,19 +31244,53 @@ h3 {
   grid-row: 1;
 }
 
-.mappingPersistentWorkspaceBand.timelinePanePopped .workspaceContextPane,
-.mappingPersistentWorkspaceBand.timelinePanePopped .workspaceSplitHandle-vertical {
+/* Setup owns its upper surface while Stage is in its separate window. The
+   lower persistent band has no remaining usable Stage content in that state,
+   so retaining its stored split only leaves a large blank projection area.
+   Remove the lower track and its resize handle instead; the active Setup
+   surface then fills the maximized main window. This deliberately does not
+   apply while Stage is integrated, where Groups remains part of the band. */
+.layout.layoutSharedWorkspace.layoutSetup:has(
+    > .mappingPersistentWorkspaceBand.stagePanePopped
+  ) {
+  grid-template-rows: minmax(0, 1fr) 0 minmax(0, 0) !important;
+}
+
+.layout.layoutSharedWorkspace.layoutSetup:has(
+    > .mappingPersistentWorkspaceBand.stagePanePopped
+  ) > .mappingPersistentWorkspaceBand,
+.layout.layoutSharedWorkspace.layoutSetup:has(
+    > .mappingPersistentWorkspaceBand.stagePanePopped
+  ) > .workspaceSplitHandle-horizontal {
   display: none;
 }
 
-.mappingPersistentWorkspaceBand.timelinePanePopped .mappingPersistentWorkspaceGrid {
-  grid-template-columns: minmax(0, 1fr);
+/* Control/LIVE while the real Timeline lives in its child window: the main
+   shell hides only its own upper arranger and the horizontal splitter and
+   hands the entire workspace height to the persistent band. Inside the band
+   nothing collapses: the real Stage with Groups stays on the left and the
+   Source shelf stays on the right, so no duplicate Timeline and no blank
+   area remain. This shell contract is scoped to Control/LIVE because the
+   Timeline detach flag means nothing in Setup, Control/Edit, or Mixer. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePanePopped
+  ) {
+  grid-template-rows: minmax(0, 0) 0 minmax(0, 1fr) !important;
 }
 
-.mappingPersistentWorkspaceBand.timelinePanePopped .mappingGroupStrip,
-.mappingPersistentWorkspaceBand.timelinePanePopped .mappingWorkspaceLeftPane {
-  grid-column: 1;
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePanePopped
+  ) > .liveControlPanel,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePanePopped
+  ) > .workspaceSplitHandle-horizontal {
+  display: none;
 }
+
+/* Both panes detached in Control/LIVE: the same shell contract applies, and
+   the band's stagePanePopped compaction above leaves Source filling the whole
+   workspace. The band itself must stay mounted; stageAndTimelinePanesPopped
+   remains only as an instrumentation hook for QA and native tooling. */
 
 /* Pane-window mode surfaces fill the window; the main-shell fixed panel
    heights are a T10 contract that does not apply inside a pane window. */
@@ -33586,12 +33582,19 @@ h3 {
 /* T24-F: Timeline expansion is a transient lane-editing workspace. Give the
    lower band a fixed fraction of the shell while expanded, then use fixed
    header/mixer tracks plus a bounded fr track for the ResizeObserver-driven
-   lane surface. Normal Control geometry remains on the stored T15-P split. */
-.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) {
+   lane surface. Normal Control geometry remains on the stored T15-P split.
+   The both-popped contract owns the shell when stageAndTimelinePanesPopped is
+   present, so expansion is scoped out of that combined state instead of
+   relying on a specificity contest. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
+  ) {
   grid-template-rows: minmax(0, 0.32fr) 7px minmax(0, 0.68fr) !important;
 }
 
-.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) > .workspaceSplitHandle-horizontal {
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
+  ) > .workspaceSplitHandle-horizontal {
   display: none;
 }
 
@@ -33662,7 +33665,9 @@ h3 {
 }
 
 @media (max-height: 800px) {
-  .layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) {
+  .layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+      > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
+    ) {
     grid-template-rows: minmax(0, 0.25fr) 7px minmax(0, 0.75fr) !important;
   }
 }
@@ -37909,15 +37914,31 @@ a[href]:focus-visible,
 
 /* The expand command belongs to the portaled upper arranger. Expansion must
    grow that arranger, not the now-unrelated lower Sources/Inspector band.
-   Escape restores the persisted normal split. */
+   Escape restores the persisted normal split. Like the T24-F split above,
+   this expansion lane is scoped out of stageAndTimelinePanesPopped so the
+   both-popped rows contract is the only author of that combined state. The
+   band keeps a real 2px rendered sliver inside its authored track: it stays
+   measurable and paint-visible while every lower child, splitter, and usable
+   surface is removed from geometry, and nothing overflows the workspace
+   root, so outer scroll stays exactly zero. */
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
-    > .mappingPersistentWorkspaceBand.timelinePaneExpanded
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
   ) {
-  grid-template-rows: minmax(0, 1fr) 0 0 !important;
+  grid-template-rows: minmax(0, 1fr) 0 2px !important;
+}
+
+/* Drop the collapsed band's block borders so the authored 2px track is the
+   entire rendered band height (<= 2.5px contract). It is already aria-hidden
+   and inert with all children display:none. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
+  )
+  > .mappingPersistentWorkspaceBand {
+  border-block-width: 0;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(
-    > .mappingPersistentWorkspaceBand.timelinePaneExpanded
+    > .mappingPersistentWorkspaceBand.timelinePaneExpanded:not(.stageAndTimelinePanesPopped)
   )
   > .workspaceSplitHandle-horizontal {
   display: none;

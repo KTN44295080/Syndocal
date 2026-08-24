@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const normalizeNewlines = (source) => source.replace(/\r\n/g, "\n");
+const app = normalizeNewlines(await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"));
 const srcRoot = new URL("../src/", import.meta.url);
 const collectSourceFiles = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -14,12 +16,13 @@ const collectSourceFiles = async (directory) => {
 };
 const frontendSources = await Promise.all((await collectSourceFiles(srcRoot)).map(async (url) => ({
   url,
-  source: await readFile(url, "utf8"),
+  source: normalizeNewlines(await readFile(url, "utf8")),
 })));
-const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
-const midi = await readFile(new URL("../../crates/io/src/midi.rs", import.meta.url), "utf8");
-const osc = await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8");
-const remote = await readFile(new URL("../../crates/io/src/remote_ws.rs", import.meta.url), "utf8");
+const backend = normalizeNewlines(await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8"));
+const controlPlane = normalizeNewlines(await readFile(new URL("../src-tauri/src/control_plane.rs", import.meta.url), "utf8"));
+const midi = normalizeNewlines(await readFile(new URL("../../crates/io/src/midi.rs", import.meta.url), "utf8"));
+const osc = normalizeNewlines(await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8"));
+const remote = normalizeNewlines(await readFile(new URL("../../crates/io/src/remote_ws.rs", import.meta.url), "utf8"));
 
 const section = (source, start, end) => {
   const startIndex = source.indexOf(start);
@@ -32,8 +35,32 @@ const section = (source, start, end) => {
 const mutationSection = section(app, "const projectMutationCommands = new Set([", "const projectMutationLabel");
 const mutationCommands = [...mutationSection.matchAll(/"([a-z0-9_]+)"/g)].map((match) => match[1]);
 const handlerSection = section(backend, "tauri::generate_handler![", ".build(tauri::generate_context!())");
-const registeredCommands = new Set(
-  [...handlerSection.matchAll(/^\s*([a-z][a-z0-9_]+),?\s*$/gm)].map((match) => match[1]),
+const registeredCommandList = [...handlerSection.matchAll(/^\s*([a-z][a-z0-9_]+),?\s*$/gm)]
+  .map((match) => match[1]);
+const registeredCommands = new Set(registeredCommandList);
+assert.equal(
+  registeredCommands.size,
+  registeredCommandList.length,
+  "production generate_handler inventory contains a duplicate command",
+);
+const frozenAdmissionCount = Number(
+  controlPlane.match(/const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = (\d+);/)?.[1],
+);
+const frozenAdmissionSha256 = controlPlane.match(
+  /const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =\s*"([a-f0-9]{64})";/,
+)?.[1];
+const currentAdmissionSha256 = createHash("sha256")
+  .update([...registeredCommandList].sort().join("\n"), "utf8")
+  .digest("hex");
+assert.equal(
+  frozenAdmissionCount,
+  registeredCommands.size,
+  "D3 frozen Tauri admission count differs from the production generate_handler inventory",
+);
+assert.equal(
+  frozenAdmissionSha256,
+  currentAdmissionSha256,
+  "D3 frozen Tauri admission fingerprint differs from the production generate_handler inventory",
 );
 const literalFrontendCommands = new Set(
   frontendSources.flatMap(({ source }) => (

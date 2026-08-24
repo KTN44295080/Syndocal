@@ -1,13 +1,14 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.9",
+  "version": "1.2.0-alpha.10",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check:frontend-invokes": "node scripts/check-frontend-tauri-invokes.mjs",
+    "check:pane-window-lifecycle": "node scripts/check-pane-window-lifecycle.mjs",
     "check:frontend-command-routing": "node scripts/check-frontend-command-routing.mjs",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",
     "check:clock-display": "node scripts/check-clock-display.mjs",
@@ -115,6 +116,7 @@
     "check:patch-viewport": "node scripts/check-viewport-containment.mjs --patch-only",
     "check:fixture-groups": "node scripts/check-viewport-containment.mjs --fixture-groups-only",
     "check:workspace-split": "node scripts/check-viewport-containment.mjs --workspace-split-only",
+    "check:pane-reflow": "node scripts/check-viewport-containment.mjs --pane-reflow-only",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
     "check:vj-first-run-viewport": "node scripts/check-viewport-containment.mjs --vj-empty",
     "prepare:runtime-libs": "node scripts/prepare-release-runtime.mjs",

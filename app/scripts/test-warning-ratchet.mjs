@@ -249,6 +249,9 @@ for (const key of compilerSelectionKeys) {
   suppressionSamples.push(["--con", "fig build.", key, "='compiler-proxy'"].join(""));
 }
 for (const sample of suppressionSamples) assert.ok(detectSuppressionText(sample).length > 0, sample);
+assert.ok(detectSuppressionText("rustc -A " + "warnings source.rs").includes("rust-command-line-allow"));
+assert.ok(detectSuppressionText("rustc -A " + "dead_code source.rs").includes("rust-command-line-allow"));
+assert.deepEqual(detectSuppressionText("git add -A\ngit commit -m seed\n"), []);
 assert.deepEqual(detectSuppressionText("const rustc = selectCompiler();\nconst wrapperName = 'rustc-wrapper';"), []);
 assert.deepEqual(detectSuppressionText(["const text = \"", "#[", "allow", "(dead_code)]\";"].join("")), []);
 

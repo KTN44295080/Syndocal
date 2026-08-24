@@ -16,14 +16,24 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  authoritativeMemberPackageNames,
   collectGitCandidateState,
   compareSemver,
+  expectedVersion,
   main,
   parseCli,
+  parseCargoPackageIdentity,
+  parseLockPackages,
   parseRuntimeUpdaterIdentity,
   parseSemver,
+  parseWorkspaceMembers,
   readVerifiedEvidenceFile,
+  readmeProductLine,
+  readmeWindowsInstallerLine,
+  requiredWorkspaceMembers,
   validateCandidateEvidence,
+  validateStaticReleaseMetadata,
+  windowsInstallerNames,
   withMaterializedVerifiedExecutable,
 } from "./check-release-metadata.mjs";
 
@@ -456,6 +466,269 @@ try {
   pass(actualGitState.previousTagCommit === actualPrevious && actualPrevious !== actualGitState.headCommit, "real previous tag resolves to a distinct commit");
   writeFileSync(join(gitRoot, "dirty.txt"), "dirty\n");
   pass(!collectGitCandidateState(gitRoot, `v${version}`, "v1.2.0-alpha.1").clean, "real Git fixture detects an untracked dirty file");
+
+  const workspaceRoot = resolve(scriptDir, "..", "..");
+  const readRepoFile = (relativePath) => readFileSync(resolve(workspaceRoot, relativePath), "utf8");
+  const staticFixturePaths = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    ...requiredWorkspaceMembers.map((member) => `${member}/Cargo.toml`),
+  ];
+  let staticFixtureSnapshot = null;
+  const snapshotStaticFixtures = () => {
+    staticFixtureSnapshot ??= new Map(staticFixturePaths.map((path) => [path, readRepoFile(path)]));
+    return staticFixtureSnapshot;
+  };
+  const staticRejects = (mutate, pattern, label) => {
+    const files = new Map(snapshotStaticFixtures());
+    mutate?.(files);
+    assert.throws(
+      () =>
+        validateStaticReleaseMetadata((path) =>
+          files.has(path) ? files.get(path) : readRepoFile(path),
+        ),
+      pattern,
+      label,
+    );
+    assertions += 1;
+  };
+  const replaceOnce = (text, from, to) => {
+    if (!text.includes(from)) throw new Error(`fixture bug: pattern not found: ${from}`);
+    return text.replace(from, to);
+  };
+  const lockBlock = (lockText, packageName) => {
+    const block = lockText
+      .split(/(?=\[\[package\]\])/u)
+      .find((candidate) => /^\s*name\s*=\s*"([^"]+)"/mu.exec(candidate)?.[1] === packageName);
+    if (!block) throw new Error(`fixture bug: no Cargo.lock block for ${packageName}`);
+    return block;
+  };
+
+  validateStaticReleaseMetadata(readRepoFile);
+  assertions += 1;
+  const manifestPackageNames = requiredWorkspaceMembers.map((member) =>
+    parseCargoPackageIdentity(readRepoFile(`${member}/Cargo.toml`), `${member}/Cargo.toml`),
+  );
+  pass(
+    JSON.stringify([...parseWorkspaceMembers(snapshotStaticFixtures().get("Cargo.toml"))].sort())
+      === JSON.stringify([...requiredWorkspaceMembers].sort()),
+    `live workspace member set matches the authoritative set order-independently (${manifestPackageNames.join(", ")})`,
+  );
+  pass(
+    JSON.stringify(parseWorkspaceMembers('[workspace]\nmembers = [\n  # "crates/audio",\n  "crates/audio", # live\n]'))
+      === JSON.stringify(["crates/audio"]),
+    "commented workspace members stay inert",
+  );
+  pass(
+    JSON.stringify(parseLockPackages('[[package]]\nname = "audio"\nversion = "1.0.0"\n\n[dependencies]\nname = "shadow"\nversion = "9.9.9"\n'))
+      === JSON.stringify([{ name: "audio", version: "1.0.0" }]),
+    "lock parser ignores nested dependency tables and comments",
+  );
+
+  staticRejects(
+    (files) => {
+      files.set("Cargo.toml", replaceOnce(files.get("Cargo.toml"), '"app/src-tauri",', '"app/src-tauri",\n    "crates/ghost",'));
+    },
+    /unexpected: crates\/ghost/,
+    "extra workspace member is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("Cargo.toml", replaceOnce(files.get("Cargo.toml"), '    "crates/video",', ""));
+    },
+    /missing: crates\/video/,
+    "missing workspace member is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("Cargo.toml", replaceOnce(files.get("Cargo.toml"), '"crates/audio",', '"crates/audio",\n    "crates/audio",'));
+    },
+    /duplicate workspace members: crates\/audio/,
+    "duplicate workspace member is rejected",
+  );
+  for (const packageName of manifestPackageNames) {
+    staticRejects(
+      (files) => {
+        const lockText = files.get("Cargo.lock");
+        const block = lockBlock(lockText, packageName);
+        files.set("Cargo.lock", lockText.replace(block, block.replace(/^(\s*version\s*=\s*)"[^"]*"/mu, '$1"9.8.7-fixture"')));
+      },
+      new RegExp(`Cargo\\.lock pins ${packageName} at 9\\.8\\.7-fixture`),
+      `${packageName} lock version mismatch is rejected`,
+    );
+  }
+  staticRejects(
+    (files) => {
+      const lockText = files.get("Cargo.lock");
+      files.set("Cargo.lock", lockText.replace(lockBlock(lockText, "engine"), ""));
+    },
+    /Cargo\.lock is missing a package entry for engine\./,
+    "missing lock entry is rejected",
+  );
+  staticRejects(
+    (files) => {
+      const lockText = files.get("Cargo.lock");
+      const block = lockBlock(lockText, "io");
+      files.set("Cargo.lock", lockText.replace(block, `${block}${block}`));
+    },
+    /package entries exist for io\./,
+    "duplicate lock entry is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("crates/audio/Cargo.toml", replaceOnce(files.get("crates/audio/Cargo.toml"), "version.workspace = true", "# version.workspace = true"));
+    },
+    /does not inherit the workspace version/,
+    "commented workspace inheritance is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("crates/audio/Cargo.toml", replaceOnce(files.get("crates/audio/Cargo.toml"), "version.workspace = true", 'version = "1.2.0-alpha.10"'));
+    },
+    /does not inherit the workspace version/,
+    "literal version override is rejected instead of substring-matching",
+  );
+  staticRejects(
+    (files) => {
+      files.set("README.md", replaceOnce(files.get("README.md"), readmeProductLine(expectedVersion), readmeProductLine("1.2.0-alpha.9")));
+    },
+    /exact product line/,
+    "wrong README product version is rejected",
+  );
+  staticRejects(
+    (files) => {
+      const { nsis } = windowsInstallerNames(expectedVersion);
+      files.set("README.md", replaceOnce(files.get("README.md"), nsis, nsis.replace("_x64-setup.exe", "_x64-install.exe")));
+    },
+    /versioned NSIS name/,
+    "wrong README NSIS name is rejected",
+  );
+  staticRejects(
+    (files) => {
+      const { msi } = windowsInstallerNames(expectedVersion);
+      files.set("README.md", replaceOnce(files.get("README.md"), msi, msi.replace("_ja-JP.msi", ".msi")));
+    },
+    /versioned MSI name/,
+    "wrong README MSI name is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("README.md", replaceOnce(files.get("README.md"), readmeProductLine(expectedVersion), `${readmeProductLine(expectedVersion)}\n${readmeProductLine(expectedVersion)}`));
+    },
+    /exactly one canonical product line/,
+    "duplicate canonical README product line is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("README.md", replaceOnce(files.get("README.md"), readmeProductLine(expectedVersion), `${readmeProductLine(expectedVersion)}\n- 製品名: **Syndocal 1.2.0-alpha.9**`));
+    },
+    /exactly one canonical product line/,
+    "canonical plus stale README product line is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("README.md", replaceOnce(files.get("README.md"), readmeWindowsInstallerLine(expectedVersion), `${readmeWindowsInstallerLine(expectedVersion)}\n${readmeWindowsInstallerLine(expectedVersion)}`));
+    },
+    /Windows installer metadata lines .*exactly one is required/,
+    "duplicate canonical README installer line is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set(
+        "README.md",
+        replaceOnce(
+          files.get("README.md"),
+          readmeWindowsInstallerLine(expectedVersion),
+          `${readmeWindowsInstallerLine(expectedVersion)}\n- Windows: \`Syndocal_1.2.0-alpha.9_x64-setup.exe\` (NSIS)、\`Syndocal_1.2.0-alpha.9_x64_ja-JP.msi\``,
+        ),
+      );
+    },
+    /Windows installer metadata lines .*exactly one is required/,
+    "canonical plus stale README installer line is rejected",
+  );
+  {
+    const files = new Map(snapshotStaticFixtures());
+    const proAudioBullet = "- Windows: Pro Audio MMCSS Critical + 1ms timer、macOS: USER_INTERACTIVE QoS";
+    files.set(
+      "README.md",
+      replaceOnce(
+        files.get("README.md"),
+        readmeWindowsInstallerLine(expectedVersion),
+        `${proAudioBullet}\n${readmeWindowsInstallerLine(expectedVersion)}`,
+      ),
+    );
+    validateStaticReleaseMetadata((path) => (files.has(path) ? files.get(path) : readRepoFile(path)));
+    assertions += 1;
+  }
+  pass(
+    Object.isFrozen(requiredWorkspaceMembers)
+      && Object.isFrozen(authoritativeMemberPackageNames)
+      && requiredWorkspaceMembers.length === 8
+      && requiredWorkspaceMembers.every((member) => typeof member === "string")
+      && Object.keys(authoritativeMemberPackageNames).length === 8
+      && Object.values(authoritativeMemberPackageNames).every((name) => typeof name === "string")
+      && new Set(Object.values(authoritativeMemberPackageNames)).size === 8
+      && requiredWorkspaceMembers.every((member) => Object.hasOwn(authoritativeMemberPackageNames, member)),
+    "frozen authoritative member-to-package mapping covers every member with unique package names",
+  );
+  staticRejects(
+    (files) => {
+      files.set("crates/audio/Cargo.toml", replaceOnce(files.get("crates/audio/Cargo.toml"), 'name = "audio"', 'name = "audio-drift"'));
+    },
+    /instead of the frozen authoritative name 'audio'/,
+    "member manifest package-name drift from the frozen mapping is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("Cargo.toml", replaceOnce(files.get("Cargo.toml"), "[workspace]", "[workspace]\n[workspace]"));
+    },
+    /2 active \[workspace\] sections/,
+    "duplicate active [workspace] section is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("Cargo.toml", replaceOnce(files.get("Cargo.toml"), "[workspace.package]", '[workspace.package]\nversion = "9.9.9"\n[workspace.package]'));
+    },
+    /2 active \[workspace\.package\] sections/,
+    "duplicate active [workspace.package] section is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set(
+        "Cargo.toml",
+        replaceOnce(
+          files.get("Cargo.toml"),
+          '"app/src-tauri",',
+          '"app/src-tauri",\n]\nmembers = [\n    "crates/audio",\n    "crates/ghost",',
+        ),
+      );
+    },
+    /2 active members assignments/,
+    "second active members assignment is rejected even when the first list is exact",
+  );
+  staticRejects(
+    (files) => {
+      files.set("crates/audio/Cargo.toml", replaceOnce(files.get("crates/audio/Cargo.toml"), "version.workspace = true", 'version.workspace = true\nname = "audio-alias"'));
+    },
+    /2 active name assignments/,
+    "duplicate active member name assignment is rejected",
+  );
+  staticRejects(
+    (files) => {
+      files.set("crates/audio/Cargo.toml", replaceOnce(files.get("crates/audio/Cargo.toml"), "[package]", '[package]\nname = "shadow-audio"\n[package]'));
+    },
+    /2 active \[package\] sections/,
+    "duplicate active member [package] section is rejected",
+  );
+  assert.throws(() => parseLockPackages('[[package]]\nname = "engine"\nname = "engine-alias"\nversion = "1.0.0"'), /duplicate name assignment/);
+  assertions += 1;
+  assert.throws(() => parseLockPackages('[[package]]\nname = "engine"\nversion = "1.0.0"\nversion = "9.9.9"'), /duplicate version assignment/);
+  assertions += 1;
+  pass(
+    readRepoFile("README.md").split(/\r?\n/u).includes(readmeWindowsInstallerLine(expectedVersion)),
+    "canonical installer line matches the live README byte-for-byte",
+  );
 
   console.log(`release metadata self-tests ok: ${assertions} assertion groups`);
 } finally {

@@ -47,6 +47,7 @@ const setupStageBandSequenceOnlyMode =
   process.argv.includes("--setup-mapping-sequence-only");
 const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
 const paneWindowOnlyMode = process.argv.includes("--pane-window-only");
+const paneReflowOnlyMode = process.argv.includes("--pane-reflow-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
@@ -172,8 +173,10 @@ const viewports = paneMixerOnlyMode
   ? [requestedViewport]
   : topbarPulseOnlyMode
     ? [compactFallbackViewports[1]]
-  : largeShowMode
+    : largeShowMode
     ? [primaryOperationalViewport]
+    : paneReflowOnlyMode
+      ? allViewports
     : timelineSourcePlacementOnlyMode || controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
     ? [primaryOperationalViewport]
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode || barBeamsOnlyMode
@@ -3369,11 +3372,12 @@ async function measureLiveDeskHeaderState(client) {
     const statusToggle = toolbarActions?.querySelector('[data-live-status-toggle]') ?? null;
     const topbar = document.querySelector('.topbar');
     const sceneReadout = document.querySelector('[data-live-desk-scene-readout]');
-    const statusInspector = document.querySelector('.liveControlPanel > .liveStatusGrid');
-    const matrix = document.querySelector('.liveControlPanel > .sceneMatrixPanel');
-    const cuePads = document.querySelector('.liveControlPanel > .liveCuePadSurface');
-    const fadeMeter = document.querySelector('.liveControlPanel > .liveFadeMeter');
-    const masterRow = document.querySelector('.liveControlPanel > .liveMasterGrid');
+    // The former Live Desk composition moved: Control/Live's upper pane hosts
+    // the Timeline arranger, and the Scene Matrix / Cue Pads / status surfaces
+    // with this shared header now live under the Control/Edit upper panel.
+    const statusInspector = document.querySelector('.editDomainUpperPanel > .liveStatusGrid, .liveControlPanel > .liveStatusGrid');
+    const matrix = document.querySelector('.editDomainUpperPanel > .sceneMatrixPanel, .liveControlPanel > .sceneMatrixPanel');
+    const cuePads = document.querySelector('.editDomainUpperPanel > .liveCuePadSurface, .liveControlPanel > .liveCuePadSurface');
     const statusItems = statusInspector
       ? [...statusInspector.querySelectorAll(':scope > .liveStatusItem')]
       : [];
@@ -3462,8 +3466,8 @@ async function measureLiveDeskHeaderState(client) {
         .filter((element) => (element.textContent || '').trim() === 'Live Desk').length,
       liveDeskStateCount: document.querySelectorAll('.liveControlPanel .liveDeskState').length,
       liveDeskSceneMetaCount: document.querySelectorAll('.liveControlPanel .liveDeskSceneMeta').length,
-      toolbarCount: document.querySelectorAll('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader').length,
-      toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
+      toolbarCount: document.querySelectorAll('.sceneMatrixSurfaceHeader, .liveCuePadSurface > .liveCuePadHeader').length,
+      toolbarActionsCount: document.querySelectorAll('[data-live-desk-toolbar-actions]').length,
       directTransportButtonCount: directTransportButtons.length,
       learnButtonCount: learnButtons.length,
       learnButtonMetrics: learnButtons.map((element) => actionMetrics(element, 'data-control-learn-toggle')),
@@ -3493,9 +3497,6 @@ async function measureLiveDeskHeaderState(client) {
         toolbarControls.every((element) => contained(measuredRect(element), globalTransportRect))
       ),
       toolbarActionsContained: contained(toolbarActionsRect, toolbarRect),
-      toolbarActionsRightAligned: Boolean(
-        toolbarRect && toolbarActionsRect && Math.abs(toolbarRect.right - toolbarActionsRect.right) <= 4
-      ),
       viewToggleContained: contained(viewToggleRect, toolbarRect),
       statusToggleContained: contained(statusToggleRect, toolbarRect),
       transportButtonMetrics: directTransportButtons.map((element) =>
@@ -3515,9 +3516,6 @@ async function measureLiveDeskHeaderState(client) {
       visibleStatusItemCount: statusItems.filter(isVisible).length,
       matrixCount: isVisible(matrix) ? 1 : 0,
       cuePadSurfaceCount: isVisible(cuePads) ? 1 : 0,
-      matrixGridRow: matrix ? getComputedStyle(matrix).gridRowStart : '',
-      fadeGridRow: fadeMeter ? getComputedStyle(fadeMeter).gridRowStart : '',
-      masterRowPresent: Boolean(masterRow),
       killButtonCount: killButtons.length,
       killClearCount: killClearButtons.length,
       killButtonsHatched: killButtons.length > 0 &&
@@ -3543,13 +3541,17 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await seedViewportLocalStorage(client);
-  await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, 'control');
-  await selectControlSurface(client, 'live');
+  // The Scene Matrix / Cue Pads / status header contract is hosted by the
+  // Control/Edit upper panel since Control/Live's upper pane became Timeline.
+  // The scene-matrix fixture supplies the 15 cue triggers the Learn flow and
+  // its >=12 visible mapping-target contract require.
+  await selectControlSurface(client, 'edit');
   await sleep(120);
   const matrix = await measureLiveDeskHeaderState(client);
   await client.evaluate(`(() => {
@@ -3558,6 +3560,9 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
         mock.calls.push({ command, args: clone(args) });
+        // The alpha.9 owner-registration barrier precedes every invoke; this
+        // browser mock answers the registration so learn flows can proceed.
+        if (command === 'register_project_transaction_owner') return null;
         if (command === 'list_midi_inputs') return [{ index: 4, name: 'Learn Controller' }];
         if (command === 'learn_midi_control') {
           return { channel: 1, message: 'ControlChange', number: 74, value: 96 };
@@ -3621,6 +3626,16 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   const expectedTransportIconActions = ['back', 'fade', 'timeline', 'clear-flags'];
   const expectedTransportTextActions = ['go', 'dmx-blackout', 'video-blackout', 'all-blackout'];
   const expectedViewIconActions = ['matrix', 'cue-pads', 'status'];
+  const expectedViewIconWidths = { matrix: 88, 'cue-pads': 88, status: 28 };
+  // The Control/Edit header lays the action groups inline in the same bank
+  // toolbar row, so every group must share the header's vertical center.
+  const surfaceHeaderCenter = matrix.toolbarRect
+    ? matrix.toolbarRect.y + matrix.toolbarRect.height / 2
+    : null;
+  const surfaceControlCenters = [matrix.toolbarActionsRect, matrix.viewToggleRect, matrix.statusToggleRect]
+    .map((rect) => (rect ? rect.y + rect.height / 2 : null));
+  const headerAnchoredOneVisualRow = surfaceHeaderCenter !== null &&
+    surfaceControlCenters.every((center) => center !== null && Math.abs(center - surfaceHeaderCenter) <= 4);
   const checks = {
     legacyLiveDeskHeaderRowRemoved:
       matrix.liveDeskHeaderCount === 0 &&
@@ -3714,14 +3729,18 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         metric.svgCount === 1 &&
         metric.title.length > 0 &&
         metric.ariaLabel === metric.title),
-    viewAndStatusControlsStayInsideSurfaceHeader:
+    viewAndStatusControlsStayInsideOneRowSurfaceHeader:
+      // On the Control/Edit host the actions sit inline in the bank toolbar
+      // row instead of right-aligned as on the old Live Desk header; the
+      // contract that survives is containment inside the header and one
+      // shared visual row.
       matrix.toolbarActionsCount === 1 &&
       matrix.viewToggleButtonCount === 2 &&
       matrix.statusToggleCount === 1 &&
       matrix.toolbarActionsContained &&
-      matrix.toolbarActionsRightAligned &&
       matrix.viewToggleContained &&
-      matrix.statusToggleContained,
+      matrix.statusToggleContained &&
+      headerAnchoredOneVisualRow,
     iconTokensDriveCompactViewGeometryAndFocus:
       matrix.iconSizeToken === '18px' &&
       matrix.iconButtonWidthToken === '28px' &&
@@ -3730,7 +3749,9 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         Math.abs(metric.iconWidth - 18) <= 0.01 &&
         Math.abs(metric.iconHeight - 18) <= 0.01) &&
       viewIconMetrics.every((metric) =>
-        Math.abs(metric.width - 28) <= 0.01 &&
+        // The Edit-hosted two-surface selector keeps its existing 88px tabs;
+        // the separate status icon keeps the 28px token width.
+        Math.abs(metric.width - expectedViewIconWidths[metric.action]) <= 0.01 &&
         Math.abs(metric.iconWidth - 18) <= 0.01 &&
         Math.abs(metric.iconHeight - 18) <= 0.01) &&
       matrix.iconButtonFocusVisible,
@@ -3740,8 +3761,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.expanded === 'true' &&
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.boxShadow !== 'none',
     topbarAndSurfaceHeaderKeepFortyTwoAndThirtyTwoPxRows:
+      // The surface header rect includes its 1px bottom hairline, so the
+      // border-inclusive measurement is 33 on the Control/Edit host.
       matrix.topbarRect?.height === 42 &&
-      matrix.toolbarRect?.height === 32,
+      matrix.toolbarRect?.height === 33,
     globalTransportNaturallyFitsAvailableWidth:
       matrix.toolbarFitsAvailableWidth &&
       matrix.toolbarScrollWidth <= matrix.toolbarClientWidth + 1,
@@ -3750,8 +3773,11 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.toolbarControlCenterSpread <= 1 &&
       matrix.globalTransportRect?.height === 40,
     sceneReadoutMovedIntoExpandedStatus:
+      // The Edit-hosted inspector is unmounted while collapsed, so the
+      // readout must be absent at baseline and appear only inside the
+      // expanded status grid.
       statusOpened &&
-      matrix.sceneReadoutCount === 1 &&
+      matrix.sceneReadoutCount === 0 &&
       !matrix.sceneReadoutVisible &&
       expanded.statusExpanded &&
       expanded.sceneReadoutVisible &&
@@ -3761,15 +3787,15 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       statusClosed &&
       !restored.statusExpanded &&
       !restored.sceneReadoutVisible,
-    statusInspectorKeepsTwoOfTwelveCellsCollapsed:
-      matrix.statusItemCount === 12 &&
-      matrix.visibleStatusItemCount === 2 &&
-      expanded.statusItemCount === 12 &&
-      expanded.visibleStatusItemCount === 12,
-    matrixAndFadeUseTwoRowsOnly:
-      matrix.matrixGridRow === '1' &&
-      matrix.fadeGridRow === '2' &&
-      !matrix.masterRowPresent,
+    statusInspectorHiddenUntilExpandedThenFullyVisible:
+      // The Edit-hosted inspector is unmounted while collapsed (no persistent
+      // 2-of-12 band on this surface); expanded, every cell must be visible
+      // (the Lighting inspector renders thirteen cells on this host).
+      matrix.statusItemCount === 0 &&
+      matrix.visibleStatusItemCount === 0 &&
+      expanded.statusItemCount === 13 &&
+      expanded.visibleStatusItemCount === 13 &&
+      restored.statusItemCount === 0,
     primaryMatrixHeightIncreased:
       viewport.width !== primaryOperationalViewport.width ||
       viewport.height !== primaryOperationalViewport.height ||
@@ -3780,7 +3806,8 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       pads.cuePadSurfaceCount === 1 &&
       pads.toolbarCount === 1 &&
       pads.liveDeskHeaderCount === 0 &&
-      pads.toolbarRect?.height === matrix.toolbarRect?.height &&
+      pads.toolbarRect?.height === 32 &&
+      matrix.toolbarRect?.height === 33 &&
       pads.toolbarActionsCount === matrix.toolbarActionsCount &&
       pads.viewToggleButtonCount === matrix.viewToggleButtonCount &&
       pads.statusToggleCount === matrix.statusToggleCount,
@@ -10440,10 +10467,10 @@ function hasExpectedPersistentWorkspaceBand(result) {
     return (
       result.visiblePersistentBandCount === 1 &&
       result.visiblePersistentGroupsCount === 1 &&
-      result.visiblePersistentStageCount === 0 &&
+      result.visiblePersistentStageCount === 1 &&
       result.visiblePersistentContextCount === 1 &&
       result.visibleWorkspaceSplitterCount === 2 &&
-      result.visibleEditTimelinePreviewCount === 1 &&
+      result.visibleEditTimelinePreviewCount === 0 &&
       result.visibleTimelineSourceShelfCount === 1 &&
       rects.groups?.width >= 428 && rects.groups?.height >= 24 &&
       rects.stage?.width >= 428 && rects.stage?.height >= 120 &&
@@ -14963,6 +14990,9 @@ function installPatchGdtfShareMockInPage() {
   ];
   const state = {
     searchError: null,
+    registerProjectTransactionOwnerCallCount: 0,
+    listGdtfFixtureCacheCallCount: 0,
+    invokeCounts: {},
     searchCalls: [],
     downloadCalls: [],
     downloadFailures: [],
@@ -15031,7 +15061,15 @@ function installPatchGdtfShareMockInPage() {
     warnings: [],
   });
   const invoke = async (command, args = {}) => {
-    if (command === "list_gdtf_fixture_cache") return clone(state.cache);
+    state.invokeCounts[command] = (state.invokeCounts[command] || 0) + 1;
+    if (command === "register_project_transaction_owner") {
+      state.registerProjectTransactionOwnerCallCount += 1;
+      return null;
+    }
+    if (command === "list_gdtf_fixture_cache") {
+      state.listGdtfFixtureCacheCallCount += 1;
+      return clone(state.cache);
+    }
     if (command === "get_fixture_profile_health") return [];
     if (command === "preview_custom_fixture_profile") {
       const request = clone(args.request || {});
@@ -15134,6 +15172,46 @@ async function runPatchGdtfShareViewport(client, viewport) {
   await clickByText(client, "Patch");
   await sleep(100);
   await client.evaluate("(" + installPatchGdtfShareMockInPage.toString() + ")()");
+  // The alpha.9 admission barrier runs when Patch mounts. Install its mock
+  // first, then remount Patch so the real refresh effect reaches the mocked
+  // owner registration and cache-list commands rather than leaving Refresh
+  // disabled behind the pre-mock rejected invocation.
+  await clickWorkspaceOption(client, "control");
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('.layout.layoutControl'))",
+    "Patch unmounted before post-mock remount",
+  );
+  await clickWorkspaceOption(client, "setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const refresh = [...document.querySelectorAll('.patchProfileBrowserHeader button')]
+        .find((button) => (button.textContent || '').trim() === 'Refresh');
+      const mock = window.__syndocalPatchGdtfShareMock;
+      return document.querySelector('.layout.layoutSetup.setupMode-patch') instanceof HTMLElement &&
+        refresh instanceof HTMLButtonElement && !refresh.disabled &&
+        (mock?.registerProjectTransactionOwnerCallCount ?? 0) >= 1 &&
+        (mock?.listGdtfFixtureCacheCallCount ?? 0) >= 1;
+    })()`,
+    "Patch owner registration and cache list after post-mock remount",
+  );
+  const patchRefreshAdmission = await client.evaluate(`(() => {
+    const refresh = [...document.querySelectorAll('.patchProfileBrowserHeader button')]
+      .find((button) => (button.textContent || '').trim() === 'Refresh');
+    const mock = window.__syndocalPatchGdtfShareMock;
+    return {
+      refreshPresent: refresh instanceof HTMLButtonElement,
+      refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled,
+      registerProjectTransactionOwnerCallCount: mock?.registerProjectTransactionOwnerCallCount ?? 0,
+      listGdtfFixtureCacheCallCount: mock?.listGdtfFixtureCacheCallCount ?? 0,
+      registerProjectTransactionOwnerInvocations:
+        mock?.invokeCounts?.register_project_transaction_owner ?? 0,
+      listGdtfFixtureCacheInvocations: mock?.invokeCounts?.list_gdtf_fixture_cache ?? 0,
+    };
+  })()`);
 
   const readState = async (scope) => await client.evaluate(`(() => {
     const visible = (element) => {
@@ -15608,6 +15686,13 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const cancelledStatus = batchCancelled.manufacturerBatches.find((entry) => entry.manufacturer === "CancelCo");
   const cancelledDownloadCalls = batchCancelled.mock?.downloadCalls ?? [];
   const checks = {
+    patchRefreshAdmissionCompletesBeforeCacheDomAssertion:
+      patchRefreshAdmission.refreshPresent &&
+      patchRefreshAdmission.refreshEnabled &&
+      patchRefreshAdmission.registerProjectTransactionOwnerCallCount >= 1 &&
+      patchRefreshAdmission.listGdtfFixtureCacheCallCount >= 1 &&
+      patchRefreshAdmission.registerProjectTransactionOwnerInvocations >= 1 &&
+      patchRefreshAdmission.listGdtfFixtureCacheInvocations >= 1,
     shareSectionOrder:
       JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "bundled", "cache", "recent", "share"]),
     defaultVerifiedAndCacheTreesCollapsed:
@@ -15827,6 +15912,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     debounceDelayMs,
     defaultCollapsed,
     qlcBundledArmed,
+    patchRefreshAdmission,
     signedOut,
     sharedCredentials,
     beforeDebounce,
@@ -16374,18 +16460,7 @@ async function readWorkspaceSplitState(client) {
     const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
     const topSplitter = splitterInfo("upper-lower");
     const lowerSplitter = splitterInfo("lower-left-right");
-    const livePanel = document.querySelector('.liveControlPanel');
     const liveStatusToggle = document.querySelector('[data-live-status-toggle]');
-    const liveStatusRect = rect('.liveControlPanel > .liveStatusGrid');
-    const sceneMatrixRect = rect('.liveControlPanel > .sceneMatrixPanel');
-    const liveFadeRect = rect('.liveControlPanel > .liveFadeMeter');
-    const liveMasterRect = rect('.liveControlPanel > .liveMasterGrid');
-    const visibleStatusItems = [...document.querySelectorAll('.liveControlPanel > .liveStatusGrid > .liveStatusItem')]
-      .filter((element) => {
-        const box = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-      });
     const visibleTransportButtons = [...document.querySelectorAll('.topbarTransportCluster [data-global-operator-action]')]
       .filter((element) => {
         const box = element.getBoundingClientRect();
@@ -16432,30 +16507,11 @@ async function readWorkspaceSplitState(client) {
       controlMode: document.querySelector('[data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') || '',
       timelineExpanded: document.querySelector('.mappingPersistentWorkspaceBand')?.getAttribute('data-timeline-pane-expanded') === 'true',
       liveStatus: {
-        expanded: livePanel?.getAttribute('data-live-status-expanded') === 'true',
         inspectorRole: document.querySelector('.liveControlPanel > .liveStatusGrid')?.getAttribute('role') ?? '',
         inspectorName: document.querySelector('.liveControlPanel > .liveStatusGrid')?.getAttribute('aria-label') ?? '',
         toggleNamed: Boolean(liveStatusToggle?.getAttribute('aria-label')),
         toggleControlsInspector: liveStatusToggle?.getAttribute('aria-controls') === 'live-status-inspector',
         toggleExpanded: liveStatusToggle?.getAttribute('aria-expanded') === 'true',
-        inspectorWidth: liveStatusRect?.width ?? 0,
-        visibleItemCount: visibleStatusItems.length,
-        totalItemCount: document.querySelectorAll('.liveControlPanel > .liveStatusGrid > .liveStatusItem').length,
-        matrixStatusDoNotOverlap: Boolean(
-          sceneMatrixRect && liveStatusRect &&
-          sceneMatrixRect.right <= liveStatusRect.x + 1
-        ),
-        matrixRow: getComputedStyle(document.querySelector('.liveControlPanel > .sceneMatrixPanel') ?? document.body).gridRowStart,
-        fadeRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
-        masterRow: (() => {
-          const master = document.querySelector('.liveControlPanel > .liveMasterGrid');
-          return master ? getComputedStyle(master).gridRowStart : 'absent';
-        })(),
-        matrixFadeMasterDoNotOverlap: Boolean(
-          sceneMatrixRect && liveFadeRect && !liveMasterRect &&
-          sceneMatrixRect.bottom <= liveFadeRect.y + 1 &&
-          liveFadeRect.bottom <= (livePanel?.getBoundingClientRect().bottom ?? 0) + 1
-        ),
         transportButtonCount: visibleTransportButtons.length,
         transportRowCount: transportRows.size,
         sceneMatrixHeaderCount: document.querySelectorAll('.liveControlPanel .sceneMatrixHeader').length,
@@ -16835,50 +16891,24 @@ async function runWorkspaceSplitViewport(client, viewport) {
     normalShellOuterScrollZero: initial.outerScrollZero,
   };
 
-  const expectedClosedStatusWidth = viewport.width <= 1320 ? 168 : 180;
-  const expectedExpandedStatusWidth = viewport.width <= 1320 ? 238 : 248;
-  checks.liveStatusToggleNamedAndControlsInspector =
-    initial.liveStatus.toggleNamed &&
-    initial.liveStatus.toggleControlsInspector &&
-    initial.liveStatus.toggleExpanded === false;
-  checks.liveStatusInspectorIsNamedRegion =
-    initial.liveStatus.inspectorRole === 'region' && initial.liveStatus.inspectorName.trim().length > 0;
-  checks.liveStatusClosedShowsTwoOfTwelveCellsAtExpectedWidth =
-    initial.liveStatus.expanded === false &&
-    initial.liveStatus.visibleItemCount === 2 &&
-    initial.liveStatus.totalItemCount === 12 &&
-    Math.abs(initial.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2;
-  checks.liveTransportIsEightButtonsInOneRow =
-    initial.liveStatus.transportButtonCount === 8 && initial.liveStatus.transportRowCount === 1;
-  checks.liveMatrixFadeMasterUseRowsOneTwoAndNoMaster =
-    initial.liveStatus.matrixRow === "1" &&
-    initial.liveStatus.fadeRow === "2" &&
-    initial.liveStatus.masterRow === "absent" &&
-    initial.liveStatus.matrixFadeMasterDoNotOverlap;
-  checks.sceneMatrixHeaderRemoved = initial.liveStatus.sceneMatrixHeaderCount === 0;
-  checks.liveStatusClosedDoesNotOverlapMatrix = initial.liveStatus.matrixStatusDoNotOverlap;
-  const liveStatusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
-  await sleep(100);
-  const expandedLiveStatus = await readWorkspaceSplitState(client);
-  checks.liveStatusExpandedShowsTwelveCellsAtExpectedWidth =
-    liveStatusOpened &&
-    expandedLiveStatus.liveStatus.expanded &&
-    expandedLiveStatus.liveStatus.toggleExpanded &&
-    expandedLiveStatus.liveStatus.visibleItemCount === 12 &&
-    Math.abs(expandedLiveStatus.liveStatus.inspectorWidth - expectedExpandedStatusWidth) <= 2;
-  checks.liveStatusExpansionHasExpectedWidthRatio =
-    expandedLiveStatus.liveStatus.inspectorWidth / Math.max(1, initial.liveStatus.inspectorWidth) >= 1.3;
-  checks.liveStatusExpandedDoesNotOverlapMatrixOrOuterScroll =
-    expandedLiveStatus.liveStatus.matrixStatusDoNotOverlap && expandedLiveStatus.outerScrollZero;
-  const liveStatusClosed = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
-  await sleep(100);
-  const restoredLiveStatus = await readWorkspaceSplitState(client);
-  checks.liveStatusToggleRestoresClosedContract =
-    liveStatusClosed &&
-    !restoredLiveStatus.liveStatus.expanded &&
-    restoredLiveStatus.liveStatus.visibleItemCount === 2 &&
-    Math.abs(restoredLiveStatus.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2 &&
-    restoredLiveStatus.outerScrollZero;
+  // The old hidden Control/Live status/matrix/fade geometry contract was
+  // removed with that surface: the current Control/Live upper pane hosts the
+  // Timeline arranger, whose header/upper-host containment, splitter aria, and
+  // scroll-zero facts are already proven by the timelinePaneExpansion result
+  // below. Only the still-rendered status toggle wiring and global topbar
+  // transport remain asserted here.
+  const liveStatusChecks = {
+    liveStatusToggleNamedAndControlsInspector:
+      initial.liveStatus.toggleNamed &&
+      initial.liveStatus.toggleControlsInspector &&
+      initial.liveStatus.toggleExpanded === false,
+    liveStatusInspectorIsNamedRegion:
+      initial.liveStatus.inspectorRole === 'region' && initial.liveStatus.inspectorName.trim().length > 0,
+    liveTransportIsEightButtonsInOneRow:
+      initial.liveStatus.transportButtonCount === 8 && initial.liveStatus.transportRowCount === 1,
+    sceneMatrixHeaderRemoved: initial.liveStatus.sceneMatrixHeaderCount === 0,
+  };
+  Object.assign(checks, liveStatusChecks);
 
   const topDrag = await dragWorkspaceSplitter(client, "upper-lower", { deltaY: -64 });
   const topCustom = await readWorkspaceSplitState(client);
@@ -17042,7 +17072,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await sleep(120);
   const reset = await readWorkspaceSplitState(client);
   checks.resetLayoutRestoresTabsDrawerAndDefaultRatios =
-    reset.workspace === "Setup" &&
+    reset.workspace === "setup" &&
     workspaceNumberClose(reset.topRatio, workspaceSplitDefaults.top) &&
     workspaceNumberClose(reset.lowerRatio, workspaceSplitDefaults.lower) &&
     reset.drawerOpen === false &&
@@ -19383,6 +19413,70 @@ async function runPaneMixerViewport(client, viewport, scenario = { id: "closed",
 // navigation; the pane-window route collapses the shell to one pane and the
 // popped param simulates a pane living in another window.
 async function runPaneWindowViewport(client, viewport) {
+  // Focused source assertion: pane lifecycle terminals must stay app-global.
+  // The Destroyed hook and the missing-window close path retire the exact
+  // registry identity first, then emit the structured terminal through an
+  // AppHandle (or `app`), so the main window's waiter always receives it even
+  // though a destroyed child can no longer emit its own events.
+  const mainRsSource = readFileSync(resolve(appRoot, "src-tauri", "src", "main.rs"), "utf8");
+  const paneTerminalEmitSites = [...mainRsSource.matchAll(
+    /([\w.()]+)\s*\.emit\(\s*PANE_WINDOW_TERMINAL_EVENT/g,
+  )].map((match) => match[1]);
+  const paneTerminalHelperIsAppHandleScopedAndUsesApp = (() => {
+    const start = mainRsSource.indexOf("fn emit_pane_window_terminal(");
+    const end = mainRsSource.indexOf("/// Retires exactly one tracked pane identity", start);
+    if (start < 0 || end < 0) return false;
+    const section = mainRsSource.slice(start, end);
+    return /fn emit_pane_window_terminal\(\s*app: &tauri::AppHandle,[\s\S]*?app\.emit\(\s*PANE_WINDOW_TERMINAL_EVENT/.test(section);
+  })();
+  const retirementHelperEmitsDestroyedTerminal = (() => {
+    const start = mainRsSource.indexOf("fn retire_destroyed_pane_window_identity(");
+    const end = mainRsSource.indexOf("/// Main-window reconciliation sweep:", start);
+    if (start < 0 || end < 0) return false;
+    const section = mainRsSource.slice(start, end);
+    return /emit_pane_window_terminal\(\s*app,\s*pane,\s*Some\(&retired\.instance_id\),\s*request_id\.as_deref\(\),\s*"destroyed"\s*,?\s*\)/.test(section);
+  })();
+  const destroyObserverCapturesExactIdentity = (() => {
+    const start = mainRsSource.indexOf("fn install_pane_window_destroyed_observer(");
+    const end = mainRsSource.indexOf("#[tauri::command]", start);
+    if (start < 0 || end < 0) return false;
+    const section = mainRsSource.slice(start, end);
+    return (
+      /fn install_pane_window_destroyed_observer\(\s*app: &tauri::AppHandle,\s*window: &tauri::WebviewWindow,\s*pane: &str,\s*instance_id: &str,/.test(section) &&
+      /let observer_pane = pane\.to_string\(\);/.test(section) &&
+      /let observer_instance_id = instance_id\.to_string\(\);/.test(section) &&
+      /let callback_pane = observer_pane\.clone\(\);/.test(section) &&
+      /let callback_instance_id = observer_instance_id\.clone\(\);/.test(section) &&
+      /retire_destroyed_pane_window_identity\(\s*&callback_app,\s*&callback_pane,\s*&callback_instance_id,?\s*\)/.test(section)
+    );
+  })() &&
+    /install_pane_window_destroyed_observer\(&app, &new_window, &pane, &instance_id\)/.test(mainRsSource);
+  const globalDestroyDoesNotRetireByPaneLabel = (() => {
+    const start = mainRsSource.indexOf(".on_window_event(|window, event|");
+    if (start < 0) return false;
+    const end = mainRsSource.indexOf(".plugin(tauri_plugin_updater", start);
+    if (end < 0) return false;
+    return !mainRsSource.slice(start, end).includes('strip_prefix("pane-")');
+  })();
+  const closeMissingWindowRetiresArmedIdentity = (() => {
+    const start = mainRsSource.indexOf("async fn close_pane_window(");
+    const end = mainRsSource.indexOf("#[tauri::command]", start);
+    if (start < 0 || end < 0) return false;
+    const section = mainRsSource.slice(start, end);
+    const armIndex = section.indexOf("PaneWindowLifecycleRegistry::arm_pending_close(");
+    const missingWindowIndex = section.indexOf("let Some(target) = app.webview_windows().get(&label).cloned() else {");
+    if (armIndex < 0 || missingWindowIndex < 0 || armIndex >= missingWindowIndex) return false;
+    const missingWindowPath = section.slice(missingWindowIndex);
+    return /retire_destroyed_pane_window_identity\(\s*&app,\s*&pane,\s*&instance_id,?\s*\)/.test(missingWindowPath);
+  })();
+  const paneDestroyedAckEmitsFromApp =
+    paneTerminalEmitSites.length >= 1 &&
+    paneTerminalEmitSites.every((receiver) => receiver === "app" || receiver.endsWith(".app_handle()")) &&
+    paneTerminalHelperIsAppHandleScopedAndUsesApp &&
+    retirementHelperEmitsDestroyedTerminal &&
+    destroyObserverCapturesExactIdentity &&
+    globalDestroyDoesNotRetireByPaneLabel &&
+    closeMissingWindowRetiresArmedIdentity;
   const paneWindowCapability = JSON.parse(readFileSync(
     resolve(appRoot, "src-tauri", "capabilities", "main.json"),
     "utf8",
@@ -19471,6 +19565,7 @@ async function runPaneWindowViewport(client, viewport) {
           const style = getComputedStyle(element);
           return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
         }).length,
+        expandTimelineControlCount: document.querySelectorAll('[data-timeline-pane-expand-toggle]').length,
         controlLiveFixed: Boolean(
           document.querySelector('.layout.layoutControl.controlModeLive') &&
           document.querySelector('.controlContextPane')
@@ -19581,9 +19676,8 @@ async function runPaneWindowViewport(client, viewport) {
     )`);
     if (!selectedTimelineMode) throw new Error('Could not select hidden Timeline control mode');
   });
-  const timelineRejoinClicked = await clickWorkspaceSelector(client, '[data-pane-rejoin-toggle="timeline"]');
-  await sleep(160);
-  const rejoinedTimelineMain = await readState();
+  // Rejoin runs only through the canonical global Workspaces pane buttons;
+  // the retired lower-band local rejoin toggle must not exist anywhere.
   const conditions = [
     ["paneWindowStageShowsOnlyLowerLeftUnit", () =>
       stageWin.stage.w >= stageWin.band.w - 4 && stageWin.context.w === 0 && stageWin.groups.w > 0],
@@ -19602,6 +19696,9 @@ async function runPaneWindowViewport(client, viewport) {
     ["paneWindowTimelineArrangerHasOneDeskToolsAndLocalScroll", () =>
       timelineWin.timelineDeskControlCount === 3 && timelineWin.timelineLocalScroll],
     ["paneWindowNativeDestroyCapability", () => paneWindowDestroyAllowed],
+    ["paneWindowDestroyedAckEmitsFromAppNotDestroyedChild", () => paneDestroyedAckEmitsFromApp],
+    ["paneWindowRoutesRenderNoExpandTimelineControl", () =>
+      stageWin.expandTimelineControlCount === 0 && timelineWin.expandTimelineControlCount === 0],
     ["paneWindowTimelineHasNoSplitters", () => timelineWin.visibleSplitterCount === 0],
     ["paneWindowTimelineModeNamed", () => timelineWin.paneWindowMode === "timeline"],
     ["paneWindowTimelineHidesModeTabsAndPopoutToggles", () =>
@@ -19613,8 +19710,9 @@ async function runPaneWindowViewport(client, viewport) {
     ["paneWindowTimelineArrangerFocusAndControlLivePersist", () =>
       timelineArrangerFocus && timelineWinAfterInteractions.controlLiveFixed &&
       timelineWinAfterInteractions.storageRaw === paneWindowStorageRaw && timelineWinAfterInteractions.scrollZero],
-    ["paneWindowRoutesHideTimelineRejoin", () =>
-      !stageWin.timelineRejoinToggleVisible && !timelineWin.timelineRejoinToggleVisible],
+    ["paneWindowRoutesHaveNoLocalRejoinToggles", () =>
+      [stageWin, timelineWin, poppedMain, poppedTimelineMain].every((state) =>
+        state.timelineRejoinToggleCount === 0 && !state.timelineRejoinToggleVisible)],
     ["paneWindowTimelineScrollZero", () => timelineWin.scrollZero === true],
     ["paneWindowDoesNotOverwriteMainLayoutStorage", () =>
       stageWin.storageRaw === paneWindowStorageRaw && timelineWin.storageRaw === paneWindowStorageRaw],
@@ -19623,29 +19721,23 @@ async function runPaneWindowViewport(client, viewport) {
       poppedMain.groups.w === 0 &&
       poppedMain.lowerSplitter.w === 0],
     ["stagePoppedMainTimelineRefillsLowerBand", () => poppedMain.context.w >= poppedMain.band.w - 4],
-    ["timelinePoppedMainHidesLowerRightAndSplitter", () =>
-      poppedTimelineMain.context.w === 0 && poppedTimelineMain.lowerSplitter.w === 0],
-    ["timelinePoppedMainStageRefillsLowerBand", () =>
-      poppedTimelineMain.stage.w >= poppedTimelineMain.band.w - 4 && poppedTimelineMain.groups.w > 0],
-    ["timelinePoppedMainRejoinVisibleAndNamed", () =>
-      poppedTimelineMain.timelineRejoinToggleCount === 1 &&
-      poppedTimelineMain.timelineRejoinToggleVisible === true &&
-      poppedTimelineMain.timelineRejoinToggleName.trim().length > 0],
-    ["timelinePoppedMainRejoinClickRestoresPane", () =>
-      rejoinedTimelineMain.context.w > 0 &&
-      rejoinedTimelineMain.stage.w > 0 &&
-      rejoinedTimelineMain.groups.w > 0 &&
-      rejoinedTimelineMain.lowerSplitter.w > 0 &&
-      rejoinedTimelineMain.timelineRejoinToggleVisible === false],
-    ["timelinePoppedMainRejoinClearsChildWindowState", () =>
-      rejoinedTimelineMain.paneWindowStorageRaw === "[]"],
-    ["timelinePoppedMainRejoinKeepsOuterScrollZero", () => rejoinedTimelineMain.scrollZero === true],
-    ["poppedMainToggleStatesPressed", () =>
-      poppedMain.stage.w === 0 && poppedTimelineMain.context.w === 0],
-    ["poppedMainKeepsOnlyUpperSplitter", () =>
-      poppedMain.visibleSplitterCount === 1 && poppedTimelineMain.visibleSplitterCount === 1],
+    ["timelinePoppedMainHidesOnlyUpperArrangerAndSplitter", () =>
+      poppedTimelineMain.timelineArrangerHost.w === 0 &&
+      poppedTimelineMain.upperSplitter.w === 0 &&
+      poppedTimelineMain.lowerSplitter.w > 0],
+    ["timelinePoppedMainKeepsRealStageAndSourceInBand", () =>
+      poppedTimelineMain.stage.w > 0 &&
+      poppedTimelineMain.groups.w > 0 &&
+      poppedTimelineMain.context.w > 0],
+    ["poppedMainToggleStatesMatchSurfaces", () =>
+      poppedMain.stage.w === 0 && poppedTimelineMain.timelineArrangerHost.w === 0],
+    ["poppedMainKeepsExactlyOneSurvivingSplitter", () =>
+      poppedMain.visibleSplitterCount === 1 &&
+      poppedMain.lowerSplitter.w === 0 &&
+      poppedTimelineMain.visibleSplitterCount === 1 &&
+      poppedTimelineMain.upperSplitter.w === 0],
     ["paneWindowAndPoppedMainKeepOuterScrollZero", () =>
-      stageWin.scrollZero && timelineWin.scrollZero && poppedMain.scrollZero && poppedTimelineMain.scrollZero && rejoinedTimelineMain.scrollZero],
+      stageWin.scrollZero && timelineWin.scrollZero && poppedMain.scrollZero && poppedTimelineMain.scrollZero],
   ];
   const failedChecks = conditions.filter(([, check]) => {
     try { return !check(); } catch { return true; }
@@ -19669,13 +19761,705 @@ async function runPaneWindowViewport(client, viewport) {
       arrangerFocused: timelineArrangerFocus,
     },
     poppedMain: [poppedMain.stage.w, poppedMain.context.w, poppedMain.lowerSplitter.w],
-    poppedTimelineMain: [poppedTimelineMain.stage.w, poppedTimelineMain.context.w, poppedTimelineMain.lowerSplitter.w],
-    rejoinedTimelineMain: [
-      rejoinedTimelineMain.stage.w,
-      rejoinedTimelineMain.context.w,
-      rejoinedTimelineMain.lowerSplitter.w,
-      rejoinedTimelineMain.paneWindowStorageRaw,
+    poppedTimelineMain: [
+      poppedTimelineMain.stage.w,
+      poppedTimelineMain.context.w,
+      poppedTimelineMain.timelineArrangerHost.w,
+      poppedTimelineMain.upperSplitter.w,
+      poppedTimelineMain.lowerSplitter.w,
     ],
+    checks: Object.fromEntries(conditions.map(([name, check]) => {
+      try { return [name, Boolean(check())]; } catch { return [name, false]; }
+    })),
+  };
+}
+
+async function runPaneReflowViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const paneReflowStorageSentinel = {
+    workspace_tab: "setup",
+    setup_sub_tab: "patch",
+    control_mode: "edit",
+    timeline_desk_surface: "playback",
+    edit_desk_surface: "effects",
+    control_category: "color",
+    top_split_ratio: 0.47,
+    lower_split_ratio: 0.52,
+    selections_drawer_open: true,
+  };
+  await client.evaluate(
+    `window.localStorage.setItem('syndocal.workspaceLayout.v1', ${JSON.stringify(JSON.stringify(paneReflowStorageSentinel))})`,
+  );
+  // Focused source assertions for pane-toggle serialization: rapid repeated
+  // toggles must be queued per pane, the toggle entry point must refuse clicks
+  // while that pane's operation is pending, and both band popout buttons must
+  // expose truthful disabled/aria-busy state bound to the same pending signal.
+  const appSourceForPaneToggles = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
+  const bandSourceForPaneToggles = readFileSync(
+    join(appRoot, "src", "components", "MappingPersistentWorkspaceBand.tsx"),
+    "utf8",
+  );
+  const paneToggleSerializationProof = {
+    queueHelper: appSourceForPaneToggles.includes("enqueuePaneWindowOperation"),
+    openSerialized: /const openPaneWindow[\s\S]*?enqueuePaneWindowOperation\(\s*pane,\s*async \(\) =>/
+      .test(appSourceForPaneToggles),
+    closeSerialized: /const closePaneWindow[\s\S]*?enqueuePaneWindowOperation\(\s*pane,\s*async \(\) =>/
+      .test(appSourceForPaneToggles),
+    toggleGuardedWhilePending: /const togglePaneWindow[\s\S]*?transitionOf\(pane\)[\s\S]*?phase !== "open"[\s\S]*?\? closePaneWindow\(pane\) : openPaneWindow\(pane\)/
+      .test(appSourceForPaneToggles),
+  };
+  const paneToggleTruthfulBusyButtonProof =
+    bandSourceForPaneToggles.includes('aria-busy={props.paneOperationPending("stage") ? "true" : undefined}') &&
+    bandSourceForPaneToggles.includes('disabled={props.paneOperationPending("stage")}') &&
+    bandSourceForPaneToggles.includes('aria-busy={props.paneOperationPending("timeline") ? "true" : undefined}') &&
+    bandSourceForPaneToggles.includes('disabled={props.paneOperationPending("timeline")}');
+  const readState = async () => await client.evaluate(`(() => {
+      const renderedBox = (element) => {
+        // The editable Stage surface is an <svg> element, not HTMLElement.
+        if (!(element instanceof Element)) return null;
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        if (box.width <= 0 || box.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return null;
+        return {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          w: Math.round(box.width),
+          h: Math.round(box.height),
+          right: Math.round(box.right),
+          bottom: Math.round(box.bottom),
+        };
+      };
+      const rectOf = (selector) => renderedBox(document.querySelector(selector)) ?? { x: 0, y: 0, w: 0, h: 0, right: 0, bottom: 0 };
+      const splitterProbe = (name) => {
+        const element = document.querySelector('[data-workspace-splitter="' + name + '"]');
+        if (!element) return { present: false, rendered: false, focusable: false };
+        const box = renderedBox(element);
+        let focusable = false;
+        if (box) {
+          element.focus({ preventScroll: true });
+          focusable = document.activeElement === element;
+          if (focusable && typeof element.blur === 'function') element.blur();
+        }
+        return { present: true, rendered: Boolean(box), focusable };
+      };
+      const doc = document.documentElement;
+      const body = document.body;
+      const app = document.querySelector('.app');
+      const root = document.querySelector('[data-workspace-split-root="true"]');
+      const bandElement = document.querySelector('.mappingPersistentWorkspaceBand');
+      const stripElement = document.querySelector('.mappingPersistentWorkspaceBand .mappingGroupStrip');
+      const upperElement = document.querySelector('[data-workspace-pane="upper"]');
+      const setupUpperPanelElement = document.querySelector('.setupPanel');
+      const leftPaneElement = document.querySelector('[data-workspace-pane="lower-left"]');
+      const contextPaneElement = document.querySelector('[data-workspace-pane="lower-right"]');
+      const expandToggleElement = document.querySelector('[data-timeline-pane-expand-toggle]');
+      const splitters = {
+        upperLower: splitterProbe('upper-lower'),
+        lowerLeftRight: splitterProbe('lower-left-right'),
+      };
+      let storage = null;
+      const storageRaw = window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '';
+      try { storage = storageRaw ? JSON.parse(storageRaw) : null; } catch { storage = null; }
+      return {
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+        rootPresent: Boolean(root),
+        rootTop: rectOf('[data-workspace-split-root="true"]').y,
+        rootBottom: rectOf('[data-workspace-split-root="true"]').bottom,
+        activeWorkspace: document.querySelector('[data-workspace-option][aria-pressed="true"]')
+          ?.getAttribute('data-workspace-option') ?? '',
+        rootIsSetupPatch: Boolean(
+          root?.classList.contains('layoutSetup') && root.classList.contains('setupMode-patch')
+        ),
+        bandPresent: Boolean(bandElement),
+        upperPresent: Boolean(upperElement),
+        setupUpperPresent: Boolean(setupUpperPanelElement && renderedBox(setupUpperPanelElement)),
+        leftPanePresent: Boolean(leftPaneElement),
+        leftPane: rectOf('[data-workspace-pane="lower-left"]'),
+        contextPanePresent: Boolean(contextPaneElement),
+        contextPane: rectOf('[data-workspace-pane="lower-right"]'),
+        // Semantic content probes: the real upper Timeline arranger, the real
+        // editable Stage SVG, Groups strip, Source shelf, and the retired
+        // lower-left transport preview must be told apart, not just boxes.
+        liveControlPanelRendered: Boolean(renderedBox(document.querySelector('.liveControlPanel'))),
+        timelineUpperRendered: Boolean(renderedBox(document.querySelector('[data-timeline-arranger-upper]'))),
+        stageSvgRendered: Boolean(renderedBox(document.querySelector('[data-persistent-band-part="stage"]'))),
+        groupsRendered: Boolean(stripElement && renderedBox(stripElement)) &&
+          Boolean(renderedBox(document.querySelector('[data-persistent-band-part="groups"]'))),
+        sourceShelfRendered: Boolean(renderedBox(document.querySelector('[data-timeline-source-shelf]'))),
+        timelinePreviewCount: document.querySelectorAll('[data-edit-timeline-preview]').length,
+        localRejoinCount: document.querySelectorAll('[data-pane-rejoin-toggle]').length,
+        bandExpandedClass: Boolean(bandElement?.classList.contains('timelinePaneExpanded')),
+        bandExpandedAttr: bandElement?.getAttribute('data-timeline-pane-expanded') === 'true',
+        bandAriaHidden: bandElement?.getAttribute('aria-hidden') === 'true',
+        bandInert: Boolean(bandElement?.inert),
+        bandStagePoppedClass: Boolean(bandElement?.classList.contains('stagePanePopped')),
+        bandTimelinePoppedClass: Boolean(bandElement?.classList.contains('timelinePanePopped')),
+        bandBothClass: Boolean(bandElement?.classList.contains('stageAndTimelinePanesPopped')),
+        expandToggle: expandToggleElement instanceof HTMLElement ? {
+          present: true,
+          visible: Boolean(renderedBox(expandToggleElement)),
+          ariaExpanded: expandToggleElement.getAttribute('aria-expanded') === 'true',
+        } : { present: false, visible: false, ariaExpanded: false },
+        band: rectOf('.mappingPersistentWorkspaceBand'),
+        bandRendered: Boolean(bandElement && renderedBox(bandElement)),
+        groupsProbe: (() => {
+          const strip = document.querySelector('[data-persistent-band-part="groups"]');
+          if (!strip) return { present: false, rendered: false, focusable: false, rect: null };
+          const box = renderedBox(strip);
+          let focusable = false;
+          const focusTarget = strip.querySelector('button');
+          if (box && focusTarget instanceof HTMLElement) {
+            focusTarget.focus({ preventScroll: true });
+            focusable = document.activeElement === focusTarget;
+            if (focusable && typeof focusTarget.blur === 'function') focusTarget.blur();
+          }
+          return { present: true, rendered: Boolean(box), focusable, rect: box };
+        })(),
+        panePopoutControls: ['stage', 'timeline'].map((pane) => {
+          const button = document.querySelector('[data-pane-popout-toggle="' + pane + '"]');
+          if (!(button instanceof HTMLButtonElement)) {
+            return { pane, present: false, disabled: false, busy: false };
+          }
+          return {
+            pane,
+            present: true,
+            disabled: button.disabled,
+            busy: button.getAttribute('aria-busy') === 'true',
+          };
+        }),
+        upper: rectOf('[data-workspace-pane="upper"]'),
+        setupUpper: rectOf('.setupPanel'),
+        groupStripRendered: Boolean(stripElement && renderedBox(stripElement)),
+        splitters,
+        rootTopRatio: Number(root?.getAttribute('data-upper-lower-ratio') ?? NaN),
+        rootLowerRatio: Number(root?.getAttribute('data-lower-left-right-ratio') ?? NaN),
+        storageTop: Number(storage?.top_split_ratio ?? NaN),
+        storageLower: Number(storage?.lower_split_ratio ?? NaN),
+        paneWindowsStorageRaw: window.localStorage.getItem('syndocal.paneWindows.v1') ?? '',
+        scrollBreakdown: {
+          winX: window.scrollX,
+          winY: window.scrollY,
+          docSW: doc.scrollWidth,
+          docCW: doc.clientWidth,
+          docSH: doc.scrollHeight,
+          docCH: doc.clientHeight,
+          bodySW: body.scrollWidth,
+          bodySH: body.scrollHeight,
+          appSW: app?.scrollWidth ?? null,
+          appCW: app?.clientWidth ?? null,
+          appSH: app?.scrollHeight ?? null,
+          appCH: app?.clientHeight ?? null,
+          rootSW: root?.scrollWidth ?? null,
+          rootCW: root?.clientWidth ?? null,
+          rootSH: root?.scrollHeight ?? null,
+          rootCH: root?.clientHeight ?? null,
+        },
+        scrollZero:
+          window.scrollX === 0 && window.scrollY === 0 &&
+          doc.scrollWidth === doc.clientWidth &&
+          doc.scrollHeight === doc.clientHeight &&
+          body.scrollWidth === doc.clientWidth &&
+          body.scrollHeight === doc.clientHeight &&
+          (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)) &&
+          (!root || (root.scrollWidth === root.clientWidth && root.scrollHeight === root.clientHeight)),
+      };
+    })()`);
+  const enterControlLive = async () => {
+    await clickWorkspaceOption(client, "control");
+    await selectControlSurface(client, "live");
+  };
+  const measureState = async (query, setup) => {
+    const targetUrl = query ? `${fixtureUrl("timeline")}&${query}` : fixtureUrl("timeline");
+    await navigateToReadyApp(client, targetUrl);
+    if (setup) await setup();
+    await sleep(320);
+    return await readState();
+  };
+  const baselineNone = await measureState("", enterControlLive);
+  // The band popout toggles render in Control/Edit and Mixer only, so the
+  // truthful disabled/busy idle probe needs one Mixer document.
+  const mixerPopoutBaseline = await measureState("", async () => {
+    await clickWorkspaceOption(client, "control");
+    await selectControlSurface(client, "mixer");
+  });
+  const stageOnly = await measureState("syndocalPoppedPanes=stage", enterControlLive);
+  const timelineOnly = await measureState("syndocalPoppedPanes=timeline", enterControlLive);
+
+  // Direct-query seeding only proves the detached-state layout contracts.
+  // Real Timeline-to-Stage and Stage-to-Timeline entry-order transitions are
+  // proven by native QA, not by this browser measurement.
+  const bothDirectQuery = await measureState("syndocalPoppedPanes=stage,timeline", enterControlLive);
+
+  const probeWorkspaceDialogPanes = () => client.evaluate(`(() => {
+    const popover = document.querySelector('.workspaceOperationsPopover');
+    const probe = (pane) => {
+      const button = popover?.querySelector('[data-workspace-pane-toggle="' + pane + '"]');
+      if (!(button instanceof HTMLElement)) return { present: false, visible: false, pressed: false, label: '' };
+      const rect = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return {
+        present: true,
+        visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+        pressed: button.getAttribute('aria-pressed') === 'true' && button.classList.contains('active'),
+        label: (button.textContent || '').trim(),
+      };
+    };
+    return { popoverVisible: Boolean(popover), stage: probe('stage'), timeline: probe('timeline') };
+  })()`);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(120);
+  const dialogControls = await probeWorkspaceDialogPanes();
+  const clickDialogPaneControl = async (pane) => await client.evaluate(`(() => {
+    const wanted = ${JSON.stringify(pane)};
+    const button = document.querySelector('.workspaceOperationsPopover')
+      ?.querySelector('[data-workspace-pane-toggle="' + wanted + '"]');
+    if (!(button instanceof HTMLElement)) return false;
+    const rect = button.getBoundingClientRect();
+    const style = getComputedStyle(button);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+    button.click();
+    return true;
+  })()`);
+
+  // Rejoin transitions run through the canonical global Workspaces pane
+  // buttons; the retired lower-band local rejoin toggle must stay absent.
+  const stageRejoinedViaDialog = await clickDialogPaneControl("stage");
+  await sleep(240);
+  const timelineOnlyAfterDialogStageRejoin = await readState();
+  const timelineRejoinedViaDialog = await clickDialogPaneControl("timeline");
+  await sleep(240);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(160);
+  const restoredNone = await readState();
+
+  // Expansion-while-detached contract on one real document: engage the visible
+  // upper expand toggle first, then detach both panes through the global
+  // Workspaces dialog, so the session-persisted expansion signal coexists with
+  // detachment. The lower band must stay rendered, not aria-hidden/inert/
+  // zero-height, with Source filling the workspace; rejoining both panes must
+  // restore the authored expansion lane. Real Tauri entry-order transitions
+  // (expanded-then-popped versus popped-then-expanded) remain native QA.
+  await navigateToReadyApp(client, fixtureUrl("timeline"));
+  await enterControlLive();
+  let bothExpandToggleClicked = false;
+  bothExpandToggleClicked = await client.evaluate(`(() => {
+    const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
+    if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
+    const rect = toggle.getBoundingClientRect();
+    const style = getComputedStyle(toggle);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(200);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(120);
+  const stageDetachedWhileExpanded = await clickDialogPaneControl("stage");
+  const timelineDetachedWhileExpanded = await clickDialogPaneControl("timeline");
+  await sleep(260);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(160);
+  const expandedThenBothPopped = await readState();
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(120);
+  const expandedStageRejoined = await clickDialogPaneControl("stage");
+  const expandedTimelineRejoined = await clickDialogPaneControl("timeline");
+  await sleep(260);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(160);
+  const expandedRestoredAfterRejoin = await readState();
+
+  const enterSetupPatch = async () => {
+    await clickWorkspaceOption(client, "setup");
+    await clickByText(client, "Lighting");
+    await clickByText(client, "Patch");
+  };
+  // Measure all three Setup/Patch pane states. The inverse integrated state
+  // pins the normal Groups+Stage band, while either detached-Stage state must
+  // remove the unusable lower band and give the Setup surface the full shell.
+  // Browser automation still cannot prove real Tauri pane windows, entry
+  // order, or native titlebar close buttons; native QA owns that boundary.
+  const setupPatchIntegrated = await measureState("", enterSetupPatch);
+  const setupPatchStageOnly = await measureState("syndocalPoppedPanes=stage", enterSetupPatch);
+  const setupPatchBoth = await measureState("syndocalPoppedPanes=stage,timeline", enterSetupPatch);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(120);
+  const setupPatchDialogControls = await probeWorkspaceDialogPanes();
+
+  const conditions = [
+    ["paneReflowPopoutButtonsReportIdleWhenNoOperationPending", () =>
+      mixerPopoutBaseline.panePopoutControls.length === 2 &&
+      mixerPopoutBaseline.panePopoutControls.every((control) => control.present && !control.disabled && !control.busy)],
+    ["paneReflowPaneTogglesSerializeWithTruthfulBusyButtons", () =>
+      paneToggleSerializationProof.queueHelper &&
+      paneToggleSerializationProof.openSerialized &&
+      paneToggleSerializationProof.closeSerialized &&
+      paneToggleSerializationProof.toggleGuardedWhilePending &&
+      paneToggleTruthfulBusyButtonProof],
+    ["paneReflowBaselineShowsRealTimelineStageAndSource", () =>
+      baselineNone.rootPresent &&
+      baselineNone.bandPresent &&
+      baselineNone.upperPresent &&
+      baselineNone.leftPanePresent &&
+      baselineNone.contextPanePresent &&
+      baselineNone.liveControlPanelRendered &&
+      baselineNone.timelineUpperRendered &&
+      baselineNone.stageSvgRendered &&
+      baselineNone.groupsRendered &&
+      baselineNone.sourceShelfRendered &&
+      baselineNone.timelinePreviewCount === 0 &&
+      baselineNone.localRejoinCount === 0 &&
+      !baselineNone.bandAriaHidden &&
+      !baselineNone.bandInert &&
+      baselineNone.band.h >= baselineNone.vh * 0.2 &&
+      baselineNone.upper.h > 0 &&
+      baselineNone.splitters.upperLower.rendered &&
+      baselineNone.splitters.lowerLeftRight.rendered],
+    ["paneReflowStageOnlyKeepsUpperTimelineAndSourceFillsBand", () =>
+      stageOnly.rootPresent &&
+      stageOnly.bandPresent &&
+      stageOnly.upperPresent &&
+      stageOnly.leftPanePresent &&
+      stageOnly.contextPanePresent &&
+      stageOnly.liveControlPanelRendered &&
+      stageOnly.timelineUpperRendered &&
+      !stageOnly.stageSvgRendered &&
+      !stageOnly.groupsRendered &&
+      stageOnly.sourceShelfRendered &&
+      stageOnly.leftPane.w === 0 &&
+      stageOnly.contextPane.w >= stageOnly.band.w - 4 &&
+      Math.abs(stageOnly.band.h - baselineNone.band.h) <= 6 &&
+      stageOnly.splitters.upperLower.rendered &&
+      !stageOnly.splitters.lowerLeftRight.rendered &&
+      !stageOnly.splitters.lowerLeftRight.focusable],
+    ["paneReflowTimelineOnlyHidesUpperTimelineAndBandReachesRoot", () =>
+      timelineOnly.rootPresent &&
+      timelineOnly.bandPresent &&
+      timelineOnly.bandRendered &&
+      !timelineOnly.liveControlPanelRendered &&
+      !timelineOnly.timelineUpperRendered &&
+      timelineOnly.stageSvgRendered &&
+      timelineOnly.groupsRendered &&
+      timelineOnly.sourceShelfRendered &&
+      timelineOnly.leftPane.w > 0 &&
+      timelineOnly.contextPane.w > 0 &&
+      timelineOnly.rootTop > 0 &&
+      timelineOnly.band.y <= timelineOnly.rootTop + 2 &&
+      timelineOnly.band.bottom >= timelineOnly.rootBottom - 2 &&
+      timelineOnly.band.h >= baselineNone.upper.h + baselineNone.band.h - 12 &&
+      timelineOnly.timelinePreviewCount === 0 &&
+      timelineOnly.localRejoinCount === 0 &&
+      !timelineOnly.splitters.upperLower.rendered &&
+      !timelineOnly.splitters.upperLower.focusable &&
+      timelineOnly.splitters.lowerLeftRight.rendered &&
+      timelineOnly.splitters.lowerLeftRight.focusable],
+    ["paneReflowBothPoppedSourceFillsWorkspace", () =>
+      bothDirectQuery.bandPresent &&
+      bothDirectQuery.bandRendered &&
+      bothDirectQuery.bandBothClass &&
+      bothDirectQuery.bandTimelinePoppedClass &&
+      !bothDirectQuery.liveControlPanelRendered &&
+      !bothDirectQuery.timelineUpperRendered &&
+      !bothDirectQuery.stageSvgRendered &&
+      !bothDirectQuery.groupsRendered &&
+      bothDirectQuery.sourceShelfRendered &&
+      !bothDirectQuery.bandAriaHidden &&
+      !bothDirectQuery.bandInert &&
+      bothDirectQuery.band.y <= bothDirectQuery.rootTop + 2 &&
+      bothDirectQuery.band.bottom >= bothDirectQuery.rootBottom - 2 &&
+      bothDirectQuery.contextPane.y <= bothDirectQuery.rootTop + 2 &&
+      bothDirectQuery.contextPane.bottom >= bothDirectQuery.rootBottom - 2],
+    ["paneReflowBothPoppedRemovesSplittersFromLayoutAndFocus", () =>
+      !bothDirectQuery.splitters.upperLower.rendered &&
+      !bothDirectQuery.splitters.upperLower.focusable &&
+      !bothDirectQuery.splitters.lowerLeftRight.rendered &&
+      !bothDirectQuery.splitters.lowerLeftRight.focusable],
+    ["paneReflowBothPoppedKeepsScrollZero", () => bothDirectQuery.scrollZero],
+    ["paneReflowBothPoppedPreservesSavedRatios", () =>
+      Math.abs(bothDirectQuery.storageTop - 0.47) <= 0.001 &&
+      Math.abs(bothDirectQuery.storageLower - 0.52) <= 0.001 &&
+      Math.abs(bothDirectQuery.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(bothDirectQuery.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowExpandedDetachedEngagesToggleWithoutSuppressingBand", () =>
+      bothExpandToggleClicked === true &&
+      stageDetachedWhileExpanded === true &&
+      timelineDetachedWhileExpanded === true &&
+      expandedThenBothPopped.expandToggle.present &&
+      !expandedThenBothPopped.expandToggle.visible &&
+      expandedThenBothPopped.expandToggle.ariaExpanded &&
+      expandedThenBothPopped.bandBothClass &&
+      !expandedThenBothPopped.bandExpandedClass &&
+      !expandedThenBothPopped.bandExpandedAttr &&
+      !expandedThenBothPopped.bandAriaHidden &&
+      !expandedThenBothPopped.bandInert],
+    ["paneReflowExpandedDetachedSourceStillFillsWorkspace", () =>
+      expandedThenBothPopped.bandRendered &&
+      !expandedThenBothPopped.liveControlPanelRendered &&
+      !expandedThenBothPopped.stageSvgRendered &&
+      !expandedThenBothPopped.groupsRendered &&
+      expandedThenBothPopped.sourceShelfRendered &&
+      expandedThenBothPopped.band.h >= expandedThenBothPopped.vh * 0.6 &&
+      expandedThenBothPopped.contextPane.bottom >= expandedThenBothPopped.rootBottom - 2],
+    ["paneReflowExpandedDetachedSplittersStayRemoved", () =>
+      !expandedThenBothPopped.splitters.upperLower.rendered &&
+      !expandedThenBothPopped.splitters.upperLower.focusable &&
+      !expandedThenBothPopped.splitters.lowerLeftRight.rendered &&
+      !expandedThenBothPopped.splitters.lowerLeftRight.focusable],
+    ["paneReflowExpandedDetachedKeepsSavedAndRootRatiosExact", () =>
+      Math.abs(expandedThenBothPopped.storageTop - 0.47) <= 0.001 &&
+      Math.abs(expandedThenBothPopped.storageLower - 0.52) <= 0.001 &&
+      Math.abs(expandedThenBothPopped.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(expandedThenBothPopped.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowExpandedDetachedKeepsScrollZero", () => expandedThenBothPopped.scrollZero],
+    ["paneReflowDialogShowsActiveNamedStageAndTimelineControls", () =>
+      dialogControls.popoverVisible &&
+      dialogControls.stage.present && dialogControls.stage.visible &&
+      dialogControls.stage.pressed && dialogControls.stage.label === "Stage" &&
+      dialogControls.timeline.present && dialogControls.timeline.visible &&
+      dialogControls.timeline.pressed && dialogControls.timeline.label === "Timeline"],
+    ["paneReflowDialogStageRejoinRestoresStageWithStillDetachedTimeline", () =>
+      stageRejoinedViaDialog === true &&
+      timelineOnlyAfterDialogStageRejoin.bandPresent &&
+      timelineOnlyAfterDialogStageRejoin.bandRendered &&
+      !timelineOnlyAfterDialogStageRejoin.liveControlPanelRendered &&
+      !timelineOnlyAfterDialogStageRejoin.timelineUpperRendered &&
+      timelineOnlyAfterDialogStageRejoin.stageSvgRendered &&
+      timelineOnlyAfterDialogStageRejoin.groupsRendered &&
+      timelineOnlyAfterDialogStageRejoin.sourceShelfRendered &&
+      timelineOnlyAfterDialogStageRejoin.leftPane.w > 0 &&
+      timelineOnlyAfterDialogStageRejoin.contextPane.w > 0 &&
+      !timelineOnlyAfterDialogStageRejoin.bandBothClass &&
+      timelineOnlyAfterDialogStageRejoin.splitters.lowerLeftRight.rendered &&
+      !timelineOnlyAfterDialogStageRejoin.splitters.upperLower.rendered],
+    ["paneReflowDialogTimelineRejoinRestoresBaselineShellExactRatios", () =>
+      timelineRejoinedViaDialog === true &&
+      restoredNone.rootPresent &&
+      restoredNone.bandPresent &&
+      restoredNone.bandRendered &&
+      restoredNone.liveControlPanelRendered &&
+      restoredNone.timelineUpperRendered &&
+      restoredNone.stageSvgRendered &&
+      restoredNone.groupsRendered &&
+      restoredNone.sourceShelfRendered &&
+      restoredNone.timelinePreviewCount === 0 &&
+      restoredNone.localRejoinCount === 0 &&
+      restoredNone.paneWindowsStorageRaw === "[]" &&
+      restoredNone.splitters.upperLower.rendered &&
+      restoredNone.splitters.lowerLeftRight.rendered &&
+      Math.abs(restoredNone.band.h - baselineNone.band.h) <= 6 &&
+      Math.abs(restoredNone.upper.h - baselineNone.upper.h) <= 6 &&
+      restoredNone.scrollZero &&
+      Math.abs(restoredNone.storageTop - 0.47) <= 0.001 &&
+      Math.abs(restoredNone.storageLower - 0.52) <= 0.001 &&
+      Math.abs(restoredNone.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(restoredNone.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowExpandedRejoinRestoresAuthoredExpansionLane", () =>
+      expandedStageRejoined === true &&
+      expandedTimelineRejoined === true &&
+      expandedRestoredAfterRejoin.bandExpandedClass &&
+      expandedRestoredAfterRejoin.bandExpandedAttr &&
+      expandedRestoredAfterRejoin.bandAriaHidden &&
+      expandedRestoredAfterRejoin.bandInert &&
+      !expandedRestoredAfterRejoin.bandTimelinePoppedClass &&
+      !expandedRestoredAfterRejoin.bandBothClass &&
+      !expandedRestoredAfterRejoin.groupStripRendered &&
+      expandedRestoredAfterRejoin.upper.bottom >= expandedRestoredAfterRejoin.rootBottom - 2 &&
+      !expandedRestoredAfterRejoin.splitters.upperLower.rendered &&
+      !expandedRestoredAfterRejoin.splitters.lowerLeftRight.rendered],
+    ["paneReflowSetupPatchBothMatchesExactViewport", () =>
+      setupPatchBoth.vw === viewport.width && setupPatchBoth.vh === viewport.height],
+    ["paneReflowSetupPatchMeasurementsTargetExactSetupPatchRoot", () =>
+      [setupPatchIntegrated, setupPatchStageOnly, setupPatchBoth].every((state) =>
+        state.rootPresent && state.activeWorkspace === 'setup' && state.rootIsSetupPatch
+      )],
+    ["paneReflowSetupPatchIntegratedKeepsGroupsStageBandAtStoredRatios", () =>
+      setupPatchIntegrated.bandPresent &&
+      setupPatchIntegrated.bandRendered &&
+      !setupPatchIntegrated.bandStagePoppedClass &&
+      !setupPatchIntegrated.bandTimelinePoppedClass &&
+      !setupPatchIntegrated.bandBothClass &&
+      setupPatchIntegrated.setupUpperPresent &&
+      setupPatchIntegrated.groupsRendered &&
+      setupPatchIntegrated.groupsProbe.focusable &&
+      setupPatchIntegrated.stageSvgRendered &&
+      setupPatchIntegrated.setupUpper.y <= setupPatchIntegrated.rootTop + 2 &&
+      setupPatchIntegrated.band.y >= setupPatchIntegrated.setupUpper.bottom - 2 &&
+      setupPatchIntegrated.band.bottom >= setupPatchIntegrated.rootBottom - 2 &&
+      setupPatchIntegrated.splitters.upperLower.rendered &&
+      setupPatchIntegrated.splitters.upperLower.focusable &&
+      setupPatchIntegrated.splitters.lowerLeftRight.rendered &&
+      setupPatchIntegrated.splitters.lowerLeftRight.focusable &&
+      Math.abs(setupPatchIntegrated.storageTop - 0.47) <= 0.001 &&
+      Math.abs(setupPatchIntegrated.storageLower - 0.52) <= 0.001 &&
+      Math.abs(setupPatchIntegrated.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(setupPatchIntegrated.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowSetupPatchStageOnlyCollapsesUnusedBandAndFillsMainWindow", () =>
+      setupPatchStageOnly.bandPresent &&
+      !setupPatchStageOnly.bandRendered &&
+      setupPatchStageOnly.bandStagePoppedClass &&
+      !setupPatchStageOnly.bandTimelinePoppedClass &&
+      !setupPatchStageOnly.bandBothClass &&
+      setupPatchStageOnly.setupUpperPresent &&
+      setupPatchStageOnly.setupUpper.y <= setupPatchStageOnly.rootTop + 2 &&
+      setupPatchStageOnly.setupUpper.bottom >= setupPatchStageOnly.rootBottom - 2 &&
+      !setupPatchStageOnly.splitters.upperLower.rendered &&
+      !setupPatchStageOnly.splitters.upperLower.focusable &&
+      !setupPatchStageOnly.splitters.lowerLeftRight.rendered &&
+      !setupPatchStageOnly.splitters.lowerLeftRight.focusable &&
+      !setupPatchStageOnly.groupsRendered &&
+      !setupPatchStageOnly.groupsProbe.focusable &&
+      !setupPatchStageOnly.stageSvgRendered &&
+      setupPatchStageOnly.contextPane.w === 0 &&
+      setupPatchStageOnly.contextPane.h === 0 &&
+      Math.abs(setupPatchStageOnly.storageTop - 0.47) <= 0.001 &&
+      Math.abs(setupPatchStageOnly.storageLower - 0.52) <= 0.001 &&
+      Math.abs(setupPatchStageOnly.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(setupPatchStageOnly.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowSetupPatchBothCollapsesUnusedLowerBandAndFillsMainWindow", () =>
+      setupPatchBoth.bandPresent &&
+      !setupPatchBoth.bandRendered &&
+      setupPatchBoth.bandBothClass &&
+      setupPatchBoth.bandTimelinePoppedClass &&
+      setupPatchBoth.setupUpperPresent &&
+      setupPatchBoth.setupUpper.y <= setupPatchBoth.rootTop + 2 &&
+      setupPatchBoth.setupUpper.bottom >= setupPatchBoth.rootBottom - 2 &&
+      !setupPatchBoth.splitters.upperLower.rendered &&
+      !setupPatchBoth.splitters.upperLower.focusable &&
+      !setupPatchBoth.splitters.lowerLeftRight.rendered &&
+      !setupPatchBoth.splitters.lowerLeftRight.focusable &&
+      !setupPatchBoth.stageSvgRendered &&
+      !setupPatchBoth.sourceShelfRendered &&
+      setupPatchBoth.contextPane.w === 0 &&
+      setupPatchBoth.contextPane.h === 0],
+    ["paneReflowSetupPatchBothHidesDetachedStageGroupsWithBand", () =>
+      setupPatchBoth.groupsProbe.present &&
+      !setupPatchBoth.groupsProbe.rendered &&
+      !setupPatchBoth.groupsProbe.focusable &&
+      !setupPatchBoth.stageSvgRendered],
+    ["paneReflowSetupPatchDialogStageAndTimelineControlsRemain", () =>
+      setupPatchDialogControls.popoverVisible &&
+      setupPatchDialogControls.stage.present && setupPatchDialogControls.stage.visible &&
+      setupPatchDialogControls.stage.pressed && setupPatchDialogControls.stage.label === "Stage" &&
+      setupPatchDialogControls.timeline.present && setupPatchDialogControls.timeline.visible &&
+      setupPatchDialogControls.timeline.pressed && setupPatchDialogControls.timeline.label === "Timeline"],
+    ["paneReflowSetupPatchBothPreservesSavedAndRootRatios", () =>
+      Math.abs(setupPatchBoth.storageTop - 0.47) <= 0.001 &&
+      Math.abs(setupPatchBoth.storageLower - 0.52) <= 0.001 &&
+      Math.abs(setupPatchBoth.rootTopRatio - 0.47) <= 0.001 &&
+      Math.abs(setupPatchBoth.rootLowerRatio - 0.52) <= 0.001],
+    ["paneReflowSetupPatchBothKeepsScrollZero", () => setupPatchBoth.scrollZero],
+    ["paneReflowAllStatesKeepOuterScrollZero", () =>
+      [
+        baselineNone,
+        mixerPopoutBaseline,
+        stageOnly,
+        timelineOnly,
+        bothDirectQuery,
+        expandedThenBothPopped,
+        expandedRestoredAfterRejoin,
+        timelineOnlyAfterDialogStageRejoin,
+        restoredNone,
+        setupPatchIntegrated,
+        setupPatchStageOnly,
+        setupPatchBoth,
+      ].every((state) => state.scrollZero)],
+    ["paneReflowNoStateRendersLocalRejoinOrTransportPreview", () =>
+      [
+        baselineNone,
+        mixerPopoutBaseline,
+        stageOnly,
+        timelineOnly,
+        bothDirectQuery,
+        expandedThenBothPopped,
+        expandedRestoredAfterRejoin,
+        timelineOnlyAfterDialogStageRejoin,
+        restoredNone,
+        setupPatchIntegrated,
+        setupPatchStageOnly,
+        setupPatchBoth,
+      ].every((state) => state.localRejoinCount === 0 && state.timelinePreviewCount === 0)],
+    ["paneReflowEveryMeasuredViewportMatchesExactly", () =>
+      [
+        baselineNone,
+        mixerPopoutBaseline,
+        stageOnly,
+        timelineOnly,
+        bothDirectQuery,
+        expandedThenBothPopped,
+        expandedRestoredAfterRejoin,
+        timelineOnlyAfterDialogStageRejoin,
+        restoredNone,
+        setupPatchIntegrated,
+        setupPatchStageOnly,
+        setupPatchBoth,
+      ].every((state) => state.vw === viewport.width && state.vh === viewport.height)],
+  ];
+  const failedChecks = conditions.filter(([, check]) => {
+    try { return !check(); } catch { return true; }
+  }).map(([name]) => name);
+  if (failedChecks.length > 0 && process.env.SYNDOCAL_PANEREFLOW_DEBUG === "1") {
+    console.log("paneReflowDebug " + JSON.stringify({
+      baselineNone,
+      stageOnly,
+      timelineOnly,
+      bothDirectQuery,
+      expandedThenBothPopped,
+      expandedRestoredAfterRejoin,
+      timelineOnlyAfterDialogStageRejoin,
+      restoredNone,
+      setupPatchIntegrated,
+      setupPatchStageOnly,
+      setupPatchBoth,
+    }));
+  }
+  return {
+    viewport,
+    label: `pane-reflow-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    baseline: [baselineNone.band.h, baselineNone.upper.h],
+    both: [
+      bothDirectQuery.bandRendered ? 1 : 0,
+      bothDirectQuery.contextPane.h,
+      bothDirectQuery.sourceShelfRendered ? 1 : 0,
+    ],
+    expandedDetached: [
+      expandedThenBothPopped.bandRendered ? 1 : 0,
+      expandedThenBothPopped.bandAriaHidden || expandedThenBothPopped.bandInert ? 1 : 0,
+    ],
+    setupBoth: [
+      setupPatchBoth.bandRendered ? 1 : 0,
+      setupPatchBoth.setupUpper.h,
+      setupPatchDialogControls.stage.pressed ? 1 : 0,
+      setupPatchDialogControls.timeline.pressed ? 1 : 0,
+    ],
+    setupIntegrated: [
+      setupPatchIntegrated.bandRendered ? 1 : 0,
+      setupPatchIntegrated.groupsRendered ? 1 : 0,
+      setupPatchIntegrated.stageSvgRendered ? 1 : 0,
+      setupPatchIntegrated.rootIsSetupPatch ? 1 : 0,
+    ],
+    setupStageOnly: [
+      setupPatchStageOnly.bandRendered ? 1 : 0,
+      setupPatchStageOnly.setupUpper.h,
+      setupPatchStageOnly.rootIsSetupPatch ? 1 : 0,
+      setupPatchStageOnly.bandStagePoppedClass ? 1 : 0,
+    ],
+    rejoins: [
+      stageRejoinedViaDialog,
+      timelineRejoinedViaDialog,
+      expandedStageRejoined,
+      expandedTimelineRejoined,
+    ],
+    restored: [restoredNone.band.h, restoredNone.upper.h],
     checks: Object.fromEntries(conditions.map(([name, check]) => {
       try { return [name, Boolean(check())]; } catch { return [name, false]; }
     })),
@@ -31477,6 +32261,31 @@ async function main() {
       const failures = paneWindowResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Pane window viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (paneReflowOnlyMode) {
+      const paneReflowResults = [];
+      for (const viewport of viewports) {
+        await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+        await waitForApp(client);
+        const result = await runPaneReflowViewport(client, viewport);
+        paneReflowResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `baseline=${result.baseline.join("/")} ` +
+            `both=${result.both.join("/")} ` +
+            `setupIntegrated=${result.setupIntegrated.join("/")} ` +
+            `setupStageOnly=${result.setupStageOnly.join("/")} ` +
+            `setupBoth=${result.setupBoth.join("/")} ` +
+            `rejoins=${result.rejoins.map((value) => (value ? 1 : 0)).join("")} ` +
+            `restored=${result.restored.join("/")} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = paneReflowResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Pane reflow viewport failed: ${JSON.stringify(failures)}`);
       }
       return;
     }

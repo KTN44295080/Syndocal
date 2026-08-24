@@ -2,10 +2,14 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import type { OperatorLockMode, OperatorPolicy } from "../types";
 import { paneWindowKinds, type NamedWorkspaceProfile, type PaneWindowKind } from "../workspaceProfiles";
 
+export type PaneWindowOperationPhase = "opening" | "closing";
+
 type WorkspaceOperationsMenuProps = {
   profiles: NamedWorkspaceProfile[];
   selectedProfileId: string | null;
   poppedPanes: PaneWindowKind[];
+  paneTransitions: Partial<Record<PaneWindowKind, PaneWindowOperationPhase>>;
+  workspaceBusy: boolean;
   operatorPolicy: OperatorPolicy | null;
   operatorLockMode: OperatorLockMode | null;
   onSelectProfile: (id: string | null) => void;
@@ -41,6 +45,10 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
   const selectedProfile = createMemo(() =>
     props.profiles.find((profile) => profile.id === props.selectedProfileId) ?? null,
   );
+  const workspaceTransitionBusy = createMemo(
+    () => props.workspaceBusy || Object.keys(props.paneTransitions).length > 0,
+  );
+  const paneTransitionBusy = (pane: PaneWindowKind) => Boolean(props.paneTransitions[pane]);
 
   const configure = async () => {
     if (password() !== confirmation()) return;
@@ -95,7 +103,7 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
               />
               <button
                 type="button"
-                disabled={props.operatorLockMode !== null || workspaceName().trim().length === 0}
+                disabled={props.operatorLockMode !== null || workspaceTransitionBusy() || workspaceName().trim().length === 0}
                 onClick={() => void props.onSaveProfile(workspaceName())}
               >
                 Save Current
@@ -105,7 +113,7 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
               <select
                 aria-label="Saved workspace"
                 value={props.selectedProfileId ?? ""}
-                disabled={props.profiles.length === 0 || props.operatorLockMode !== null}
+                disabled={props.profiles.length === 0 || props.operatorLockMode !== null || workspaceTransitionBusy()}
                 onChange={(event) => props.onSelectProfile(event.currentTarget.value || null)}
               >
                 <option value="">Select workspace</option>
@@ -113,7 +121,8 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
               </select>
               <button
                 type="button"
-                disabled={!selectedProfile() || props.operatorLockMode !== null}
+                aria-busy={props.workspaceBusy ? "true" : undefined}
+                disabled={!selectedProfile() || props.operatorLockMode !== null || workspaceTransitionBusy()}
                 onClick={() => selectedProfile() && void props.onApplyProfile(selectedProfile()!)}
               >
                 Apply
@@ -121,7 +130,7 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
               <button
                 type="button"
                 class="dangerSubtle"
-                disabled={!selectedProfile() || props.operatorLockMode !== null}
+                disabled={!selectedProfile() || props.operatorLockMode !== null || workspaceTransitionBusy()}
                 onClick={() => selectedProfile() && props.onDeleteProfile(selectedProfile()!)}
               >
                 Delete
@@ -139,9 +148,11 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
                 {(pane) => (
                   <button
                     type="button"
+                    data-workspace-pane-toggle={pane}
                     class={props.poppedPanes.includes(pane) ? "active" : ""}
                     aria-pressed={props.poppedPanes.includes(pane)}
-                    disabled={props.operatorLockMode !== null}
+                    aria-busy={props.operatorLockMode === null && (paneTransitionBusy(pane) || props.workspaceBusy) ? "true" : undefined}
+                    disabled={props.operatorLockMode !== null || paneTransitionBusy(pane) || props.workspaceBusy}
                     onClick={() => props.onTogglePane(pane)}
                   >
                     {paneLabels[pane]}

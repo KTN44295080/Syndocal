@@ -970,8 +970,6 @@ const japaneseText: Record<string, string> = {
   "Select a Media Library item to inspect its properties.": "プロパティを確認するMedia Library項目を選択してください。",
   "Advanced Video Controls": "詳細な映像コントロール",
   "Layers, output routing, and physical displays are configured in Setup Video.": "レイヤー、出力ルーティング、物理ディスプレイはSetup Videoで設定します。",
-  "Timeline Preview": "タイムラインプレビュー",
-  "Timeline transport preview": "タイムライン転送プレビュー",
   "Availability": "可用性",
   "Lighting Banks and Scenes": "Lightingのバンクとシーン",
   "Selected media properties": "選択中のメディアプロパティ",
@@ -1252,7 +1250,7 @@ const japaneseText: Record<string, string> = {
   "Tabs, panes, and desk surfaces auto-save on this device": "タブ、ペイン、デスク面はこの端末へ自動保存されます",
   "Groups and Stage pane": "グループとステージのペイン",
   "Resize upper and lower workspace panes": "ワークスペースの上下ペインをリサイズ",
-  "Resize Stage and Timeline panes": "ステージとタイムラインのペインをリサイズ",
+  "Resize Stage and Source panes": "ステージとソースのペインをリサイズ",
   "Drag to resize. Double-click to reset pane sizes.": "ドラッグでリサイズ。ダブルクリックでペインサイズを初期化します。",
   "Discard unsaved Timeline edits?": "未保存のタイムライン編集を破棄しますか？",
   "Discard unsaved Timeline edits and close Timeline window?": "未保存のタイムライン編集を破棄してタイムラインウィンドウを閉じますか？",
@@ -2169,6 +2167,8 @@ const japaneseText: Record<string, string> = {
   "Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.":
     "プロジェクトの変更とタイムライン編集は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。",
   "Timeline edits will be discarded.": "タイムライン編集は破棄されます。",
+  "Timeline edits will be discarded. The main window is waiting for this Timeline window.":
+    "タイムライン編集は破棄されます。メインウィンドウがこのタイムラインウィンドウを待機しています。",
   "Timeline edits will be discarded. Live DMX output will stop.":
     "タイムライン編集は破棄され、ライブDMX出力は停止します。",
   "Timeline edits will be discarded. Playback/live output will stop.":
@@ -3027,6 +3027,7 @@ const japaneseText: Record<string, string> = {
   "Wheel Color": "ホイールカラー",
   "Wheel Slots": "ホイールスロット",
   Workspace: "ワークスペース",
+  Workspaces: "ワークスペース",
   "Workspace context pane": "ワークスペース・コンテキストペイン",
   "Workspace pane controls": "ワークスペースペイン操作",
   "X Step": "X間隔",

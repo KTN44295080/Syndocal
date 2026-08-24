@@ -18,21 +18,255 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 
-export const expectedVersion = "1.2.0-alpha.9";
+export const expectedVersion = "1.2.0-alpha.10";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
 
-function assertStaticReleaseMetadata() {
-  const appPackage = JSON.parse(read("app/package.json"));
-  const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
-  const updaterOverlay = JSON.parse(read("app/src-tauri/tauri.updater.conf.json"));
+export const requiredWorkspaceMembers = Object.freeze([
+  "crates/audio",
+  "crates/protocol",
+  "crates/gdtf",
+  "crates/io",
+  "crates/engine",
+  "crates/video",
+  "crates/visualizer",
+  "app/src-tauri",
+]);
 
-  if (appPackage.name !== "syndocal" || appPackage.version !== expectedVersion) {
-    throw new Error(`Frontend package metadata is not Syndocal ${expectedVersion}.`);
+export const authoritativeMemberPackageNames = Object.freeze({
+  "crates/audio": "audio",
+  "crates/protocol": "protocol",
+  "crates/gdtf": "gdtf",
+  "crates/io": "io",
+  "crates/engine": "engine",
+  "crates/video": "video",
+  "crates/visualizer": "visualizer",
+  "app/src-tauri": "syndocal",
+});
+
+export function windowsInstallerNames(productVersion) {
+  return {
+    nsis: `Syndocal_${productVersion}_x64-setup.exe`,
+    msi: `Syndocal_${productVersion}_x64_ja-JP.msi`,
+  };
+}
+
+export function readmeProductLine(productVersion) {
+  return `- 製品名: **Syndocal ${productVersion}**`;
+}
+
+export function readmeWindowsInstallerLine(productVersion) {
+  const { nsis, msi } = windowsInstallerNames(productVersion);
+  return `- Windows: \`${nsis}\` (NSIS)、\`${msi}\``;
+}
+
+export function stripTomlComment(line) {
+  let stripped = "";
+  let inBasicString = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (inBasicString) {
+      stripped += character;
+      if (character === "\\") {
+        index += 1;
+        if (index < line.length) stripped += line[index];
+      } else if (character === '"') {
+        inBasicString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inBasicString = true;
+      stripped += character;
+      continue;
+    }
+    if (character === "#") break;
+    stripped += character;
   }
-  if (tauri.productName !== "Syndocal" || tauri.version !== expectedVersion || !tauri.bundle?.active) {
+  return stripped;
+}
+
+export function parseTomlSections(text) {
+  const sections = [{ header: "", lines: [] }];
+  for (const rawLine of String(text).split(/\r?\n/u)) {
+    const line = stripTomlComment(rawLine);
+    const header = /^\s*\[{1,2}\s*([^\]]+?)\s*\]{1,2}\s*$/u.exec(line);
+    if (header) {
+      sections.push({ header: header[1], lines: [] });
+      continue;
+    }
+    sections.at(-1).lines.push(line);
+  }
+  return sections;
+}
+
+function uniqueTomlSection(sections, header, label) {
+  const matches = sections.filter((section) => section.header === header);
+  if (matches.length !== 1) {
+    throw new Error(`${label} declares ${matches.length} active [${header}] sections; exactly one is required.`);
+  }
+  return matches[0];
+}
+
+export function parseWorkspaceMembers(manifestText) {
+  const workspace = uniqueTomlSection(parseTomlSections(manifestText), "workspace", "Root Cargo.toml");
+  const assignmentCount = workspace.lines.filter((line) => /^\s*members\s*=/u.test(line)).length;
+  if (assignmentCount !== 1) {
+    throw new Error(
+      `Root Cargo.toml [workspace] declares ${assignmentCount} active members assignments; exactly one is required.`,
+    );
+  }
+  const membersBlock = /^\s*members\s*=\s*\[([\s\S]*?)\]/mu.exec(workspace.lines.join("\n"));
+  if (!membersBlock) throw new Error("Root Cargo.toml [workspace] lacks an active members array.");
+  return [...membersBlock[1].matchAll(/"([^"]+)"/gu)].map((entry) => entry[1]);
+}
+
+export function parseLockPackages(lockText) {
+  const packages = [];
+  let current = null;
+  for (const rawLine of String(lockText).split(/\r?\n/u)) {
+    const line = stripTomlComment(rawLine);
+    if (/^\s*\[\[\s*package\s*\]\]\s*$/u.test(line)) {
+      current = {};
+      packages.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (/^\s*\[/u.test(line)) {
+      current = null;
+      continue;
+    }
+    const field = /^\s*(name|version)\s*=\s*"([^"]*)"\s*$/u.exec(line);
+    if (field) {
+      if (current[field[1]] !== undefined) {
+        throw new Error(
+          `Cargo.lock [[package]] entry declares a duplicate ${field[1]} assignment (${current[field[1]]} then ${field[2]}).`,
+        );
+      }
+      current[field[1]] = field[2];
+    }
+  }
+  return packages;
+}
+
+export function parseCargoPackageIdentity(manifestText, label) {
+  const pkg = uniqueTomlSection(parseTomlSections(manifestText), "package", label);
+  const assignments = pkg.lines.map((line) => line.trim()).filter((line) => line !== "");
+  const nameMatches = assignments.map((line) => /^name\s*=\s*"([^"]+)"$/u.exec(line)).filter(Boolean);
+  if (nameMatches.length === 0) throw new Error(`${label} [package] lacks an exact active name = "..." assignment.`);
+  if (nameMatches.length > 1) {
+    throw new Error(
+      `${label} [package] declares ${nameMatches.length} active name assignments; exactly one is required.`,
+    );
+  }
+  const name = nameMatches[0][1];
+  const versionAssignments = assignments.filter((line) => /^version(?:\.workspace)?\s*=/u.test(line));
+  if (versionAssignments.length !== 1 || versionAssignments[0] !== "version.workspace = true") {
+    throw new Error(`${label} does not inherit the workspace version through exactly one active version.workspace = true assignment.`);
+  }
+  return name;
+}
+
+function assertExactWorkspaceMembers(manifestText) {
+  const members = parseWorkspaceMembers(manifestText);
+  const counts = new Map();
+  for (const member of members) counts.set(member, (counts.get(member) ?? 0) + 1);
+  const duplicates = [...counts.entries()].filter(([, count]) => count > 1).map(([member]) => member);
+  if (duplicates.length > 0) {
+    throw new Error(`Root Cargo.toml declares duplicate workspace members: ${duplicates.join(", ")}`);
+  }
+  const missing = requiredWorkspaceMembers.filter((member) => !counts.has(member));
+  const extra = [...counts.keys()].filter((member) => !requiredWorkspaceMembers.includes(member));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `Root Cargo.toml workspace members are not the exact authoritative set `
+        + `(missing: ${missing.join(", ") || "none"}; unexpected: ${extra.join(", ") || "none"}).`,
+    );
+  }
+}
+
+function assertWorkspacePackageVersion(rootManifest, productVersion) {
+  const section = uniqueTomlSection(parseTomlSections(rootManifest), "workspace.package", "Root Cargo.toml");
+  const assignments = (section?.lines ?? []).map((line) => line.trim()).filter((line) => line !== "");
+  const versionAssignments = assignments.filter((line) => /^version\s*=/u.test(line));
+  if (versionAssignments.length !== 1 || versionAssignments[0] !== `version = "${productVersion}"`) {
+    throw new Error(`Cargo workspace version is not ${productVersion}.`);
+  }
+}
+
+function assertLockFirstPartyVersions(lockText, packageNames, productVersion) {
+  const byName = new Map();
+  for (const record of parseLockPackages(lockText)) {
+    if (!record.name || record.version === undefined) {
+      throw new Error("Cargo.lock contains a [[package]] entry lacking an exact name/version pair.");
+    }
+    const entries = byName.get(record.name) ?? [];
+    entries.push(record.version);
+    byName.set(record.name, entries);
+  }
+  for (const name of packageNames) {
+    const entries = byName.get(name) ?? [];
+    if (entries.length === 0) throw new Error(`Cargo.lock is missing a package entry for ${name}.`);
+    if (entries.length > 1) {
+      throw new Error(`Cargo.lock is ambiguous: ${entries.length} package entries exist for ${name}.`);
+    }
+    if (entries[0] !== productVersion) {
+      throw new Error(`Cargo.lock pins ${name} at ${entries[0]} instead of ${productVersion}.`);
+    }
+  }
+}
+
+function readmeWindowsInstallerCandidates(lines) {
+  return lines.filter(
+    (line) => line.startsWith("- Windows:") && /Syndocal_|\.(?:exe|msi)\b|\(NSIS\)/u.test(line),
+  );
+}
+
+function assertReadmeVersionLines(markdown, productVersion) {
+  const lines = markdown.split(/\r?\n/u);
+  const canonicalProductLine = readmeProductLine(productVersion);
+  const productLines = lines.filter((line) => line.startsWith("- 製品名:"));
+  if (!productLines.includes(canonicalProductLine)) {
+    throw new Error(`README lacks the exact product line '${canonicalProductLine}'.`);
+  }
+  if (productLines.length !== 1) {
+    throw new Error(
+      `README declares ${productLines.length} '- 製品名:' product metadata lines; exactly one canonical product line is required.`,
+    );
+  }
+  const { nsis, msi } = windowsInstallerNames(productVersion);
+  const installerLines = readmeWindowsInstallerCandidates(lines);
+  if (installerLines.length !== 1) {
+    throw new Error(
+      `README declares ${installerLines.length} Windows installer metadata lines (Syndocal_/.exe/.msi/(NSIS)); exactly one is required.`,
+    );
+  }
+  const windowsLine = installerLines[0];
+  if (!windowsLine.includes("(NSIS)")) {
+    throw new Error("README lacks the exact Windows installer line for NSIS and MSI artifacts.");
+  }
+  if (!windowsLine.includes(nsis)) {
+    throw new Error(`README Windows installer line does not carry the versioned NSIS name ${nsis}.`);
+  }
+  if (!windowsLine.includes(msi)) {
+    throw new Error(`README Windows installer line does not carry the versioned MSI name ${msi}.`);
+  }
+  if (windowsLine !== readmeWindowsInstallerLine(productVersion)) {
+    throw new Error("README Windows installer line is not the exact canonical versioned line.");
+  }
+}
+
+export function validateStaticReleaseMetadata(readManifest = read, productVersion = expectedVersion) {
+  const appPackage = JSON.parse(readManifest("app/package.json"));
+  const tauri = JSON.parse(readManifest("app/src-tauri/tauri.conf.json"));
+  const updaterOverlay = JSON.parse(readManifest("app/src-tauri/tauri.updater.conf.json"));
+
+  if (appPackage.name !== "syndocal" || appPackage.version !== productVersion) {
+    throw new Error(`Frontend package metadata is not Syndocal ${productVersion}.`);
+  }
+  if (tauri.productName !== "Syndocal" || tauri.version !== productVersion || !tauri.bundle?.active) {
     throw new Error("Tauri product/version/bundle metadata is inconsistent.");
   }
   if (tauri.bundle.publisher !== "Seraf()のKTN") {
@@ -72,37 +306,49 @@ function assertStaticReleaseMetadata() {
     throw new Error("The signed updater release runbook is missing.");
   }
 
-  const rootManifest = read("Cargo.toml");
-  if (!rootManifest.includes(`version = "${expectedVersion}"`)) {
-    throw new Error(`Cargo workspace version is not ${expectedVersion}.`);
-  }
-  for (const manifest of [
-    "app/src-tauri/Cargo.toml",
-    "crates/audio/Cargo.toml",
-    "crates/engine/Cargo.toml",
-    "crates/gdtf/Cargo.toml",
-    "crates/io/Cargo.toml",
-    "crates/protocol/Cargo.toml",
-    "crates/video/Cargo.toml",
-    "crates/visualizer/Cargo.toml",
-  ]) {
-    if (!read(manifest).includes("version.workspace = true")) {
-      throw new Error(`${manifest} does not inherit the workspace version.`);
+  const rootManifest = readManifest("Cargo.toml");
+  assertExactWorkspaceMembers(rootManifest);
+  assertWorkspacePackageVersion(rootManifest, productVersion);
+  const firstPartyPackageNames = [];
+  const declaredFirstPartyNames = new Map();
+  for (const member of requiredWorkspaceMembers) {
+    if (!Object.hasOwn(authoritativeMemberPackageNames, member)) {
+      throw new Error(`No frozen authoritative package name is mapped for workspace member ${member}.`);
     }
+    const expectedName = authoritativeMemberPackageNames[member];
+    const declaredName = parseCargoPackageIdentity(readManifest(`${member}/Cargo.toml`), `${member}/Cargo.toml`);
+    if (declaredName !== expectedName) {
+      throw new Error(
+        `${member}/Cargo.toml declares package name '${declaredName}' instead of the frozen authoritative name '${expectedName}'.`,
+      );
+    }
+    if (declaredFirstPartyNames.has(declaredName)) {
+      throw new Error(
+        `Authoritative workspace members ${declaredFirstPartyNames.get(declaredName)} and ${member} declare the duplicate package name ${declaredName}.`,
+      );
+    }
+    declaredFirstPartyNames.set(declaredName, member);
+    firstPartyPackageNames.push(declaredName);
   }
+  assertLockFirstPartyVersions(readManifest("Cargo.lock"), firstPartyPackageNames, productVersion);
+  assertReadmeVersionLines(readManifest("README.md"), productVersion);
 
-  const macBundleScript = read("app/scripts/bundle-macos-runtime.sh");
-  if (!macBundleScript.includes(`Syndocal_${expectedVersion}_$(uname -m).dmg`)) {
+  const macBundleScript = readManifest("app/scripts/bundle-macos-runtime.sh");
+  if (!macBundleScript.includes(`Syndocal_${productVersion}_$(uname -m).dmg`)) {
     throw new Error("macOS DMG filename does not match the product version.");
   }
-  if (!macBundleScript.includes(`-volname 'Syndocal ${expectedVersion}'`)) {
+  if (!macBundleScript.includes(`-volname 'Syndocal ${productVersion}'`)) {
     throw new Error("macOS DMG volume name does not match the product version.");
   }
 
-  const crossPlatformWorkflow = read(".github/workflows/cross-platform.yml");
-  if (!crossPlatformWorkflow.includes(`name: syndocal-${expectedVersion}-\${{ matrix.os }}`)) {
+  const crossPlatformWorkflow = readManifest(".github/workflows/cross-platform.yml");
+  if (!crossPlatformWorkflow.includes(`name: syndocal-${productVersion}-\${{ matrix.os }}`)) {
     throw new Error("Cross-platform artifact name does not match the product version.");
   }
+}
+
+function assertStaticReleaseMetadata() {
+  validateStaticReleaseMetadata(read);
 }
 
 export function parseSemver(version) {
