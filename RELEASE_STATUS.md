@@ -19,7 +19,7 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
-## 2026-08-25 alpha.11 D4 integrated-source checkpoint (native acceptance pending)
+## 2026-08-25 alpha.11 D4 integrated-source/native acceptance checkpoint (accepted)
 
 The D4 Stage transaction source is integrated on `codex/d4-stage-integration`.
 The engine lineage is `2ea64ff`, `887505f`, and `7804620`; backend, frontend,
@@ -39,10 +39,54 @@ frozen command fingerprint remains
 Release metadata and its 102-group self-test pass. Independent Ox and Terra
 reviews report no remaining code P0/P1.
 
-This is not native acceptance or a release claim. The required release build,
-exact executable launch/window proof, maximized 4K Stage QA, artifact hash and
-embedded version evidence remain pending. Windows ASIO, DJ-Link peer/hardware,
-and other physical/external gates remain open.
+Native acceptance is now recorded from direct evidence on committed checkpoint
+HEAD `63cf795d17846602419d63a007db9f3a95cfce7b` (before concurrent uncommitted
+FFmpeg script/doc changes, which remain preserved).
+`pnpm --dir app run check:warnings -- --configuration windows-native-release`
+passed and internally ran `pnpm --dir app tauri build --no-bundle` successfully
+with the exact VS2022 x64 linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+pinned (file version 14.44.35225.0, SHA-256
+`1523A87532C2EB737DD7B7BCFC652CE5687A4F16048A45D1A5A0E8F6451AD49E`) and the
+complete shared SDK root as `FFMPEG_DIR`
+(`C:\Users\kouty\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build-shared`).
+Warning totals were current/baseline 0/0 with zero first-party and zero
+third-party warnings. The artifact is a 57,888,768-byte
+`target/release/syndocal.exe`, SHA-256
+`1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`,
+ProductVersion/FileVersion `1.2.0-alpha.11`.
+
+The exact executable launched as PID 117672; after integrated-state cleanup
+exactly one responsive top-level `Syndocal` window remained and the intended
+window was maximized before UI operations. Real 4K `DISPLAY3` measured
+3840x2160 @ 240 Hz at Windows scale 150% (bounds `(-3840,-429)`, work area
+3840x2088); the app client covered 3840x2088 physical / 2560x1392 CSS. With
+Timeline and Stage detached, Sources expanded through the available workspace
+with no blank lower reserved pane; closing the detached Timeline reintegrated
+one fully drawn Timeline while the detached Stage stayed separate with Sources
+below it; closing the detached Stage reintegrated Stage lower-left and Sources
+lower-right beneath Timeline, after which `list_windows` contained only one
+Syndocal window, no duplicate Timeline existed, and the integrated Stage was
+visibly drawn. This directly resolves the reported blank-space,
+duplicate-Timeline, and missing-integrated-Stage concerns.
+
+Manual D4 QA ran in that verified maximized native 4K window: stage object
+`D4 QA alpha11 20260825-0540` appeared on map and panel; Project-menu Undo
+removed it completely, enabled Redo, and Redo restored the exact label/map
+object (`Redid Add Stage Object`); stage map preset
+`D4 QA alpha11 preset 20260825-0550` saved with 1 object; X maximum changed
+10.0 -> 10.1 via native spin control (`Updated 2D stage map`); applying the
+preset restored X maximum exactly to 10.0 with the object retained
+(`Applied stage map preset ... (1 object)`); the QA preset was then removed.
+The fixture transform A/B step was not performed because the launched Untitled
+project had zero patched fixtures; that fixture/hardware-specific boundary
+remains explicitly unverified and is not a D4 stage-object/preset blocker.
+
+Alpha.11 D4 software/native integration is therefore accepted. This is still
+not a beta/RC/tag/release or whole-product claim: Windows ASIO completion,
+DJ-Link peer/hardware, fixture/hardware-specific Stage behavior, and other
+physical/external gates remain open. Next action: ASIO alpha12 authoring route
+repair/verification plus the ongoing physical-device boundaries.
 
 ## 2026-08-22 alpha.5 recovery-durability checkpoint (historical)
 

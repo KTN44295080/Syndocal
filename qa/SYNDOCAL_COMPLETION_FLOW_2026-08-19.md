@@ -498,7 +498,9 @@ evidence ledgers, clean reviewed commit, and pushed handoff.
 - [x] D2 atomic PATCH/GDTF Repair with whole-batch prevalidation, Published ACK,
   allocator/cache/output rollback, and one history result.
 - [x] D3 server-side admission for every mutation, including raw Tauri paths.
-- [ ] D4 Stage import/mutation identity fence, atomicity, Undo, and error truth.
+- [x] D4 Stage import/mutation identity fence, atomicity, Undo, and error truth.
+  Accepted at the 2026-08-25 alpha.11 native checkpoint (section 37);
+  fixture/hardware-specific Stage behavior remains an open physical boundary.
 
 Exit: no project/file mutation bypasses one recoverable authority/publication path.
 
@@ -1637,3 +1639,65 @@ and integrate the frozen D4 Stage transaction lane, independently audit the froz
 ASIO persistence lane without claiming real-device acceptance, then continue the
 remaining 51 rows in section 6. The post-alpha.10 snapshot is evidence and an
 exhaustive residual cross-check, not a prohibition on this explicit continuation.
+
+## 37. 2026-08-25 alpha.11 D4 native acceptance
+
+D4 Stage transaction software/native integration is accepted at
+`1.2.0-alpha.11`. The focused/static evidence recorded earlier on this branch
+remains binding; the native rows were closed on `codex/d4-stage-integration`
+at committed checkpoint HEAD `63cf795d17846602419d63a007db9f3a95cfce7b`,
+recorded before concurrent uncommitted FFmpeg script/doc changes
+(`app/scripts/check-native-window-acceptance.ps1`,
+`app/scripts/check-native-workspace-operator.ps1`,
+`qa/NATIVE_WINDOW_ACCEPTANCE.md`) that stay preserved untouched in the
+worktree.
+
+The native gate resolved and pinned the exact VS2022 x64 linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+(file version 14.44.35225.0, SHA-256
+`1523A87532C2EB737DD7B7BCFC652CE5687A4F16048A45D1A5A0E8F6451AD49E`) before
+Cargo/Tauri and exposed the complete shared SDK root as `FFMPEG_DIR`
+(`C:\Users\kouty\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build-shared`).
+`pnpm --dir app run check:warnings -- --configuration windows-native-release`
+passed and internally ran `pnpm --dir app tauri build --no-bundle`
+successfully with warning totals current/baseline total 0/0 (first-party 0,
+third-party 0). The artifact is the 57,888,768-byte
+`target/release/syndocal.exe`, SHA-256
+`1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`,
+ProductVersion/FileVersion `1.2.0-alpha.11`.
+
+The exact executable launched as PID 117672 and, after integrated-state
+cleanup, presented exactly one responsive top-level application window titled
+`Syndocal`; the intended window was verified maximized before UI operations.
+The active display was the real 4K `DISPLAY3`: 3840x2160 @ 240 Hz, Windows
+scale 150%, bounds `(-3840,-429)`, work area 3840x2088, app client physical
+3840x2088 / CSS viewport 2560x1392. With Timeline and Stage detached, the main
+Sources surface expanded through the available workspace with no blank lower
+reserved pane. Closing the detached Timeline reintegrated a single fully drawn
+Timeline while the detached Stage remained separate with Sources below it.
+Closing the detached Stage reintegrated Stage lower-left and Sources
+lower-right beneath Timeline; `list_windows` then contained only one Syndocal
+window, no duplicate Timeline appeared, and the integrated Stage was visibly
+drawn. This directly resolves the operator-reported blank-space,
+duplicate-Timeline, and missing-integrated-Stage concerns.
+
+Manual D4 transaction QA ran in that verified maximized native 4K window. A
+stage object labeled `D4 QA alpha11 20260825-0540` appeared on the Stage map
+and panel. The Project menu offered `Undo Add Stage Object 1 step`; Undo
+removed it completely and enabled Redo; Redo restored the exact label and map
+object with status `Redid Add Stage Object`. The unique stage map preset
+`D4 QA alpha11 preset 20260825-0550` was saved holding 1 stage object. The X
+maximum changed 10.0 -> 10.1 through the native spin control (status
+`Updated 2D stage map`, map re-rendered); applying the preset restored the X
+maximum exactly to 10.0 and retained the object (status
+`Applied stage map preset ... (1 object)`); the QA preset was then removed
+(status `Removed stage map preset...`). The test-fixture transform A/B step
+was not performed because the launched Untitled project had zero patched
+fixtures; that fixture/hardware-specific behavior remains an explicitly
+unverified boundary rather than a D4 stage-object/preset blocker.
+
+This accepts the alpha.11 D4 software/native integration row only. It does not
+claim whole-product completion, a beta/RC/tag/release, Windows ASIO completion,
+or any physical/hardware acceptance; all device/network/soak boundaries in
+sections 7-8 stay open. Next action: ASIO alpha12 authoring route repair/
+verification plus the ongoing physical-device boundaries.

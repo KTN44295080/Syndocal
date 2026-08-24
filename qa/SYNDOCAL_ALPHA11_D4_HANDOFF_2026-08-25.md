@@ -1,16 +1,25 @@
 # Syndocal alpha.11 D4 Stage transaction handoff
 
-Status: **IN PROGRESS — integrated/focused acceptance complete; native acceptance pending**
+Status: **ACCEPTED — D4 software/native integration accepted on evidence-backed
+native acceptance; whole-product, ASIO, and hardware claims remain open**
 
-This document records the D4 integration checkpoint. The source/focused gates are
-accepted; it does not authorize an alpha.11 native or release claim until the
-remaining native rows are filled from direct evidence.
+This document records the D4 integration checkpoint. The source/focused gates,
+the exact-linker native release build, launch/window/display proof, and the
+manual Stage transaction QA on the real 4K `DISPLAY3` are accepted from direct
+evidence below. This does not claim whole-product completion, a beta/RC/tag or
+release, Windows ASIO completion, or any physical-hardware result.
 
 ## Integration state at handoff creation
 
 - Integration worktree: `C:\Users\kouty\Documents\KDMX-d4-integration`
 - Branch: `codex/d4-stage-integration`
-- Current pushed HEAD: `f45a7606f7ad07771d3189f889808cbe7556aa95`
+- Committed checkpoint HEAD at native acceptance:
+  `63cf795d17846602419d63a007db9f3a95cfce7b`, recorded before this handoff
+  update and before the concurrent uncommitted FFmpeg script/doc changes
+  (`app/scripts/check-native-window-acceptance.ps1`,
+  `app/scripts/check-native-workspace-operator.ps1`,
+  `qa/NATIVE_WINDOW_ACCEPTANCE.md`) which this documentation-only update
+  preserves untouched.
 - Upstream: `origin/codex/d4-stage-integration`; divergence `0/0`
 - Base alpha.10 commit: `c9ca896a0da78b69471b2d352ac549081736f987`
 - Engine commits already integrated on this branch:
@@ -97,40 +106,89 @@ is marked complete:
   `1.2.0-alpha.11` only after D4 acceptance.
   - Version/check-hardening commit: `f45a7606f7ad07771d3189f889808cbe7556aa95`.
   - `pnpm --dir app run check:release`: exit 0; release self-test: 102 groups.
-- [ ] Run the required native release build with the exact VS2022 x64
+- [x] Run the required native release build with the exact VS2022 x64
   `link.exe` pinned; verify the resolved linker path before Cargo/Tauri.
-  - Exact build command(s): **PENDING**
-  - Linker path evidence: **PENDING**
-  - Build result/hash/warnings: **PENDING**
-- [ ] Launch the built `target/release/syndocal.exe`, verify exactly one
+  - Gate command: `pnpm --dir app run check:warnings --
+    --configuration windows-native-release` passed and internally ran
+    `pnpm --dir app tauri build --no-bundle` successfully.
+  - Linker path evidence: resolved and pinned
+    `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+    before Cargo/Tauri; file version 14.44.35225.0, SHA-256
+    `1523A87532C2EB737DD7B7BCFC652CE5687A4F16048A45D1A5A0E8F6451AD49E`; no
+    fall-through to Git for Windows' incompatible `usr\bin\link.exe`.
+  - Environment: complete shared FFmpeg SDK root exposed as `FFMPEG_DIR` =
+    `C:\Users\kouty\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build-shared`.
+  - Warning totals: current/baseline total 0/0; first-party 0; third-party 0.
+  - Artifact: `C:\Users\kouty\Documents\KDMX-d4-integration\target\release\syndocal.exe`,
+    57,888,768 bytes, SHA-256
+    `1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`,
+    ProductVersion/FileVersion `1.2.0-alpha.11`.
+- [x] Launch the built `target/release/syndocal.exe`, verify exactly one
   responsive Syndocal window, maximize the verified window, and perform the
   manual Stage transaction QA sequence.
-  - Launch/window evidence: **PENDING**
-  - Manual Stage QA sequence/result: **PENDING**
-- [ ] Update the authoritative roadmap/release/QA handoff with native evidence, then commit and
-  push the accepted checkpoint.
-  - Focused source/version checkpoint `f45a760` is pushed at upstream `0/0`;
-    final native-evidence documentation commit remains pending.
+  - Launch/window evidence: launched the exact executable as PID `117672`;
+    after integrated-state cleanup exactly one responsive top-level
+    application window titled `Syndocal` remained; the intended window was
+    verified maximized before UI operations.
+  - Display geometry: real 4K `DISPLAY3` at 3840x2160 @ 240 Hz, Windows scale
+    150%, display bounds `(-3840,-429)`, work area 3840x2088; app client
+    physical 3840x2088 with CSS viewport 2560x1392.
+  - Pane reintegration proof: with Timeline and Stage detached, the main
+    Sources surface expanded through the available workspace with no blank
+    lower reserved pane. Closing the detached Timeline reintegrated a single
+    fully drawn Timeline while the detached Stage remained separate with
+    Sources below it. Closing the detached Stage reintegrated Stage
+    lower-left and Sources lower-right beneath Timeline, after which
+    `list_windows` contained only one Syndocal window, no duplicate Timeline
+    existed, and the integrated Stage was visibly drawn. This directly
+    resolves the reported blank-space/duplicate-Timeline/
+    missing-integrated-Stage concerns.
+  - Manual Stage QA sequence/result on real native 4K:
+    created a stage object labeled `D4 QA alpha11 20260825-0540`; it appeared
+    on both the Stage map and panel. The Project menu showed
+    `Undo Add Stage Object 1 step`; Undo removed it completely and enabled
+    Redo; Redo restored the exact label and map object with status
+    `Redid Add Stage Object`. Saved unique stage map preset
+    `D4 QA alpha11 preset 20260825-0550` holding 1 stage object. Changed the
+    X maximum 10.0 -> 10.1 through the native spin control; status
+    `Updated 2D stage map` and the map re-rendered. Applying the preset
+    restored the X maximum exactly to 10.0 and retained the object; status
+    `Applied stage map preset ... (1 object)`. The QA preset was then removed;
+    status `Removed stage map preset...`.
+  - Boundary: the test-fixture transform A/B step was not performed because
+    the launched Untitled project had zero patched fixtures. This remains an
+    unverified fixture/hardware-specific boundary, not a D4 stage-object or
+    preset blocker, and no hardware acceptance is claimed.
+- [x] Update the authoritative roadmap/release/QA handoff with native evidence.
+  - This handoff, `RELEASE_STATUS.md`, and section 37 of
+    `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` carry this evidence.
+- [ ] Commit and push the accepted native-evidence documentation checkpoint.
+  - Ready for the supervising integration commit. Concurrent uncommitted FFmpeg
+    script/doc changes must remain preserved in the worktree; stage only these
+    three owned documents, run `git diff --check`, commit, and push.
 
 ## Explicit non-claims and remaining boundaries
 
-- D4 source/focused integration is accepted; native acceptance is not, and
-  alpha.11 is not released.
-- No native build, native launch, responsive-window check, maximized-window
-  manual QA, or native warning-ratchet result is claimed until the pending
-  evidence above is recorded.
-- This handoff does not claim Windows ASIO product completion, real-device
-  enumeration/negotiation, capture or output soak, or physical hardware QA.
-- Five displays were enumerated read-only and `DISPLAY3` is a real active
-  3840x2160/240 Hz monitor, but no Syndocal 4K UI acceptance is claimed yet.
-  DJ-Link live-network acceptance and other external/hardware results remain open.
+- D4 software/native integration is accepted at alpha.11. Alpha.11 is not
+  released; no beta/RC/tag, whole-product, or whole-roadmap completion is
+  claimed.
+- Windows ASIO product completion, real-device enumeration/negotiation, capture
+  or output soak, and ASIO licensing/artifact separation remain open.
+- The fixture transform A/B exercise was not performed because the launched
+  Untitled project had zero patched fixtures; fixture/hardware-specific Stage
+  behavior is an explicitly unverified boundary, not a D4 stage-object or
+  preset blocker. No hardware acceptance of any kind is claimed.
+- DJ-Link live-network acceptance, DMX/MIDI/OSC physical I/O, display-output
+  playback, recording, soak, distribution/legal, and macOS/Linux rows remain
+  open under the active completion flow.
 - AI3 durable terminal recovery, replacement-output retirement/re-Arm, and the
-  remaining post-D4 roadmap are outside this D4 pre-acceptance boundary.
+  remaining post-D4 roadmap are outside this D4 acceptance boundary.
 
 ## Next safe action
 
-Run the required exact-linker native release build, launch only this worktree's
-executable, verify exactly one responsive maximized Syndocal window, and execute
-the Stage transaction QA on the real 3840x2160 `DISPLAY3`. Then record executable
-version/hash, warning ratchet, window/geometry evidence, manual results and
-remaining non-claims before the final documentation commit/push.
+Commit and push only the three owned documentation files, preserving the
+concurrent FFmpeg script/doc changes untouched. Then begin the next tranche:
+ASIO alpha12 authoring route repair/
+verification, keeping every physical-device boundary (real fixtures, DMX,
+audio devices, DJ-Link network, soak) explicitly open until its own acceptance
+runs.
