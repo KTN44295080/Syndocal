@@ -60,10 +60,38 @@ The native launcher uses the separate identifier
 the OS temporary directory. It never selects or sends keys to the normal
 Syndocal or Daslight windows. The launcher closes only its own QA process tree.
 
-`FFMPEG_DIR` must point to the LGPL shared SDK root containing `include`, `lib`
-and `bin`. On the primary workstation the harness also recognizes the existing
-`C:\temp\ffmpeg-n8.1-lgpl-shared` SDK. This preserves the production default
-libav/Spout feature set instead of weakening the QA build.
+`FFMPEG_DIR` must point to a complete shared SDK. The harness validates all
+three directories and the files needed by the current `ffmpeg-next` feature set:
+`include/libavcodec/avcodec.h`, `include/libavformat/avformat.h`,
+`include/libavutil/avutil.h`,
+`include/libswscale/swscale.h`; the matching MSVC import libraries
+`avcodec.lib`, `avformat.lib`, `avutil.lib`, and `swscale.lib`; and non-empty
+runtime DLLs under `bin`. When versioned `.def` metadata is present, the DLL
+major must match it; otherwise the validator requires a non-empty DLL from the
+corresponding library family.
+
+When `FFMPEG_DIR` is unset, the harness first discovers a complete installed
+Gyan FFmpeg Shared SDK under the user's WinGet package directory. It may then
+inspect `C:\temp\ffmpeg-n8.1-lgpl-shared` and its versioned children as a fallback,
+but directory existence alone is never sufficient. An incomplete candidate is
+reported with its missing headers, import libraries, or runtime DLLs and the
+gate fails closed if no complete SDK can be selected. This preserves the
+production default libav/Spout feature set instead of weakening the QA build.
+SDK discovery and completeness do not certify a redistribution license. The
+legacy `C:\temp\ffmpeg-n8.1-lgpl-shared` directory name is not license evidence;
+public artifacts must still pass the separate third-party licensing gate for the
+exact FFmpeg binaries they distribute.
+
+The 2026-08-25 fallback hardening checkpoint passed PowerShell parsing and
+function-level validation in both native scripts: the helper implementations
+were byte-identical; an unset variable selected the complete WinGet SDK; an
+explicit complete SDK was accepted; the known partial SDK was rejected; and
+versioned `.def` metadata rejected a stale-major runtime DLL. Independent Ox
+and Terra reviews found no P0/P1 after the fixes. The obsolete partial trees
+`C:\temp\ffmpeg-n8.1-lgpl-shared` and
+`C:\temp\syndocal-ffmpeg-sdk-20260813` were moved to the Recycle Bin (4 files
+and 806,696 bytes each; 1,613,392 bytes total, recoverable). The complete
+217-file / 296,016,041-byte WinGet SDK remained intact at the path above.
 
 ## Evidence
 

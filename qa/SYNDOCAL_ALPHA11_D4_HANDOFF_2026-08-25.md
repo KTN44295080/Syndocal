@@ -162,10 +162,21 @@ is marked complete:
 - [x] Update the authoritative roadmap/release/QA handoff with native evidence.
   - This handoff, `RELEASE_STATUS.md`, and section 37 of
     `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` carry this evidence.
-- [ ] Commit and push the accepted native-evidence documentation checkpoint.
-  - Ready for the supervising integration commit. Concurrent uncommitted FFmpeg
-    script/doc changes must remain preserved in the worktree; stage only these
-    three owned documents, run `git diff --check`, commit, and push.
+- [x] Commit and push the accepted native-evidence documentation checkpoint.
+  - Commit `9e8d0af42cc816e0b1bf878a6ef8354040227861`
+    (`docs: accept alpha11 D4 native checkpoint`) is pushed to
+    `origin/codex/d4-stage-integration` with upstream divergence `0/0` at that
+    checkpoint.
+- [x] Harden native FFmpeg SDK discovery and remove verified obsolete partial
+  SDK copies.
+  - Both native acceptance scripts now validate required headers, import
+    libraries, version-matched runtime DLLs where `.def` metadata exists, and
+    deterministic WinGet/fallback ordering. Explicit invalid `FFMPEG_DIR`
+    fails closed. Ox and Terra reported no P0/P1 after follow-up review.
+  - `C:\temp\ffmpeg-n8.1-lgpl-shared` and
+    `C:\temp\syndocal-ffmpeg-sdk-20260813` were moved to the Recycle Bin:
+    4 files / 806,696 bytes each, 1,613,392 bytes total, recoverable. The
+    complete WinGet SDK remained intact at 217 files / 296,016,041 bytes.
 
 ## Explicit non-claims and remaining boundaries
 
@@ -186,9 +197,8 @@ is marked complete:
 
 ## Next safe action
 
-Commit and push only the three owned documentation files, preserving the
-concurrent FFmpeg script/doc changes untouched. Then begin the next tranche:
-ASIO alpha12 authoring route repair/
-verification, keeping every physical-device boundary (real fixtures, DMX,
-audio devices, DJ-Link network, soak) explicitly open until its own acceptance
-runs.
+Commit and push the reviewed FFmpeg acceptance hardening and this cleanup
+record, then integrate the accepted alpha.11 branch into main. Continue with
+the ASIO alpha12 authoring route repair/verification while keeping every
+physical-device boundary (real fixtures, DMX, audio devices, DJ-Link network,
+soak) explicitly open until its own acceptance runs.
