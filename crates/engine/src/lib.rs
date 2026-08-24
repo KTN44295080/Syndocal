@@ -3053,29 +3053,35 @@ impl ProjectSnapshotLoadAdmission {
     }
 }
 
-struct FixturePatchPublicationError {
+struct SnapshotPublicationError {
     message: String,
     allocator_rewind_safe: bool,
 }
 
-/// Truthful publication boundary for a fixture PATCH batch whose provisional
-/// identities have already been reserved. `Definitive` means no batch was
-/// published and the caller may safely cancel its surrounding transaction.
-/// `Indeterminate` means the engine admitted the batch before its ACK channel
-/// disconnected, so callers must retain the reservation and fail closed.
+/// Truthful publication boundary shared by every admitted snapshot
+/// publication that reports its outcome as a classified failure: the D3
+/// fixture PATCH/repair surface and the D4 acknowledged Stage project
+/// mutations. `Definitive` means nothing was published and the caller may
+/// safely cancel its surrounding transaction. `Indeterminate` means the
+/// engine admitted the operation before its ACK channel disconnected, so
+/// callers must retain reservations and fail closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FixturePatchPublicationFailure {
+pub enum SnapshotPublicationFailure {
     Definitive(String),
     Indeterminate(String),
 }
 
-impl FixturePatchPublicationFailure {
+/// Compatibility name for the fixture PATCH surface. This is deliberately an
+/// alias and not a copy: PATCH and Stage share one classification vocabulary.
+pub type FixturePatchPublicationFailure = SnapshotPublicationFailure;
+
+impl SnapshotPublicationFailure {
     pub fn is_indeterminate(&self) -> bool {
         matches!(self, Self::Indeterminate(_))
     }
 }
 
-impl std::fmt::Display for FixturePatchPublicationFailure {
+impl std::fmt::Display for SnapshotPublicationFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Definitive(message) | Self::Indeterminate(message) => {
@@ -3085,25 +3091,68 @@ impl std::fmt::Display for FixturePatchPublicationFailure {
     }
 }
 
-fn receive_fixture_patch_allocated_ack(
-    receiver: mpsc::Receiver<Result<(), String>>,
+/// One bounded Stage project mutation for the acknowledged D4 surface. Every
+/// variant maps onto an existing Engine primitive and is executed through the
+/// same admitted shared-snapshot publication machinery as the D3/PATCH
+/// surface; no parallel transaction or receipt system is introduced.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StageProjectMutation {
+    SetFixtureTransform {
+        fixture_id: FixtureId,
+        position: Vec3,
+        rotation: Rotation3,
+    },
+    SetStageMapConfig(StageMapConfig),
+    SaveStageMapPreset {
+        label: String,
+        config: StageMapConfig,
+        stage_objects: Option<Vec<StageObjectSummary>>,
+    },
+    ApplyStageMapPreset {
+        label: String,
+    },
+    RemoveStageMapPreset {
+        label: String,
+    },
+    /// Shared import/upsert primitive. The existing published preset upsert
+    /// remains authoritative; this variant routes through the same runtime
+    /// application so both entry points classify identically.
+    UpsertStageMapPreset(StageMapPresetSummary),
+    /// The only creation route for a stage object on this surface.
+    AddStageObject(StageObjectSummary),
+    /// True Set semantics: a missing target fails definitively and is never
+    /// recreated.
+    SetStageObject(StageObjectSummary),
+    RemoveStageObject(StageObjectId),
+}
+
+/// Explicit outcome of an acknowledged Stage project mutation. `Unchanged`
+/// lets the receipt layer observe an identical valid request without
+/// manufacturing a history entry for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageProjectMutationOutcome {
+    Applied,
+    Unchanged,
+}
+
+fn receive_classified_snapshot_ack<T>(
+    receiver: mpsc::Receiver<Result<T, String>>,
     admission: &ProjectSnapshotLoadAdmission,
     deadline: Instant,
     timeout: Duration,
-) -> Result<(), FixturePatchPublicationError> {
-    let definitive = |message| FixturePatchPublicationError {
+    disconnected_after_admission_message: String,
+) -> Result<T, SnapshotPublicationError> {
+    let definitive = |message| SnapshotPublicationError {
         message,
         allocator_rewind_safe: true,
     };
-    let disconnected = || {
-        FixturePatchPublicationError {
-        message: "Fixture PATCH acknowledgement disconnected after engine admission; provisional fixture IDs remain reserved because publication outcome is indeterminate".to_string(),
+    let disconnected = || SnapshotPublicationError {
+        message: disconnected_after_admission_message.clone(),
         allocator_rewind_safe: admission.current_state()
             != ProjectSnapshotLoadAdmissionState::Admitted,
-    }
     };
     match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(definitive(error)),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             if admission.cancel_if_queued() {
@@ -3113,7 +3162,7 @@ fn receive_fixture_patch_allocated_ack(
                 )))
             } else {
                 match receiver.recv() {
-                    Ok(Ok(())) => Ok(()),
+                    Ok(Ok(value)) => Ok(value),
                     Ok(Err(error)) => Err(definitive(error)),
                     Err(_) => Err(disconnected()),
                 }
@@ -3121,6 +3170,36 @@ fn receive_fixture_patch_allocated_ack(
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(disconnected()),
     }
+}
+
+fn receive_fixture_patch_allocated_ack(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<(), SnapshotPublicationError> {
+    receive_classified_snapshot_ack(
+        receiver,
+        admission,
+        deadline,
+        timeout,
+        "Fixture PATCH acknowledgement disconnected after engine admission; provisional fixture IDs remain reserved because publication outcome is indeterminate".to_string(),
+    )
+}
+
+fn receive_stage_project_mutation_ack(
+    receiver: mpsc::Receiver<Result<StageProjectMutationOutcome, String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<StageProjectMutationOutcome, SnapshotPublicationError> {
+    receive_classified_snapshot_ack(
+        receiver,
+        admission,
+        deadline,
+        timeout,
+        "Stage project mutation acknowledgement disconnected after engine admission; publication outcome is indeterminate until the next shared snapshot observation".to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -3656,6 +3735,16 @@ define_engine_command! {
     },
     UpsertStageObject(StageObjectSummary),
     RemoveStageObject(StageObjectId),
+    /// A definitive, acknowledgement-bearing Stage project mutation executed
+    /// through the same admitted shared-snapshot publication machinery as the
+    /// D3/PATCH surface. The ACK reports Applied/Unchanged explicitly so the
+    /// later receipt layer never has to guess from snapshots.
+    StageProjectMutationPublished {
+        mutation: StageProjectMutation,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<StageProjectMutationOutcome, String>>,
+    },
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
     SetOutputOwnershipRole {
@@ -4880,6 +4969,7 @@ impl EngineCommand {
                 | EngineCommand::RepairFixtureProfilePublished { .. }
                 | EngineCommand::ReplaceFixtureProfile { .. }
                 | EngineCommand::UpsertStageMapPresetPublished { .. }
+                | EngineCommand::StageProjectMutationPublished { .. }
                 | EngineCommand::RemoveFixture(_)
                 | EngineCommand::SetAttribute { .. }
                 | EngineCommand::SetFixtureAttributeBatch { .. }
@@ -7212,7 +7302,7 @@ impl EngineHandle {
         &self,
         candidates: Vec<FixturePatchCandidate>,
         timeout: Duration,
-    ) -> Result<(), FixturePatchPublicationError> {
+    ) -> Result<(), SnapshotPublicationError> {
         let deadline = Instant::now() + timeout;
         let admission = ProjectSnapshotLoadAdmission::new();
         let (ack, receiver) = mpsc::sync_channel(1);
@@ -7222,7 +7312,7 @@ impl EngineHandle {
             admission: admission.clone(),
             ack,
         })
-        .map_err(|error| FixturePatchPublicationError {
+        .map_err(|error| SnapshotPublicationError {
             message: error.to_string(),
             allocator_rewind_safe: true,
         })?;
@@ -7353,6 +7443,50 @@ impl EngineHandle {
         })
         .map_err(|error| error.to_string())?;
         receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
+    /// Execute one bounded Stage project mutation as a single admitted,
+    /// acknowledgement-bearing shared-snapshot publication. The returned
+    /// outcome distinguishes an applied mutation from an identical no-op so
+    /// the later receipt layer never manufactures history for unchanged
+    /// requests. Missing targets and validation failures are definitive and
+    /// leave the complete pre-mutation project image intact; only an ACK
+    /// disconnect after admission is indeterminate.
+    pub fn apply_stage_project_mutation_published(
+        &self,
+        mutation: StageProjectMutation,
+    ) -> Result<StageProjectMutationOutcome, SnapshotPublicationFailure> {
+        self.apply_stage_project_mutation_published_with_timeout(
+            mutation,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn apply_stage_project_mutation_published_with_timeout(
+        &self,
+        mutation: StageProjectMutation,
+        timeout: Duration,
+    ) -> Result<StageProjectMutationOutcome, SnapshotPublicationFailure> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::StageProjectMutationPublished {
+            mutation,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| SnapshotPublicationFailure::Definitive(error.to_string()))?;
+        receive_stage_project_mutation_ack(receiver, &admission, deadline, timeout).map_err(
+            |error| {
+                if error.allocator_rewind_safe {
+                    SnapshotPublicationFailure::Definitive(error.message)
+                } else {
+                    SnapshotPublicationFailure::Indeterminate(error.message)
+                }
+            },
+        )
     }
 
     pub fn remove_cue_published(&self, cue_id: CueId) -> Result<(), String> {
@@ -9430,6 +9564,24 @@ impl EngineHandle {
                     observe_stage_object_allocator_sources(&mut maxima, stage_objects);
                 }
             }
+            EngineCommand::StageProjectMutationPublished { mutation, .. } => match mutation {
+                StageProjectMutation::AddStageObject(object)
+                | StageProjectMutation::SetStageObject(object) => {
+                    maxima.observe_u64(AllocatorDomain::StageObjects, object.id);
+                }
+                StageProjectMutation::SaveStageMapPreset {
+                    stage_objects: Some(stage_objects),
+                    ..
+                } => {
+                    observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                }
+                StageProjectMutation::UpsertStageMapPreset(preset) => {
+                    if let Some(stage_objects) = &preset.stage_objects {
+                        observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                    }
+                }
+                _ => {}
+            },
             EngineCommand::SaveStageMapPreset {
                 stage_objects: None,
                 ..
@@ -17006,8 +17158,53 @@ struct AppliedVideoIsfEventPulse {
     replaced_resets: Vec<PendingVideoIsfEventReset>,
 }
 
+/// Delivery end of a pending acknowledged command. `Plain` carries the
+/// historic `Result<(), String>` contract; `ClassifiedStage` additionally
+/// reports the D4 Applied/Unchanged outcome on publication success.
+enum PendingCommandAckSender {
+    Plain(mpsc::SyncSender<Result<(), String>>),
+    ClassifiedStage(
+        mpsc::SyncSender<Result<StageProjectMutationOutcome, String>>,
+        StageProjectMutationOutcome,
+    ),
+}
+
+impl PendingCommandAckSender {
+    fn deliver(self, result: Result<(), String>) {
+        match self {
+            Self::Plain(ack) => {
+                let _ = ack.send(result);
+            }
+            Self::ClassifiedStage(ack, outcome) => {
+                let _ = ack.send(Self::classify(result, outcome));
+            }
+        }
+    }
+
+    fn try_deliver(self, result: Result<(), String>) {
+        match self {
+            Self::Plain(ack) => {
+                let _ = ack.try_send(result);
+            }
+            Self::ClassifiedStage(ack, outcome) => {
+                let _ = ack.try_send(Self::classify(result, outcome));
+            }
+        }
+    }
+
+    fn classify(
+        result: Result<(), String>,
+        outcome: StageProjectMutationOutcome,
+    ) -> Result<StageProjectMutationOutcome, String> {
+        match result {
+            Ok(()) => Ok(outcome),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 struct PendingCommandAck {
-    ack: mpsc::SyncSender<Result<(), String>>,
+    ack: PendingCommandAckSender,
     result: Result<(), String>,
     rollback: PendingCommandRollback,
     publication_error: &'static str,
@@ -17166,6 +17363,16 @@ enum PendingCommandRollback {
     },
     RestoreStageMapPresets {
         stage_map_presets: Vec<StageMapPresetSummary>,
+        last_error: Option<String>,
+    },
+    /// Complete Stage A image for a D4 acknowledged project mutation. The
+    /// whole live fixture vector, map, preset list, and object list are the
+    /// smallest image that restores every bounded mutation target exactly.
+    RestoreStageProject {
+        fixtures: Vec<RuntimeFixture>,
+        stage_map: StageMapConfig,
+        stage_map_presets: Vec<StageMapPresetSummary>,
+        stage_objects: Vec<StageObjectSummary>,
         last_error: Option<String>,
     },
     RestoreCueLists {
@@ -17385,6 +17592,7 @@ impl PendingCommandRollback {
                 | Self::RestoreAutoVj { .. }
                 | Self::RestoreFixturePatchBatch { .. }
                 | Self::RestoreStageMapPresets { .. }
+                | Self::RestoreStageProject { .. }
                 | Self::RestoreCueLists { .. }
                 | Self::RestoreCueListDeletion { .. }
                 | Self::RestoreCueRemoval { .. }
@@ -17834,7 +18042,7 @@ impl EngineRuntime {
         };
         self.last_error = result.as_ref().err().cloned();
         self.pending_command_acks.push(PendingCommandAck {
-            ack,
+            ack: PendingCommandAckSender::Plain(ack),
             result,
             rollback,
             publication_error:
@@ -17863,7 +18071,7 @@ impl EngineRuntime {
         };
         self.last_error = result.as_ref().err().cloned();
         self.pending_command_acks.push(PendingCommandAck {
-            ack,
+            ack: PendingCommandAckSender::Plain(ack),
             result,
             rollback,
             publication_error:
@@ -18426,6 +18634,153 @@ impl EngineRuntime {
         self.stage_map_presets
             .sort_by(|left, right| left.label.cmp(&right.label));
         Ok(())
+    }
+
+    /// Classify an acknowledged save/upsert through the same shared preset
+    /// primitive as the authoritative published upsert: one sanitizing
+    /// preparation, one write path, and an explicit `Unchanged` for an
+    /// already-identical stored preset.
+    fn apply_classified_stage_map_preset_upsert(
+        &mut self,
+        preset: StageMapPresetSummary,
+    ) -> Result<StageProjectMutationOutcome, String> {
+        let prepared = self.prepare_stage_map_preset_upsert(preset)?;
+        if self.stage_map_presets.contains(&prepared) {
+            return Ok(StageProjectMutationOutcome::Unchanged);
+        }
+        self.apply_stage_map_preset_upsert(prepared)?;
+        Ok(StageProjectMutationOutcome::Applied)
+    }
+
+    /// Classify and execute one bounded Stage project mutation against the
+    /// live runtime image. Validation and identical-request detection happen
+    /// before any write, so every `Err` and `Unchanged` leaves the complete
+    /// pre-mutation state untouched.
+    fn apply_classified_stage_project_mutation(
+        &mut self,
+        mutation: StageProjectMutation,
+    ) -> Result<StageProjectMutationOutcome, String> {
+        match mutation {
+            StageProjectMutation::SetFixtureTransform {
+                fixture_id,
+                position,
+                rotation,
+            } => {
+                let Some(fixture) = self
+                    .fixtures
+                    .iter_mut()
+                    .find(|fixture| fixture.id == fixture_id)
+                else {
+                    return Err(format!("Fixture {fixture_id} was not found"));
+                };
+                if fixture.request.position == position && fixture.request.rotation == rotation {
+                    return Ok(StageProjectMutationOutcome::Unchanged);
+                }
+                fixture.request.position = position;
+                fixture.request.rotation = rotation;
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::SetStageMapConfig(config) => {
+                let config = sanitize_stage_map_config(config);
+                if self.stage_map == config {
+                    return Ok(StageProjectMutationOutcome::Unchanged);
+                }
+                self.stage_map = config;
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::SaveStageMapPreset {
+                label,
+                config,
+                stage_objects,
+            } => self.apply_classified_stage_map_preset_upsert(StageMapPresetSummary {
+                label,
+                config,
+                stage_objects,
+            }),
+            StageProjectMutation::UpsertStageMapPreset(preset) => {
+                self.apply_classified_stage_map_preset_upsert(preset)
+            }
+            StageProjectMutation::ApplyStageMapPreset { label } => {
+                let label = label.trim();
+                if label.is_empty() {
+                    return Err("Stage map preset label is required".to_string());
+                }
+                let Some(preset) = self
+                    .stage_map_presets
+                    .iter()
+                    .find(|preset| preset.label == label)
+                    .cloned()
+                else {
+                    return Err(format!("Stage map preset {label} was not found"));
+                };
+                let next_objects = preset
+                    .stage_objects
+                    .as_ref()
+                    .map(|objects| sanitize_stage_objects(objects.clone()));
+                let objects_unchanged = match &next_objects {
+                    Some(next_objects) => self.stage_objects == *next_objects,
+                    None => true,
+                };
+                if self.stage_map == preset.config && objects_unchanged {
+                    return Ok(StageProjectMutationOutcome::Unchanged);
+                }
+                self.stage_map = preset.config;
+                if let Some(next_objects) = next_objects {
+                    self.stage_objects = next_objects;
+                }
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::RemoveStageMapPreset { label } => {
+                let label = label.trim();
+                let before = self.stage_map_presets.len();
+                self.stage_map_presets
+                    .retain(|preset| preset.label != label);
+                if self.stage_map_presets.len() == before {
+                    return Err(format!("Stage map preset {label} was not found"));
+                }
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::AddStageObject(object) => {
+                let Some(object) = sanitize_stage_object(object) else {
+                    return Err("Stage object is invalid".to_string());
+                };
+                if self
+                    .stage_objects
+                    .iter()
+                    .any(|candidate| candidate.id == object.id)
+                {
+                    return Err(format!("Stage object {} already exists", object.id));
+                }
+                self.stage_objects.push(object);
+                self.stage_objects.sort_by_key(|object| object.id);
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::SetStageObject(object) => {
+                let Some(object) = sanitize_stage_object(object) else {
+                    return Err("Stage object is invalid".to_string());
+                };
+                let Some(existing) = self
+                    .stage_objects
+                    .iter_mut()
+                    .find(|candidate| candidate.id == object.id)
+                else {
+                    return Err(format!("Stage object {} was not found", object.id));
+                };
+                if *existing == object {
+                    return Ok(StageProjectMutationOutcome::Unchanged);
+                }
+                *existing = object;
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::RemoveStageObject(object_id) => {
+                let before = self.stage_objects.len();
+                self.stage_objects.retain(|object| object.id != object_id);
+                if self.stage_objects.len() == before {
+                    return Err(format!("Stage object {object_id} was not found"));
+                }
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+        }
     }
 
     fn rebuild_fixture_group_effect_targets(&mut self) {
@@ -19504,6 +19859,7 @@ impl EngineRuntime {
                     | EngineCommand::PatchFixturesPublished { .. }
                     | EngineCommand::RepairFixtureProfilePublished { .. }
                     | EngineCommand::UpsertStageMapPresetPublished { .. }
+                    | EngineCommand::StageProjectMutationPublished { .. }
                     | EngineCommand::SetTouchSurface { .. }
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::ClearLiveAudioInputPublished { .. }
@@ -19716,7 +20072,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -19757,7 +20113,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -20211,7 +20567,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -20315,7 +20671,7 @@ impl EngineRuntime {
                     PendingCommandRollback::KeepApplied
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -20362,7 +20718,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -20421,7 +20777,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -20480,6 +20836,50 @@ impl EngineRuntime {
                     self.last_error = None;
                 }
             }
+            EngineCommand::StageProjectMutationPublished {
+                mutation,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreStageProject {
+                    fixtures: self.fixtures.clone(),
+                    stage_map: self.stage_map,
+                    stage_map_presets: self.stage_map_presets.clone(),
+                    stage_objects: self.stage_objects.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    match self.apply_classified_stage_project_mutation(mutation) {
+                        Ok(outcome) => (Ok(()), outcome),
+                        Err(message) => (Err(message), StageProjectMutationOutcome::Applied),
+                    }
+                } else {
+                    (
+                        Err(
+                            "Stage project mutation expired or was cancelled before engine admission"
+                                .to_string(),
+                        ),
+                        StageProjectMutationOutcome::Applied,
+                    )
+                };
+                // A validation error and a queued cancellation leave the
+                // complete pre-mutation state and its previous diagnostic
+                // untouched.
+                self.last_error = match &result.0 {
+                    Ok(()) => None,
+                    Err(_) => previous_last_error,
+                };
+                let (result, stage_outcome) = result;
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::ClassifiedStage(ack, stage_outcome),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Stage project mutation could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::SetOutputOwnershipRole {
                 role,
                 expires_at,
@@ -20505,7 +20905,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
@@ -20525,7 +20925,7 @@ impl EngineRuntime {
                     self.last_error = Some(error.clone());
                 }
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
@@ -20558,7 +20958,7 @@ impl EngineRuntime {
                     self.drop_all_dmx_senders();
                 }
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
@@ -20674,7 +21074,7 @@ impl EngineRuntime {
                     }
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack: completion.ack,
+                    ack: PendingCommandAckSender::Plain(completion.ack),
                     result,
                     rollback: PendingCommandRollback::SafetyBlackoutKeepApplied,
                     publication_error:
@@ -20711,7 +21111,7 @@ impl EngineRuntime {
                     }
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack: completion.ack,
+                    ack: PendingCommandAckSender::Plain(completion.ack),
                     result,
                     rollback,
                     publication_error:
@@ -20965,7 +21365,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Color effect add was rolled back",
@@ -21004,7 +21404,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21044,7 +21444,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Move effect add was rolled back",
@@ -21083,7 +21483,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Value effect add was rolled back",
@@ -21122,7 +21522,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Curve effect add was rolled back",
@@ -21161,7 +21561,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21202,7 +21602,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21345,7 +21745,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21405,7 +21805,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21465,7 +21865,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21525,7 +21925,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21585,7 +21985,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21645,7 +22045,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21707,7 +22107,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21762,7 +22162,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21913,7 +22313,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Node graph save could not publish an acknowledged snapshot",
@@ -21946,7 +22346,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -21979,7 +22379,7 @@ impl EngineRuntime {
                     result.as_ref().err().cloned()
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22083,7 +22483,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue create was rolled back",
@@ -22147,7 +22547,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22232,7 +22632,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue update was rolled back",
@@ -22372,7 +22772,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Scene Bank move could not publish an acknowledged snapshot",
@@ -22415,7 +22815,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22459,7 +22859,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue step update was rolled back",
@@ -22531,7 +22931,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22575,7 +22975,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22622,7 +23022,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue color update was rolled back",
@@ -22678,7 +23078,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -22717,7 +23117,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23025,7 +23425,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23078,7 +23478,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Cue List delete could not publish an acknowledged snapshot",
@@ -23312,7 +23712,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Cue removal was rolled back",
@@ -23382,7 +23782,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23422,7 +23822,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23455,7 +23855,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23523,7 +23923,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Scene Block add was rolled back",
@@ -23590,7 +23990,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23623,7 +24023,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23658,7 +24058,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Timeline snap was rolled back",
@@ -23687,7 +24087,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23724,7 +24124,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23761,7 +24161,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23799,7 +24199,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23836,7 +24236,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23873,7 +24273,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23910,7 +24310,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23947,7 +24347,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -23982,7 +24382,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24046,7 +24446,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24083,7 +24483,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24120,7 +24520,7 @@ impl EngineRuntime {
                     Ok(())
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     // A Follow abort is a runtime safety fence. If a shared
                     // snapshot is busy, leave B applied and make that failure
@@ -24143,7 +24543,7 @@ impl EngineRuntime {
                     self.acknowledge_timeline_follow_settlement(settlement_ack, Instant::now())
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     // Consumer application is physical/runtime-only. A
                     // publication miss must not re-open the settled target or
@@ -24370,7 +24770,7 @@ impl EngineRuntime {
             } => {
                 self.clear_live_audio_generation(generation);
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result: if Instant::now() > expires_at {
                         Err("Live audio clear expired before snapshot publication".to_string())
                     } else {
@@ -24414,7 +24814,7 @@ impl EngineRuntime {
                 }
                 self.last_error = None;
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result: Ok(()),
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
@@ -24458,7 +24858,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24509,7 +24909,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack: completion.ack,
+                    ack: PendingCommandAckSender::Plain(completion.ack),
                     result,
                     rollback,
                     publication_error:
@@ -24559,7 +24959,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24601,7 +25001,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24644,7 +25044,7 @@ impl EngineRuntime {
                     previous_last_error
                 };
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; DJ Link release was rolled back",
@@ -24890,7 +25290,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error: "Engine snapshot was busy; Auto VJ config was rolled back",
@@ -24912,7 +25312,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -24935,7 +25335,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25042,7 +25442,7 @@ impl EngineRuntime {
                 );
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25102,7 +25502,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25131,7 +25531,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25324,7 +25724,7 @@ impl EngineRuntime {
                     });
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25351,7 +25751,7 @@ impl EngineRuntime {
                     self.set_video_layer_isf_effect_from_legacy_ingress(layer_id, effect, &ids);
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25389,7 +25789,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25432,7 +25832,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25458,7 +25858,7 @@ impl EngineRuntime {
                 let result = self.mutate_video_layer_isf_stack_canonical(layer_id, mutation, &ids);
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25492,7 +25892,7 @@ impl EngineRuntime {
                 let result = pulse_result.map(|_| ());
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25530,7 +25930,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25907,7 +26307,7 @@ impl EngineRuntime {
                 })();
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::ClearBootstrappedVjShow,
                     publication_error:
@@ -25923,7 +26323,7 @@ impl EngineRuntime {
                 let result = self.bootstrap_vj_show_with_assets(layers, output, expires_at);
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::ClearBootstrappedVjShow,
                     publication_error:
@@ -25962,7 +26362,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback,
                     publication_error:
@@ -25990,7 +26390,7 @@ impl EngineRuntime {
                 };
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
-                    ack,
+                    ack: PendingCommandAckSender::Plain(ack),
                     result,
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
@@ -26245,6 +26645,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreFixtureGroupState { .. }
                         | PendingCommandRollback::RestoreFixturePatchBatch { .. }
                         | PendingCommandRollback::RestoreStageMapPresets { .. }
+                        | PendingCommandRollback::RestoreStageProject { .. }
                         | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
                         | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
@@ -26478,9 +26879,9 @@ impl EngineRuntime {
                 if !(pending_was_success && published) {
                     receipt.finish(result.clone());
                 }
-                let _ = pending.ack.try_send(result);
+                pending.ack.try_deliver(result);
             } else {
-                let _ = pending.ack.send(result);
+                pending.ack.deliver(result);
             }
         }
     }
@@ -26830,6 +27231,19 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.stage_map_presets = stage_map_presets;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreStageProject {
+                fixtures,
+                stage_map,
+                stage_map_presets,
+                stage_objects,
+                last_error,
+            } => {
+                self.fixtures = fixtures;
+                self.stage_map = stage_map;
+                self.stage_map_presets = stage_map_presets;
+                self.stage_objects = stage_objects;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreCueLists {
@@ -69222,6 +69636,343 @@ mod tests {
             snapshot.read().unwrap().stage_objects,
             before_snapshot.stage_objects
         );
+    }
+
+    fn stage_transaction_d4_seed_runtime() -> EngineRuntime {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.stage_map = StageMapConfig {
+            locked: true,
+            min_x: -40.0,
+            max_x: 40.0,
+            min_z: -20.0,
+            max_z: 20.0,
+        };
+        runtime.stage_map_presets = vec![published_stage_map_preset("A", 2)];
+        runtime.stage_objects = vec![allocator_stage_object(1)];
+        runtime.last_error = Some("A diagnostic".to_string());
+        runtime
+    }
+
+    #[test]
+    fn stage_transaction_d4_published_mutation_reports_applied_and_publishes_shared_snapshot() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.snapshot();
+        let caller_engine = engine.clone();
+        let caller = thread::spawn(move || {
+            caller_engine.apply_stage_project_mutation_published(
+                StageProjectMutation::SetStageMapConfig(StageMapConfig {
+                    locked: true,
+                    min_x: -30.0,
+                    max_x: 30.0,
+                    min_z: -15.0,
+                    max_z: 15.0,
+                }),
+            )
+        });
+        assert_eq!(
+            caller.join().unwrap(),
+            Ok(StageProjectMutationOutcome::Applied)
+        );
+        let after = engine.snapshot();
+        assert_eq!(after.stage_map.min_x, -30.0);
+        assert_eq!(after.stage_map.max_z, 15.0);
+        assert_eq!(after.stage_objects, before.stage_objects);
+        assert_eq!(after.stage_map_presets, before.stage_map_presets);
+    }
+
+    #[test]
+    fn stage_transaction_d4_identical_valid_mutation_reports_unchanged_without_state_change() {
+        let mut runtime = stage_transaction_d4_seed_runtime();
+        // Success — Applied or Unchanged — clears the previous diagnostic
+        // exactly like every other acknowledged publication, so the compared
+        // persistence image must not carry the seeded diagnostic forward.
+        runtime.last_error = None;
+        let identical_object = allocator_stage_object(1);
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let shared = RwLock::new(before_snapshot.clone());
+
+        for mutation in [
+            StageProjectMutation::SetStageObject(identical_object),
+            StageProjectMutation::SetStageMapConfig(runtime.stage_map),
+        ] {
+            let admission = ProjectSnapshotLoadAdmission::new();
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+                mutation,
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission,
+                ack,
+            });
+            runtime.fail_next_pending_publication = false;
+            runtime.publish_pending_command_acks(0, &shared);
+            assert_eq!(
+                receiver.recv().unwrap(),
+                Ok(StageProjectMutationOutcome::Unchanged)
+            );
+        }
+
+        assert_eq!(runtime.build_persistence_snapshot(), before_snapshot);
+        assert_eq!(
+            shared.read().unwrap().stage_objects,
+            before_snapshot.stage_objects
+        );
+    }
+
+    #[test]
+    fn stage_transaction_d4_missing_target_fails_definitively_and_preserves_complete_a() {
+        let mut runtime = stage_transaction_d4_seed_runtime();
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let before_presets = runtime.stage_map_presets.clone();
+        let before_objects = runtime.stage_objects.clone();
+        let shared = RwLock::new(before_snapshot.clone());
+
+        for mutation in [
+            StageProjectMutation::RemoveStageMapPreset {
+                label: "Missing".to_string(),
+            },
+            StageProjectMutation::ApplyStageMapPreset {
+                label: "Missing".to_string(),
+            },
+            StageProjectMutation::SetStageObject(allocator_stage_object(9)),
+            StageProjectMutation::RemoveStageObject(9),
+            StageProjectMutation::UpsertStageMapPreset(StageMapPresetSummary {
+                label: "   ".to_string(),
+                config: StageMapConfig::default(),
+                stage_objects: None,
+            }),
+        ] {
+            let admission = ProjectSnapshotLoadAdmission::new();
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+                mutation,
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission,
+                ack,
+            });
+            runtime.fail_next_pending_publication = false;
+            runtime.publish_pending_command_acks(0, &shared);
+            assert!(
+                receiver.recv().unwrap().is_err(),
+                "missing or invalid target must fail definitively"
+            );
+            assert_eq!(runtime.stage_map_presets, before_presets);
+            assert_eq!(runtime.stage_objects, before_objects);
+            assert_eq!(runtime.stage_map, before_snapshot.stage_map);
+            assert_eq!(
+                runtime.last_error.as_deref(),
+                Some("A diagnostic"),
+                "a rejected mutation must leave the previous diagnostic untouched"
+            );
+        }
+        assert_eq!(runtime.build_persistence_snapshot(), before_snapshot);
+        assert_eq!(*shared.read().unwrap(), before_snapshot);
+    }
+
+    #[test]
+    fn stage_transaction_d4_publication_failure_restores_complete_stage_project_a() {
+        // Fixture-transform B must roll back to the exact fixture A image.
+        let mut runtime = stage_transaction_d4_seed_runtime();
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 7,
+            request: sample_patch_request("Transform A", 1),
+            profile: sample_profile(),
+        });
+        // The legacy patch application cleared the seeded diagnostic on
+        // success. Restore it so the admitted mutation's Stage A image
+        // carries a non-trivial diagnostic that must roll back verbatim.
+        runtime.last_error = Some("A diagnostic".to_string());
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let shared = RwLock::new(before_snapshot.clone());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::SetFixtureTransform {
+                fixture_id: 7,
+                position: Vec3 {
+                    x: 9.0,
+                    y: 3.0,
+                    z: 8.0,
+                },
+                rotation: Rotation3 {
+                    pitch: 10.0,
+                    yaw: 20.0,
+                    roll: 30.0,
+                },
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &shared);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime.fixtures[0].request.position,
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0
+            }
+        );
+        assert_eq!(
+            runtime.fixtures[0].request.rotation,
+            Rotation3 {
+                pitch: 0.0,
+                yaw: 0.0,
+                roll: 0.0
+            }
+        );
+        assert_eq!(runtime.build_persistence_snapshot(), before_snapshot);
+        assert_eq!(*shared.read().unwrap(), before_snapshot);
+        assert_eq!(runtime.last_error.as_deref(), Some("A diagnostic"));
+
+        // Object-add B must roll back to the exact object A image as well.
+        let mut runtime = stage_transaction_d4_seed_runtime();
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let shared = RwLock::new(before_snapshot.clone());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::AddStageObject(allocator_stage_object(5)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &shared);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_persistence_snapshot(), before_snapshot);
+        assert_eq!(*shared.read().unwrap(), before_snapshot);
+    }
+
+    #[test]
+    fn stage_transaction_d4_add_is_the_only_creation_route_and_set_never_recreates() {
+        let mut runtime = stage_transaction_d4_seed_runtime();
+
+        // Set on a missing object fails definitively and recreates nothing.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::SetStageObject(allocator_stage_object(6)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = false;
+        let shared = RwLock::new(runtime.build_persistence_snapshot());
+        runtime.publish_pending_command_acks(0, &shared);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.stage_objects.len(), 1);
+
+        // Add is the only creation route.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::AddStageObject(allocator_stage_object(6)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &shared);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Ok(StageProjectMutationOutcome::Applied)
+        );
+        assert_eq!(runtime.stage_objects.len(), 2);
+
+        // Add never silently replaces an existing id.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::AddStageObject(allocator_stage_object(6)),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &shared);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.stage_objects.len(), 2);
+
+        // Set replaces an existing object in place and keeps the order.
+        let mut renamed = allocator_stage_object(6);
+        renamed.label = "Renamed".to_string();
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::StageProjectMutationPublished {
+            mutation: StageProjectMutation::SetStageObject(renamed),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &shared);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Ok(StageProjectMutationOutcome::Applied)
+        );
+        assert_eq!(runtime.stage_objects.len(), 2);
+        assert_eq!(runtime.stage_objects[1].label, "Renamed");
+    }
+
+    #[test]
+    fn stage_transaction_d4_classification_definitive_versus_indeterminate() {
+        // Definitive: a queued cancellation before admission leaves no
+        // publication and reports a definitive failure at the handle.
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let cancelled = engine.apply_stage_project_mutation_published_with_timeout(
+            StageProjectMutation::SetStageMapConfig(StageMapConfig::default()),
+            Duration::ZERO,
+        );
+        match cancelled {
+            Err(failure) => assert!(
+                !failure.is_indeterminate(),
+                "pre-admission cancellation must classify as definitive"
+            ),
+            Ok(outcome) => panic!("cancelled mutation must fail, got {outcome:?}"),
+        }
+
+        // Indeterminate: an ACK disconnect after engine admission can never
+        // be reported as a definitive failure.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+        let (sender, receiver) =
+            mpsc::sync_channel::<Result<StageProjectMutationOutcome, String>>(1);
+        drop(sender);
+        let error = receive_stage_project_mutation_ack(
+            receiver,
+            &admission,
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(!error.allocator_rewind_safe);
+
+        // Definitive: a validation rejection delivered over the classified
+        // channel stays definitive after classification.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+        let (sender, receiver) =
+            mpsc::sync_channel::<Result<StageProjectMutationOutcome, String>>(1);
+        sender
+            .send(Err("Stage map preset label is required".to_string()))
+            .unwrap();
+        drop(sender);
+        let error = receive_stage_project_mutation_ack(
+            receiver,
+            &admission,
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.allocator_rewind_safe);
     }
 
     #[test]
