@@ -143,7 +143,10 @@ function New-TestMetrics {
 
 function New-GoodWorld {
   $editor = New-TestMonitor $script:EditorIdentity "\\.\DISPLAY2" 101 1920 1080 96 0 0
-  $led = New-TestMonitor $script:LedIdentity "\\.\DISPLAY5" 102 1920 1080 144 1920 0
+  # The LED's current GDI name is intentionally a disposable observation
+  # value.  The real topology has observed this same stable identity as
+  # DISPLAY33; tests below also renumber it and require acceptance.
+  $led = New-TestMonitor $script:LedIdentity "\\.\DISPLAY33" 102 1920 1080 144 1920 0
   $projector = New-TestMonitor $script:ProjectorIdentity "\\.\DISPLAY3" 103 3840 2160 144 -3840 0
   $extraA = New-TestMonitor "\\?\DISPLAY#TEST_EXTRA_A#D#{55555555-5555-5555-5555-555555555555}" "\\.\DISPLAY1" 104 1920 1080 96 0 -1080
   $extraB = New-TestMonitor "\\?\DISPLAY#TEST_EXTRA_B#E#{66666666-6666-6666-6666-666666666666}" "\\.\DISPLAY4" 105 2560 1440 96 3840 0
@@ -319,9 +322,49 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "resolution-only identity omission is rejected"; Run = {
       $role = $config.roles[0]; $prior = $role.stable_identity; $role.stable_identity = ""; try { Assert-Throws { Get-ThreeDisplayExpectedMonitor -Role $role -Inventory @($script:World.monitors) } "resolution-only" } finally { $role.stable_identity = $prior }
     } })
-    $checks.Add([pscustomobject]@{ Name = "exact role identity acceptance succeeds"; Run = {
+    $checks.Add([pscustomobject]@{ Name = "exact stable role identity acceptance records a nonblank current GDI name"; Run = {
       $sample = Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true
-      New-Check -Passed ($sample.windows[1].window.monitor_device_name -eq "\\.\DISPLAY5") -Detail "LED resolved by exact stable identity and DISPLAY5 role contract"
+      $ledMonitor = @($sample.monitors | Where-Object { $_.stable_identity -ceq $script:LedIdentity })[0]
+      $ledWindow = @($sample.windows | Where-Object { $_.role -ceq "led" })[0]
+      $passed =
+        (-not [string]::IsNullOrWhiteSpace([string]$ledMonitor.device_name)) -and
+        (-not [string]::IsNullOrWhiteSpace([string]$ledWindow.window.monitor_device_name)) -and
+        ([string]$ledWindow.window.monitor_device_name -ceq [string]$ledMonitor.device_name) -and
+        ([int]$ledMonitor.effective_dpi -eq 144) -and
+        ([int]$ledMonitor.physical_bounds.width -eq 1920) -and
+        ([int]$ledMonitor.physical_bounds.height -eq 1080)
+      New-Check -Passed $passed -Detail "LED selected by explicit stable identity; current nonblank GDI name was recorded without a role-hardcoded number"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "inventory blank/whitespace current GDI name is rejected"; Run = {
+      $results = foreach ($candidate in @("", "   ")) {
+        Assert-Throws { Assert-ThreeDisplayNonblankCurrentGdiName -Name $candidate -FailureMessage "current GDI device name is blank for an enumerated monitor." } "current GDI device name is blank for an enumerated monitor."
+      }
+      $passed = (@($results | Where-Object { -not $_.Passed }).Count -eq 0)
+      New-Check -Passed $passed -Detail "inventory callback guard rejects both empty and whitespace-only current GDI names"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "selected monitor blank/whitespace device_name is rejected"; Run = {
+      $prior = $script:World.monitors[1].device_name
+      try {
+        $results = foreach ($candidate in @("", "   ")) {
+          $script:World.monitors[1].device_name = $candidate
+          Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "stable identity resolved without a nonblank current GDI device name"
+        }
+        $passed = (@($results | Where-Object { -not $_.Passed }).Count -eq 0)
+        New-Check -Passed $passed -Detail "selected stable monitor rejects both empty and whitespace-only device_name values"
+      } finally { $script:World.monitors[1].device_name = $prior }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "window metrics blank/whitespace monitor_device_name is rejected"; Run = {
+      $prior = $script:World.metrics[22]
+      try {
+        $results = foreach ($candidate in @("", "   ")) {
+          $changed = New-TestMetrics 22 "Syndocal Output - LED Program" $script:GoodPid $script:World.monitors[1] 1920 1080
+          $changed.monitor_device_name = $candidate
+          $script:World.metrics[22] = $changed
+          Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "has no nonblank current GDI device name"
+        }
+        $passed = (@($results | Where-Object { -not $_.Passed }).Count -eq 0)
+        New-Check -Passed $passed -Detail "window metrics reject both empty and whitespace-only monitor_device_name values"
+      } finally { $script:World.metrics[22] = $prior }
     } })
     $checks.Add([pscustomobject]@{ Name = "role monitor collision is rejected"; Run = {
       Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:EditorIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "three distinct"
@@ -366,8 +409,34 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "non-alpha.12 configuration is rejected"; Run = {
       Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.11" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.12"
     } })
-    $checks.Add([pscustomobject]@{ Name = "wrong exact GDI role binding is rejected"; Run = {
-      $prior = $script:World.monitors[1].device_name; $script:World.monitors[1].device_name = "\\.\DISPLAY4"; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "expected '\\.\DISPLAY5'" } finally { $script:World.monitors[1].device_name = $prior }
+    $checks.Add([pscustomobject]@{ Name = "GDI renumbering of the same stable identity is accepted"; Run = {
+      $priorName = $script:World.monitors[1].device_name
+      $priorMetrics = $script:World.metrics[22]
+      $renumberedName = "\\.\DISPLAY5"
+      $script:World.monitors[1].device_name = $renumberedName
+      $script:World.metrics[22] = New-TestMetrics 22 "Syndocal Output - LED Program" $script:GoodPid $script:World.monitors[1] 1920 1080
+      try {
+        $sample = Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true
+        $ledMonitor = @($sample.monitors | Where-Object { $_.stable_identity -ceq $script:LedIdentity })[0]
+        $ledWindow = @($sample.windows | Where-Object { $_.role -ceq "led" })[0]
+        $passed =
+          ([string]$ledMonitor.stable_identity -ceq $script:LedIdentity) -and
+          ([string]$ledMonitor.device_name -ceq $renumberedName) -and
+          ([string]$ledWindow.window.monitor_device_name -ceq $renumberedName) -and
+          ([int]$ledMonitor.effective_dpi -eq 144) -and
+          ([int]$ledMonitor.physical_bounds.width -eq 1920) -and
+          ([int]$ledMonitor.physical_bounds.height -eq 1080)
+        New-Check -Passed $passed -Detail "same stable LED identity accepted after current GDI renumbering; DPI, physical resolution, and nonblank GDI evidence remained exact"
+      } finally {
+        $script:World.monitors[1].device_name = $priorName
+        $script:World.metrics[22] = $priorMetrics
+      }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "stable-identity role swap is rejected"; Run = {
+      $swapped = New-GoodConfiguration
+      $swapped.roles[1].stable_identity = $script:ProjectorIdentity
+      $swapped.roles[2].stable_identity = $script:LedIdentity
+      Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $swapped -RequireEditorMaximized $true } "native physical resolution"
     } })
     $checks.Add([pscustomobject]@{ Name = "projector effective DPI 144 is required"; Run = {
       $prior = $script:World.monitors[2].effective_dpi; $script:World.monitors[2].effective_dpi = 96; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "effective DPI is 96, expected 144" } finally { $script:World.monitors[2].effective_dpi = $prior }
@@ -819,11 +888,11 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "runner static contract forbids process and output mutations"; Run = {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.12", "\\.\DISPLAY2", "\\.\DISPLAY5", "\\.\DISPLAY3", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"',
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.12", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
       $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }
-      foreach ($retired in @("plugin:window|get_current_window", "__TAURI_INTERNALS__")) { if ($text.Contains($retired)) { return New-Check $false "retired or raw window-label path $retired remains" } }
+      foreach ($retired in @("plugin:window|get_current_window", "__TAURI_INTERNALS__", "expected_gdi_device_name", "\\.\DISPLAY2", "\\.\DISPLAY3", "\\.\DISPLAY5")) { if ($text.Contains($retired)) { return New-Check $false "retired or hardcoded GDI role authority $retired remains" } }
       New-Check $true "static safety and identity contract present"
     } })
 

@@ -52,11 +52,15 @@
 # Required release/physical-role contract (all monitor selection is by the
 # explicit stable monitor identity, and the executable must be the exact
 # expected artifact for the supplied exact HEAD and SHA-256; selection is
-# NEVER by resolution, primary flag, or first match):
-#   editor/operator  \\.\DISPLAY2  1920x1080 at DPI 96
-#   LED output        \\.\DISPLAY5  1920x1080 at DPI 144
-#   projector output  \\.\DISPLAY3  3840x2160 at DPI 144 (Windows 150%)
+# NEVER by GDI display number, resolution, primary flag, or first match):
+#   editor/operator  stable identity, 1920x1080 at DPI 96
+#   LED output       stable identity, 1920x1080 at DPI 144
+#   projector output stable identity, 3840x2160 at DPI 144 (Windows 150%)
 # The two 1920x1080 roles must therefore still provide distinct identities.
+# The current GDI device name is read after stable-identity selection, must be
+# nonblank, and is retained in inventory/window evidence only. GDI numbers are
+# transient (for example, a physical LED may be renumbered) and are never
+# compared with a role-hardcoded value.
 # This acceptance scope is deliberately only these three named roles in the
 # current five-display topology.  The other two connected displays are not
 # selected, bound, or individually asserted here; this harness never claims a
@@ -65,8 +69,8 @@
 # back to the exact GDI monitor name from GetMonitorInfoW.  It is reported in
 # inventory evidence verbatim; users copy it into the three expected-identity
 # parameters.  Blank, duplicate, stale, disconnected, or unresolvable paths
-# fail closed.  Resolution, exact GDI role, effective DPI, and client bounds
-# are checked only AFTER exact identity selection.
+# fail closed.  Nonblank current GDI name, exact resolution, effective DPI,
+# and client bounds are checked only AFTER exact identity selection.
 #
 # Native output roles are proven by the current production contract:
 #   label video-output-<output id>
@@ -164,9 +168,9 @@ $script:ThreeDisplayShowAsioPassLineRegex = '^Show-ASIO local artifact PASS: (.+
 $script:ThreeDisplayShowAsioLeafRegex = '^Syndocal_Show_ASIO_([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)_([0-9a-f]{12})_x64$'
 $script:ThreeDisplayShowAsioCheckerTimeoutMs = 180000
 $script:ThreeDisplayRoleContracts = @{
-  editor = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY2"; effective_dpi = 96; physical_width = 1920; physical_height = 1080 }
-  led = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY5"; effective_dpi = 144; physical_width = 1920; physical_height = 1080 }
-  projector = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY3"; effective_dpi = 144; physical_width = 3840; physical_height = 2160 }
+  editor = [pscustomobject]@{ effective_dpi = 96; physical_width = 1920; physical_height = 1080 }
+  led = [pscustomobject]@{ effective_dpi = 144; physical_width = 1920; physical_height = 1080 }
+  projector = [pscustomobject]@{ effective_dpi = 144; physical_width = 3840; physical_height = 2160 }
 }
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
@@ -779,9 +783,20 @@ function Get-ThreeDisplayDisplayConfigPaths {
   return @($paths | Select-Object -First ([int]$returnedPaths))
 }
 
+function Assert-ThreeDisplayNonblankCurrentGdiName {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Name,
+    [Parameter(Mandatory = $true)][string]$FailureMessage
+  )
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Fail closed: $FailureMessage" }
+  return $Name
+}
+
 function Get-ThreeDisplayMonitorInventory {
   # SEAM: enumerates only currently active monitor paths and binds each Win32
-  # HMONITOR/GDI name to exactly one stable DisplayConfig target path.
+  # HMONITOR/GDI name to exactly one stable DisplayConfig target path.  The
+  # stable target path is the authority; the current GDI name is retained only
+  # as nonblank observation evidence because Windows can renumber it.
   $paths = @(Get-ThreeDisplayDisplayConfigPaths)
   $pathByGdiName = @{}
   foreach ($path in $paths) {
@@ -801,7 +816,7 @@ function Get-ThreeDisplayMonitorInventory {
         $info = [SyndocalThreeDisplayNative+MONITORINFOEXW]::new()
         $info.Size = [Runtime.InteropServices.Marshal]::SizeOf([type][SyndocalThreeDisplayNative+MONITORINFOEXW])
         if (-not [SyndocalThreeDisplayNative]::GetMonitorInfoW($handle, [ref]$info)) { throw "Fail closed: GetMonitorInfoW failed while enumerating monitors." }
-        $gdiName = [string]$info.DeviceName
+        $gdiName = Assert-ThreeDisplayNonblankCurrentGdiName -Name ([string]$info.DeviceName) -FailureMessage "current GDI device name is blank for an enumerated monitor."
         $key = $gdiName.ToUpperInvariant()
         if (-not $pathByGdiName.ContainsKey($key)) { throw "Fail closed: Win32 monitor '$gdiName' has no unique active DisplayConfig target path." }
         $target = $pathByGdiName[$key]
@@ -1074,9 +1089,9 @@ function New-ThreeDisplayConfiguration {
     expected_product_version = $ProductVersion; expected_git_head = $GitHead.ToLowerInvariant()
     sample_interval_ms = $IntervalMs; max_sample_attempts = $Attempts; cdp_port = $CdpPort
     roles = @(
-      [pscustomobject]@{ role = "editor"; output_id = $null; stable_identity = $EditorIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.editor.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.editor.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.editor.physical_width; physical_height = $script:ThreeDisplayRoleContracts.editor.physical_height; native_window_label = "main"; exact_title = $script:ThreeDisplayMainTitle },
-      [pscustomobject]@{ role = "led"; output_id = $LedId; stable_identity = $LedIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.led.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.led.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.led.physical_width; physical_height = $script:ThreeDisplayRoleContracts.led.physical_height; native_window_label = "video-output-$LedId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$LedLabel" },
-      [pscustomobject]@{ role = "projector"; output_id = $ProjectorId; stable_identity = $ProjectorIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.projector.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.projector.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.projector.physical_width; physical_height = $script:ThreeDisplayRoleContracts.projector.physical_height; native_window_label = "video-output-$ProjectorId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$ProjectorLabel" }
+      [pscustomobject]@{ role = "editor"; output_id = $null; stable_identity = $EditorIdentity; expected_effective_dpi = $script:ThreeDisplayRoleContracts.editor.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.editor.physical_width; physical_height = $script:ThreeDisplayRoleContracts.editor.physical_height; native_window_label = "main"; exact_title = $script:ThreeDisplayMainTitle },
+      [pscustomobject]@{ role = "led"; output_id = $LedId; stable_identity = $LedIdentity; expected_effective_dpi = $script:ThreeDisplayRoleContracts.led.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.led.physical_width; physical_height = $script:ThreeDisplayRoleContracts.led.physical_height; native_window_label = "video-output-$LedId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$LedLabel" },
+      [pscustomobject]@{ role = "projector"; output_id = $ProjectorId; stable_identity = $ProjectorIdentity; expected_effective_dpi = $script:ThreeDisplayRoleContracts.projector.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.projector.physical_width; physical_height = $script:ThreeDisplayRoleContracts.projector.physical_height; native_window_label = "video-output-$ProjectorId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$ProjectorLabel" }
     )
   }
 }
@@ -1155,12 +1170,9 @@ function Get-ThreeDisplayExpectedMonitor {
   }
   $monitor = $matches[0]
   if (-not [bool]$monitor.connected) { throw "Fail closed: role '$($Role.role)' monitor identity is not currently connected." }
-  if ([string]::IsNullOrWhiteSpace([string]$monitor.device_name)) { throw "Fail closed: role '$($Role.role)' monitor has no GDI device binding." }
-  if (-not [string]::Equals([string]$monitor.device_name, [string]$Role.expected_gdi_device_name, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Fail closed: role '$($Role.role)' raw identity resolved to GDI device '$($monitor.device_name)', expected '$($Role.expected_gdi_device_name)'."
-  }
+  [void](Assert-ThreeDisplayNonblankCurrentGdiName -Name ([string]$monitor.device_name) -FailureMessage "role '$($Role.role)' stable identity resolved without a nonblank current GDI device name.")
   if ([int]$monitor.effective_dpi -ne [int]$Role.expected_effective_dpi) {
-    throw "Fail closed: role '$($Role.role)' monitor '$($Role.expected_gdi_device_name)' effective DPI is $($monitor.effective_dpi), expected $($Role.expected_effective_dpi)."
+    throw "Fail closed: role '$($Role.role)' monitor '$($Role.stable_identity)' current GDI '$($monitor.device_name)' effective DPI is $($monitor.effective_dpi), expected $($Role.expected_effective_dpi)."
   }
   if ([int]$monitor.physical_bounds.width -ne [int]$Role.physical_width -or [int]$monitor.physical_bounds.height -ne [int]$Role.physical_height) {
     throw "Fail closed: role '$($Role.role)' monitor '$($Role.stable_identity)' native physical resolution is $($monitor.physical_bounds.width)x$($monitor.physical_bounds.height), expected $($Role.physical_width)x$($Role.physical_height)."
@@ -1570,8 +1582,9 @@ function Assert-ThreeDisplayWindowState {
   if (-not [bool]$Metrics.alive -or -not [bool]$Metrics.visible) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is missing or invisible." }
   if (-not [bool]$Metrics.responding) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is hung/unresponsive." }
   if ([bool]$Metrics.minimized) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is minimized." }
+  [void](Assert-ThreeDisplayNonblankCurrentGdiName -Name ([string]$Metrics.monitor_device_name) -FailureMessage "role '$($Role.role)' HWND $($Metrics.handle_decimal) has no nonblank current GDI device name for its explicit monitor identity '$($Role.stable_identity)'.")
   if (-not [string]::Equals([string]$Metrics.monitor_device_name, [string]$ExpectedMonitor.device_name, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is on '$($Metrics.monitor_device_name)', not its explicit monitor identity '$($Role.stable_identity)'; swap/default/first-monitor fallback is rejected."
+    throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) current GDI device '$($Metrics.monitor_device_name)' does not match the current GDI device '$($ExpectedMonitor.device_name)' recorded for its explicit monitor identity '$($Role.stable_identity)'; swap/default/first-monitor fallback is rejected."
   }
   if ([long]$Metrics.monitor_handle_decimal -ne [long]$ExpectedMonitor.monitor_handle_decimal) {
     throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) monitor handle does not match its explicit identity binding."
