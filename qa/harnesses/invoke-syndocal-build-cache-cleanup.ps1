@@ -550,8 +550,12 @@ function Test-SyndocalCleanupWriterName {
 function Test-SyndocalCleanupOwnershipAnchor {
     param(
         [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [string]$ExecutablePath,
         [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [string]$CommandLine,
         [Parameter(Mandatory)]
         [string]$RepositoryRoot,
@@ -601,7 +605,10 @@ function Assert-SyndocalCleanupNoOwnedWriters {
         $nameProperty = $process.PSObject.Properties["Name"]
         $pidProperty = $process.PSObject.Properties["ProcessId"]
         $parentProperty = $process.PSObject.Properties["ParentProcessId"]
-        if ($null -eq $nameProperty -or $null -eq $pidProperty -or $null -eq $parentProperty) {
+        if ($null -eq $nameProperty -or $null -eq $nameProperty.Value -or
+            [string]::IsNullOrWhiteSpace([string]$nameProperty.Value) -or
+            $null -eq $pidProperty -or $null -eq $pidProperty.Value -or
+            $null -eq $parentProperty -or $null -eq $parentProperty.Value) {
             Throw-SyndocalCleanupGate -Code "CimRecordIncomplete" -Message "Win32_Process returned an incomplete identity record."
         }
         $processId = [int]$pidProperty.Value

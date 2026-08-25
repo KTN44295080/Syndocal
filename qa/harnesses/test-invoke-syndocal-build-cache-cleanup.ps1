@@ -294,6 +294,47 @@ try {
     Assert-Equal -Expected "PlanReady" -Actual $unrelatedWriterPlan.Outcome -Message "same-name unrelated process is not misclassified as checkout-owned"
     Assert-True -Condition (Test-Path -LiteralPath $unrelatedWriterFixture.Candidate) -Message "unrelated writer test remains Plan-only"
 
+    $inaccessibleMetadataFixture = New-CleanupTestFixture
+    $inaccessibleMetadataReport = Invoke-FixtureCleanup -Fixture $inaccessibleMetadataFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{
+                    Name = "System.exe"
+                    ProcessId = 900004
+                    ParentProcessId = 0
+                    ExecutablePath = $null
+                    CommandLine = $null
+                }
+                [pscustomobject]@{
+                    Name = "svchost.exe"
+                    ProcessId = 900005
+                    ParentProcessId = 0
+                    CommandLine = $null
+                }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Applied" -Actual $inaccessibleMetadataReport.Outcome -Message "blank or missing executable metadata on irrelevant OS processes remains safely irrelevant during Apply"
+    Assert-True -Condition (-not (Test-Path -LiteralPath $inaccessibleMetadataFixture.Candidate)) -Message "irrelevant OS process metadata does not block the exact reviewed deletion"
+
+    $nullNameFixture = New-CleanupTestFixture
+    $nullNameReport = Invoke-FixtureCleanup -Fixture $nullNameFixture -Apply -Hooks @{
+        CimProvider = {
+            @([pscustomobject]@{
+                Name = $null
+                ProcessId = 900006
+                ParentProcessId = 0
+                ExecutablePath = $null
+                CommandLine = $null
+            })
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $nullNameReport.Outcome -Message "null process identity fails closed during Apply"
+    Assert-Equal -Expected "CimRecordIncomplete" -Actual $nullNameReport.Blocker.Code -Message "null process identity has a typed blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $nullNameFixture.Candidate) -Message "null process identity cannot delete"
+
     $missingMetadataFixture = New-CleanupTestFixture
     $missingMetadataReport = Invoke-FixtureCleanup -Fixture $missingMetadataFixture -Apply -Hooks @{
         CimProvider = {
