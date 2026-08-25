@@ -50,7 +50,9 @@ DJ-Link is the WebSocket client. Syndocal extends its existing Web Remote listen
 the dedicated `/dj-link` role/path; it does not open an unrelated second server.
 Generic Remote authorization and DJ Link authorization remain separate.
 
-Every DJ frame is a strict, bounded JSON envelope:
+Every DJ frame is strict, bounded JSON. The `syndocal-envelope-v1` adapter uses the
+envelope shape below; the explicit `generic-json` adapter carries the corresponding
+semantic fields at the frame root and uses its fixed flat ACK shape:
 
 ```json
 {
@@ -64,10 +66,11 @@ Every DJ frame is a strict, bounded JSON envelope:
 }
 ```
 
-`DJ_AGENT_HELLO` is the first frame and carries a dedicated token, Agent version, and
-capabilities. The token is backend-generated, shown only through an explicit rotation
-flow, and is never placed in a URL, query string, ordinary status response, `.sdc`,
-template, backup, or Standby checkpoint. Only an authenticated session may send:
+`DJ_AGENT_HELLO` is the first Agent-to-Syndocal frame and carries a dedicated token,
+Agent version, and capabilities. The token is backend-generated, shown only through
+an explicit rotation flow, and is never placed in a URL, query string, ordinary status
+response, `.sdc`, template, backup, or Standby checkpoint. After HELLO, an
+authenticated Agent session may send only these Agent-to-Syndocal event types:
 
 - `DJ_HEARTBEAT`
 - `DJ_MASTER_CHANGED`
@@ -75,6 +78,18 @@ template, backup, or Standby checkpoint. Only an authenticated session may send:
 - `DJ_LOOP_STATE`
 - `DJ_RELEASE`
 - `DJ_STATE_SYNC`
+- `DJ_TIMELINE_STATE_REQUEST` (control frame with an empty payload)
+- `DJ_TIMELINE_BEAT_JUMP`
+- `DJ_TIMELINE_LOOP_SET`
+
+On the production `syndocal-envelope-v1` wire, the Syndocal-to-Agent direction has
+one authoritative timeline-state event, `DJ_TIMELINE_STATE`, plus ACK responses to
+admitted physical events. The explicit `generic-json` compatibility adapter also
+accepts `DJ_STATE_SYNC_REQUEST` or its legacy `STATE_SYNC_REQUEST` alias and answers
+with a fresh Agent-to-Syndocal `DJ_STATE_SYNC`; the Syndocal production listener does
+not emit either compatibility request. The Agent never originates
+`DJ_TIMELINE_STATE`; it only decodes that event and changes mode from its authoritative
+contents.
 
 Sequence is a positive JavaScript-safe integer and increases monotonically for one
 `agentId`/`sessionId`; gaps are allowed. `eventId` is opaque and bounded. Same ID plus
@@ -112,8 +127,19 @@ must not shorten them to `HELLO`, `MASTER_TRACK_ACTIVE`, or similar private alia
 `trackBpm`, `positionSec`, `startedAt`, and `playSessionId`. `DJ_LOOP_STATE.payload`
 carries the absolute `division`. `DJ_STATE_SYNC.payload` carries `loopDivision`,
 `released`, `masterDeck`, and nested `masterTrack { contentId, title, artist,
-isPlaying }`. State Sync updates diagnostics and absolute Loop truth only; it cannot
-fire a Track mapping or infer Release.
+isPlaying }`. `DJ_TIMELINE_STATE_REQUEST` has no payload. `DJ_TIMELINE_BEAT_JUMP`
+carries `{ bars: -4|4, timelineId }`, and `DJ_TIMELINE_LOOP_SET` carries
+`{ active: boolean, timelineId }`; both are Agent-to-Syndocal and ACKed.
+
+`DJ_TIMELINE_STATE` is Syndocal-to-Agent and authoritative. Its semantic fields are
+`state` (`idle`, `running`, `stopped`, `ended`, or `reset`), boolean `loopActive`,
+`timelineId`, and nonnegative `positionBars`, together with the event identity and
+sequence. The generic-json adapter places those fields at the frame root; the
+`syndocal-envelope-v1` adapter places them under the envelope `payload`. State Sync
+updates diagnostics and absolute Loop truth only; it cannot fire a Track mapping or
+infer Release. Stage 2 F14 derives its absolute `active` value as the logical inverse
+of the latest authoritative `DJ_TIMELINE_STATE.loopActive` for that `timelineId`;
+neither the local LoopHalf counter nor an ACK alone is an authority update.
 
 ## 3. DJ-Link peer behavior
 
@@ -128,16 +154,46 @@ The Pedal defaults may use F13/F14/F15, but remain configurable and are acquired
 native Windows global hotkeys on the DJ PC, not through browser `keydown` and not by
 Syndocal.
 
-- Pedal 2 sends one configured local MIDI Loop Half action and advances the Agent's
-  absolute `loopDivision`. It sends `DJ_LOOP_STATE` with the absolute division.
-- Pedal 3 runs the configured nonblocking local MIDI CC ramp. It sends no Syndocal
-  show event.
-- Pedal 1 sends the configured local deterministic stop, optional local reset steps,
-  and one idempotent `DJ_RELEASE` which is not complete until acknowledged.
+In Stage 1, F13 runs the configured local release macro: Filter HP and the master
+deck's `ChannelFader` fade, Cue/Stop, optional local reset steps, and then one
+idempotent `DJ_RELEASE`. F14 keeps the local MIDI LoopHalf action and
+sends `DJ_LOOP_STATE` with the absolute division. F15 is deliberately inactive in
+Stage 1 and sends neither MIDI nor a Syndocal show event. F13 macro ordering is
+configuration-dependent: the documented default is `sequence:"parallel"`, while
+`filter-then-fade` waits for Filter completion before starting the fade. Ramp
+duration/interval and reset-after-stop policy come from the peer configuration; a
+ramp or reset failure does not advance to Stop/Release. With the macro disabled,
+the legacy direct Stop/Release path is the fallback.
 
-Network loss does not block local rekordbox control. The peer displays the loss and,
-after reconnecting, sends `DJ_STATE_SYNC` with current state instead of replaying old
-relative actions.
+Only an authoritative `DJ_TIMELINE_STATE` with `state:"running"` enters Stage 2.
+There F13/F15 send `DJ_TIMELINE_BEAT_JUMP` with `bars:-4/+4`, while F14 sends the
+absolute `DJ_TIMELINE_LOOP_SET` value derived from the latest authoritative
+`loopActive`; Stage 2 never sends Rekordbox MIDI. The requested F14 value is
+`active: !loopActive` for the current authoritative `timelineId`. An ACK does not
+replace that authority; the next `DJ_TIMELINE_STATE` broadcast does.
+
+During initial connection, authoritative-snapshot wait, disconnect, and immediately
+after reconnect, Stage 1 F13/F14 local Rekordbox operation continues. The peer marks
+only the network-side effect pending or failed and does not replay old relative
+actions after reconnect; after a valid State Sync snapshot it sends `DJ_STATE_SYNC`
+with current state and requests a fresh authoritative timeline state. If the State
+Sync provider is invalid, neither frame is sent. If a Stage 1 `DJ_RELEASE` is pending
+when the socket closes, the peer finalizes that delivery as `send-failed` for the
+connection failure; the router exits `handoff-pending` to `dj-control`, reports a
+failed/retryable local operation, and a later reconnect does not resend that old
+physical event. A new F13 press is required. An ACK `rejected`, `timed-out`, or
+`send-failed` has the same retryable Stage 1 disposition when no authoritative
+running state has won the race.
+If `running` was authoritative first, a late Release failure does not roll back the
+completed handoff or re-enable local control.
+
+Stage 2 cannot be entered without a valid authoritative snapshot. On disconnect it
+keeps `timeline-control`, clears snapshot readiness, and does not fall back to local
+MIDI; an invalid or missing snapshot does not authorize a Stage 2 action. A malformed
+later state broadcast is ignored with a warning rather than becoming new authority.
+After reconnect, a valid `DJ_TIMELINE_STATE(state:"running")` keeps Stage 2 active;
+a valid `idle`, `stopped`, `ended`, or `reset` state exits Stage 2 to `dj-control`,
+resets the peer's local loop division to zero, and restores Stage 1 (F15 inactive).
 
 ## 4. Master Track Active event
 
@@ -197,6 +253,15 @@ division only when the synchronized state is not released. A snapshot with
 `released: true` cannot re-enable or resume the loop. State Sync never replays Track
 Active mappings and never executes Release transport semantics from a snapshot.
 
+`DJ_TIMELINE_BEAT_JUMP` is accepted only for `bars:-4` or `bars:4` and the current
+authoritative `timelineId`; it is available only in Stage 2. `DJ_TIMELINE_LOOP_SET`
+is an absolute boolean request for that same authoritative `timelineId`, not another
+relative Loop Half operation. The peer derives F14's requested boolean from
+`DJ_TIMELINE_STATE.loopActive`, holds a second toggle while the first is pending, and
+discards the pending request on rejection, timeout, or send failure. A successful ACK
+still waits for the next authoritative timeline-state broadcast before changing the
+peer's state.
+
 ## 7. Syndocal operator surface
 
 The existing Web Remote/Setup I/O surface contains a `DJ Link agent` disclosure with:
@@ -237,7 +302,31 @@ Syndocal proof must cover:
 
 The DJ-Link peer separately proves Hook/Now Playing regression safety, Master Track
 Active generation, Pedal/global-hotkey input, local MIDI mappings/ramp/reset, local
-operation during disconnect, reconnect State Sync, and ACK display.
+operation during disconnect, reconnect State Sync, and ACK display. The current
+`C:\Users\kouty\Desktop\rb-output` source was statically inspected on
+`beta-v1.1.2`: `tests/smoke.test.js` contains 60 test declarations and
+`tests/syndocal-envelope-v1.test.js` contains 9. The following focused declarations
+are the existing source evidence for the Stage 2 and reconnect contract; this is a
+static test inventory, not a hardware execution claim:
+
+- `tests/smoke.test.js`:
+  `timeline-control maps pedals to ACKed timeline actions without MIDI and fails
+  closed on disconnect`; `Syndocal disconnect does not gate Stage 1 local MIDI
+  actions`; `release handoff failures never stick in handoff-pending and running
+  wins the late-failure race`; `every physical event waits for typed ACK outcomes,
+  including master and timeline events`; `invalid State Sync snapshots never send
+  or request timeline, then recover on reconnect`; and `Busy backoff is fenced to
+  its socket and reconnect never replays old events` (6 declarations).
+- `tests/syndocal-envelope-v1.test.js`:
+  `syndocal-envelope-v1 physical events use exact typed payloads and strict ACK
+  semantics`; `syndocal-envelope-v1 rejects malformed outbound payloads fail-closed
+  and decodes only valid timeline states`; and `Stage 1 local MIDI independence and
+  Stage 2 network fail-closed gates hold on syndocal-envelope-v1` (3 declarations).
+
+These tests statically cover the authoritative `running` gate, F13/F15 `-4/+4`
+beat-jump payloads, F14 absolute loop-set payload, no Stage 2 MIDI, invalid/missing
+state handling, typed ACK rejection/timeout, and disconnect fail-closed behavior.
+They do not close the physical pedal, rekordbox, wired-LAN, or two-process rows.
 
 ## 9. Native and hardware acceptance
 
@@ -248,6 +337,28 @@ video evidence. It demonstrates Track pre-load without trigger, actual Master pl
 trigger, Master switch, absolute repeated Loop divisions, filter isolation, Release,
 disconnect/local operation/reconnect sync, same-session dedupe, app restart, and next
 show reuse while Art-Net/sACN traffic shares the wired network.
+
+The HW-4 demonstration matrix is explicit below. All twelve rows are still unchecked:
+the current software tests do not substitute for a real pedal, rekordbox, two-process,
+wired-LAN, or shared-network run. Therefore the DJ/Pedal matrix is **0/12 checked
+(0%)**, with **12/12 Required / Peer and hardware pending**. This is a local HW-4
+matrix count and does not add or remove any item from the whole-product accepted
+denominator, which remains **19/71 (26.8%)**.
+
+| Check | Required demonstration | Status |
+| --- | --- | --- |
+| [ ] HW-4.1 | Wired `/dj-link` HELLO/authentication, session replacement, and old-close protection | Required / Peer and hardware pending |
+| [ ] HW-4.2 | Track pre-load without trigger and non-Master rejection | Required / Peer and hardware pending |
+| [ ] HW-4.3 | Actual Master playback emits one mapped Track Active event | Required / Peer and hardware pending |
+| [ ] HW-4.4 | Master switch while already playing | Required / Peer and hardware pending |
+| [ ] HW-4.5 | Stage 1 F14 local LoopHalf plus absolute/repeated `DJ_LOOP_STATE` divisions | Required / Peer and hardware pending |
+| [ ] HW-4.6 | Stage 1 F13 Filter isolation and configured local release-macro behavior | Required / Peer and hardware pending |
+| [ ] HW-4.7 | Stage 1 F13 Release, ACK/rejection/timeout, and retry disposition | Required / Peer and hardware pending |
+| [ ] HW-4.8 | Stage 2 authoritative `running`; F13/F15 `-4/+4`, F14 absolute loop set, and no MIDI | Required / Peer and hardware pending |
+| [ ] HW-4.9 | Disconnect/local Stage 1 operation, reconnect State Sync, and Stage 2 fail-closed behavior | Required / Peer and hardware pending |
+| [ ] HW-4.10 | Same-session event dedupe and replay safety | Required / Peer and hardware pending |
+| [ ] HW-4.11 | App restart and next-show reuse | Required / Peer and hardware pending |
+| [ ] HW-4.12 | Art-Net/sACN traffic sharing the wired network during the DJ run | Required / Peer and hardware pending |
 
 Until the separately developed DJ-Link peer exposes the fixed contract and both builds
 pass the wired-LAN hardware matrix, this feature remains `Required / Peer and hardware
