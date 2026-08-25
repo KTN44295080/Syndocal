@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseStrictJson } from "./strict-json.mjs";
 import { validateAsioPackagingBoundary } from "./check-release-metadata.mjs";
@@ -28,7 +38,10 @@ import {
   showAsioBridgeExports,
   showAsioFeatures,
 } from "./check-show-asio-artifact.mjs";
-import { prepareShowAsioRuntime } from "./prepare-show-asio-runtime.mjs";
+import {
+  prepareShowAsioRuntime,
+  readVerifiedCargoBridgeBuildOutput,
+} from "./prepare-show-asio-runtime.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 export const workspaceRoot = resolve(scriptDir, "../..");
@@ -407,7 +420,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
     { cwd: workspace, environment: bridgeEnvironment },
   );
   const bridgePath = resolve(bridgeTarget, "release/syndocal_asio_bridge.dll");
-  const bridgeRecord = readVerifiedRegularFile(bridgePath, "Just-built Show-ASIO bridge", { allowedRoots: [bridgeTarget] });
+  const bridgeRecord = readVerifiedCargoBridgeBuildOutput(bridgePath, bridgeTarget);
   const bridgeSha256 = createHash("sha256").update(bridgeRecord.bytes).digest("hex");
   const exports = inspectBridgeExports(bridgePath, { environment: bridgeEnvironment });
   if (JSON.stringify(exports) !== JSON.stringify(showAsioBridgeExports)) {
@@ -446,6 +459,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
     expectedBridgeSha256: bridgeSha256,
     applicationPath: resolve(appTarget, "release/syndocal.exe"),
     bridgePath,
+    allowCargoRootDepsAlias: true,
     artifactDir: finalArtifact,
     inventory,
     exportInspector: (path) => inspectBridgeExports(path, { environment: applicationEnvironment }),
@@ -514,6 +528,56 @@ async function runSelfTest() {
     /pin is not the exact/,
     "wrong absolute Cargo linker pin is rejected",
   );
+  const cargoLinkFixture = mkdtempSync(join(tmpdir(), "syndocal-show-asio-cargo-link-"));
+  try {
+    const releaseDirectory = join(cargoLinkFixture, "release");
+    const depsDirectory = join(releaseDirectory, "deps");
+    const rootOutput = join(releaseDirectory, "syndocal_asio_bridge.dll");
+    const depsOutput = join(depsDirectory, "syndocal_asio_bridge.dll");
+    mkdirSync(depsDirectory, { recursive: true });
+    writeFileSync(rootOutput, "cargo bridge bytes", { flag: "wx" });
+    linkSync(rootOutput, depsOutput);
+    const accepted = readVerifiedCargoBridgeBuildOutput(rootOutput, cargoLinkFixture);
+    pass(accepted.bytes.toString("utf8") === "cargo bridge bytes", "exact Cargo root/deps two-name bridge topology is accepted");
+
+    const thirdLink = join(releaseDirectory, "unexpected-bridge-alias.dll");
+    linkSync(rootOutput, thirdLink);
+    rejects(
+      () => readVerifiedCargoBridgeBuildOutput(rootOutput, cargoLinkFixture),
+      /exactly the canonical root\/deps two-name link topology/,
+      "an additional in-target bridge hard-link alias is rejected",
+    );
+    unlinkSync(thirdLink);
+
+    rejects(
+      () => readVerifiedCargoBridgeBuildOutput(join(releaseDirectory, "wrong.dll"), cargoLinkFixture),
+      /not the exact isolated target path/,
+      "a noncanonical Cargo bridge root path is rejected",
+    );
+
+    unlinkSync(depsOutput);
+    const unexpectedAlias = join(releaseDirectory, "unexpected-root-alias.dll");
+    linkSync(rootOutput, unexpectedAlias);
+    rejects(
+      () => readVerifiedCargoBridgeBuildOutput(rootOutput, cargoLinkFixture),
+      /deps output is missing/,
+      "a two-link root with the canonical deps name missing is rejected",
+    );
+    unlinkSync(unexpectedAlias);
+
+    const rootAlias = join(releaseDirectory, "root-pair-alias.dll");
+    linkSync(rootOutput, rootAlias);
+    writeFileSync(depsOutput, "cargo bridge bytes", { flag: "wx" });
+    const depsAlias = join(depsDirectory, "deps-pair-alias.dll");
+    linkSync(depsOutput, depsAlias);
+    rejects(
+      () => readVerifiedCargoBridgeBuildOutput(rootOutput, cargoLinkFixture),
+      /not exactly two names for one unchanged file identity/,
+      "two separate two-link same-byte pairs are rejected instead of being mistaken for one Cargo identity",
+    );
+  } finally {
+    rmSync(cargoLinkFixture, { recursive: true, force: true });
+  }
   pass(!existsSync(resolve(workspaceRoot, "target/show-asio-build/self-test-probe")), "self-test creates no Cargo/native output");
   console.log("Show-ASIO build orchestrator self-test passed: " + assertions + " assertions; Cargo/native/process-stop=NOT_RUN");
 }
