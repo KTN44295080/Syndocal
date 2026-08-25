@@ -1860,3 +1860,22 @@ Remote listener, and first prove authenticated wired HELLO/ACK. Only then may
 the twelve-row hardware sequence proceed. This observation checks none of
 HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
 whole-product accepted denominator remains exactly 19/71 (26.8%).
+
+## 41. 2026-08-25 authoritative near-show completion objective
+
+The immediate completion denominator is now the physical next-show scenario in
+`qa/SYNDOCAL_NEAR_SHOW_READINESS_2026-08-25.md`. It requires the exact
+`DSF2026.dvc` import boundary; representative Lighting; temporary deterministic
+LED `1920x1080` and projector `3840x2160` video with a `1920x1080` editor;
+authored `人生オーバー` and `惑う星` Timelines; wired authenticated DJ-Link Master
+trigger, position and loop synchronization; pedal-mediated DJ-to-band
+continuation; BPM-aware automatic transition to `惑う星`; real ASIO; three
+physical displays; persistence/restart; native artifact identity; and closure of
+every discovered fail-closed, clean-break, browser/native, warning, and operator
+defect.
+
+This is a stricter scenario gate, not a reduction of the 71-row product ledger.
+No browser, loopback, short device smoke, partial Timeline, or generic native
+launch may promote this objective. The final artistic Lighting design and final
+video assets remain user-authored after the complete product path is proven with
+representative scenes and deterministic temporary media.

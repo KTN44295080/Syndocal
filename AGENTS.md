@@ -62,6 +62,15 @@
 - Remove existing warnings in focused commits and reach zero first-party warnings before beta/release-candidate acceptance. Do not suppress debt with crate-wide `allow(dead_code)`, rustc command-line warning-allow flags, fake reads, or an arbitrary Vite chunk-limit increase.
 - A narrow third-party/platform allowlist requires a reason, owner, upstream reference where applicable, and expiry. Once a supported matrix reaches zero, make warnings errors in CI and do not regress it.
 
+## Fail-closed and clean-break obligation
+
+- Treat compatibility as a deliberate, evidenced product decision, never as the automatic default. Do not preserve an obsolete behavior, schema, route, state, or adapter merely because something might still depend on it.
+- Fail closed on invalid, ambiguous, stale, unsupported, underdetermined, or unverifiable state. The failure must be visible, specific, and actionable; never silently accept, promote, normalize, synthesize, or substitute a more permissive result.
+- Do not stack fallback paths, legacy branches, retries, or compatibility shims to conceal an unresolved invariant or ownership failure. Diagnose and repair the authoritative path. A safety fallback is allowed only when its bounded trigger, owner, telemetry, tests, and removal condition are explicit.
+- When a clean break is chosen, remove the retired design completely in the same tranche: entry points, persisted state, schemas, adapters, UI, runtime branches, tests, documentation, generated inventories, and obsolete artifacts. Do not leave a dormant second path that can accidentally reactivate.
+- Add a migration only when preserved user data or an external protocol explicitly requires one. Keep it one-way, bounded, observable, and separately versioned; reject invalid and future versions, and record the removal milestone instead of supporting it indefinitely.
+- Completion proof must cover both sides of the boundary: the intended path succeeds, and invalid or retired paths are unreachable or fail closed. At each checkpoint, document the old path, new path, reason for the break, deliberately unsupported cases, and any temporary migration with its deletion gate.
+
 ## Delegation and concurrency
 
 - Keep task decomposition, instruction design, integration decisions, and completion claims under the supervising `gpt-5.6-sol` agent. Delegated summaries are evidence inputs, not substitutes for the supervisor's diff and gate verification.
