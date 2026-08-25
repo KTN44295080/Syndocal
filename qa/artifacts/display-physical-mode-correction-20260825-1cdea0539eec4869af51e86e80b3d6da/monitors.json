@@ -1,0 +1,125 @@
+{
+  "inventory": [
+    {
+      "stable_identity": "\\\\?\\DISPLAY#PXO1560#5&2c959af3&0&UID768#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "device_name": "\\\\.\\DISPLAY5",
+      "friendly_name": "PX160 WAVE",
+      "monitor_handle_decimal": 131073,
+      "connected": true,
+      "effective_dpi": 144,
+      "physical_bounds": {
+        "left": -2465,
+        "top": 1731,
+        "right": -545,
+        "bottom": 2811,
+        "width": 1920,
+        "height": 1080
+      },
+      "work_area": {
+        "left": -2465,
+        "top": 1731,
+        "right": -545,
+        "bottom": 2739,
+        "width": 1920,
+        "height": 1008
+      }
+    },
+    {
+      "stable_identity": "\\\\?\\DISPLAY#IOC9125#5&eb37e8d&1&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "device_name": "\\\\.\\DISPLAY1",
+      "friendly_name": "GA27T1M",
+      "monitor_handle_decimal": 65689,
+      "connected": true,
+      "effective_dpi": 120,
+      "physical_bounds": {
+        "left": 1920,
+        "top": -364,
+        "right": 4480,
+        "bottom": 1076,
+        "width": 2560,
+        "height": 1440
+      },
+      "work_area": {
+        "left": 1920,
+        "top": -364,
+        "right": 4480,
+        "bottom": 1016,
+        "width": 2560,
+        "height": 1380
+      }
+    },
+    {
+      "stable_identity": "\\\\?\\DISPLAY#CRXED00#5&2c959af3&0&UID772#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "device_name": "\\\\.\\DISPLAY6",
+      "friendly_name": "XENEON EDGE",
+      "monitor_handle_decimal": 65691,
+      "connected": true,
+      "effective_dpi": 96,
+      "physical_bounds": {
+        "left": 1598,
+        "top": 1080,
+        "right": 4158,
+        "bottom": 1800,
+        "width": 2560,
+        "height": 720
+      },
+      "work_area": {
+        "left": 1598,
+        "top": 1080,
+        "right": 4158,
+        "bottom": 1752,
+        "width": 2560,
+        "height": 672
+      }
+    },
+    {
+      "stable_identity": "\\\\?\\DISPLAY#MSI3DD2#5&eb37e8d&1&UID4357#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "device_name": "\\\\.\\DISPLAY3",
+      "friendly_name": "MPG321UX OLED",
+      "monitor_handle_decimal": 499785825,
+      "connected": true,
+      "effective_dpi": 144,
+      "physical_bounds": {
+        "left": -3840,
+        "top": -429,
+        "right": 0,
+        "bottom": 1731,
+        "width": 3840,
+        "height": 2160
+      },
+      "work_area": {
+        "left": -3840,
+        "top": -429,
+        "right": 0,
+        "bottom": 1659,
+        "width": 3840,
+        "height": 2088
+      }
+    },
+    {
+      "stable_identity": "\\\\?\\DISPLAY#PXO2500#5&eb37e8d&1&UID4355#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+      "device_name": "\\\\.\\DISPLAY2",
+      "friendly_name": "Pixio PX259PS",
+      "monitor_handle_decimal": 1676745713,
+      "connected": true,
+      "effective_dpi": 96,
+      "physical_bounds": {
+        "left": 0,
+        "top": 0,
+        "right": 1920,
+        "bottom": 1080,
+        "width": 1920,
+        "height": 1080
+      },
+      "work_area": {
+        "left": 0,
+        "top": 0,
+        "right": 1920,
+        "bottom": 1032,
+        "width": 1920,
+        "height": 1032
+      }
+    }
+  ],
+  "decision": "not-configured"
+}

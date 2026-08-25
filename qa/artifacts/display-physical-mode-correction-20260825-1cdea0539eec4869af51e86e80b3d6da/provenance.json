@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "tool": "run-syndocal-three-display-show-acceptance.ps1",
+  "mode": "dry-run",
+  "observed_at_utc": "2026-08-25T09:16:09.7089779Z",
+  "checkout_root": "C:\\Users\\kouty\\Documents\\KDMX",
+  "expected_executable_path": "C:\\Users\\kouty\\Documents\\KDMX\\target\\release\\syndocal.exe",
+  "fully_configured": false,
+  "expectations": {
+    "sha256": null,
+    "product_version": null,
+    "git_head": null,
+    "roles": [
+      {
+        "role": "editor",
+        "stable_identity": "",
+        "physical_width": 1920,
+        "physical_height": 1080,
+        "native_window_label": "main",
+        "exact_title": "Syndocal"
+      },
+      {
+        "role": "led",
+        "stable_identity": "",
+        "physical_width": 1920,
+        "physical_height": 1080,
+        "native_window_label": "video-output-0",
+        "exact_title": "Syndocal Output - "
+      },
+      {
+        "role": "projector",
+        "stable_identity": "",
+        "physical_width": 3840,
+        "physical_height": 2160,
+        "native_window_label": "video-output-0",
+        "exact_title": "Syndocal Output - "
+      }
+    ]
+  },
+  "safety": {
+    "read_only_default": true,
+    "creates_or_changes_syndocal_outputs": false,
+    "launches_or_terminates_processes": false,
+    "screenshots_taken": false,
+    "hardware_or_network_access": false,
+    "output_window_repositioning": false
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "performed": false,
+  "kind": "none",
+  "reason": "dry-run: no mutation path is reachable"
+}

@@ -1,0 +1,7 @@
+{
+  "verdict": "not-configured",
+  "accepted": false,
+  "message": "Read-only discovery completed without a complete identity/provenance/output-role configuration; no acceptance was evaluated.",
+  "errors": [],
+  "native_hardware_claim": false
+}

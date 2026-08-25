@@ -163,13 +163,56 @@ The objective is not complete if any of the following remains true:
 | ID | Live-show requirement | Current evidence | Exit evidence | Status |
 | --- | --- | --- | --- | --- |
 | SHOW-P0-1 | Bank/Scene authoring never leaves project mutation authority stuck | Native alpha.11 Bank Save remained pending while recovery checkpoint reported busy. Static review found a possible permanent transaction-lane residue: a failed Commit followed by one swallowed failed Cancel can leave `closing`/active state without automatic finalization. | Deterministic contention tests prove exact-identity Commit/Cancel cleanup reaches a terminal state without permanent active/pending/closing residue; native create, rename, reorder, delete, Undo, save, restart, and reload all complete. | BLOCKED BY IMPLEMENTATION |
-| SHOW-P0-2 | Timeline lower-right uses the same authoritative Bank/Scene representation as Lighting, with placement-only behavior | The compact representation exists in the dirty tree, but `cueLists` is not yet connected from `App.tsx`; fallback grouping can lose Bank name/order, and an all-empty Bank set can disappear. | Same snapshot produces identical Bank ID/order/name/color and Scene ID/order/number/name/type in Lighting and Timeline; empty Banks remain; Timeline exposes no CRUD/play path; click and drag place the same Scene Block. | BLOCKED BY INTEGRATION |
+| SHOW-P0-2 | Timeline lower-right uses the same authoritative Bank/Scene representation as Lighting, with placement-only behavior | The compact representation and required `cueLists={snapshot().cue_lists}` connection exist in the dirty tree. The shared fail-closed authority now covers Control/Edit Cue Pads, editable Touch, outer and inner Timeline placement, delayed callbacks, and orphan events without fabricated Cue/Bank IDs. The hardened Scene Matrix gate drives the production-shaped owner registration, exact three-field Program Audio state, Begin/Batch/Commit, exact operation ACK, a complete terminal `R+1` authority result, Undo, and an expected dirty-project `beforeunload`; it passes 5/5 viewport sizes. Dedicated source-shelf and external-DnD contracts also pass. Independent Ox review, authoritative backend Bank create/rename integration, and a fresh native run remain open. | Same snapshot produces identical Bank ID/order/name/color and Scene ID/order/number/name/type in Lighting and Timeline; empty Banks remain; Timeline exposes no CRUD/play path; click and drag place the same Scene Block. | FOCUSED FRONTEND PROOF PASS / OX REVIEW, BACKEND, AND NATIVE PROOF OPEN |
 | SHOW-P0-3 | Detached Stage/Timeline panes never dual-render, disappear, or leave unused main-window space | The previous startup recovery could treat failed placement capture as child absence. A fail-closed exact-label child census is being implemented. | Browser state-machine proof plus a fresh exact-checkout native run covers both detachment orders, restart with detached records, child present/absent/unknown outcomes, Stage integrated rendering, Timeline source/timeline separation, no duplicate pane, and no unusable main-window void. | BLOCKED BY INTEGRATION |
-| SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | The exact source project exists at `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`. Temporary resolution-specific media and a reproducible generator now exist, but the DVC exact-import report and physical output flow remain unexecuted. Prior native D4 and pane evidence does not prove this next-show flow. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh alpha.12 native three-display output complete, save, restart, and reload without substitution. | IN AUDIT |
-| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | Current acceptance remains 0/12. The observed DJ-PC peer was an older build whose setup API returned 404; alpha.11 listener/token/NIC state did not satisfy restart reuse. | Identity-bound `beta-v1.1.2` peer is committed and pushed, both PCs run the intended artifacts, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, loop, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | BLOCKED BY IMPLEMENTATION AND HARDWARE |
+| SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | Static exact derivation of the pinned file reports 46 fixtures, 12 profiles, 15 fixture groups, 2 Banks, 2 Scenes, 84/84 accepted value payloads, 234 beam records, and zero unknown fixture types. Two MIDI mappings remain Approximate because device affinity is not exact, and one DVC GOLD binding remains Unsupported. Temporary resolution-specific media and a reproducible generator exist, but the focused importer execution and physical output flow remain unexecuted. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh alpha.12 native three-display output complete, save, restart, and reload without substitution. | STATIC INVENTORY COMPLETE / EXECUTION BLOCKED |
+| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | The complete peer source is committed and pushed on `beta-v1.1.2` at `1a2f3bc70507d1bb4c5ffe2eb8bbb2b24686532f`, equal to `origin/beta-v1.1.2`, with a clean tree. Full tests pass 329/329 with 2 release-gated skips separately exercised by the real pkg commitment smoke (2/2); `npm audit` reports 0 vulnerabilities and first-party warnings are 0. The release workflow's Inno Setup URL/hash mismatch was fixed by pinning the official GitHub `is-6_7_3` asset whose measured SHA-256 exactly matches the recorded pin. Final annotated tag, installer/ZIP/release manifest, and all 12 physical checks remain open by design. | Identity-bound `beta-v1.1.2` peer is committed and pushed, both PCs run the intended artifacts, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, loop, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | SOURCE CHECKPOINT PUSHED / TAG, PACKAGE, AND HARDWARE OPEN |
 | SHOW-P0-6 | The distributed artifact exactly matches the accepted source | Current source is dirty and remains version `1.2.0-alpha.11`. | Focused gates, warning ratchet, synchronized alpha.12 metadata, `check:release`, exact VS2022 14.44 linker, `pnpm --dir app tauri build --no-bundle`, exactly one responsive maximized exact-path window, evidence update, meaningful commit, and successful push. | NOT RUN |
-| SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | Short successful TOPPING and HOTONE runs exist, but the advertised matrix, occupied-driver/control-panel/reset/resync/XRUN/unplug faults, one-hour soak, and latency evidence remain open. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Free, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, one-hour soak, and measured latency pass without WASAPI or another-driver substitution. | BLOCKED BY IMPLEMENTATION AND HARDWARE |
-| SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Required primitives exist in partial form, but the exact authored Timelines and full DJ-to-band-to-next-song sequence have not been executed. | Wired authenticated Master-track trigger, position follow, absolute 8-beat and half-loop updates, pedal stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | BLOCKED BY IMPLEMENTATION AND AUTHORING |
+| SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | The isolated bridge has clean-broken to ABI/schema v2 and one canonical `syndocal_asio_bridge.dll`; independent Ox review passed its bridge boundary. Follow-up hardening bounds every channel gain to finite `[0,1]`, adds exported pre-backend invalid-gain proof, and validates all nine full C prototypes including duplicate/mutated/comment-only negative cases. SDK-free tests pass 11/11 under the exact VS 14.44 linker with zero reported first-party warnings; `distribution_approved` remains false. Default-package separation has an implementation, but independent adversarial review found common-config resource, path traversal, SDK-pin drift, renamed-byte, and installer-content bypasses, so packaging is not accepted. The application loader remains ABI v1 and incompatible until strict v2 integration; persistence/stale lock, typed lifecycle, real hardware, one-hour soak, and latency evidence remain open. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Close, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, one-hour soak, and measured latency pass without WASAPI or another-driver substitution. | BRIDGE V2 REVIEWED / PACKAGE REPAIR, APP INTEGRATION, AND HARDWARE OPEN |
+| SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Absolute loop/release and authored Follow/BPM primitives exist in the dirty source, but MasterTrackActive starts the Timeline without applying `position_sec` or track BPM to engine transport; StateSync also stores position diagnostically only. A nonmatching nonempty content ID can still fall through to title/artist matching. The exact authored Timelines and full sequence remain unexecuted. | Wired authenticated Master-track trigger, position follow, absolute 8-beat and half-loop updates, pedal stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | BLOCKED BY IMPLEMENTATION AND AUTHORING |
+| SHOW-P0-9 | Scene Settings remains usable at show-editor size and an authored Scene may intentionally contain zero owned FX | The focused browser gate now passes at 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720 with an 8-FX fixture: 4x2 family layout at 1920, no chooser descriptions, local 32px owned-FX toolbar controls, contained focusable scrollport, real wheel/PageDown/End reaching a bottom sentinel, and zero document/app scroll. Browser removal reaches 0, but native Tauri/engine guards still reject the final removal. | Exact-checkout native UI reproduces the internal scroll and zero-FX operation; acknowledged engine state, active runtime release, save/reload persistence, and publication-failure rollback all pass without browser-local authority. | FOCUSED LAYOUT PROOF PASS / NATIVE MUTATION BLOCKED |
+
+## Discovered fail-closed and clean-break repair ledger
+
+Every finding below remains required even if a narrower show smoke passes. Line
+references are the discovery snapshot and may move as the file is decomposed;
+the invariant and retirement proof remain binding.
+
+| ID | Finding and discovery evidence | Required end state | Status |
+| --- | --- | --- | --- |
+| FC-01 | Generic project Begin/Commit can wait indefinitely; failed Cancel/ACK cleanup is swallowed (`App.tsx` generic invoke/recovery; `main.rs` blocking admission and lane close). | Exact-identity bounded terminal recovery, no raw mutation resend, no permanent active/pending/closing residue, visible unrecovered state, next mutation succeeds without restart. | IN IMPLEMENTATION |
+| FC-02 | Browser fixture implements Bank/Scene/Timeline/Patch/FX CRUD with direct `setSnapshot`, bypassing Tauri, coordinator, engine publication, history, and persistence. | Fixtures use the production typed mutation contract or are immutable layout-only inputs that cannot promote native acceptance; production mutation functions contain no fixture-local project mutation branch. | OPEN |
+| FC-03 | Bank/Scene CRUD mixes legacy renderer-ticketed Create/Rename with server-authoritative Empty/Delete/Reorder. | One versioned server-authoritative Bank/Scene API owns every CRUD operation; old route is removed from invoke registration, frontend inventories, backend, tests, and docs. | IN IMPLEMENTATION |
+| FC-04 | A nonmatching DJ `content_id` falls through to title/artist matching and can trigger the wrong Timeline (`main.rs` DJ mapping resolver). | Nonempty content ID is the sole authority; mismatch is explicit `mapping_not_found`; any metadata-only policy is explicit, versioned, unambiguous, and never entered from ID mismatch. | OPEN |
+| FC-05 | Project JSON is deserialized into separate project/mapping structs without rejecting unknown mapping keys, so a typo can silently delete DJ triggers. | One versioned project document owns mappings, rejects unknown/future fields, and migrates supported v1 exactly once to canonical v2. | OPEN |
+| FC-06 | Missing Bank, output, layer, DMX mode, or fixture mode selection is replaced by first/default/fabricated state. | Preserve stale identity, visibly lock the operation, and require explicit reselection; exact identity mismatch changes no other object. | OPEN |
+| FC-07 | Root Timeline transport uses a newer authority while child play/seek, metronome, loop, and old root commands remain fire-and-forget and registered; count-in is clamped. | One receipt/fence protocol owns root and child play/seek/loop/metronome; invalid count rejects unchanged; old commands are unregistered. | OPEN |
+| FC-08 | DJ machine status/NIC errors become unavailable/empty UI, and legacy and generic wire envelopes remain accepted without a retirement gate. | Preserve typed failure reason; exact current envelope only; old wire unregistered after a bounded peer migration; wired restart evidence passes. | OPEN |
+| FC-09 | When the selected ASIO backend disappears from inventory, the frontend automatically chooses WASAPI or the first backend and clears settings. | Retain the ASIO identity as stale/faulted, lock Start, expose the exact reason, and change backend only through an explicit operator action. | OPEN / SHOW P0 |
+| FC-10 | Missing ASIO backend fields deserialize to WASAPI and optional backend queries default to WASAPI. | Versioned requests require backend identity, reject unknown/missing fields, and perform zero stream/catalog mutation on rejection. | OPEN / SHOW P0 |
+| FC-11 | ASIO bridge missing/load/symbol/ABI errors collapse to `built:false`. | Return and display `NotPackaged`, `Ready`, or typed `Fault`; no error class triggers fallback. | OPEN / SHOW P0 |
+| FC-12 | Two ASIO DLL names are searched in order, so legacy-only or both-present states select silently. | One canonical artifact name; legacy-only and ambiguity fail visibly, or a separately versioned one-way migration has an explicit deletion milestone. | OPEN / SHOW P0 |
+| FC-13 | ASIO backend/driver/rate/format/channels/buffer/mix are process-local signals and do not survive restart. | Versioned machine-local persistence, exact driver identity revalidation, stale lock, restart/next-show proof, and no project-file secret/device leakage. | OPEN / SHOW P0 |
+| FC-14 | Timeline layers and missing `layer_id` are synthesized/retargeted at runtime from legacy track fields indefinitely. | One-way versioned migration writes canonical layers; runtime requires exact IDs; old track synthesis and retarget paths are removed. | OPEN |
+| FC-15 | Timeline Bank shelf accepts optional `cueLists`, fabricates unavailable Banks, loses authoritative order/name, and hides valid empty Banks. | `cueLists` is required; exact order/name/color and empty Banks are retained; orphans are explicit unavailable non-placeable entries; Timeline remains placement-only. | IMPLEMENTED / FOCUSED BROWSER PROOF PASS / NATIVE OPEN |
+| FC-16 | UI display logic and engine snapshot sanitization rewrite the persisted default-Bank aliases `Main` / `Cue List 1` to `Bank 1`, allowing an authored saved label to change during load or diverge across Lighting/Timeline/Executor. | A new project starts with the exact label `Bank 1`; every persisted nonblank label, including `Main`, remains byte-for-byte unchanged everywhere; all alias rewrite branches and their positive tests are removed or inverted. | IN IMPLEMENTATION |
+| FC-17 | New authoritative media commands coexist with transitional legacy public media IPC, allocator, adapters, and tests. | Only the authoritative media route remains registered; any saved-data migration is loader-only and one-way, not public runtime IPC. | OPEN |
+| FC-18 | `.sdc` remains v1 while several legacy normalizations run on every load without writing a canonical upgraded artifact. | Independent schema version, one-way migration report, explicit upgraded save, future/invalid rejection, second load performs zero migration, old loader has a deletion milestone. | OPEN |
+| FC-19 | Legacy video output commands remain registered beside v2; some mapping-preset routes still mutate Engine. | Retired output commands are absent from invoke handler, frontend types/inventory, backend, tests, and docs; only v2 succeeds. | OPEN |
+| FC-20 | Browser pane `window.open()` success and localStorage persistence failures can be accepted or swallowed without proving a child/native record. | Browser path remains layout-only; native exact-label lifecycle is authoritative; popup/storage failure is visible and never hides main content. | PARTIAL FIX / NATIVE PROOF OPEN |
+| FC-21 | Decoder and last-valid video fallbacks have telemetry but no explicit ownership/removal condition under the new rule. | Either remove the fallback or record bounded trigger, owner, performance/freshness limit, tests, operator state, and deletion criterion. | OPEN |
+| FC-22 | Frontend sets and backend invoke registration are hand-maintained inventories, so an unclassified mutator can escape the gates. | Generate one descriptor inventory; every command is exactly one of read-only, runtime-only, backend-authoritative mutation, or retired/unregistered; unclassified is a build failure. | OPEN |
+| FC-23 | Browser VJ constructs synthetic media/runtime/effects/outputs, while multiple native output operations remain explicitly unavailable. | Use real imported test media and canonical artistic renderer on exact physical outputs; unavailable native operations remain disabled until implemented, never simulated as acceptance. | IN IMPLEMENTATION / SHOW P0 |
+| FC-24 | Scene Settings browser fixture can remove the final owned FX locally, but both Tauri validation and the engine reject an empty replacement, so native `x` cannot reach zero and the green browser result bypasses authority. | Empty FX replacement is an acknowledged authoritative mutation; an active effect-only Scene releases its runtime contribution, persists zero FX, survives save/reload, and rollback leaves the old FX intact on publication failure. The duplicate last-FX rejection path and its legacy acceptance test are deleted or inverted. | IN IMPLEMENTATION / NATIVE PROOF OPEN |
+| FC-25 | The shared Bank authority now closes the Bank editor, shelf, executor, Control/Edit Lighting Cue Pads, editable Touch, outer and inner Timeline placement, and delayed callbacks. Fault clears armed state; orphan events remain unavailable without fabricated Cue/Bank IDs. A production-shaped fixture hook and strict terminal-authority harness expose real authority transitions without a permissive empty snapshot; its first `R+1` run exposed and then proved the immutable-clone Undo repair. | One immutable authority result gates every Bank mutation, Scene placement, executor, Control/Edit/Live/Touch action, outer and inner Timeline surface, and delayed callback before rendering and again at invocation time; fault clears armed state, sends zero IPC/runtime commands, preserves visible invalid bindings, and never fabricates Cue/Bank IDs. | FOCUSED IMPLEMENTATION AND 5-SIZE PROOF PASS / OX REVIEW AND NATIVE PROOF OPEN |
+| FC-26 | A non-null selected Bank identity that disappears during polling is silently replaced by the first remaining Bank in shared helper, App selection effect, Playback Executor create state, and Scene Matrix selection. A contract test currently blesses missing Bank 1 becoming Bank 7. | `null` initial selection may explicitly adopt the first authoritative Bank once; any non-null missing/stale selection remains preserved as unavailable and locks dependent actions. Only a successful explicit delete transaction may select a documented successor. Tests must reject missing-ID-to-first-Bank fallback. | P0 REVIEW FINDING / REPAIR REQUIRED |
+| FC-27 | Bank authority does not validate `CueListSummary.active_cue_id`; UI can display a Cue from another Bank as active, and engine load can carry a malformed active-Cue reference into effect activation. Existing sanitization may silently clear some malformed values instead of rejecting the document unchanged. | An active Cue reference is null or an exact unique Cue in the same exact Bank. Invalid, missing, duplicate, or cross-Bank references reject load/mutation unchanged and close every dependent UI/runtime surface; no label-only display, activation, or silent clear is permitted. | REVIEW FINDING / FRONTEND AND ENGINE REPAIR REQUIRED |
+| FC-28 | Video core has a payload-less exact-black artistic admission. Independent review confirmed all six public frame-only artistic wrappers reject both `Error` and `LastValid` with typed `NonFreshArtisticOutput`; `cargo test -p video` passed 159/159 with 1 ignored and zero first-party warnings under the exact VS 14.44 linker. NDI/Spout integration is under adversarial repair after review found current-project blackout did not dominate historical Follow snapshots, route identity omitted exact kind/endpoint, Follow authority could roll over before SDK send, and revalidate-then-send lacked an honest linearization/fence. Display still uses legacy preparation/raw presentation paths and hides zero-area. | Every physical sender/presenter consumes the evidenced artistic result, rechecks complete current output/safety/project authority immediately before I/O, treats non-Fresh as typed failure or exact-black safety output, updates LastValid only from Fresh, exposes blackout telemetry, rejects zero-area unchanged, and has no reachable legacy/frame-only success path. | CORE PASS / NDI-SPOUT ADVERSARIAL REPAIR ACTIVE / DISPLAY OPEN |
+| FC-29 | `App.tsx` is currently 28,159 lines / 1,199,580 bytes and `main.rs` is 123,293 lines / 4,717,427 bytes. Bank/Scene, project transaction/recovery, Timeline, external control, ASIO, video presentation, and fixture/browser routes still converge in these two files, so authority ownership is difficult to audit and native-only divergence can hide behind a frontend pass. The new `bankAuthority.ts` and `projectTransactionRecovery.ts` extractions are useful starts, not architectural completion. | Each mutation domain has one typed coordinator/controller module and one registered backend handler surface; `App.tsx` composes UI only, `main.rs` composes Tauri/state only, generated command classification rejects unowned routes, and domain tests prove no fixture/browser/recovery/legacy parallel mutation path. Extraction must preserve the accepted show contracts one domain at a time; a risky monolithic rewrite is forbidden. | STRUCTURAL DEBT CONFIRMED / INCREMENTAL EXTRACTION STARTED / COMPLETION OPEN |
+
+Closing a row requires implementation plus a negative proof that the retired or
+invalid path is unreachable. A comment, warning, disabled UI button, or green
+browser layout is not row closure.
 
 ## Mandatory ASIO show blocker
 
@@ -246,12 +289,91 @@ rate, duration, size, and hash. These files prove only deterministic media
 availability and resolution; they do not prove Syndocal import, decoder,
 timeline, monitor routing, or physical pixel output.
 
+## Focused frontend checkpoint (2026-08-25)
+
+The current dirty frontend passes `pnpm --dir app run build` with TypeScript
+and Vite reporting no first-party warnings. Focused fail-closed/UI gates also
+pass: identity color (`21` distinct hues), Timeline external DnD, Timeline
+source-shelf contract and click/drag parity, localization (`3566/3566`, zero
+unprotected user-data labels), right-click suppression, Scene Settings at all
+five supported browser sizes, Scene Matrix full authoring at all five sizes,
+and the production-shaped Scene Matrix cross-Bank transaction/Undo gate at all
+five sizes. The comprehensive Scene Matrix fixture covers Bank create/custom
+name/automatic name/normalized-duplicate rejection, context-menu rename/delete,
+keyboard opening/escape/focus restoration, empty-Bank single `+ Scene` action,
+Scene rename/duplicate/delete, Bank reorder, and Undo/Redo.
+
+These are browser/fixture proofs only. They do not close the backend Bank
+authority, native Tauri mutation, native input, persistence, or process/window
+acceptance rows. In particular, the fixture's successful Bank creation must not
+be cited as proof that the current native Bank Save hang is repaired.
+
+## Connected display mode evidence
+
+The 2026-08-25 five-display probe must distinguish DPI-virtualized
+`System.Windows.Forms.Screen.Bounds` from the current physical display mode.
+The earlier logical-bounds reading was incorrectly treated as physical mode
+evidence. A Win32 `EnumDisplaySettings(..., ENUM_CURRENT_SETTINGS, ...)` probe
+corrected that conclusion and confirmed that the 4K display is present:
+
+| Device | Primary | DPI-virtualized bounds | Current physical mode |
+| --- | --- | --- | --- |
+| `DISPLAY1` | no | 2048x1152 at 1920,-364 | 2560x1440 at 320 Hz |
+| `DISPLAY2` | yes | 1920x1080 at 0,0 | 1920x1080 at 360 Hz |
+| `DISPLAY3` | no | 2560x1440 at -3840,-429 | **3840x2160 at 240 Hz** |
+| `DISPLAY5` | no | 1280x720 at -2465,1731 | 1920x1080 at 60 Hz |
+| `DISPLAY6` | no | 2560x720 at 1598,1080 | 2560x720 at 60 Hz |
+
+Therefore the projector's required 3840x2160 physical mode is available now;
+there is no mode-switch blocker. Final acceptance must bind the intended output
+to the exact display identity and verify the physical client extent. Logical
+desktop bounds alone are not valid evidence for output resolution.
+
+A read-only DisplayConfig inventory was also retained at
+`qa/artifacts/display-physical-mode-correction-20260825-1cdea0539eec4869af51e86e80b3d6da`.
+It identifies `DISPLAY3` as `MPG321UX OLED`, stable identity ending
+`MSI3DD2...UID4357`, at 3840x2160 and effective DPI 144; `DISPLAY2` is the
+primary `Pixio PX259PS` at 1920x1080/DPI 96; and `DISPLAY5` is `PX160 WAVE` at
+1920x1080/DPI 144. The dry-run verdict is deliberately `not-configured`: exact
+editor/LED/projector role binding and the two live output IDs/labels remain for
+the final native run and must not be inferred from resolution or display order.
+
+The acceptance harnesses were re-run after this correction. The native 4K
+runner self-test passed 27/27 and the three-display runner self-test passed
+18/18. These results prove the runners' fail-closed identity, DPI, HWND,
+process-path, hash/version/HEAD, placement, responsiveness, and stable-sampling
+contracts; they are not a substitute for the later exact-build physical run.
+
+## Recoverable build-artifact cleanup ledger
+
+The workspace-size audit found no evidence that old authored source is the main
+capacity consumer. A 2026-08-25 `du -h -d 1` measurement identified Cargo
+outputs as the dominant recoverable footprint:
+
+| Generated path | Measured size | Disposition |
+| --- | ---: | --- |
+| `target/debug/deps` | 83 GB | Remove after all active Rust checks finish. |
+| `target/debug/incremental` | 13 GB | Remove with the debug profile; fully reproducible. |
+| `target/debug/build` | 5.3 GB | Remove with the debug profile; fully reproducible. |
+| entire `target/debug` | 102 GB | Run `cargo clean --profile dev --dry-run`, verify the exact checkout target, then run the same command without `--dry-run`. |
+| entire `target/release` | 8.5 GB | Retain until the accepted native executable and evidence are replaced by the final exact-source release build. |
+| entire `target/qa` | 249 MB | Retain current acceptance evidence; prune only named superseded runs after the final evidence set is recorded. |
+| `.git` | 316 MB | Retain; `git count-objects -vH` reported only one 568 KiB temporary object, not the capacity cause. |
+
+Do not clean `target/debug` while Cargo owners are running: doing so would race
+their compiler outputs and waste the near-show critical path. Build artifacts
+are recoverable by recompilation; authored `.sdc` projects, source media,
+licensed SDK input, accepted QA evidence, and the final release executable are
+not cleanup targets.
+
 ## Required final operator sequence
 
 1. Start from no running exact-checkout Syndocal process and a known saved show
    project; build and launch the exact accepted source.
-2. Verify one responsive maximized Syndocal window on the intended real 4K
-   display and confirm all three show outputs have explicit identities.
+2. Verify one responsive maximized Syndocal operator window on the intended
+   1920x1080 editor display, then bind the projector output to the exact
+   `DISPLAY3` 3840x2160 identity and confirm all three show surfaces have
+   explicit identities.
 3. Create/rename/reorder/delete/Undo a temporary Bank and Scene, save, restart,
    and verify the restored authoritative state.
 4. Verify Lighting and Timeline show the same Bank/Scene identity and ordering;
