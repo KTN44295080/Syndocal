@@ -1,6 +1,6 @@
 # ASIO Input Acceptance
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 
 ## Release boundary
 
@@ -54,12 +54,152 @@ Current pin:
 ## Current implementation status
 
 - Implemented: `tools/asio-bridge` is an independently locked and built Windows DLL with ABI/schema v2 and the one canonical filename `syndocal_asio_bridge.dll`. The normal app graph remains on Rodio 0.21.1 / CPAL 0.16; ASIO stays dynamically loaded and separately licensed rather than linking CPAL 0.18.1 into that graph.
-- Implemented in the isolated v2 bridge: driver enumeration, capability query, explicit stream open, applied buffer reporting, Stop/Close, backend XRUN count, telemetry and terminal event delivery are separate typed operations. The current application loader is still ABI v1 and is deliberately incompatible with the v2 DLL until the app-integration tranche replaces it; this is not accepted as a working ASIO application path.
+- Implemented in the isolated v2 bridge: driver enumeration, capability query, explicit stream open, applied buffer reporting, Stop/Close, backend XRUN count, telemetry and terminal event delivery are separate typed operations. The current application source now loads the canonical ABI/schema v2 bridge and routes catalog, capability, persistent-selection, Start/Stop/Close, callback, terminal-fault, and safety-zero handling through that v2 surface. Source compilation and deterministic contract coverage do not by themselves constitute native or physical ASIO acceptance.
 - Implemented: ASIO offers no system-default selection. Driver IDs are generation-scoped, and Start revalidates the explicit driver, rate, channels, native sample format, fixed buffer, and channel mix. Mismatch or disappearance fails rather than substituting another driver, the first enumerated driver, or WASAPI.
 - Implemented in the isolated bridge: the realtime callback uses Start-time storage, converts the exact negotiated buffer to mono `f32`, and performs no heap allocation or lock acquisition in the normal callback. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/Close and an explicit restart.
-- Not yet integrated for ABI v2: the application-side callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, and the 64 px operator rail still use the retired ABI-v1 loader contract. Existing UI controls do not make the v2 DLL operable; the loader and UI state publication must move to v2 together before native acceptance.
-- Validated on 2026-08-25 after the current gain/parser and callback-fault repair: SDK-free tests pass 12/12; the ASIO-feature deterministic suite passes 14/14 with the one explicitly physical test ignored; Clippy `-D warnings`, ASIO all-target check, and the canonical release build report zero first-party/linker warnings with the exact VS 14.44 linker first. SDK provenance validates the pinned 48-file extraction and archive hash. The release DLL exposes exactly nine v2 symbols with v1/Play/Free absent and has SHA-256 `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. The suite covers empty/all-zero, negative, non-finite, subtly-over-one, and extreme gain rejection through both the parser and exported Start boundary. Physical-driver and application evidence still predates the final v2 checkpoint and must be rerun. Previous ABI-v1 app catalogue/capability evidence is historical only; it does not validate the present v2 boundary. Default normal builds remain ASIO-free.
+- The current application-side v2 path includes the callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, persistent-selection status, and the operator rail. The remaining acceptance boundary is execution on the current native artifact with a real selected driver: callback continuity, negotiated configuration, Start/Stop/Close, occupied/reset/resync/XRUN/unplug/no-callback recovery, restart, soak, and latency remain fail-closed and unchecked until directly demonstrated.
+- Validated on 2026-08-25 after the current gain/parser and callback-fault repair: the isolated bridge's SDK-free tests pass 12/12; its ASIO-feature deterministic suite passes 14/14 with the one explicitly physical test ignored; Clippy `-D warnings`, ASIO all-target check, and the canonical release build report zero first-party/linker warnings with the exact VS 14.44 linker first. SDK provenance validates the pinned 48-file extraction and archive hash. The release DLL exposes exactly nine v2 symbols with v1/Play/Free absent and has SHA-256 `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. That isolated bridge suite covers empty/all-zero, negative, non-finite, subtly-over-one, and extreme gain rejection through both the parser and exported Start boundary. Those results are bridge-only evidence; the current application compile/no-run checkpoint is recorded below, while physical-driver and native application execution remain unverified. Any earlier ABI-v1 hardware/native evidence is historical and does not close the present v2 hardware gate. Default normal builds remain ASIO-free.
 - Not approved for distribution: `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false` as the authority. The normal MIT installer/updater is fail-closed against `syndocal_asio_bridge.dll`, the retired `syndocal-asio-bridge.dll`, every other `*asio*.dll`, and every DLL wildcard/glob. Windows libav packaging is deliberately limited to the seven exact DLLs recorded in `app/src-tauri/tauri.windows.conf.json`; FFmpeg and Spout notices remain explicit normal-package resources. No ASIO distribution artifact is generated, staged, published, or accepted until a separately reviewed GPLv3 artifact path or a signed Steinberg agreement, notices, and release workflow exist.
+
+## Current application integration compile checkpoint (2026-08-26)
+
+This checkpoint covers the current KDMX application source only. It is separate
+from the isolated `tools/asio-bridge` 12/12 and 14/14 bridge evidence above.
+It proves fixed-toolchain compilation and test-binary compilation; it does not
+prove that a native executable loaded the bridge or that a real ASIO device was
+opened.
+
+Source identity at the checkpoint:
+
+- Branch: `codex/syndocal-v1.2`
+- HEAD: `1200aac44e2cd0a9c2f4b7138e76750d5d68e125`
+- `origin/codex/syndocal-v1.2`: equal to HEAD
+- Working tree: dirty, including the untracked `app/src-tauri/src/asio_bridge_v2.rs`
+- The existing `target/release/syndocal.exe` is therefore not an artifact claim
+  for this dirty source checkpoint; a release build and exact-source native
+  launch remain required.
+
+Both commands were run from a fresh VS2022 Community 14.44 environment with
+the absolute Cargo linker pin below. `where.exe` was intentionally allowed to
+show Git's incompatible `link.exe` second; Cargo was pinned to the first exact
+MSVC linker and did not fall through to Git.
+
+```text
+cmd.exe /d /v:on /s /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.44 >nul && set "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe" && echo PIN=!CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER! && where.exe link.exe && cargo check -p syndocal --features asio'
+```
+
+Observed evidence: exit `0`; pinned linker was
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`; `where.exe link.exe` returned that path first and
+`C:\Program Files\Git\usr\bin\link.exe` second; Cargo finished the `dev`
+profile with first-party warning count `0`.
+
+```text
+cmd.exe /d /v:on /s /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.44 >nul && set "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe" && echo PIN=!CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER! && where.exe link.exe && cargo test -p syndocal --features asio --no-run'
+```
+
+Observed evidence: exit `0`; the test profile compiled the current
+`syndocal` test binary with first-party warning count `0`. `--no-run` did not
+execute tests, enumerate a driver, open a stream, invoke a physical callback,
+or validate XRUN/unplug/restart/latency behavior.
+
+### Application-side deterministic execution (2026-08-26; no hardware driver)
+
+The current dirty application source then executed the deterministic
+`asio_bridge_v2` module filter under the same fixed local toolchain. Cargo was
+pinned to exactly
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe` through
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`; `where.exe link.exe` returned
+that MSVC path first and `C:\Program Files\Git\usr\bin\link.exe` second.
+Cargo therefore did not select Git's incompatible linker.
+
+```text
+cargo test -p syndocal --features asio asio_bridge_v2 -- --nocapture
+```
+
+The initial execution ran 35 deterministic tests: 31 passed, 4 failed, and 0
+were ignored. The four failures were traced and corrected without weakening the
+safety contracts:
+
+- The stale-generation test sent both a stale sample and a stale event but
+  expected one stale callback; it now asserts two fences while still requiring
+  zero application-hook delivery.
+- The XRUN test's severity matrix already latched every XRUN. Its unrelated
+  second terminal assertion incorrectly expected a one-shot terminal latch to
+  latch again; it now requires the second result to be false while retaining
+  the terminal-event accounting assertion.
+- A null sample payload latched local safety zero but also invoked the
+  application terminal hook. The callback now latches local safety zero and
+  returns before every application hook, so malformed FFI sample data cannot
+  reach the application sink.
+- The malformed Start-result cleanup path correctly called Stop then Close,
+  but its fake transport had no scripted successful Stop response. The fixture
+  now supplies that response and continues to assert exactly one Stop and one
+  Close on the opened raw handle.
+
+Final execution of the same filter: 35 passed, 0 failed, 0 ignored, and 1020
+tests filtered out. No warning originated from `app/src-tauri/src/asio_bridge_v2.rs`.
+An external, mid-edit first-party `engine` warning was emitted at
+`crates/engine/src/lib.rs:18438` (`DjLinkTimelineObservation.position_ms` is
+never read), so the artifact-wide warning gate remains incomplete and this
+checkpoint does not claim a warning-free application artifact.
+
+These tests use fake transports, parser/selection payloads, and callback
+trampolines only. They did not enumerate or open a hardware ASIO driver,
+produce a native release artifact, or verify any physical-driver, native-UI,
+latency, soak, XRUN, reset, unplug, or restart row below. In particular, an
+observation that TOPPING is present is not acceptance evidence and does not
+close any hardware gate.
+
+### Fixed-toolchain preflight shell checkpoint (2026-08-26)
+
+The ASIO preflight is now self-contained under both Windows PowerShell 5.1 and
+PowerShell 7. An initial Windows PowerShell run failed before Cargo because the
+harness depended on the optional `Get-FileHash` command and the .NET Core-only
+`Convert.ToHexString` and `Path.GetRelativePath` APIs. The harness now opens
+each file with a read-only `FileStream`, hashes it with SHA-256 while write and
+delete sharing remain denied, formats bytes with `BitConverter`, and derives a
+relative path only after an explicit canonical child-prefix check. It adds
+positive nested-path and negative sibling-escape self-tests and does not add a
+compatibility fallback or weaken any archive/extraction comparison.
+
+`qa/harnesses/check-asio-build.ps1 -SelfTest` passes, and the same tracked
+harness invoked through `powershell.exe -NoProfile -PreflightOnly` in the
+pinned VS 2022 14.44 environment passes with the exact SDK archive hash and 48
+extracted files. `where.exe link.exe` again reports the absolute
+`14.44.35207\bin\Hostx64\x64\link.exe` first and Git's `link.exe` second.
+The preflight explicitly reported that Cargo was not invoked; this evidence is
+toolchain/provenance proof only and does not close native or hardware rows.
+
+### Current-source physical bridge execution (2026-08-26; native application still open)
+
+The ignored physical-driver test was then built from the current ABI/schema v2
+bridge source with the same absolute VS 2022 MSVC 14.44 linker pin. In both
+runs, `where.exe link.exe` returned the required
+`14.44.35207\bin\Hostx64\x64\link.exe` first and Git's `link.exe` second. The
+test used the pinned local SDK/archive, `--locked --offline`, one test thread,
+and only explicitly named driver/configuration inputs; it had no default-driver,
+first-driver, other-ASIO-driver, or WASAPI fallback path.
+
+`asio:TOPPING Pro USB Audio Device` at 48 kHz / 2 channels / native `i32` /
+128 frames failed on cycle 1 before the stream started. The bridge returned
+status 5 and `backend_error`: `failed to build exact ASIO input stream: hardware
+is malfunctioning (can be returned by any ASIO function)`. The same result was
+reproduced once after verifying and stopping only the three TOPPING vendor
+control-panel processes (`ToppingPro.exe`, `ToppingTune.exe`, and
+`ToppingUsbAudioCpl.exe`). No Windows audio service, unrelated application, or
+other device was stopped, and no fallback occurred. This is a current negative
+result, not a successful TOPPING checkpoint; further blind retries are not
+accepted as progress.
+
+The connected Ampero Mini then passed the exact current-source v2 bridge test at
+`asio:HOTONE AUDIO USB Audio Device`, 44.1 kHz / 2 channels / native `i32` /
+128 frames. All 100 Start/Stop/Close cycles completed in 15.5345877 seconds;
+the applied buffer was 128 on every cycle, callbacks were 200, Stops were 100,
+Closes were 100, and warnings, terminal events, XRUNs, nonfinite samples, frame
+mismatches, and fallbacks were all 0. This is physical current-source bridge
+evidence. It does not prove that the final release DLL was loaded by the native
+application, that the operator UI can run and stop it, or that soak, fault
+injection, and latency thresholds pass.
 
 ## Hardware evidence (2026-07-14)
 
@@ -154,15 +294,16 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 ## Gate state
 
 - [x] Isolated non-default ASIO bridge ABI/schema v2 implemented.
-- [ ] Application loader, callback/fault publication, persistence, and operator UI integrated against ABI/schema v2 and verified natively.
+- [x] Current application source integrates the loader, callback/fault publication, persistence, and operator UI against ABI/schema v2; the 2026-08-26 fixed-linker `cargo check --features asio` and `cargo test --features asio --no-run` are warning-free. This is source compile/no-run evidence only.
+- [ ] Current ABI-v2 application path is verified natively with a real selected driver and the operator UI; hardware/native execution remains open.
 - [x] SDK version/archive/SHA pin recorded; local build requires explicit SDK and libclang paths.
-- [x] Direct-Cargo P0 closed: `-PreflightOnly` fail-closed MSVC toolset/linker-pin preflight implemented with parser/static/self-test proof. On 2026-08-25 the live preflight passed inside a fresh `vcvars64.bat -vcvars_ver=14.44` shell with `VCToolsInstallDir` exactly `14.44.35207`, the pinned Community `Hostx64\x64\link.exe` first and Git's `link.exe` second; the full ASIO Cargo check remains part of the next native checkpoint.
-- [ ] Current final ABI-v2 DLL completes one explicit working-driver short smoke with applied buffer and XRUN telemetry. The recorded ABI-v1/pre-checkpoint run is historical evidence only.
+- [x] Direct-Cargo P0 closed: `-PreflightOnly` fail-closed MSVC toolset/linker-pin preflight implemented with parser/static/self-test proof. On 2026-08-25 the live preflight passed inside a fresh `vcvars64.bat -vcvars_ver=14.44` shell with `VCToolsInstallDir` exactly `14.44.35207`, the pinned Community `Hostx64\x64\link.exe` first and Git's `link.exe` second. The current application feature check and test-binary compile/no-run repeated that exact linker pin on 2026-08-26 with first-party warnings 0; this does not close any physical-driver or native-execution row.
+- [ ] Current final ABI-v2 DLL completes one explicit working-driver short smoke with applied buffer and XRUN telemetry. Current-source v2 bridge code passed 100 exact Ampero cycles on 2026-08-26, but native release-DLL loading and operator-path telemetry remain unverified.
 - [ ] Current final ABI-v2 DLL proves an unavailable explicit driver fails without another-driver or WASAPI fallback. The recorded negative run predates the final v2 checkpoint.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
-- [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. The recorded Start/Stop/Free result is historical.
+- [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. Current-source v2 bridge code passed this exact 100-cycle test on 2026-08-26; final release-DLL/native-app loading remains open.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
-- [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The recorded Start/Stop/Free result is historical.
+- [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The current-source 2026-08-26 attempt failed explicitly on cycle 1 with the same backend hardware-malfunction result before and after the bounded vendor-control-panel isolation retry; no fallback occurred.
 - [ ] Current-source ABI-v2 native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc. The recorded run is ABI-v1 historical evidence only.
 - [ ] Occupied-driver/control-panel/reset/resync/xrun/unplug failure matrix completed.
 - [ ] One-hour matched ASIO/WASAPI soak and callback/capture/engine percentile thresholds passed.

@@ -194,10 +194,44 @@ function Get-StreamSha256 {
 
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
-        return [Convert]::ToHexString($sha.ComputeHash($Stream))
+        return [BitConverter]::ToString($sha.ComputeHash($Stream)).Replace("-", "")
     } finally {
         $sha.Dispose()
     }
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [IO.File]::Open(
+        [IO.Path]::GetFullPath($Path),
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        return Get-StreamSha256 -Stream $stream
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-StrictChildRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd("\") + "\"
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "SDK provenance path escapes the extracted root: $fullPath"
+    }
+    $relative = $fullPath.Substring($rootPrefix.Length).Replace("\", "/")
+    if ([string]::IsNullOrWhiteSpace($relative) -or $relative.StartsWith("/")) {
+        throw "SDK provenance produced an invalid relative path: $relative"
+    }
+    return $relative
 }
 
 function Assert-SdkArchiveExtractionProvenance {
@@ -211,7 +245,7 @@ function Assert-SdkArchiveExtractionProvenance {
     if ($archive.Name -cne $Pin.archive_filename) {
         throw "SDK ZIP filename '$($archive.Name)' does not equal pin '$($Pin.archive_filename)'."
     }
-    $archiveHash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
+    $archiveHash = Get-FileSha256 -Path $archive.FullName
     if (-not $archiveHash.Equals($Pin.sha256, [StringComparison]::OrdinalIgnoreCase)) {
         throw "SDK ZIP SHA-256 '$archiveHash' does not equal pin '$($Pin.sha256)'."
     }
@@ -255,7 +289,7 @@ function Assert-SdkArchiveExtractionProvenance {
             throw "Extracted SDK file count $($extractedFiles.Count) does not equal ZIP file count $($entries.Count)."
         }
         foreach ($file in $extractedFiles) {
-            $relative = [IO.Path]::GetRelativePath($SdkDirectory, $file.FullName).Replace("\", "/")
+            $relative = Get-StrictChildRelativePath -Root $SdkDirectory -Path $file.FullName
             $key = $relative.ToLowerInvariant()
             if (-not $entries.ContainsKey($key)) {
                 throw "Extracted SDK contains a file absent from the pinned ZIP: $relative"
@@ -266,7 +300,7 @@ function Assert-SdkArchiveExtractionProvenance {
             } finally {
                 $entryStream.Dispose()
             }
-            $fileHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            $fileHash = Get-FileSha256 -Path $file.FullName
             if (-not $entryHash.Equals($fileHash, [StringComparison]::OrdinalIgnoreCase)) {
                 throw "Extracted SDK file differs from the pinned ZIP: $relative"
             }
@@ -420,6 +454,26 @@ function Invoke-SelfTest {
             throw "Self-test source contract is missing: $needle"
         }
     }
+    $moduleDependentHashCmdlet = "Get" + "-FileHash"
+    if ($source.Contains($moduleDependentHashCmdlet)) {
+        throw "Self-test source contract forbids the module-dependent file-hash cmdlet."
+    }
+    $relativeRoot = Join-Path ([IO.Path]::GetTempPath()) "syndocal-asio-relative-root"
+    $relativeChild = Join-Path $relativeRoot "nested\file.h"
+    if ((Get-StrictChildRelativePath -Root $relativeRoot -Path $relativeChild) -cne "nested/file.h") {
+        throw "Strict child relative-path self-test did not preserve the exact nested path."
+    }
+    $relativeEscapeRejected = $false
+    try {
+        $null = Get-StrictChildRelativePath `
+            -Root $relativeRoot `
+            -Path (Join-Path ([IO.Path]::GetDirectoryName($relativeRoot)) "sibling\file.h")
+    } catch {
+        $relativeEscapeRejected = $true
+    }
+    if (-not $relativeEscapeRejected) {
+        throw "Strict child relative-path self-test accepted a sibling path."
+    }
 
     $base = @{
         VctoolsInstallDir = $script:RequiredVcToolsInstallDir
@@ -564,5 +618,5 @@ if ($bridgeDlls.Count -ne 1 -or $bridgeDlls[0].Name -cne $script:CanonicalDllNam
     throw "Release output must contain one canonical bridge DLL only; found: $($bridgeDlls.Name -join ', ')"
 }
 Assert-ExactBridgeExports -DllPath $canonicalDll
-$dllHash = (Get-FileHash -LiteralPath $canonicalDll -Algorithm SHA256).Hash
+$dllHash = Get-FileSha256 -Path $canonicalDll
 Write-Host "ASIO bridge gate PASS: abi=2 dll=$canonicalDll sha256=$dllHash first_party_warnings=0 linker_warnings=0 hardware=NOT_RUN distribution_approved=false"
