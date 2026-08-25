@@ -491,14 +491,25 @@ runner is the only final-show entrypoint: `DISPLAY2` hosts the editor,
 `DISPLAY5` hosts the LED output, and `DISPLAY3` hosts the 3840x2160 projector
 output at DPI 144 (Windows 150%).
 
-Configured three-display acceptance is intentionally blocked until the app
-supplies a typed, read-only output-ID-to-HWND observation. It must bind each
-configured output ID to its exact label, `video-output-<ID>` native label,
-live-open state, and native HWND; titles or operator-authored JSON do not count
-as that proof. The runner also requires exact alpha.12 artifact hash/version/
-HEAD, a clean checkout, raw DisplayConfig identities, exact GDI role names, and
-full physical client/monitor-bound equality. Harness self-tests prove only
-these runner contracts; they are not a native visual-content or hardware claim.
+The typed, read-only output-ID-to-HWND observation route and its fail-closed
+three-display harness are now implemented. The harness binds each configured
+output ID to its exact label, `video-output-<ID>` native label, live-open state,
+and native HWND; titles or operator-authored JSON do not count as that proof.
+It also revalidates the title-selected HWND immediately before the app-owned
+observation, sanitizes hostile observed labels before diagnostics, and states
+truthfully that it proves only the three named show roles inside the current
+five-display topology. On 2026-08-26 both Windows PowerShell 5.1 and PowerShell
+7 deterministic suites passed `56/56`; an independent read-only review found
+no remaining P0/P1 in the runner or companion self-test. `git diff --check` was
+clean apart from Git's informational LF-to-CRLF notices.
+
+Configured physical acceptance remains open until the current integrated
+source is built as the exact clean alpha.12 release artifact and the real
+editor/LED/projector windows are available. The runner then still requires the
+exact artifact hash/version/HEAD, raw DisplayConfig identities, exact GDI role
+names, exact output IDs/labels, and full physical client/monitor-bound equality.
+The `56/56` result proves only deterministic harness contracts; it is not a
+native visual-content or hardware claim.
 
 ## Recoverable build-artifact cleanup ledger
 

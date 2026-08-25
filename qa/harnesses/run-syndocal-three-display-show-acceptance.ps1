@@ -3,8 +3,10 @@
 # This is an observation-first harness for exactly one checkout-local
 # syndocal.exe, its one "Syndocal" editor window, and exactly two live native
 # Display-output windows.  It never creates outputs, changes Syndocal
-# settings, launches or terminates a process, talks to hardware/network, takes
-# screenshots, injects input, changes focus, or changes Z-order.  The default
+# settings, launches or terminates a process, talks to hardware, takes
+# screenshots, injects input, changes focus, or changes Z-order.  Its only
+# network use is read-only observation of the explicitly supplied loopback
+# 127.0.0.1 CDP port; it never contacts any non-loopback address.  The default
 # is a read-only dry-run.  Dry-run always writes a clearly labelled observation
 # verdict; it never calls a window mutation API and never calls the result an
 # acceptance.  -Apply is deliberately narrow: after every identity and
@@ -12,38 +14,58 @@
 # only.  It never moves an output window, so a swapped/default/first-monitor
 # placement is rejected rather than repaired into an accidental pass.
 #
-# Required physical-role contract (all monitor selection is by the explicit
-# stable monitor identity, NEVER by resolution, DISPLAY ordinal, primary flag,
-# or first match):
-#   editor/operator  1920x1080
-#   LED output        1920x1080
-#   projector output  3840x2160
+# Required release/physical-role contract (all monitor selection is by the
+# explicit stable monitor identity, and the executable must be the clean
+# 1.2.0-alpha.12 artifact for the supplied exact HEAD and SHA-256; selection is
+# NEVER by resolution, primary flag, or first match):
+#   editor/operator  \\.\DISPLAY2  1920x1080 at DPI 96
+#   LED output        \\.\DISPLAY5  1920x1080 at DPI 144
+#   projector output  \\.\DISPLAY3  3840x2160 at DPI 144 (Windows 150%)
 # The two 1920x1080 roles must therefore still provide distinct identities.
+# This acceptance scope is deliberately only these three named roles in the
+# current five-display topology.  The other two connected displays are not
+# selected, bound, or individually asserted here; this harness never claims a
+# complete five-display identity acceptance.
 # The stable identity is the active DisplayConfig monitor-device path, matched
 # back to the exact GDI monitor name from GetMonitorInfoW.  It is reported in
 # inventory evidence verbatim; users copy it into the three expected-identity
 # parameters.  Blank, duplicate, stale, disconnected, or unresolvable paths
-# fail closed.  Resolution is checked only AFTER exact identity selection.
+# fail closed.  Resolution, exact GDI role, effective DPI, and client bounds
+# are checked only AFTER exact identity selection.
 #
 # Native output roles are proven by the current production contract:
 #   label video-output-<output id>
 #   live title "Syndocal Output - <output label>"
 # plus one exact HWND, visible/responsive/non-minimized state, owner PID equal
-# to the proven checkout process, and exact monitor identity.  The Tauri label
-# is not a Win32 property, so the evidence records its deterministic native
-# label derived from the explicit output ID and proves the live native role by
-# the exact corresponding title/owner/placement.  Test-pattern titles are not
-# accepted as live output roles.
+# to the proven checkout process, and exact monitor identity.  Exact output-ID
+# to HWND evidence must come from the typed result of app command
+# get_video_output_window_observation_v1 through an app-owned read-only
+# observation provider; this PowerShell file never accepts an
+# operator-authored JSON substitute.
+# The provider attaches only to an explicitly supplied loopback WebView2 CDP
+# port whose listener process descends from the exact checkout PID; it never
+# discovers a port, reads an environment variable, or uses a window title to
+# select a browser page. Test-pattern titles are not accepted as live output
+# roles.
 #
 # Evidence is always retained under a NEW, unique, non-reparse direct child of
 # the evidence root.  No file or directory is overwritten or deleted.
 # Artifacts: provenance.json, monitors.json, before.json, operation.json,
 # final.json, optional failure.json, and SHA256SUMS.txt written last.
-# Screenshots are neither taken nor claimed.
+# Screenshots are neither taken nor claimed.  The default evidence root is
+# this checkout's gitignored target\qa tree, so evidence written by one run
+# can never dirty a later run's exact-artifact clean-checkout gate.
+#
+# Diagnostics (every thrown message echo of observed titles, every catch
+# message stored in JSON, every console error line) pass through one
+# centralized Unicode-safe single-line sanitizer capped at 400 UTF-16 code
+# units; raw multi-line or oversized text never reaches evidence or console.
 #
 # Self-test seams are the functions marked SEAM.  The companion self-test
-# replaces every UI/process/network-facing seam with deterministic synthetic
-# values; it performs no real UI/process/network mutation.
+# replaces every UI/process/network-facing seam - including the loopback CDP
+# transport and the narrow native window seams around IsWindow, owner-PID
+# lookup, title read, and ShowWindow - with deterministic synthetic values;
+# it performs no real UI/process/network mutation.
 
 [CmdletBinding()]
 param(
@@ -63,6 +85,8 @@ param(
   [UInt64]$ProjectorOutputId = 0,
   [string]$ProjectorOutputLabel = "",
 
+  [int]$CdpPort = 0,
+
   [string]$EvidenceSlug = "",
   [string]$EvidenceRootPath = "",
   [int]$SampleIntervalMs = 300,
@@ -79,6 +103,14 @@ $script:ThreeDisplayOutputTitlePrefix = "Syndocal Output - "
 $script:ThreeDisplayRequiredSamples = 3
 $script:ThreeDisplayMinimumSampleIntervalMs = 200
 $script:ThreeDisplaySchemaVersion = 1
+$script:ThreeDisplayRequiredProductVersion = "1.2.0-alpha.12"
+$script:ThreeDisplaySwMaximize = 3
+$script:ThreeDisplayMaximumDiagnosticLength = 400
+$script:ThreeDisplayRoleContracts = @{
+  editor = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY2"; effective_dpi = 96; physical_width = 1920; physical_height = 1080 }
+  led = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY5"; effective_dpi = 144; physical_width = 1920; physical_height = 1080 }
+  projector = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY3"; effective_dpi = 144; physical_width = 3840; physical_height = 2160 }
+}
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
   throw "The Syndocal three-display acceptance harness requires Windows."
@@ -188,6 +220,37 @@ function ConvertTo-ThreeDisplayRect {
   }
 }
 
+function ConvertTo-ThreeDisplayOneLineDiagnostic {
+  # Centralized diagnostic sanitizer for every title echo, catch message,
+  # failure JSON value, and console error line: collapses every Unicode
+  # line-break and control character to spaces, trims, truncates to at most
+  # 400 UTF-16 code units without splitting a surrogate pair, and never
+  # returns an empty result when a non-empty fallback is supplied.
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+    [int]$MaxLength = $script:ThreeDisplayMaximumDiagnosticLength,
+    [string]$Fallback = ""
+  )
+  if ($MaxLength -lt 1) { throw "Fail closed: diagnostic maximum length must be positive." }
+  $text = [regex]::Replace($Value, "[\x00-\x1F\x7F\u0085\u2028\u2029]+", " ").Trim()
+  if ($text.Length -gt $MaxLength) {
+    $keep = $MaxLength
+    if ([char]::IsHighSurrogate($text[$keep - 1])) { $keep-- }
+    $text = $text.Substring(0, $keep)
+  }
+  while ($text.Length -gt 0) {
+    $last = $text[$text.Length - 1]
+    if ([char]::IsHighSurrogate($last)) { $text = $text.Substring(0, $text.Length - 1); continue }
+    if ([char]::IsLowSurrogate($last) -and (($text.Length -eq 1) -or -not [char]::IsHighSurrogate($text[$text.Length - 2]))) {
+      $text = $text.Substring(0, $text.Length - 1)
+      continue
+    }
+    break
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) { return $Fallback }
+  return $text
+}
+
 function Invoke-WithThreeDisplayPhysicalDpiContext {
   param([Parameter(Mandatory = $true)][scriptblock]$Action)
   if (-not [SyndocalThreeDisplayNative]::IsValidDpiAwarenessContext([IntPtr](-4))) {
@@ -201,12 +264,39 @@ function Invoke-WithThreeDisplayPhysicalDpiContext {
 }
 
 function Get-ThreeDisplayWindowTitle {
+  # SEAM: narrow title-read seam.  Deterministic self-tests replace this so
+  # the real maximize body executes against synthetic HWNDs.
   param([Parameter(Mandatory = $true)][IntPtr]$Handle)
   $length = [SyndocalThreeDisplayNative]::GetWindowTextLengthW($Handle)
   if ($length -le 0) { return "" }
   $builder = New-Object Text.StringBuilder ($length + 1)
   [void][SyndocalThreeDisplayNative]::GetWindowTextW($Handle, $builder, $builder.Capacity)
   return $builder.ToString()
+}
+
+function Test-ThreeDisplayNativeIsWindow {
+  # SEAM: narrow IsWindow seam used only by Invoke-ThreeDisplayWindowMaximize.
+  param([Parameter(Mandatory = $true)][IntPtr]$Handle)
+  return [bool][SyndocalThreeDisplayNative]::IsWindow($Handle)
+}
+
+function Get-ThreeDisplayNativeOwnerProcessId {
+  # SEAM: narrow GetWindowThreadProcessId owner-PID seam used only by
+  # Invoke-ThreeDisplayWindowMaximize.
+  param([Parameter(Mandatory = $true)][IntPtr]$Handle)
+  [uint32]$ownerPid = 0
+  [void][SyndocalThreeDisplayNative]::GetWindowThreadProcessId($Handle, [ref]$ownerPid)
+  return [uint32]$ownerPid
+}
+
+function Invoke-ThreeDisplayNativeShowWindow {
+  # SEAM: narrow ShowWindow seam.  The only call site passes exactly
+  # SW_MAXIMIZE (3).
+  param(
+    [Parameter(Mandatory = $true)][IntPtr]$Handle,
+    [Parameter(Mandatory = $true)][int]$Command
+  )
+  return [bool][SyndocalThreeDisplayNative]::ShowWindow($Handle, $Command)
 }
 
 function Get-ThreeDisplayNativeProcessPath {
@@ -236,7 +326,7 @@ function Get-SyndocalCandidateProcesses {
   $processes = @(Get-Process -Name syndocal -ErrorAction SilentlyContinue -ErrorVariable errors)
   foreach ($record in @($errors)) {
     if ("$($record.FullyQualifiedErrorId)" -notmatch "^NoProcessFound\b") {
-      throw "Fail closed: syndocal process enumeration failed: $($record.Exception.Message)"
+      throw "Fail closed: syndocal process enumeration failed: $(ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$record.Exception.Message) -Fallback 'process enumeration failed without a readable single-line diagnostic')"
     }
   }
   $result = [System.Collections.Generic.List[object]]::new()
@@ -270,6 +360,19 @@ function Resolve-ThreeDisplayGitHead {
   $head = ([string]@($answer)[0]).Trim()
   if ($head -notmatch "^[0-9a-fA-F]{40}$") { throw "Fail closed: git HEAD is not a full 40-hex commit ('$head')." }
   return $head.ToLowerInvariant()
+}
+
+function Test-ThreeDisplayCheckoutClean {
+  # SEAM: exact artifact acceptance cannot treat an uncommitted working tree
+  # as the supplied Git HEAD.
+  param([Parameter(Mandatory = $true)][string]$CheckoutRootPath)
+  $answer = & git -C $CheckoutRootPath status --porcelain=v1 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Fail closed: git status --porcelain=v1 failed for '$CheckoutRootPath'." }
+  $entries = @($answer | ForEach-Object { ([string]$_).TrimEnd() } | Where-Object { $_ -ne "" })
+  if ($entries.Count -ne 0) {
+    throw "Fail closed: exact alpha.12 artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
+  }
+  return $true
 }
 
 function Get-ThreeDisplaySourceDeviceName {
@@ -333,33 +436,46 @@ function Get-ThreeDisplayMonitorInventory {
     $pathByGdiName[$key] = $target
   }
   $monitors = [System.Collections.Generic.List[object]]::new()
+  $enumFailure = @{}
   Invoke-WithThreeDisplayPhysicalDpiContext {
     $callback = [SyndocalThreeDisplayMonitorEnumProc]{
       param([IntPtr]$handle, [IntPtr]$hdc, [IntPtr]$rect, [IntPtr]$unused)
-      $info = [SyndocalThreeDisplayNative+MONITORINFOEXW]::new()
-      $info.Size = [Runtime.InteropServices.Marshal]::SizeOf([type][SyndocalThreeDisplayNative+MONITORINFOEXW])
-      if (-not [SyndocalThreeDisplayNative]::GetMonitorInfoW($handle, [ref]$info)) { throw "Fail closed: GetMonitorInfoW failed while enumerating monitors." }
-      $gdiName = [string]$info.DeviceName
-      $key = $gdiName.ToUpperInvariant()
-      if (-not $pathByGdiName.ContainsKey($key)) { throw "Fail closed: Win32 monitor '$gdiName' has no unique active DisplayConfig target path." }
-      $target = $pathByGdiName[$key]
-      [uint32]$dpiX = 0; [uint32]$dpiY = 0
-      if ([SyndocalThreeDisplayNative]::GetDpiForMonitor($handle, 0, [ref]$dpiX, [ref]$dpiY) -ne 0 -or $dpiX -eq 0 -or $dpiX -ne $dpiY) {
-        throw "Fail closed: effective DPI is unprovable for monitor '$gdiName'."
+      try {
+        $info = [SyndocalThreeDisplayNative+MONITORINFOEXW]::new()
+        $info.Size = [Runtime.InteropServices.Marshal]::SizeOf([type][SyndocalThreeDisplayNative+MONITORINFOEXW])
+        if (-not [SyndocalThreeDisplayNative]::GetMonitorInfoW($handle, [ref]$info)) { throw "Fail closed: GetMonitorInfoW failed while enumerating monitors." }
+        $gdiName = [string]$info.DeviceName
+        $key = $gdiName.ToUpperInvariant()
+        if (-not $pathByGdiName.ContainsKey($key)) { throw "Fail closed: Win32 monitor '$gdiName' has no unique active DisplayConfig target path." }
+        $target = $pathByGdiName[$key]
+        [uint32]$dpiX = 0; [uint32]$dpiY = 0
+        if ([SyndocalThreeDisplayNative]::GetDpiForMonitor($handle, 0, [ref]$dpiX, [ref]$dpiY) -ne 0 -or $dpiX -eq 0 -or $dpiX -ne $dpiY) {
+          throw "Fail closed: effective DPI is unprovable for monitor '$gdiName'."
+        }
+        $monitors.Add([pscustomobject]@{
+          stable_identity = [string]$target.MonitorDevicePath
+          device_name = $gdiName
+          friendly_name = [string]$target.MonitorFriendlyDeviceName
+          monitor_handle_decimal = [long]$handle.ToInt64()
+          connected = $true
+          effective_dpi = [int]$dpiX
+          physical_bounds = ConvertTo-ThreeDisplayRect -Rect $info.Monitor
+          work_area = ConvertTo-ThreeDisplayRect -Rect $info.Work
+        })
+        return $true
+      } catch {
+        # Never let an exception cross the reverse-PInvoke callback boundary.
+        # Capture the failure, stop enumeration, and rethrow only after
+        # EnumDisplayMonitors has returned to managed code.
+        $enumFailure["failure"] = $_.Exception
+        return $false
       }
-      $monitors.Add([pscustomobject]@{
-        stable_identity = [string]$target.MonitorDevicePath
-        device_name = $gdiName
-        friendly_name = [string]$target.MonitorFriendlyDeviceName
-        monitor_handle_decimal = [long]$handle.ToInt64()
-        connected = $true
-        effective_dpi = [int]$dpiX
-        physical_bounds = ConvertTo-ThreeDisplayRect -Rect $info.Monitor
-        work_area = ConvertTo-ThreeDisplayRect -Rect $info.Work
-      })
-      return $true
     }
-    if (-not [SyndocalThreeDisplayNative]::EnumDisplayMonitors([IntPtr]::Zero, [IntPtr]::Zero, $callback, [IntPtr]::Zero)) {
+    $enumerated = [SyndocalThreeDisplayNative]::EnumDisplayMonitors([IntPtr]::Zero, [IntPtr]::Zero, $callback, [IntPtr]::Zero)
+    if ($null -ne $enumFailure["failure"]) {
+      throw $enumFailure["failure"]
+    }
+    if (-not $enumerated) {
       throw "Fail closed: EnumDisplayMonitors failed."
     }
   }
@@ -442,9 +558,27 @@ function Get-ThreeDisplayWindowMetrics {
 function Invoke-ThreeDisplayWindowMaximize {
   # SEAM: the only mutation seam.  It is called only by -Apply after a fresh,
   # full identity/monitor/output revalidation.  No output window is moved or
-  # modified by this harness.
-  param([Parameter(Mandatory = $true)][long]$HandleDecimal)
-  if (-not [SyndocalThreeDisplayNative]::ShowWindow([IntPtr]$HandleDecimal, 3)) {
+  # modified by this harness.  Every user32 touch below goes through the
+  # narrow SEAM wrappers so deterministic self-tests execute this real body
+  # and prove each failure plus the exact SW_MAXIMIZE command.
+  param(
+    [Parameter(Mandatory = $true)][long]$HandleDecimal,
+    [Parameter(Mandatory = $true)][uint32]$ExpectedProcessId,
+    [Parameter(Mandatory = $true)][string]$ExpectedTitle
+  )
+  $handle = [IntPtr]$HandleDecimal
+  if (-not (Test-ThreeDisplayNativeIsWindow -Handle $handle)) {
+    throw "Fail closed: editor HWND $HandleDecimal disappeared before maximize."
+  }
+  $ownerPid = Get-ThreeDisplayNativeOwnerProcessId -Handle $handle
+  if ([uint32]$ownerPid -ne $ExpectedProcessId) {
+    throw "Fail closed: editor HWND $HandleDecimal owner PID changed before maximize."
+  }
+  $title = Get-ThreeDisplayWindowTitle -Handle $handle
+  if ([string]$title -cne $ExpectedTitle) {
+    throw "Fail closed: editor HWND $HandleDecimal title changed before maximize."
+  }
+  if (-not (Invoke-ThreeDisplayNativeShowWindow -Handle $handle -Command $script:ThreeDisplaySwMaximize)) {
     throw "Fail closed: ShowWindow(SW_MAXIMIZE) failed for editor HWND $HandleDecimal."
   }
   return $true
@@ -469,7 +603,13 @@ function Test-ThreeDisplayGitHeadFormat {
 
 function Test-ThreeDisplayIdentityFormat {
   param([string]$Value)
-  return (-not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 512 -and $Value -notmatch "[\r\n]")
+  return (
+    -not [string]::IsNullOrWhiteSpace($Value) -and
+    $Value.Length -le 512 -and
+    $Value -notmatch "[\r\n]" -and
+    $Value.StartsWith("\\?\DISPLAY#", [StringComparison]::OrdinalIgnoreCase) -and
+    $Value.Contains("#{")
+  )
 }
 
 function New-ThreeDisplayConfiguration {
@@ -486,6 +626,7 @@ function New-ThreeDisplayConfiguration {
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LedLabel,
     [Parameter(Mandatory = $true)][UInt64]$ProjectorId,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ProjectorLabel,
+    [Parameter(Mandatory = $true)][int]$CdpPort,
     [Parameter(Mandatory = $true)][int]$IntervalMs,
     [Parameter(Mandatory = $true)][int]$Attempts,
     [Parameter(Mandatory = $true)][string]$CheckoutRootPath
@@ -495,6 +636,9 @@ function New-ThreeDisplayConfiguration {
   }
   if ($Attempts -lt $script:ThreeDisplayRequiredSamples) {
     throw "Fail closed: MaxSampleAttempts=$Attempts is below required stable sample count $($script:ThreeDisplayRequiredSamples)."
+  }
+  if ($CdpPort -lt 0 -or $CdpPort -gt 65535) {
+    throw "Fail closed: CdpPort must be 0 (unconfigured) or an exact TCP port in 1..65535."
   }
   $defaultExecutablePath = [IO.Path]::GetFullPath((Join-Path $CheckoutRootPath "target\release\syndocal.exe"))
   $effectiveExecutablePath = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $defaultExecutablePath } else { [IO.Path]::GetFullPath($ExecutablePath) }
@@ -511,8 +655,11 @@ function New-ThreeDisplayConfiguration {
   }
   if ($Sha256 -ne "" -and -not (Test-ThreeDisplaySha256Format $Sha256)) { throw "Fail closed: ExpectedSha256 must be exactly 64 hexadecimal characters." }
   if ($GitHead -ne "" -and -not (Test-ThreeDisplayGitHeadFormat $GitHead)) { throw "Fail closed: ExpectedGitHead must be exactly 40 hexadecimal characters." }
+  if ($ProductVersion -ne "" -and -not [string]::Equals($ProductVersion, $script:ThreeDisplayRequiredProductVersion, [StringComparison]::Ordinal)) {
+    throw "Fail closed: ExpectedProductVersion must be exactly $($script:ThreeDisplayRequiredProductVersion) for this final show harness."
+  }
   foreach ($identity in @($EditorIdentity, $LedIdentity, $ProjectorIdentity)) {
-    if ($identity -ne "" -and -not (Test-ThreeDisplayIdentityFormat $identity)) { throw "Fail closed: every monitor identity must be one non-empty stable DisplayConfig device path without line breaks." }
+    if ($identity -ne "" -and -not (Test-ThreeDisplayIdentityFormat $identity)) { throw "Fail closed: every monitor identity must be one raw stable DisplayConfig monitor-device path (\\?\DISPLAY#...) without line breaks." }
   }
   $fullyConfigured =
     (-not [string]::IsNullOrWhiteSpace($Sha256)) -and
@@ -522,9 +669,10 @@ function New-ThreeDisplayConfiguration {
     (Test-ThreeDisplayIdentityFormat $LedIdentity) -and
     (Test-ThreeDisplayIdentityFormat $ProjectorIdentity) -and
     ($LedId -gt 0) -and (-not [string]::IsNullOrWhiteSpace($LedLabel)) -and
-    ($ProjectorId -gt 0) -and (-not [string]::IsNullOrWhiteSpace($ProjectorLabel))
+    ($ProjectorId -gt 0) -and (-not [string]::IsNullOrWhiteSpace($ProjectorLabel)) -and
+    ($CdpPort -gt 0)
   if ($IsApply -and -not $fullyConfigured) {
-    throw "Fail closed: -Apply requires exact hash/version/HEAD, all three stable monitor identities, and both explicit live output IDs/labels."
+    throw "Fail closed: -Apply requires exact alpha.12 hash/version/HEAD, all three stable monitor identities, both explicit live output IDs/labels, and one explicit loopback CDP port."
   }
   if ($fullyConfigured) {
     if ($EditorIdentity -eq $LedIdentity -or $EditorIdentity -eq $ProjectorIdentity -or $LedIdentity -eq $ProjectorIdentity) {
@@ -537,11 +685,11 @@ function New-ThreeDisplayConfiguration {
     apply = $IsApply; fully_configured = $fullyConfigured; checkout_root = [IO.Path]::GetFullPath($CheckoutRootPath)
     expected_executable_path = $effectiveExecutablePath; expected_sha256 = $Sha256.ToLowerInvariant()
     expected_product_version = $ProductVersion; expected_git_head = $GitHead.ToLowerInvariant()
-    sample_interval_ms = $IntervalMs; max_sample_attempts = $Attempts
+    sample_interval_ms = $IntervalMs; max_sample_attempts = $Attempts; cdp_port = $CdpPort
     roles = @(
-      [pscustomobject]@{ role = "editor"; stable_identity = $EditorIdentity; physical_width = 1920; physical_height = 1080; native_window_label = "main"; exact_title = $script:ThreeDisplayMainTitle },
-      [pscustomobject]@{ role = "led"; stable_identity = $LedIdentity; physical_width = 1920; physical_height = 1080; native_window_label = "video-output-$LedId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$LedLabel" },
-      [pscustomobject]@{ role = "projector"; stable_identity = $ProjectorIdentity; physical_width = 3840; physical_height = 2160; native_window_label = "video-output-$ProjectorId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$ProjectorLabel" }
+      [pscustomobject]@{ role = "editor"; output_id = $null; stable_identity = $EditorIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.editor.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.editor.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.editor.physical_width; physical_height = $script:ThreeDisplayRoleContracts.editor.physical_height; native_window_label = "main"; exact_title = $script:ThreeDisplayMainTitle },
+      [pscustomobject]@{ role = "led"; output_id = $LedId; stable_identity = $LedIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.led.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.led.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.led.physical_width; physical_height = $script:ThreeDisplayRoleContracts.led.physical_height; native_window_label = "video-output-$LedId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$LedLabel" },
+      [pscustomobject]@{ role = "projector"; output_id = $ProjectorId; stable_identity = $ProjectorIdentity; expected_gdi_device_name = $script:ThreeDisplayRoleContracts.projector.gdi_device_name; expected_effective_dpi = $script:ThreeDisplayRoleContracts.projector.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.projector.physical_width; physical_height = $script:ThreeDisplayRoleContracts.projector.physical_height; native_window_label = "video-output-$ProjectorId"; exact_title = "$($script:ThreeDisplayOutputTitlePrefix)$ProjectorLabel" }
     )
   }
 }
@@ -621,6 +769,12 @@ function Get-ThreeDisplayExpectedMonitor {
   $monitor = $matches[0]
   if (-not [bool]$monitor.connected) { throw "Fail closed: role '$($Role.role)' monitor identity is not currently connected." }
   if ([string]::IsNullOrWhiteSpace([string]$monitor.device_name)) { throw "Fail closed: role '$($Role.role)' monitor has no GDI device binding." }
+  if (-not [string]::Equals([string]$monitor.device_name, [string]$Role.expected_gdi_device_name, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fail closed: role '$($Role.role)' raw identity resolved to GDI device '$($monitor.device_name)', expected '$($Role.expected_gdi_device_name)'."
+  }
+  if ([int]$monitor.effective_dpi -ne [int]$Role.expected_effective_dpi) {
+    throw "Fail closed: role '$($Role.role)' monitor '$($Role.expected_gdi_device_name)' effective DPI is $($monitor.effective_dpi), expected $($Role.expected_effective_dpi)."
+  }
   if ([int]$monitor.physical_bounds.width -ne [int]$Role.physical_width -or [int]$monitor.physical_bounds.height -ne [int]$Role.physical_height) {
     throw "Fail closed: role '$($Role.role)' monitor '$($Role.stable_identity)' native physical resolution is $($monitor.physical_bounds.width)x$($monitor.physical_bounds.height), expected $($Role.physical_width)x$($Role.physical_height)."
   }
@@ -646,9 +800,365 @@ function Get-ThreeDisplayWindowForRole {
   param([Parameter(Mandatory = $true)]$Role, [Parameter(Mandatory = $true)][object[]]$TopLevelWindows)
   $matches = @($TopLevelWindows | Where-Object { [string]::Equals([string]$_.title, [string]$Role.exact_title, [StringComparison]::Ordinal) })
   if ($matches.Count -ne 1) {
-    throw "Fail closed: role '$($Role.role)' exact native label/title '$($Role.native_window_label)'/'$($Role.exact_title)' matched $($matches.Count) visible top-level HWND(s); exactly one is required."
+    $expectedTitleEcho = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$Role.exact_title)
+    throw "Fail closed: role '$($Role.role)' exact native label/title '$($Role.native_window_label)'/'$expectedTitleEcho' matched $($matches.Count) visible top-level HWND(s); exactly one is required."
   }
   return $matches[0]
+}
+
+function Get-ThreeDisplayExactOutputWindowObservation {
+  # The transport seam below is the sole process/network-facing boundary. The
+  # provider validates its complete result before returning it: no title,
+  # arbitrary JSON, file, environment, or browser-state substitute can enter
+  # the output ID-to-HWND proof.
+  param([Parameter(Mandatory = $true)]$Configuration)
+  if ([int]$Configuration.cdp_port -le 0) {
+    throw "Fail closed: exact output ID-to-HWND observation requires one explicit loopback CDP port."
+  }
+  $process = Get-ThreeDisplayExactCheckoutProcess -Configuration $Configuration
+  $transport = Get-ThreeDisplayCdpTransportObservation -CdpPort ([int]$Configuration.cdp_port)
+  if ($null -eq $transport) {
+    throw "Fail closed: exact output observation CDP transport returned no evidence."
+  }
+  $listenerPid = ConvertTo-ThreeDisplayStrictProcessId -Value $transport.listener_process_id -Subject "CDP listener PID"
+  $ancestorValues = $transport.PSObject.Properties["listener_ancestor_process_ids"]
+  if ($null -eq $ancestorValues -or -not ($ancestorValues.Value -is [System.Array]) -or $ancestorValues.Value.Count -eq 0) {
+    throw "Fail closed: CDP listener ancestry is missing or not an array."
+  }
+  $ancestors = @($ancestorValues.Value | ForEach-Object {
+    ConvertTo-ThreeDisplayStrictProcessId -Value $_ -Subject "CDP listener ancestor PID"
+  })
+  if ($ancestors[0] -ne $listenerPid) {
+    throw "Fail closed: CDP listener ancestry does not begin with listener PID $listenerPid."
+  }
+  if ((@($ancestors | Select-Object -Unique)).Count -ne $ancestors.Count) {
+    throw "Fail closed: CDP listener ancestry contains a repeated PID."
+  }
+  $expectedPid = ConvertTo-ThreeDisplayStrictProcessId -Value $process.process_id -Subject "exact checkout PID"
+  if ($ancestors -notcontains $expectedPid) {
+    throw "Fail closed: CDP listener PID $listenerPid is not descended from exact checkout PID $expectedPid."
+  }
+  $pageValues = $transport.PSObject.Properties["pages"]
+  if ($null -eq $pageValues -or -not ($pageValues.Value -is [System.Array])) {
+    throw "Fail closed: CDP transport pages are missing or not an array."
+  }
+  $readerPages = [System.Collections.Generic.List[object]]::new()
+  foreach ($page in @($pageValues.Value)) {
+    Assert-ThreeDisplayExactPropertyNames -Value $page -Expected @(
+      "strict_reader_succeeded", "command_result", "failure"
+    ) -Subject "CDP strict-reader page result"
+    $succeeded = $page.PSObject.Properties["strict_reader_succeeded"].Value
+    if (-not ($succeeded -is [bool])) {
+      throw "Fail closed: CDP strict-reader page result success flag is not Boolean."
+    }
+    $failure = $page.PSObject.Properties["failure"].Value
+    $commandResult = $page.PSObject.Properties["command_result"].Value
+    if ($succeeded) {
+      if ($null -ne $failure) {
+        throw "Fail closed: successful CDP strict-reader page result also contains a failure."
+      }
+      $readerPages.Add($page)
+    } else {
+      if (-not ($failure -is [string]) -or [string]::IsNullOrWhiteSpace($failure) -or $failure -match "[\r\n]") {
+        throw "Fail closed: rejected CDP strict-reader page result has no exact single-line failure."
+      }
+      if ($null -ne $commandResult) {
+        throw "Fail closed: rejected CDP strict-reader page result also contains a command result."
+      }
+    }
+  }
+  if ($readerPages.Count -ne 1) {
+    throw "Fail closed: exact checkout CDP endpoint exposed $($readerPages.Count) self-verified main frontend reader(s); exactly one is required."
+  }
+  $commandResult = $readerPages[0].PSObject.Properties["command_result"]
+  if ($null -eq $commandResult -or $null -eq $commandResult.Value) {
+    throw "Fail closed: exact checkout self-verified main frontend reader returned no output observation result."
+  }
+  return ConvertTo-ThreeDisplayStrictOutputWindowObservation -Value $commandResult.Value
+}
+
+function ConvertTo-ThreeDisplayStrictProcessId {
+  param([Parameter(Mandatory = $true)]$Value, [Parameter(Mandatory = $true)][string]$Subject)
+  if (-not ($Value -is [uint32]) -or [uint32]$Value -eq 0) {
+    throw "Fail closed: $Subject must be one nonzero UInt32."
+  }
+  return [uint32]$Value
+}
+
+function Assert-ThreeDisplayExactPropertyNames {
+  param(
+    [Parameter(Mandatory = $true)]$Value,
+    [Parameter(Mandatory = $true)][string[]]$Expected,
+    [Parameter(Mandatory = $true)][string]$Subject
+  )
+  if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.Array]) {
+    throw "Fail closed: $Subject must be one typed object."
+  }
+  $actual = @($Value.PSObject.Properties | ForEach-Object { [string]$_.Name } | Sort-Object)
+  $expectedSorted = @($Expected | Sort-Object)
+  if ($actual.Count -ne $expectedSorted.Count -or (@(Compare-Object -ReferenceObject $expectedSorted -DifferenceObject $actual).Count -ne 0)) {
+    throw "Fail closed: $Subject schema properties are not exactly '$($expectedSorted -join ", ")'."
+  }
+}
+
+function ConvertTo-ThreeDisplayCanonicalPositiveDecimal {
+  param([Parameter(Mandatory = $true)]$Value, [Parameter(Mandatory = $true)][string]$Subject)
+  if (-not ($Value -is [string])) {
+    throw "Fail closed: $Subject must be a canonical positive decimal string."
+  }
+  $text = [string]$Value
+  if ($text -notmatch "^[1-9][0-9]*$") {
+    throw "Fail closed: $Subject must be a canonical positive decimal string."
+  }
+  try {
+    $parsed = [UInt64]::Parse($text, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture)
+  } catch {
+    throw "Fail closed: $Subject exceeds the supported unsigned 64-bit decimal range."
+  }
+  if ($parsed -eq 0 -or $parsed.ToString([Globalization.CultureInfo]::InvariantCulture) -cne $text) {
+    throw "Fail closed: $Subject must be a canonical positive decimal string."
+  }
+  return [UInt64]$parsed
+}
+
+function ConvertTo-ThreeDisplayStrictOutputWindowObservation {
+  param([Parameter(Mandatory = $true)]$Value)
+  Assert-ThreeDisplayExactPropertyNames -Value $Value -Expected @("schema_version", "source", "outputs") -Subject "app-owned output observation"
+  if (-not (($Value.schema_version -is [int]) -or ($Value.schema_version -is [long])) -or [Int64]$Value.schema_version -ne 1) {
+    throw "Fail closed: exact output observation must be schema_version 1 from the app-owned-read-only provider."
+  }
+  if (-not ($Value.source -is [string]) -or [string]$Value.source -cne "app-owned-read-only") {
+    throw "Fail closed: exact output observation must be schema_version 1 from the app-owned-read-only provider."
+  }
+  if (-not ($Value.outputs -is [System.Array])) {
+    throw "Fail closed: exact output observation outputs must be an array."
+  }
+  $seenOutputIds = [System.Collections.Generic.HashSet[UInt64]]::new()
+  $outputs = [System.Collections.Generic.List[object]]::new()
+  foreach ($status in @($Value.outputs)) {
+    Assert-ThreeDisplayExactPropertyNames -Value $status -Expected @("output_id", "label", "live_open", "live_window_label", "native_window_handle_decimal") -Subject "app-owned output observation status"
+    $outputId = ConvertTo-ThreeDisplayCanonicalPositiveDecimal -Value $status.output_id -Subject "Display output ID"
+    if (-not $seenOutputIds.Add($outputId)) {
+      throw "Fail closed: exact output observation contains duplicate Display output ID '$($status.output_id)'."
+    }
+    foreach ($field in @("label", "live_window_label")) {
+      $fieldValue = $status.$field
+      if (-not ($fieldValue -is [string]) -or [string]::IsNullOrWhiteSpace($fieldValue) -or $fieldValue -match "[\r\n]") {
+        throw "Fail closed: exact output observation $field must be one non-empty single-line string."
+      }
+    }
+    $expectedLiveWindowLabel = "video-output-$($status.output_id)"
+    $observedLiveWindowLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$status.live_window_label) -Fallback "<empty live window label>"
+    $expectedLiveWindowLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value $expectedLiveWindowLabel -Fallback "<invalid expected live window label>"
+    if ([string]$status.live_window_label -cne $expectedLiveWindowLabel) {
+      throw "Fail closed: exact output observation live_window_label '$observedLiveWindowLabelDiagnostic' must equal '$expectedLiveWindowLabelDiagnostic'."
+    }
+    if (-not ($status.live_open -is [bool])) {
+      throw "Fail closed: exact output observation live_open must be boolean."
+    }
+    $nativeWindowHandleDecimal = $null
+    if ($status.live_open) {
+      $null = ConvertTo-ThreeDisplayCanonicalPositiveDecimal -Value $status.native_window_handle_decimal -Subject "Native window HWND"
+      $nativeWindowHandleDecimal = [string]$status.native_window_handle_decimal
+    } elseif ($null -ne $status.native_window_handle_decimal) {
+      throw "Fail closed: closed exact output observation status must report native_window_handle_decimal null."
+    }
+    $outputs.Add([pscustomobject]@{
+      output_id = [string]$status.output_id
+      label = [string]$status.label
+      live_open = [bool]$status.live_open
+      live_window_label = [string]$status.live_window_label
+      native_window_handle_decimal = $nativeWindowHandleDecimal
+    })
+  }
+  return [pscustomobject]@{
+    schema_version = 1
+    source = "app-owned-read-only"
+    outputs = @($outputs)
+  }
+}
+
+function Get-ThreeDisplayCdpPageTargets {
+  param([Parameter(Mandatory = $true)][int]$CdpPort)
+  try {
+    $response = Invoke-RestMethod -Uri "http://127.0.0.1:$CdpPort/json/list" -TimeoutSec 2 -ErrorAction Stop
+  } catch {
+    throw "Fail closed: loopback CDP endpoint 127.0.0.1:$CdpPort cannot be queried."
+  }
+  $pages = [System.Collections.Generic.List[object]]::new()
+  foreach ($target in @($response)) {
+    if ($null -eq $target -or [string]$target.type -ne "page") { continue }
+    if (-not ($target.webSocketDebuggerUrl -is [string])) {
+      throw "Fail closed: loopback CDP page target has no WebSocket debugger URL."
+    }
+    try { $uri = [Uri][string]$target.webSocketDebuggerUrl } catch { throw "Fail closed: loopback CDP page target has an invalid WebSocket debugger URL." }
+    if ($uri.Scheme -ne "ws" -or $uri.Host -ne "127.0.0.1" -or $uri.Port -ne $CdpPort) {
+      throw "Fail closed: CDP page target WebSocket endpoint is not the requested loopback port."
+    }
+    $pages.Add($target)
+  }
+  if ($pages.Count -eq 0) { throw "Fail closed: loopback CDP endpoint exposes no page targets." }
+  return @($pages)
+}
+
+function Invoke-ThreeDisplayCdpRuntimeEvaluate {
+  param(
+    [Parameter(Mandatory = $true)][string]$WebSocketDebuggerUrl,
+    [Parameter(Mandatory = $true)][string]$Expression
+  )
+  $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+  $cancellation = [Threading.CancellationTokenSource]::new()
+  $cancellation.CancelAfter([TimeSpan]::FromSeconds(15))
+  try {
+    $socket.ConnectAsync([Uri]$WebSocketDebuggerUrl, $cancellation.Token).GetAwaiter().GetResult()
+    $request = [ordered]@{
+      id = 1
+      method = "Runtime.evaluate"
+      params = [ordered]@{ expression = $Expression; awaitPromise = $true; returnByValue = $true }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $payload = [Text.Encoding]::UTF8.GetBytes($request)
+    $socket.SendAsync([ArraySegment[byte]]::new($payload), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cancellation.Token).GetAwaiter().GetResult()
+    $buffer = [byte[]]::new(65536)
+    while ($true) {
+      $stream = [IO.MemoryStream]::new()
+      try {
+        do {
+          $receive = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cancellation.Token).GetAwaiter().GetResult()
+          if ($receive.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { throw "CDP target closed during app-owned output observation." }
+          if ($receive.Count -gt 0) { $stream.Write($buffer, 0, $receive.Count) }
+        } while (-not $receive.EndOfMessage)
+        $response = ([Text.Encoding]::UTF8.GetString($stream.ToArray())) | ConvertFrom-Json -ErrorAction Stop
+      } finally { $stream.Dispose() }
+      $responseId = $response.PSObject.Properties["id"]
+      if ($null -eq $responseId -or $responseId.Value -ne 1) { continue }
+      $errorPayload = $response.PSObject.Properties["error"]
+      if ($null -ne $errorPayload -and $null -ne $errorPayload.Value) { throw "CDP Runtime.evaluate failed: $($errorPayload.Value.message)" }
+      $evaluation = $response.PSObject.Properties["result"]
+      if ($null -eq $evaluation -or $null -eq $evaluation.Value) { throw "CDP Runtime.evaluate returned no result envelope." }
+      $exception = $evaluation.Value.PSObject.Properties["exceptionDetails"]
+      if ($null -ne $exception -and $null -ne $exception.Value) { throw "CDP Runtime.evaluate threw: $($exception.Value.text)" }
+      $remote = $evaluation.Value.PSObject.Properties["result"]
+      $value = if ($null -eq $remote -or $null -eq $remote.Value) { $null } else { $remote.Value.PSObject.Properties["value"] }
+      if ($null -eq $value) { throw "CDP Runtime.evaluate returned no serializable value." }
+      return $value.Value
+    }
+  } finally {
+    $cancellation.Dispose()
+    $socket.Dispose()
+  }
+}
+
+function Get-ThreeDisplayProcessAncestorIds {
+  param([Parameter(Mandatory = $true)][uint32]$ProcessId)
+  $ancestors = [System.Collections.Generic.List[uint32]]::new()
+  $seen = [System.Collections.Generic.HashSet[uint32]]::new()
+  [uint32]$current = $ProcessId
+  for ($depth = 0; $depth -lt 64; $depth++) {
+    if ($current -eq 0 -or -not $seen.Add($current)) { throw "Fail closed: CDP listener process ancestry is invalid or cyclic." }
+    $record = Get-CimInstance Win32_Process -Filter "ProcessId = $current" -ErrorAction Stop
+    if ($null -eq $record) { throw "Fail closed: CDP listener process $current disappeared during ancestry proof." }
+    $ancestors.Add($current)
+    if ([uint64]$record.ParentProcessId -gt [uint64][uint32]::MaxValue) { throw "Fail closed: CDP listener process ancestry contains an invalid parent PID." }
+    [uint32]$parent = [uint32]$record.ParentProcessId
+    if ($parent -eq 0) { return @($ancestors) }
+    $current = $parent
+  }
+  throw "Fail closed: CDP listener process ancestry exceeded 64 levels."
+}
+
+function Get-ThreeDisplayCdpTransportObservation {
+  # SEAM: this is the complete live-process/CDP transport boundary. It only
+  # observes an explicitly supplied loopback port and never changes a process,
+  # window, Tauri state, focus, or Z-order.
+  param([Parameter(Mandatory = $true)][int]$CdpPort)
+  $listeners = @(Get-NetTCPConnection -LocalPort $CdpPort -State Listen -ErrorAction Stop)
+  if ($listeners.Count -ne 1) { throw "Fail closed: loopback CDP port $CdpPort has $($listeners.Count) listening endpoints; exactly one is required." }
+  $listener = $listeners[0]
+  if ([string]$listener.LocalAddress -cne "127.0.0.1") { throw "Fail closed: CDP port $CdpPort is not bound exactly to 127.0.0.1." }
+  $listenerPid = ConvertTo-ThreeDisplayStrictProcessId -Value ([uint32]$listener.OwningProcess) -Subject "CDP listener PID"
+  $ancestors = Get-ThreeDisplayProcessAncestorIds -ProcessId $listenerPid
+  $commandExpression = @'
+(async () => {
+  const read = window.__syndocalReadVideoOutputWindowObservationV1;
+  if (typeof read !== 'function') throw new Error('strict frontend output observation reader is unavailable');
+  return await read();
+})()
+'@
+  $pages = [System.Collections.Generic.List[object]]::new()
+  foreach ($page in @(Get-ThreeDisplayCdpPageTargets -CdpPort $CdpPort)) {
+    try {
+      $result = Invoke-ThreeDisplayCdpRuntimeEvaluate -WebSocketDebuggerUrl ([string]$page.webSocketDebuggerUrl) -Expression $commandExpression
+      $pages.Add([pscustomobject]@{
+        strict_reader_succeeded = $true
+        command_result = $result
+        failure = $null
+      })
+    } catch {
+      $failure = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "strict frontend output observation reader rejected this page"
+      $pages.Add([pscustomobject]@{
+        strict_reader_succeeded = $false
+        command_result = $null
+        failure = $failure
+      })
+    }
+  }
+  $successfulPages = @($pages | Where-Object { $_.strict_reader_succeeded -eq $true })
+  if ($successfulPages.Count -ne 1) {
+    throw "Fail closed: exact checkout CDP endpoint exposed $($successfulPages.Count) self-verified main frontend reader(s); exactly one is required."
+  }
+  return [pscustomobject]@{
+    listener_process_id = $listenerPid
+    listener_ancestor_process_ids = @($ancestors)
+    pages = @($pages)
+  }
+}
+
+function Assert-ThreeDisplayExactOutputWindowObservation {
+  param(
+    [Parameter(Mandatory = $true)]$Configuration,
+    [Parameter(Mandatory = $true)]$Observation,
+    [Parameter(Mandatory = $true)]$Selected
+  )
+  $Observation = ConvertTo-ThreeDisplayStrictOutputWindowObservation -Value $Observation
+  $statuses = @($Observation.outputs)
+  if ($statuses.Count -eq 0) {
+    throw "Fail closed: exact output observation contains no output statuses."
+  }
+  $liveStatuses = @($statuses | Where-Object { [bool]$_.live_open })
+  if ($liveStatuses.Count -ne 2) {
+    throw "Fail closed: exact output observation reports $($liveStatuses.Count) live Display outputs; exactly LED and projector are required."
+  }
+  foreach ($role in @($Configuration.roles | Where-Object { $_.role -ne "editor" })) {
+    $matches = @($statuses | Where-Object {
+      (ConvertTo-ThreeDisplayCanonicalPositiveDecimal -Value $_.output_id -Subject "Display output ID") -eq [UInt64]$role.output_id
+    })
+    if ($matches.Count -ne 1) {
+      throw "Fail closed: exact output observation matched $($matches.Count) status record(s) for $($role.native_window_label); exactly one is required."
+    }
+    $status = $matches[0]
+    if (-not [bool]$status.live_open) {
+      throw "Fail closed: exact output observation reports $($role.native_window_label) closed."
+    }
+    $expectedLabel = $role.exact_title.Substring($script:ThreeDisplayOutputTitlePrefix.Length)
+    $observedLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$status.label) -Fallback "<empty output label>"
+    $expectedLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value $expectedLabel -Fallback "<invalid expected output label>"
+    $observedLiveWindowLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$status.live_window_label) -Fallback "<empty live window label>"
+    $expectedLiveWindowLabelDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$role.native_window_label) -Fallback "<invalid expected live window label>"
+    if (-not [string]::Equals([string]$status.label, $expectedLabel, [StringComparison]::Ordinal)) {
+      throw "Fail closed: exact output observation label '$observedLabelDiagnostic' for $expectedLiveWindowLabelDiagnostic differs from expected '$expectedLabelDiagnostic'."
+    }
+    if (-not [string]::Equals([string]$status.live_window_label, [string]$role.native_window_label, [StringComparison]::Ordinal)) {
+      throw "Fail closed: exact output observation live window label '$observedLiveWindowLabelDiagnostic' differs from expected '$expectedLiveWindowLabelDiagnostic'."
+    }
+    $observedHandle = ConvertTo-ThreeDisplayCanonicalPositiveDecimal -Value $status.native_window_handle_decimal -Subject "Native window HWND"
+    if ([long]$Selected[$role.role].handle_decimal -le 0) {
+      throw "Fail closed: native title-selected HWND $($Selected[$role.role].handle_decimal) is not positive."
+    }
+    $selectedHandle = [UInt64][long]$Selected[$role.role].handle_decimal
+    if ($observedHandle -ne $selectedHandle) {
+      throw "Fail closed: exact output observation HWND $($status.native_window_handle_decimal) for $($role.native_window_label) differs from the native title-selected HWND $($Selected[$role.role].handle_decimal)."
+    }
+  }
 }
 
 function Assert-ThreeDisplayWindowState {
@@ -660,6 +1170,14 @@ function Assert-ThreeDisplayWindowState {
     [Parameter(Mandatory = $true)]$ExpectedMonitor,
     [Parameter(Mandatory = $true)][bool]$RequireEditorMaximized
   )
+  if ([long]$Metrics.handle_decimal -ne [long]$Window.handle_decimal) {
+    throw "Fail closed: role '$($Role.role)' fresh metrics HWND $($Metrics.handle_decimal) differs from title-selected HWND $($Window.handle_decimal); title/handle selection changed after the census."
+  }
+  if (-not [string]::Equals([string]$Metrics.title, [string]$Role.exact_title, [StringComparison]::Ordinal)) {
+    $observedTitleDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$Metrics.title) -Fallback "<empty native window title>"
+    $expectedTitleDiagnostic = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$Role.exact_title) -Fallback "<invalid expected native window title>"
+    throw "Fail closed: role '$($Role.role)' fresh metrics title '$observedTitleDiagnostic' differs from exact title '$expectedTitleDiagnostic'; title/handle selection changed after the census."
+  }
   if ([uint32]$Metrics.owner_pid -ne $ExpectedPid) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) owner PID $($Metrics.owner_pid) differs from exact checkout PID $ExpectedPid." }
   if (-not [bool]$Metrics.alive -or -not [bool]$Metrics.visible) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is missing or invisible." }
   if (-not [bool]$Metrics.responding) { throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) is hung/unresponsive." }
@@ -670,12 +1188,25 @@ function Assert-ThreeDisplayWindowState {
   if ([long]$Metrics.monitor_handle_decimal -ne [long]$ExpectedMonitor.monitor_handle_decimal) {
     throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) monitor handle does not match its explicit identity binding."
   }
+  if ([int]$Metrics.effective_dpi -ne [int]$ExpectedMonitor.effective_dpi) {
+    throw "Fail closed: role '$($Role.role)' HWND $($Metrics.handle_decimal) effective DPI is $($Metrics.effective_dpi), expected monitor DPI $($ExpectedMonitor.effective_dpi)."
+  }
   if ($Role.role -eq "editor" -and $RequireEditorMaximized -and -not [bool]$Metrics.maximized) {
     throw "Fail closed: editor HWND $($Metrics.handle_decimal) is not maximized after placement verification."
   }
   if ($Role.role -ne "editor") {
     if ([int]$Metrics.client_physical_bounds.width -ne [int]$Role.physical_width -or [int]$Metrics.client_physical_bounds.height -ne [int]$Role.physical_height) {
       throw "Fail closed: $($Role.role) live output HWND $($Metrics.handle_decimal) client is $($Metrics.client_physical_bounds.width)x$($Metrics.client_physical_bounds.height) physical pixels, expected $($Role.physical_width)x$($Role.physical_height)."
+    }
+    $client = $Metrics.client_physical_bounds
+    $monitorBounds = $ExpectedMonitor.physical_bounds
+    if (
+      [int]$client.left -ne [int]$monitorBounds.left -or
+      [int]$client.top -ne [int]$monitorBounds.top -or
+      [int]$client.right -ne [int]$monitorBounds.right -or
+      [int]$client.bottom -ne [int]$monitorBounds.bottom
+    ) {
+      throw "Fail closed: $($Role.role) live output HWND $($Metrics.handle_decimal) client physical bounds $($client.left),$($client.top),$($client.right),$($client.bottom) do not exactly fill its explicit monitor bounds $($monitorBounds.left),$($monitorBounds.top),$($monitorBounds.right),$($monitorBounds.bottom)."
     }
   }
 }
@@ -698,6 +1229,7 @@ function Get-ThreeDisplayStrictSample {
   if (-not [string]::Equals($actualVersion, $Configuration.expected_product_version, [StringComparison]::Ordinal)) { throw "Fail closed: executable ProductVersion mismatch (actual '$actualVersion')." }
   $actualHead = Resolve-ThreeDisplayGitHead -CheckoutRootPath $Configuration.checkout_root
   if (-not [string]::Equals($actualHead, $Configuration.expected_git_head, [StringComparison]::OrdinalIgnoreCase)) { throw "Fail closed: checkout git HEAD mismatch (actual '$actualHead')." }
+  [void](Test-ThreeDisplayCheckoutClean -CheckoutRootPath $Configuration.checkout_root)
 
   $inventory = @(Get-ThreeDisplayMonitorInventory)
   if ($inventory.Count -eq 0) { throw "Fail closed: monitor inventory is empty." }
@@ -714,10 +1246,11 @@ function Get-ThreeDisplayStrictSample {
   $knownOutputTitles = @($Configuration.roles | Where-Object { $_.role -ne "editor" } | ForEach-Object { [string]$_.exact_title })
   $unexpectedOutputWindows = @($topLevelWindows | Where-Object { ([string]$_.title).StartsWith($script:ThreeDisplayOutputTitlePrefix, [StringComparison]::Ordinal) -and $knownOutputTitles -notcontains [string]$_.title })
   if ($unexpectedOutputWindows.Count -gt 0) {
-    $titles = (@($unexpectedOutputWindows | ForEach-Object { "'$($_.title)'" }) -join ", ")
-    throw "Fail closed: unexpected visible native output label/title(s) for the exact checkout PID: $titles."
+    $titles = @($unexpectedOutputWindows | ForEach-Object {
+      "'{0}'" -f (ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.title))
+    })
+    throw "Fail closed: unexpected visible native output label/title(s) for the exact checkout PID: $($titles -join ', ')."
   }
-
   $windowEvidence = [System.Collections.Generic.List[object]]::new()
   Invoke-WithThreeDisplayPhysicalDpiContext {
     foreach ($role in @($Configuration.roles)) {
@@ -733,10 +1266,17 @@ function Get-ThreeDisplayStrictSample {
       })
     }
   }
+  # Re-read each title/HWND through Get-ThreeDisplayWindowMetrics and reject
+  # any post-census replacement before consuming the app-owned output-ID to
+  # HWND observation.  This closes the title/handle TOCTOU between selection
+  # and the engine/app evidence boundary.
+  $outputObservation = Get-ThreeDisplayExactOutputWindowObservation -Configuration $Configuration
+  Assert-ThreeDisplayExactOutputWindowObservation -Configuration $Configuration -Observation $outputObservation -Selected $selected
   [pscustomobject]@{
     observed_at_utc = [DateTime]::UtcNow.ToString("o")
     process = [pscustomobject]@{ process_id = [uint32]$process.process_id; native_image_path = [string]$process.native_image_path; sha256 = $actualHash; product_version = $actualVersion; git_head = $actualHead }
     monitors = @($inventory)
+    output_window_observation = $outputObservation
     windows = @($windowEvidence)
   }
 }
@@ -771,7 +1311,7 @@ function Get-ThreeDisplayDryRunObservation {
       message = "Read-only evidence visibly rejected the configured state before acceptance."
       inventory = @($inventory)
       sample = $null
-      errors = @($_.Exception.Message)
+      errors = @((ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "dry-run rejection without a readable single-line diagnostic"))
     }
   }
 }
@@ -787,7 +1327,10 @@ function Invoke-ThreeDisplayApplyAcceptance {
     # never masks a swapped/default output by moving it.
     $prechange = Get-ThreeDisplayStrictSample -Configuration $Configuration -RequireEditorMaximized $false
     $currentEditor = @($prechange.windows | Where-Object { $_.role -eq "editor" })[0]
-    [void](Invoke-ThreeDisplayWindowMaximize -HandleDecimal ([long]$currentEditor.window.handle_decimal))
+    [void](Invoke-ThreeDisplayWindowMaximize `
+      -HandleDecimal ([long]$currentEditor.window.handle_decimal) `
+      -ExpectedProcessId ([uint32]$currentEditor.window.owner_pid) `
+      -ExpectedTitle ([string]$currentEditor.window.title))
     $operation = [ordered]@{
       performed = $true; kind = "maximize-editor"; target_role = "editor"
       prechange_revalidation = $prechange.observed_at_utc
@@ -806,7 +1349,7 @@ function Invoke-ThreeDisplayApplyAcceptance {
       }
     } catch {
       $consecutive = 0
-      $stable.Add([pscustomobject]@{ attempt = $attempt; stable = $false; consecutive = 0; sample = $null; error = $_.Exception.Message })
+      $stable.Add([pscustomobject]@{ attempt = $attempt; stable = $false; consecutive = 0; sample = $null; error = (ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "sample attempt failed without a readable single-line diagnostic") })
     }
     if ($attempt -lt $Configuration.max_sample_attempts) { [void](Invoke-ThreeDisplaySampleDelay -Milliseconds $Configuration.sample_interval_ms) }
   }
@@ -833,6 +1376,7 @@ function Invoke-ThreeDisplayAcceptance {
       sha256 = if ($Configuration.expected_sha256) { $Configuration.expected_sha256 } else { $null }
       product_version = if ($Configuration.expected_product_version) { $Configuration.expected_product_version } else { $null }
       git_head = if ($Configuration.expected_git_head) { $Configuration.expected_git_head } else { $null }
+      cdp_port = if ($Configuration.cdp_port -gt 0) { $Configuration.cdp_port } else { $null }
       roles = @($Configuration.roles)
     }
     safety = [ordered]@{
@@ -840,7 +1384,9 @@ function Invoke-ThreeDisplayAcceptance {
       creates_or_changes_syndocal_outputs = $false
       launches_or_terminates_processes = $false
       screenshots_taken = $false
-      hardware_or_network_access = $false
+      hardware_access = $false
+      non_loopback_network_access = $false
+      loopback_cdp_observation_only = $true
       output_window_repositioning = $false
     }
   }
@@ -876,7 +1422,7 @@ function Invoke-ThreeDisplayAcceptance {
       [void](Write-ThreeDisplayEvidenceJson -EvidenceDirectory $EvidenceDirectory -FileName "monitors.json" -Value ([ordered]@{ inventory = @($dry.inventory); decision = $dry.verdict }))
     }
   } catch {
-    $failure = $_.Exception.Message
+    $failure = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "acceptance failed without a readable single-line diagnostic"
     $final = [ordered]@{ verdict = "rejected"; accepted = $false; errors = @($failure); native_hardware_claim = $false }
   }
   if ($Configuration.apply) {
@@ -890,7 +1436,15 @@ function Invoke-ThreeDisplayAcceptance {
   [void](Write-ThreeDisplayEvidenceSums -EvidenceDirectory $EvidenceDirectory)
   return [pscustomobject]@{
     evidence_directory = $EvidenceDirectory
-    succeeded = ([bool]$final.accepted -or -not $Configuration.apply)
+    # A partial dry-run is discovery only and exits successfully after its
+    # labelled not-configured evidence.  A fully configured dry-run that
+    # rejects any exact-show invariant (including the app-owned ID-to-HWND
+    # proof) is a blocked final-show route and must not return a success code.
+    succeeded = (
+      [bool]$final.accepted -or
+      ((-not $Configuration.apply) -and [string]$final.verdict -eq "not-configured") -or
+      ((-not $Configuration.apply) -and [string]$final.verdict -eq "dry-run-would-accept")
+    )
     accepted = [bool]$final.accepted
     verdict = [string]$final.verdict
     failure = $failure
@@ -898,18 +1452,32 @@ function Invoke-ThreeDisplayAcceptance {
   }
 }
 
+function Get-ThreeDisplayDefaultEvidenceRoot {
+  # Default evidence root: this checkout's gitignored target\qa tree (the
+  # Cargo target directory is excluded by .gitignore), so evidence written by
+  # one run can never dirty a later run's exact-artifact clean-checkout gate.
+  return [IO.Path]::GetFullPath((Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"))
+}
+
 function Invoke-ThreeDisplayAcceptanceMain {
-  $root = if ([string]::IsNullOrWhiteSpace($EvidenceRootPath)) { Join-Path $script:ThreeDisplayCheckoutRoot "qa\artifacts" } else { $EvidenceRootPath }
+  $evidenceDirectory = $null
+  $explicitRoot = -not [string]::IsNullOrWhiteSpace($EvidenceRootPath)
+  $root = if ($explicitRoot) { $EvidenceRootPath } else { Get-ThreeDisplayDefaultEvidenceRoot }
+  if (-not $explicitRoot -and -not (Test-Path -LiteralPath $root -PathType Container)) {
+    # Only the checkout-local gitignored default may be created on demand;
+    # explicit operator-supplied roots must already exist and are never created.
+    [void](New-Item -ItemType Directory -Path $root -Force -ErrorAction Stop)
+  }
   $evidenceDirectory = New-ThreeDisplayEvidenceDirectory -RootPath $root -Slug $EvidenceSlug
   try {
-    $configuration = New-ThreeDisplayConfiguration -IsApply ([bool]$Apply) -ExecutablePath $ExpectedExecutablePath -Sha256 $ExpectedSha256 -ProductVersion $ExpectedProductVersion -GitHead $ExpectedGitHead -EditorIdentity $ExpectedEditorMonitorIdentity -LedIdentity $ExpectedLedMonitorIdentity -ProjectorIdentity $ExpectedProjectorMonitorIdentity -LedId $LedOutputId -LedLabel $LedOutputLabel -ProjectorId $ProjectorOutputId -ProjectorLabel $ProjectorOutputLabel -IntervalMs $SampleIntervalMs -Attempts $MaxSampleAttempts -CheckoutRootPath $script:ThreeDisplayCheckoutRoot
+    $configuration = New-ThreeDisplayConfiguration -IsApply ([bool]$Apply) -ExecutablePath $ExpectedExecutablePath -Sha256 $ExpectedSha256 -ProductVersion $ExpectedProductVersion -GitHead $ExpectedGitHead -EditorIdentity $ExpectedEditorMonitorIdentity -LedIdentity $ExpectedLedMonitorIdentity -ProjectorIdentity $ExpectedProjectorMonitorIdentity -LedId $LedOutputId -LedLabel $LedOutputLabel -ProjectorId $ProjectorOutputId -ProjectorLabel $ProjectorOutputLabel -CdpPort $CdpPort -IntervalMs $SampleIntervalMs -Attempts $MaxSampleAttempts -CheckoutRootPath $script:ThreeDisplayCheckoutRoot
     $result = Invoke-ThreeDisplayAcceptance -Configuration $configuration -EvidenceDirectory $evidenceDirectory
     [Console]::Out.WriteLine((@{ evidence_directory = $result.evidence_directory; verdict = $result.verdict; accepted = $result.accepted; native_hardware_claim = $false } | ConvertTo-Json -Compress))
     if ($result.succeeded) { exit 0 }
     [Console]::Error.WriteLine("Three-display acceptance rejected: $($result.failure). Evidence: $evidenceDirectory")
     exit 1
   } catch {
-    $message = $_.Exception.Message
+    $message = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "three-display harness failed without a readable single-line diagnostic"
     try {
       [void](Write-ThreeDisplayEvidenceJson -EvidenceDirectory $evidenceDirectory -FileName "failure.json" -Value ([ordered]@{ failure = $message }))
       [void](Write-ThreeDisplayEvidenceSums -EvidenceDirectory $evidenceDirectory)
