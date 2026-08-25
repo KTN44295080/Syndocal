@@ -166,10 +166,10 @@ The objective is not complete if any of the following remains true:
 | SHOW-P0-2 | Timeline lower-right uses the same authoritative Bank/Scene representation as Lighting, with placement-only behavior | The compact representation and required `cueLists={snapshot().cue_lists}` connection exist in the dirty tree. The shared fail-closed authority now covers Control/Edit Cue Pads, editable Touch, outer and inner Timeline placement, delayed callbacks, and orphan events without fabricated Cue/Bank IDs. The hardened Scene Matrix gate drives the production-shaped owner registration, exact three-field Program Audio state, Begin/Batch/Commit, exact operation ACK, a complete terminal `R+1` authority result, Undo, and an expected dirty-project `beforeunload`; it passes 5/5 viewport sizes. Dedicated source-shelf and external-DnD contracts also pass. Independent Ox review returned PASS with no Blocker/High/Medium; its two actionable Low findings were repaired by safety-lowering flash release across a later authority fault and visible discard messages for stale delayed look writes. The stopped Ox backend tranche now passes exact-linker engine Bank tests 16/16 and Tauri `--no-default-features` Bank tests 9/9, but remains uncommitted under independent review. The warning ratchet also found the new eight-argument `rename_cue_list` command; it must be converted to a typed request shape rather than suppressed. Fresh native proof remains open. | Same snapshot produces identical Bank ID/order/name/color and Scene ID/order/number/name/type in Lighting and Timeline; empty Banks remain; Timeline exposes no CRUD/play path; click and drag place the same Scene Block. | FOCUSED FRONTEND + OX REVIEW PASS / BACKEND TESTS PASS / REVIEW, WARNING FIX, AND NATIVE PROOF OPEN |
 | SHOW-P0-3 | Detached Stage/Timeline panes never dual-render, disappear, or leave unused main-window space | The previous startup recovery could treat failed placement capture as child absence. A fail-closed exact-label child census is being implemented. | Browser state-machine proof plus a fresh exact-checkout native run covers both detachment orders, restart with detached records, child present/absent/unknown outcomes, Stage integrated rendering, Timeline source/timeline separation, no duplicate pane, and no unusable main-window void. | BLOCKED BY INTEGRATION |
 | SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | Static exact derivation of the pinned file reports 46 fixtures, 12 profiles, 15 fixture groups, 2 Banks, 2 Scenes, 84/84 accepted value payloads, 234 beam records, and zero unknown fixture types. Two MIDI mappings remain Approximate because device affinity is not exact, and one DVC GOLD binding remains Unsupported. Temporary resolution-specific media and a reproducible generator exist, but the focused importer execution and physical output flow remain unexecuted. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh alpha.12 native three-display output complete, save, restart, and reload without substitution. | STATIC INVENTORY COMPLETE / EXECUTION BLOCKED |
-| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | The prior peer source checkpoint remains pushed on `beta-v1.1.2` at `1a2f3bc70507d1bb4c5ffe2eb8bbb2b24686532f`, but adversarial end-to-end review invalidated it as the final show artifact: it can emit a one-shot Active with null position/BPM, accepts generic/flat-v1 setup paths, changes pedal ownership on generic `Running`, forwards a pedal-intent loop guess instead of measured Rekordbox loop state, and cannot recover the initial missing sample. A peer-only strict envelope-v2 clean break is now in implementation; it requires a new commit, package/build identity, push, and installer before hardware acceptance. | Identity-bound strict-v2 peer is committed and pushed, both PCs run the intended artifacts, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, measured loop, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | PRIOR CHECKPOINT SUPERSEDED / STRICT V2 IMPLEMENTATION ACTIVE |
-| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | Current source is dirty and remains version `1.2.0-alpha.11`. | Focused gates, warning ratchet, synchronized alpha.12 metadata, `check:release`, exact VS2022 14.44 linker, `pnpm --dir app tauri build --no-bundle`, exactly one responsive maximized exact-path window, evidence update, meaningful commit, and successful push. | NOT RUN |
-| SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | The isolated bridge has clean-broken to ABI/schema v2 and one canonical `syndocal_asio_bridge.dll`. Follow-up review and repair validate each JSON gain as finite `f64` within `[0,1]` before narrowing to the realtime `f32` path, reject empty and all-zero mixes, cover negative/subtly-over-one/extreme/non-finite values at both parser and exported Start boundaries, latch a failed client event callback terminally without recursive notification, and validate all nine full C prototypes including duplicate/mutated/whole-line/inline-comment cases. The exact VS 14.44 full gate now passes SDK-free 12/12, ASIO feature 14/14 plus one physical ignored test, pinned SDK provenance over 48 files, all-target check, canonical release DLL build, exact nine-export inspection, and zero first-party/linker warnings; DLL SHA-256 is `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. `distribution_approved` remains false. Independent packaging review is now a hard FAIL: cold clean CI runs a self-test before staging untracked runtime DLLs; the x86_64 inventory accepts ARM64 targets; inventory digests/sizes/known-ASIO hashes can redefine their own authority; extracted installers omit common-resource and exact-tree proof; explicit CLI NDI features bypass the claimed guard; malformed inventories lose the typed RC error; and arbitrary Windows reparse coverage is not proven. Repairs are split between Ox and Terra and remain uncommitted. The application loader remains ABI v1 and incompatible until strict v2 integration; earlier native/hardware evidence is historical and must not close the v2 gate. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Close, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, one-hour soak, and measured latency pass without WASAPI or another-driver substitution. | BRIDGE V2 BUILD/EXPORT PASS / PACKAGE FAIL UNDER REPAIR / APP INTEGRATION AND HARDWARE OPEN |
-| SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Absolute loop/release and authored Follow/BPM primitives exist, but the current path is not show-correct. MasterTrackActive always starts transport at zero and stores position/original BPM diagnostically; StateSync never converges position; a nonmatching nonempty content ID falls through to title/artist; the peer may send Active once before position/BPM exists and never retry; actual loop state is not routed; generic `Running` steals the pedal from DJ MIDI; and RELEASE is not session-fenced. Strict wire v2, required fresh position/effective BPM/session/deck identity, continuous revisioned Sync, measured loop state, atomic engine start/sync/release ownership, and late-event fencing are now the accepted clean-break contract. The exact authored Timelines and full sequence remain unexecuted. | Wired authenticated Master-track trigger, position follow, measured absolute 8/4/2-beat loop updates, pedal stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | STRICT V2 PEER ACTIVE / KDMX ENGINE CONTRACT AND AUTHORING OPEN |
+| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | The peer strict envelope-v2 clean break is committed at `5eaf1994e1bf4456857fefd36cc0ce827145b603`; release code is fixed by annotated immutable tag `v1.1.3` at `24d38f6decbc8880149df1902ef8d2ccfe76b784`, and the evidence-only branch head is pushed at `03be38419bf8f547d8f64b23f669bf786f7e96f2`. The published checkpoint's product version was `1.1.3`. Independent Ox review found no P0/P1. `node --check` passed 18/18, `git diff --check` passed, and full `npm test` passed 328 total / 326 pass / 0 fail / 2 intentional real-package skips, including strict v2, measured 8/4/2 loops, correlated pedal release, reconnect, and 262,145 TRACK_SYNC frames. The exact tagged Windows PowerShell build passed all seven stages and produced `DJLinkForPCDJ-setup.exe` (56,071,355 B, SHA-256 `db867318...a18ce`) and `rb-output-1.1.3.zip` (62,599,518 B, SHA-256 `089509c8...d272`). Manifest, packaged-executable, and isolated ZIP extraction checks passed; the ZIP has 11 entries, 0 duplicates, and 0 unsafe paths. The published non-draft GitHub Release `v1.1.3` contains the installer, ZIP, and release manifest; GitHub asset sizes/digests match local measurements. The initial `npm run` wrapper failed closed because this machine globally routes npm scripts through Git Bash and injects a PS7-first module path into Windows PowerShell; direct execution of the same tracked script under exact Windows PowerShell passed. Update 2026-08-26: corrected v1.1.4 source is pushed on peer branch `beta-v1.1.2` at `600ec0fd46729ed6c7bf5501ad70da8350141ec7`; full `npm test` passes 368 total / 366 pass / 0 fail / 2 intentional package-smoke skips in 371652.9948ms; no v1.1.4 tag, installer, or GitHub release exists; DJ-PC processes are intentionally stopped with only the FOH listener side active. No installer result is promoted to hardware acceptance. | Identity-bound strict-v2 peer is committed, tagged, built, published, and pushed; both PCs run the intended artifacts, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, measured loop, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | V1.1.3 PUBLISHED BUT BLOCKED / CORRECTED V1.1.4 SOURCE PUSHED, UNTAGGED AND UNPUBLISHED / HARDWARE 0/12 OPEN |
+| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | Product metadata is synchronized at `1.2.0-alpha.12`, and `pnpm --dir app run check:release:self-test` passes its metadata, ASIO-packaging, Windows-artifact, and strict-JSON groups. The source is still dirty and the last accepted native artifact remains alpha.11, so no alpha.12 binary/source equivalence is claimed. | Focused gates, warning ratchet, `check:release`, exact VS2022 14.44 linker, `pnpm --dir app tauri build --no-bundle`, exactly one responsive maximized exact-path window, evidence update, meaningful commit, and successful push. | ALPHA.12 METADATA + RELEASE SELF-TEST PASS / NATIVE BUILD, COMMIT, AND PUSH OPEN |
+| SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | The isolated bridge and application loader source have clean-broken to ABI/schema v2 and one canonical `syndocal_asio_bridge.dll`; the old claim that the app loader remains ABI v1 is retired. Follow-up review and repair validate each JSON gain as finite `f64` within `[0,1]` before narrowing to the realtime `f32` path, reject empty and all-zero mixes, cover negative/subtly-over-one/extreme/non-finite values at both parser and exported Start boundaries, latch a failed client event callback terminally without recursive notification, and validate all nine full C prototypes. The exact VS 14.44 full gate passes SDK-free 12/12, ASIO feature 14/14 plus one physical ignored test, pinned SDK provenance over 48 files, all-target check, canonical release DLL build, exact nine-export inspection, and zero first-party/linker warnings; DLL SHA-256 is `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. The Windows PowerShell 5.1 provenance preflight now passes against the pinned 48-file SDK after removing PS7-only hash/path APIs. Direct bridge-v2 hardware exercise on Ampero Mini at 44.1 kHz, 2-channel i32, 128 frames passed 100 Start/Stop/Close cycles with 200 callbacks and zero reported XRUN, callback, non-finite, mismatch, or fallback faults; TOPPING remained fail-closed with driver status 5 and is not accepted. `distribution_approved` remains false. The alpha.12 application has not yet been natively built with the DLL adjacent, and persistence/revalidation, UI operation, fault recovery, one-hour soak, and measured latency remain open. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Close, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, one-hour soak, and measured latency pass without WASAPI or another-driver substitution. | BRIDGE + APP LOADER V2 SOURCE AND AMPERO CYCLE PROOF PASS / ALPHA.12 NATIVE UI, SOAK, LATENCY, AND DISTRIBUTION OPEN |
+| SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Absolute loop/release and authored Follow/BPM primitives exist, but the current path is not show-correct. MasterTrackActive always starts transport at zero and stores position/original BPM diagnostically; StateSync never converges position; a nonmatching nonempty content ID falls through to title/artist; the peer may send Active once before position/BPM exists and never retry; actual loop state is not routed; generic `Running` steals the pedal from DJ MIDI; and RELEASE is not session-fenced. Strict wire v2, required fresh position/effective BPM/session/deck identity, continuous revisioned Sync, measured loop state, atomic engine start/sync/release ownership, and late-event fencing are now the accepted clean-break contract. The corrected strict-v2 peer source is pushed, but its release and the exact authored Timelines/full physical sequence remain unexecuted. | Wired authenticated Master-track trigger, position follow, measured absolute 8/4/2-beat loop updates, pedal stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | STRICT V2 CONTRACT ACCEPTED (SOURCE PUSHED, RELEASE PENDING) / KDMX ENGINE CONTRACT AND AUTHORING OPEN |
 | SHOW-P0-9 | Scene Settings remains usable at show-editor size and an authored Scene may intentionally contain zero owned FX | The focused browser gate now passes at 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720 with an 8-FX fixture: 4x2 family layout at 1920, no chooser descriptions, local 32px owned-FX toolbar controls, contained focusable scrollport, real wheel/PageDown/End reaching a bottom sentinel, and zero document/app scroll. Browser removal reaches 0, but native Tauri/engine guards still reject the final removal. | Exact-checkout native UI reproduces the internal scroll and zero-FX operation; acknowledged engine state, active runtime release, save/reload persistence, and publication-failure rollback all pass without browser-local authority. | FOCUSED LAYOUT PROOF PASS / NATIVE MUTATION BLOCKED |
 
 ## Discovered fail-closed and clean-break repair ledger
@@ -209,10 +209,66 @@ the invariant and retirement proof remain binding.
 | FC-27 | Bank authority does not validate `CueListSummary.active_cue_id`; UI can display a Cue from another Bank as active, and engine load can carry a malformed active-Cue reference into effect activation. Existing sanitization may silently clear some malformed values instead of rejecting the document unchanged. | An active Cue reference is null or an exact unique Cue in the same exact Bank. Invalid, missing, duplicate, or cross-Bank references reject load/mutation unchanged and close every dependent UI/runtime surface; no label-only display, activation, or silent clear is permitted. | REVIEW FINDING / FRONTEND AND ENGINE REPAIR REQUIRED |
 | FC-28 | Video core has a payload-less exact-black artistic admission. The refreshed exact-linker suite passes 159/159 with 1 ignored. A full dependency clippy run nevertheless exposes 12 first-party large-error warnings because `VideoOutputArtisticRejection` is embedded by value; an Ox structural indirection repair is active and suppression is forbidden. Terra's NDI/Spout repair is stable and passes Spout 15/15, NDI 8/8, both feature checks, no-run, format, and diff gates. It makes current-project blackout dominate historical Follow snapshots, binds exact route kind/endpoint, rechecks Follow identity, and separates pre-send revocation from SDK failure. An independent Ox review is active. This is still only observed-mutation mitigation: Display and all external transports require the engine-owned Prepared to Committed presentation token to close SDK/present TOCTOU, and Display still uses legacy preparation/raw presentation paths and hides zero-area. | Every physical sender/presenter consumes the evidenced artistic result, rechecks complete current output/safety/project authority immediately before I/O, treats non-Fresh as typed failure or exact-black safety output, updates LastValid only from Fresh, exposes blackout telemetry, rejects zero-area unchanged, and has no reachable legacy/frame-only success path. | CORE TESTS PASS / WARNING REPAIR AND NDI-SPOUT OX REVIEW ACTIVE / ENGINE TOKEN AND DISPLAY OPEN |
 | FC-29 | `App.tsx` is currently 28,159 lines / 1,199,580 bytes and `main.rs` is 123,293 lines / 4,717,427 bytes. Bank/Scene, project transaction/recovery, Timeline, external control, ASIO, video presentation, and fixture/browser routes still converge in these two files, so authority ownership is difficult to audit and native-only divergence can hide behind a frontend pass. The new `bankAuthority.ts` and `projectTransactionRecovery.ts` extractions are useful starts, not architectural completion. | Each mutation domain has one typed coordinator/controller module and one registered backend handler surface; `App.tsx` composes UI only, `main.rs` composes Tauri/state only, generated command classification rejects unowned routes, and domain tests prove no fixture/browser/recovery/legacy parallel mutation path. Extraction must preserve the accepted show contracts one domain at a time; a risky monolithic rewrite is forbidden. | STRUCTURAL DEBT CONFIRMED / INCREMENTAL EXTRACTION STARTED / COMPLETION OPEN |
+| FC-30 | Several browser acceptances install `__TAURI_INTERNALS__` only after App mount, after owner registration has already failed closed, then use synthetic untrusted `.click()` events that cannot re-arm registration. Live Audio, Operator VJ, Auto VJ, Control Learn, Setup I/O, Scene Settings Save, and the separate Cue Audio gate can therefore fail spuriously or exercise a fixture-only path; permissive unknown-command catch-alls can also hide missing startup IPC. | Every post-mount mock explicitly validates owner registration and Program Audio startup payloads, rejects unknown commands, and uses one real CDP pointer/keyboard action before the first native-bound operation. Focused gates distinguish fixture/layout proof from native IPC proof and no total-order assumption is imposed across independent startup effects. | ROOT CAUSE CONFIRMED / COMMON HARNESS REPAIR ACTIVE |
+| FC-31 | Machine-local Live Audio/ASIO selection restore was placed inside the operator unlock action, so an ordinary restart never restores the saved exact device. The static gate only compared loose source-string ordering and falsely passed. | Restore runs once in App mount before backend discovery, never inside unlock; saved ASIO starts stale/locked, becomes ready only after one exact catalog/capability match, and remains locked on missing or ambiguous identity. Static scope checks and a restart browser acceptance prove the route. | PRODUCT BUG CONFIRMED / REPAIR ACTIVE |
 
 Closing a row requires implementation plus a negative proof that the retired or
 invalid path is unreachable. A comment, warning, disabled UI button, or green
 browser layout is not row closure.
+
+## 2026-08-26 01:57 JST parallel checkpoint
+
+The branch is `codex/syndocal-v1.2`; the last pushed HEAD is
+`573382543670fd129de7f90db1f92e32d990a98c`. That checkpoint contains only the
+Windows PowerShell 5.1-compatible pinned-ASIO-SDK preflight repair and its
+acceptance-document correction. The integrated show source below remains dirty
+and is not yet a distributable alpha.12 artifact.
+
+- DJ-Link cadence/liveness: the current engine lane distinguishes ordinary
+  500 ms-or-longer forward samples from a genuine locate using elapsed
+  monotonic observation time, rebuilds active Scene/FX/step state on a genuine
+  locate through existing recall machinery, and clears the observation on
+  release/stop/source changes. Focused engine tests pass 6/6, filtered I/O
+  strict-v2 tests pass 28/28, and exact-linker checks report zero first-party
+  warnings. An unrelated 75 ms performance budget failed once at 78.5 ms while
+  concurrent builds were running and passed alone in 0.03 s. Outbound ownership
+  truth equality, same-session ACTIVE dedupe convergence, unmapped-session
+  isolation, and immutable Release receipt follow-ups are active; therefore no
+  wired or authored-show acceptance is claimed.
+- ASIO: an exact Ampero Mini ABI/schema-v2 60-minute run is active under
+  `target/qa/asio-ampero-v2-soak-20260826-014416`, selecting only
+  `asio:HOTONE AUDIO USB Audio Device` at 44.1 kHz, 2-channel i32, 128 frames.
+  The first valid sample reported 5,174 callbacks with zero XRUN, terminal,
+  non-finite, frame-mismatch, or callback-gap faults. Attempt 1 failed closed at
+  time zero because of a QA-harness pre-callback check and is retained as
+  rejected evidence; attempt 2 is the only candidate soak. Completion still
+  requires the full duration, native alpha.12 UI/persistence/fault proof, and
+  latency measurement.
+- Three-display route: `get_video_output_window_observation_v1` now reads only
+  the current Tauri app window registry and maps configured Display output IDs
+  to exact `video-output-{id}` HWNDs. IDs and HWNDs are canonical positive u64
+  decimal strings; missing windows are closed/null and mismatches, zero,
+  precision loss, unknown fields, and overflow fail closed. Rust observation
+  tests pass 3/3 and the strict frontend receiver contract passes. The
+  PowerShell final-show runner's direct native command-result transport and an
+  independent Ox review remain active; title-only or operator-authored JSON is
+  still not acceptance.
+- Timeline graph: an independent audit found that project load and Cue/Bank
+  removal could admit a missing, self-referential, duplicate, cyclic, or newly
+  dangling child-Timeline graph even though the single mutation route was
+  strict. Global load-boundary validation and removal preflight are active.
+  Valid deep acyclic nested Timelines remain required; the repair must not ban
+  Super Scenes or create a parallel child transport.
+- Live Audio restore: a real post-mount CDP gate reproduced a visible backend
+  select reset to the first WASAPI option even while the authoritative saved
+  identity and every backend request remained ASIO. Controlled select
+  hydration, current-catalogue re-probe at Refresh/Start, exact ready+built
+  dispatch gating, backend restore-verdict display, and a ready-to-fault
+  zero-Start proof are active. No WASAPI substitution is accepted.
+
+These items are concurrent implementation evidence, not closure of the
+corresponding SHOW-P0 or FC rows. The next checkpoint must rerun integrated
+gates on the final on-disk state before commit and push.
 
 ## Mandatory ASIO show blocker
 
@@ -294,7 +350,7 @@ timeline, monitor routing, or physical pixel output.
 The current dirty frontend passes `pnpm --dir app run build` with TypeScript
 and Vite reporting no first-party warnings. Focused fail-closed/UI gates also
 pass: identity color (`21` distinct hues), Timeline external DnD, Timeline
-source-shelf contract and click/drag parity, localization (`3566/3566`, zero
+source-shelf contract and click/drag parity, localization (`3569/3569`, zero
 unprotected user-data labels), right-click suppression, Scene Settings at all
 five supported browser sizes, Scene Matrix full authoring at all five sizes,
 and the production-shaped Scene Matrix cross-Bank transaction/Undo gate at all
@@ -302,6 +358,16 @@ five sizes. The comprehensive Scene Matrix fixture covers Bank create/custom
 name/automatic name/normalized-duplicate rejection, context-menu rename/delete,
 keyboard opening/escape/focus restoration, empty-Bank single `+ Scene` action,
 Scene rename/duplicate/delete, Bank reorder, and Undo/Redo.
+
+The latest integrated frontend rerun advances localization to `3569/3569`
+with zero unprotected user-data labels. `check:scene-settings`,
+`check:scene-matrix-strip-drag`, `check:cue-store-form`, and the Timeline source
+shelf contract/click/drag placement gate all pass. The source-shelf static gate
+was also tightened to the current Scene Matrix fixture-only snapshot seam: it
+requires the local fault-injection state and the cloned snapshot hook to remain
+inside the exact `viewportFixture === "scene-matrix"` block, and still requires
+teardown deletion. This is test maintenance, not a relaxation of production
+authority or a native acceptance claim.
 
 After independent Ox review, the momentary Touch flash path was hardened so an
 activation retains its exact safety-release half even if full Bank authority
@@ -346,11 +412,21 @@ primary `Pixio PX259PS` at 1920x1080/DPI 96; and `DISPLAY5` is `PX160 WAVE` at
 editor/LED/projector role binding and the two live output IDs/labels remain for
 the final native run and must not be inferred from resolution or display order.
 
-The acceptance harnesses were re-run after this correction. The native 4K
-runner self-test passed 27/27 and the three-display runner self-test passed
-18/18. These results prove the runners' fail-closed identity, DPI, HWND,
-process-path, hash/version/HEAD, placement, responsiveness, and stable-sampling
-contracts; they are not a substitute for the later exact-build physical run.
+The former single-window native 4K runner is retired. It moved the main editor
+onto `DISPLAY3`, which now belongs exclusively to the projector output; retaining
+that route would make the final show contract ambiguous. The three-display
+runner is the only final-show entrypoint: `DISPLAY2` hosts the editor,
+`DISPLAY5` hosts the LED output, and `DISPLAY3` hosts the 3840x2160 projector
+output at DPI 144 (Windows 150%).
+
+Configured three-display acceptance is intentionally blocked until the app
+supplies a typed, read-only output-ID-to-HWND observation. It must bind each
+configured output ID to its exact label, `video-output-<ID>` native label,
+live-open state, and native HWND; titles or operator-authored JSON do not count
+as that proof. The runner also requires exact alpha.12 artifact hash/version/
+HEAD, a clean checkout, raw DisplayConfig identities, exact GDI role names, and
+full physical client/monitor-bound equality. Harness self-tests prove only
+these runner contracts; they are not a native visual-content or hardware claim.
 
 ## Recoverable build-artifact cleanup ledger
 
@@ -358,14 +434,29 @@ The workspace-size audit found no evidence that old authored source is the main
 capacity consumer. A 2026-08-25 `du -h -d 1` measurement identified Cargo
 outputs as the dominant recoverable footprint:
 
+The 2026-08-26 active-writer re-audit supersedes the earlier size snapshot for
+deletion decisions: `target/debug` is now 147,260,456,081 B (including about
+95.29 GB under `deps`, 11.74 GB under `build`, and 38.26 GB under
+`incremental`); `target/release` is about 10.29 GB; `target/asio-hardware-qa`
+is about 428 MB; and `target/qa` is about 256 MB. The safe-now deletion set is
+empty because current Cargo/Ox writers and the Ampero soak own recent outputs.
+Deleting any of them now would race proof generation and waste the show
+critical path. After all writers exit and the integrated checkpoint is clean,
+committed, and pushed, only `target/debug/incremental` and the separately
+revalidated `target/asio-hardware-qa` are pre-accepted cleanup candidates;
+`target/debug/deps` requires a new hard-link/owner review. Keep release, QA,
+near-show media, the pinned SDK/archive, and `target/tmp` (which contains
+user-authored test/OCR and stash/worktree material) unless a later exact audit
+proves a narrower named target disposable.
+
 | Generated path | Measured size | Disposition |
 | --- | ---: | --- |
-| `target/debug/deps` | 83 GB | Remove after all active Rust checks finish. |
-| `target/debug/incremental` | 13 GB | Remove with the debug profile; fully reproducible. |
-| `target/debug/build` | 5.3 GB | Remove with the debug profile; fully reproducible. |
-| entire `target/debug` | 102 GB | Run `cargo clean --profile dev --dry-run`, verify the exact checkout target, then run the same command without `--dry-run`. |
-| entire `target/release` | 8.5 GB | Retain until the accepted native executable and evidence are replaced by the final exact-source release build. |
-| entire `target/qa` | 249 MB | Retain current acceptance evidence; prune only named superseded runs after the final evidence set is recorded. |
+| entire `target/debug` | 133,365,652,702 B | Remove only after the integrated checkpoint is committed/pushed and all Rust writers exit; fully reproducible. |
+| `target/asio-audit-*` | 1,135,276,560 B | Remove the four named audit trees after the same writer/checkpoint gate. |
+| `target/asio-v2-*` | 1,255,903,975 B | Remove the four named isolated v2 build trees after the same writer/checkpoint gate. |
+| entire `target/release` | 9,963,099,449 B | Retain until the accepted native executable and evidence are replaced by the final exact-source release build. |
+| entire `target/qa` | 256,313,098 B | Retain current acceptance evidence; prune only named superseded runs after the final evidence set is recorded. |
+| `target/asio-qa` | 1,044,918,757 B | Retain the current accepted ABI-v2 bridge evidence. |
 | `.git` | 316 MB | Retain; `git count-objects -vH` reported only one 568 KiB temporary object, not the capacity cause. |
 
 Four untracked `three-display-show-*` runs from 2026-08-25 were inspected as
@@ -379,6 +470,17 @@ their compiler outputs and waste the near-show critical path. Build artifacts
 are recoverable by recompilation; authored `.sdc` projects, source media,
 licensed SDK input, accepted QA evidence, and the final release executable are
 not cleanup targets.
+
+The 20:51 JST recheck initially found no immediate deletion target that passed
+every ownership and writer gate. After the peer strict-v2 source and handoff
+checkpoints were pushed, the incomplete `rb-output/dist` tree was rechecked as
+Git ignored, tracked-file zero, reparse-point zero, process-reference zero, and
+stable across two samples, then its exact directory was deleted: 32 files and
+91,752,038 logical bytes, recoverable with `npm run build:dist`. `target/debug`
+and the eight named ASIO audit/v2 trees remain protected while Rust writers are
+active. Cargo hardlinks mean later physical reclaimed bytes may be lower. Every
+future deletion still requires an exact absolute-path, reparse-point, Git
+tracking, hardlink, and active-writer recheck immediately before execution.
 
 ## Required final operator sequence
 
