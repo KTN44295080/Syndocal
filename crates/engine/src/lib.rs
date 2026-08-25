@@ -120006,6 +120006,277 @@ mod tests {
     }
 
     #[test]
+    fn video_full_gate_engine_path_publishes_and_rolls_back_complete_video_state() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let first_source = clip_slot_engine_test_source("full-gate-first", 2_000);
+        let second_source = clip_slot_engine_test_source("full-gate-second", 2_000);
+
+        publish_test_media_asset_transaction(
+            &mut runtime,
+            &published,
+            MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![
+                    media_asset_test_summary(10, "Full gate first", first_source.clone()),
+                    media_asset_test_summary(11, "Full gate second", second_source.clone()),
+                ],
+                layers: vec![
+                    media_asset_test_layer_with_default_slot(
+                        1,
+                        10,
+                        20,
+                        "Full gate first",
+                        first_source,
+                    ),
+                    media_asset_test_layer_with_default_slot(
+                        2,
+                        11,
+                        21,
+                        "Full gate second",
+                        second_source,
+                    ),
+                ],
+            }),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("the media/layer A image must publish");
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateVideoClipSlotPublished {
+            layer_id: 1,
+            slot: clip_slot_engine_test_slot(22, 11, VideoClipLoopMode::Loop, 1.0),
+            before_slot_id: None,
+            make_default: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        receiver
+            .recv()
+            .unwrap()
+            .expect("the second clip slot must publish");
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: Some(VideoClipSlotId(22)),
+            transition_kind: VideoClipTakeKind::Cut,
+            transition_duration: VideoClipTakeDuration::milliseconds(0),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        receiver
+            .recv()
+            .unwrap()
+            .expect("the alternate clip slot must publish");
+
+        let first_target = VideoLayerTransitionTarget::Layer { layer_id: 1 };
+        let second_target = VideoLayerTransitionTarget::Layer { layer_id: 2 };
+        let bus = VideoLayerTransitionBusSummary {
+            id: VideoTransitionBusId(31),
+            label: "Full gate program bus".to_string(),
+            composition_id: 1,
+            enabled: true,
+            members: vec![first_target.clone(), second_target.clone()],
+            default_from: first_target.clone(),
+            default_to: second_target.clone(),
+            default_kind: VideoClipTakeKind::Custom,
+            default_duration: VideoClipTakeDuration::milliseconds(400),
+            default_curve: VideoLayerTransitionCurve::EaseInOut,
+            matte_source: None,
+        };
+        let scoped_chain = |id, scope| VideoEffectChainSummary {
+            id: VideoEffectChainId(id),
+            scope,
+            bypassed: false,
+            stages: vec![VideoEffectStageSummary {
+                id: VideoEffectStageId(id),
+                enabled: true,
+                label: format!("Full gate scoped stage {id}"),
+                effect: protocol::VideoEffectSummary {
+                    id: VideoEffectId(id),
+                    kind: VideoEffectKind::Isf {
+                        effect: video_effect_chain_c1_event_effect(),
+                    },
+                },
+            }],
+        };
+        let effect_chains = vec![
+            scoped_chain(101, VideoEffectScope::Layer { layer_id: 1 }),
+            scoped_chain(
+                102,
+                VideoEffectScope::Clip {
+                    layer_id: 1,
+                    slot_id: VideoClipSlotId(22),
+                },
+            ),
+            scoped_chain(
+                103,
+                VideoEffectScope::Transition {
+                    owner: VideoTransitionEffectOwner::LayerBus { bus_id: bus.id },
+                },
+            ),
+        ];
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            effect_chains: effect_chains.clone(),
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: vec![bus.clone()],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        receiver
+            .recv()
+            .unwrap()
+            .expect("the scoped effect and C3 bus catalog must publish atomically");
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoLayerTransitionBusPublished {
+            bus_id: bus.id,
+            from: first_target.clone(),
+            to: second_target.clone(),
+            kind: VideoClipTakeKind::Custom,
+            duration: VideoClipTakeDuration::milliseconds(400),
+            curve: VideoLayerTransitionCurve::EaseInOut,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        receiver
+            .recv()
+            .unwrap()
+            .expect("the C3 bus runtime must publish");
+
+        // EngineSnapshot is the last software seam owned by this crate. The
+        // native renderer consumes this exact authored/rendered/runtime image,
+        // but decoder/GPU frame presentation is intentionally not simulated
+        // here because it lives outside `engine`.
+        let complete = published.read().unwrap().clone();
+        assert_eq!(complete.video.media_assets.len(), 2);
+        assert_eq!(complete.video.effect_chains, effect_chains);
+        assert_eq!(complete.video.transition_buses, vec![bus.clone()]);
+        assert!(complete
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == 1)
+            .unwrap()
+            .isf_effect
+            .is_some());
+        assert_eq!(
+            complete
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == 1)
+                .unwrap()
+                .media_asset_id,
+            Some(11)
+        );
+        assert_eq!(
+            complete
+                .authored_video
+                .as_ref()
+                .unwrap()
+                .layers
+                .iter()
+                .find(|layer| layer.id == 1)
+                .unwrap()
+                .media_asset_id,
+            Some(10),
+            "runtime clip selection must not overwrite the authored default"
+        );
+        assert_eq!(
+            complete.video_clip_runtime.layers[0].active_slot_id,
+            Some(VideoClipSlotId(22))
+        );
+        assert_eq!(complete.video_transition_runtime.buses.len(), 1);
+        assert_eq!(complete.video_transition_runtime.buses[0].bus_id, bus.id);
+        assert_eq!(
+            complete.video_transition_runtime.buses[0].kind,
+            VideoClipTakeKind::Custom
+        );
+        assert_eq!(complete.video_transition_runtime.buses[0].duration_ms, 400);
+        assert_eq!(
+            complete.authored_video.as_ref().unwrap().effect_chains,
+            effect_chains
+        );
+
+        // Apply a real B catalog mutation, then fail only at the shared
+        // publication seam. Complete-A rollback must restore the scoped
+        // catalog, renderer projection, active clip, and active C3 bus while
+        // the previously published image remains exactly unchanged.
+        let before_rollback = runtime.build_snapshot(0);
+        let published_before_rollback = published.read().unwrap().clone();
+        let mut replacement_chains = effect_chains.clone();
+        replacement_chains[0].bypassed = true;
+        runtime.fail_next_pending_publication = true;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            effect_chains: replacement_chains,
+            effect_presets: Vec::new(),
+            layer_groups: Vec::new(),
+            transition_buses: vec![bus.clone()],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        assert!(runtime.video_effect_chains[0].bypassed);
+        runtime.publish_pending_command_acks(0, &published);
+        let rollback_error = receiver.recv().unwrap().unwrap_err();
+        assert!(rollback_error.contains("rolled back"));
+        assert_eq!(runtime.build_snapshot(0), before_rollback);
+        assert_eq!(*published.read().unwrap(), published_before_rollback);
+
+        // A target outside the authored bus is rejected before B and cannot
+        // disturb any media, slot, effect, transition, or published state.
+        let live_before_fail_closed = runtime.video_snapshot();
+        let clips_before_fail_closed = runtime.video_clip_runtime_snapshot();
+        let transitions_before_fail_closed = runtime.video_layer_transition_runtime_snapshot();
+        let authored_before_fail_closed = runtime.build_persistence_snapshot().authored_video;
+        let published_before_fail_closed = published.read().unwrap().clone();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoLayerTransitionBusPublished {
+            bus_id: bus.id,
+            from: first_target,
+            to: VideoLayerTransitionTarget::Layer { layer_id: 999 },
+            kind: VideoClipTakeKind::Custom,
+            duration: VideoClipTakeDuration::milliseconds(400),
+            curve: VideoLayerTransitionCurve::EaseInOut,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        let fail_closed_error = receiver.recv().unwrap().unwrap_err();
+        assert!(fail_closed_error.contains("distinct authored members"));
+        assert_eq!(runtime.video_snapshot(), live_before_fail_closed);
+        assert_eq!(
+            runtime.video_clip_runtime_snapshot(),
+            clips_before_fail_closed
+        );
+        assert_eq!(
+            runtime.video_layer_transition_runtime_snapshot(),
+            transitions_before_fail_closed
+        );
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video,
+            authored_before_fail_closed
+        );
+        assert_eq!(*published.read().unwrap(), published_before_fail_closed);
+    }
+
+    #[test]
     fn timeline_automation_lane_identity_survives_runtime_projection() {
         let lighting = TimelineAutomationSummary {
             id: 401,
