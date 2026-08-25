@@ -1,10 +1,25 @@
 # Syndocal historical release decision — 2026-08-12
 
 > This decision records the `1.1.0` checkpoint and is historical evidence, not
-> current authority. The active product train is now `1.2.0-alpha.11`; the
-> alpha.10 pause request was rescinded before promotion on 2026-08-25. Use `AGENTS.md` and
-> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current work. The post-alpha.10
-> snapshot remains checkpoint evidence only.
+> current authority. Pushed HEAD
+> `07a9b75f25e74e58739be251aad3b3f1e98986f7` metadata remains
+> `1.2.0-alpha.11`, while the dirty uncommitted worktree synchronizes
+> in-progress `1.2.0-alpha.12` metadata that is not yet a reproducible
+> checkpoint or native artifact. The performance is 2026-08-30; development,
+> acceptance, and show preparation have a separate 2026-08-29 completion
+> deadline.
+> The controlled source-only DJ route, local-only non-default show-ASIO route,
+> and current cleanup allowlist are defined by the current near-show and domain
+> gates; this historical decision does not authorize an installer, normal
+> updater, legacy adapter, ASIO fallback, or deletion. No show-ASIO artifact is
+> accepted, DJ hardware remains 0/12 open, and only the 44.1 kHz bridge-only
+> 3,600,031 ms ASIO run has passed; formal matched 48 kHz/native operator/
+> recovery/latency acceptance remains open. Cleanup commit `7ee3b8f` proves only
+> the reviewed guard; its sole current candidate is `target/debug/incremental`,
+> no Apply has run, and reclaimed bytes are 0. The alpha.10 pause request was
+> rescinded before promotion on 2026-08-25. Use `AGENTS.md` and
+> `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current work. The
+> post-alpha.10 snapshot remains checkpoint evidence only.
 
 ## Decision
 

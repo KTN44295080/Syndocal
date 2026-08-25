@@ -1,15 +1,18 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-25
-Branch: `codex/syndocal-v1.2` (current integrated alpha.11 branch)
+Updated: 2026-08-26
+Branch: `codex/syndocal-v1.2` at pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7` (committed metadata remains `1.2.0-alpha.11`; the dirty uncommitted worktree synchronizes in-progress metadata to `1.2.0-alpha.12`, which is not yet a reproducible checkpoint, tag, or native artifact; last accepted native checkpoint/artifact: alpha.11)
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
 > Current continuation note (resumed 2026-08-25): the requested pause after
-> `1.2.0-alpha.10` was rescinded before final promotion. The active integrated
-> product metadata is now `1.2.0-alpha.11`; alpha.10 remains the immutable source
-> checkpoint and historical artifact. The
+> `1.2.0-alpha.10` was rescinded before final promotion. The accepted integrated
+> checkpoint advanced through alpha.11; pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7` metadata
+> remains `1.2.0-alpha.11`, while only the uncommitted dirty worktree
+> synchronizes in-progress `1.2.0-alpha.12` metadata (2026-08-26), which is not
+> yet a reproducible checkpoint or artifact. Alpha.10 and alpha.11 remain
+> immutable source checkpoints and historical artifacts. The
 > [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md) is again the active
 > dependency-ordered work authority. The [post-alpha.10 snapshot](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md),
 > [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
@@ -18,6 +21,68 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > historical or domain gate/evidence records. Do not mark AI3 complete, advance
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
+
+## 2026-08-26 release-metadata advance to 1.2.0-alpha.12
+
+Synchronized product metadata advanced from `1.2.0-alpha.11` to
+`1.2.0-alpha.12` across the root workspace Cargo version, the eight first-party
+Cargo.lock package entries (audio, engine, gdtf, io, protocol, syndocal,
+video, visualizer) regenerated with `cargo update --workspace --offline`
+(bounded to those entries), `app/package.json`,
+`app/src-tauri/tauri.conf.json`, the release-metadata gate's
+`expectedVersion`, the macOS DMG filename/volume name, the cross-platform CI
+artifact name, and README current product/installer names. Historical alpha.11
+acceptance evidence and QA history are preserved unchanged, as is the
+intentional rejected-inventory alpha.11 fixture in
+`check-windows-release-artifacts.mjs`. This is a metadata-only checkpoint: it
+claims no native build, installer, or hardware acceptance; concurrent
+implementation lanes own that verification.
+
+Boundary correction (2026-08-26): this advance currently exists only as
+uncommitted working-tree state on top of pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7`, whose committed
+metadata remains `1.2.0-alpha.11`. `pnpm --dir app run check:release` and its
+self-test pass only while their supporting checker sources (for example the
+untracked `check-windows-release-artifacts.mjs`, `windows-runtime-inventory.mjs`,
+`strict-json.mjs`, and `check-asio-packaging.mjs`) are present in the worktree,
+so this is not yet a reproducible committed checkpoint, tag, installer, or
+native artifact; no alpha.12 binary/source equivalence or native acceptance is
+claimed, and no product version file was changed by this documentation note.
+
+## 2026-08-26 current near-show authority correction
+
+The performance is **2026-08-30**; development, acceptance, and show preparation
+must be complete by the separate **2026-08-29 completion deadline**. Current
+work is bounded to the controlled near-show path and its explicit blockers; historical package,
+adapter, hardware, and native evidence below is not promoted into that path.
+
+- The DJ peer authority is branch `beta-v1.1.2` at pushed HEAD
+  `925880068500d42d71b2671fa8a99e5895aca4e2`; runtime checkpoint H is
+  `c6ebb0f`, and the source product version is `1.1.4`. The sole current show
+  route is the controlled source checkout on the target DJ PC, not an installer,
+  shortcut, or published v1.1.3 artifact. It requires a checkout-external show
+  JSON through `DJ_AGENT_CONFIG_PATH`, then no-argument `start-all.bat` for the
+  real launch. The only supported alternate invocation is the exact lowercase
+  `--preflight-only`. Preflight is software-only and launches no show-side
+  process; a real launch still requires the current real Syndocal token. The
+  current topology is FOH `192.168.50.1` and DJ PC `192.168.50.2`, with only
+  `syndocal-envelope-v2`; `generic-json` and `syndocal-envelope-v1` remain
+  retired. Hardware acceptance remains exactly **0/12 open**.
+- The 44.1 kHz HOTONE/Ampero ABI-v2 bridge-only run completed for
+  `3,600,031 ms`. It does not close the formal matched 48 kHz ASIO/WASAPI,
+  current native operator, persistence/revalidation, occupied/reset/unplug/
+  XRUN/no-callback recovery, or measured-latency gates. Warning evidence is
+  configuration-focused only; the artifact-wide first-party warning gate is
+  still open.
+- The proposed show-ASIO build for the 2026-08-30 performance is a separately
+  licensed, non-default, local-only `show-asio` feature/overlay. It is outside the normal MIT
+  installer and signed-updater route, which must never select, repair, replace,
+  or attest it. Its own source identity, runtime manifest, staging, and artifact
+  checker must pass; **no show-ASIO artifact is accepted yet**.
+- Commit `7ee3b8f` tracks and independently reviewed only the cleanup safety
+  harness. Its current exact candidate set contains only
+  `target/debug/incremental`; no Apply deletion has run and reclaimed bytes are
+  **0**. Every other previously listed build or ASIO path remains protected or
+  blocked on exact ASIO ownership/evidence review.
 
 ## 2026-08-25 exact Windows linker checkpoint
 
@@ -259,7 +324,7 @@ MTC/DJ Link, and audio-hardware acceptance remain open.
 
 Syndocal v1.0は、2026-07時点の`COMPLETION_PLAN.md`で定義していた**旧ソフトウェア完成条件を満たした歴史的baseline**である。
 
-現行の拡張製品リリースは未完了である。AI control-planeのAI3は5要件すべてを監査済みで、ローカルGUIのsafety-latch Release Blackout／active Arm／exact Take Overというcanonical R4 verticalとそのネイティブ完了ゲートは2026-08-19に通過した。しかしMIDI/OSC/Remoteとall/video/per-output release、owner lease、project-swap physical fence、durable receipt/audit、rate/soak proofは未完了であり、これはAI3全体の合格ではない。Windows ASIOも配布ライセンス/成果物境界、第二vendor、rate/buffer/channel matrix、障害復旧、1時間soak、物理遅延などの受入が未完了である。旧baselineや個別修復の合格を、これら現行要件の合格へ読み替えない。
+現行の拡張製品リリースは未完了である。AI control-planeのAI3は5要件すべてを監査済みで、ローカルGUIのsafety-latch Release Blackout／active Arm／exact Take Overというcanonical R4 verticalとそのネイティブ完了ゲートは2026-08-19に通過した。しかしMIDI/OSC/Remoteとall/video/per-output release、owner lease、project-swap physical fence、durable receipt/audit、rate/soak proofは未完了であり、これはAI3全体の合格ではない。Windows ASIOも配布ライセンス/成果物境界（`distribution_approved: false`のまま）、rate/buffer/channel matrix、障害復旧、matched 48kHz ASIO/WASAPI一時間soak、物理遅延などの受入が未完了である。HOTONE Amperoによる第二vendor証拠と44.1kHz ABI-v2 bridge単体の1時間連続soak（2026-08-26）は通過したが、これらはbridge-onlyであり、最終release DLLをネイティブアプリがloadするoperator path受入へ読み替えない。旧baselineや個別修復の合格を、これら現行要件の合格へ読み替えない。
 
 - 照明、映像、共有タイムライン/キュー/エフェクト、2D Stage Map、`.sdc`保存/復元、外部I/O境界を実装済み。
 - Windows/macOS/LinuxでRust、libav、フロントエンド、Tauri、配布物生成とパッケージ起動CIがgreen。
@@ -507,7 +572,9 @@ Device Refresh後の明示選択はbackend／device名が新旧catalogueの双�
 
 選択sample rateごとにbackendがchannel数／sample format／buffer capabilityの単一`resolved_config`を返し、UIはそのchannel／formatをStartへ返送してbackendが同じ構成を再解決・厳密検証する。これはStart前の構成確定であり、requested fixed bufferと実callback frameの表示を分離する。WASAPIを含む汎用post-open OS／driver applied-config照会はまだ持たず、ASIOだけはbridgeがactual fixed bufferを返す。
 
-非既定Windows featureとしてASIO入力を実装した。Rodio／CPAL 0.16の既定WASAPI graphへCPAL 0.18.1を混在させず、`tools/asio-bridge`を独立lock／独立artifactとしてbuildし、appはABI v1 bridge DLLを動的loadする。UIはWASAPI Shared／ASIOを明示切替し、ASIOではsystem defaultを作らず、更新世代に結び付くdriver、rate、channels、native sample format、fixed bufferをStart前とbridge内で再検証する。driver消失、reset／resync／rate change、XRUN、250ms callback gapはterminal faultとなり、別ASIO driverやWASAPIへ黙ってfallbackしない。post-openでactual buffer framesとbackend XRUNをstatus／64px railへ返す。通常MIT buildとinstallerはASIOを含まず、配布には別途license決定が必要である。
+非既定Windows featureとしてASIO入力を実装した。Rodio／CPAL 0.16の既定WASAPI graphへCPAL 0.18.1を混在させず、`tools/asio-bridge`を独立lock／独立artifactとしてbuildする。UIはWASAPI Shared／ASIOを明示切替し、ASIOではsystem defaultを作らず、更新世代に結び付くdriver、rate、channels、native sample format、fixed bufferをStart前とbridge内で再検証する。driver消失、reset／resync／rate change、XRUN、250ms callback gapはterminal faultとなり、別ASIO driverやWASAPIへ黙ってfallbackしない。post-openでactual buffer framesとbackend XRUNをstatus／64px railへ返す。通常MIT buildとinstallerはASIOを含まず、配布には別途license決定が必要である。
+
+2026-08-25に通常Windows packageのASIO境界をclean-breakした。`qa/ASIO_SDK_PIN.json`の`distribution_approved: false`をリリース検査とruntime stagingが必ず再検証し、canonical `syndocal_asio_bridge.dll`、退役済み`syndocal-asio-bridge.dll`、その他ASIO DLL、`*.dll`等のglobを正常installer/updaterから拒否する。旧来の`target/release/*.dll`同梱を、現在のlibav実行依存7本（`avcodec-62`、`avdevice-62`、`avfilter-11`、`avformat-62`、`avutil-60`、`swresample-6`、`swscale-9`）だけの明示resource mapへ置換した。Spoutは静的linkのままで、そのBSD noticeとFFmpeg/bcdec noticesは通常packageへ明示保持する。NDI runtimeは従前からfeature-gatedで通常resource mapに存在せず、この変更で削除・同梱判断をしていない。通常package flowでのASIO配布artifactの生成・stage・publishは、別ライセンス／notice／release workflowの承認まで不可である。
 
 2026-07-14の短時間実機smokeでは、`TOPPING Pro USB Audio Device`を明示指定し、48kHz／2ch／i32／requested・applied 128 framesでStartした。7 callbacks／896 frames、max capture delay 4166.7us、XRUN 0、nonfinite 0、terminal event 0でStopも成功した。`Realtek ASIO`はhardware input/output unavailableとして失敗し、別driver／WASAPIへfallbackしなかった。これはbridge／app loaderと1台の明示構成を確認した証拠であり、第二の正常driver、1時間soak、callback percentile、capture-to-engine／pixel latency、native UIの実入力運用、TouchDesigner同条件A/Bは未受入である。
 
@@ -521,7 +588,13 @@ stream error／engine publish failure／250ms無入力は`stale`へfail-closed�
 
 同日にlive feature frameへspectral centroid、80ms／800msのfast／slow density、kick／snareのstrengthと独立refractory pulseを追加した。VJ Deskの54px REACTIVE stripからcompiled Audio Reactive Rackを一操作で開き、Live Inputの16 band、RMS、Peak、flux、onset／strength、BPM／confidence／phase、centroid、両density、kick／snare event／strengthをgain／bias／gate、attack／release／hold、4 curve、invertで整形し、照明属性または映像parameterへ接続できる。Audio nodeは44Hz tickごとに一度だけ評価し、load／upsert時に逆向き経路と対象IDをcompileするため、各targetでnode／edgeを再帰走査しない。Rack monitorは保存済みAudio graphを選択し、node IDが一致するengine runtimeのIN／OUT／safety状態だけを表示する。VJ stripもenabled数をLIVEと誤表示せず、READY／SAFE ZERO／HELD／LIVEをruntimeから区別する。Speed／BPM-sync映像targetは表示値だけでなく実playheadを駆動し、authored transport値を保持したまま入力断時は作者設定速度へ即復帰する。未検証、clear、250ms TTL切れはreleaseを待たずsafe zeroへ戻り、authoredな灯体／映像baseを復元する。onset／kick／snareは全graphへ同tick一回だけ配信する。Project save、checkpoint／history、Cue captureはon-demand authored-video snapshotを使い、変調値の焼込み／reload後二重適用を防ぐ。persistence snapshotはrendered videoを一度だけ構築し、authored側はraw layerと既存non-layer metadataから組み立てて二度目のeffect評価を避ける。graph作成／enable／removeはsnapshot publication barrier後にackし、失敗時はgraphとCue参照を一体rollbackする。64 mapping×各200 lighting targetのrelease benchmarkは1000 sampleでp99 196us／max 502usとなり、rack単体のp99 1ms／max 2ms gateを通過した。audio 22件、protocol 19件、engine 284件（manual benchmark 1 ignored）、既定Tauri suite 263 passed／4 hardware-manual ignored、frontend build／project-storage／2298/2298 localization、1920x1080／1366x768 Audio Rack containment、英日5解像度のAuto VJ／live-audio gateが通過した。別identifierのcurrent-source native QA buildを1920x1032へ最大化し、既存Syndocal／Daslightを閉じずにPreview／Programを保持したREACTIVE strip、Create Mapping、Live Input、`Snare strength`選択、停止中`SAFE ZERO`を確認した。P1 telemetry修正後も同じQA targetを再buildして最大化し、空rackが`0/0 READY`、editorが`No saved mapping`／`SAVE TO MONITOR`を示して仮計算をengine出力として表示しないことを確認した。
 
-未達はASIO配布ライセンス／成果物方針、第二の正常ASIO driver、ASIO／WASAPI一時間soak、同一device hot-plug自動復帰、WASAPIを含む汎用post-open applied-config、live spectrum／clearのengine出力適用ack、capture-to-analysis／engine／pixel latency percentile、frozen dataset精度、大規模showのsave／checkpoint／warm-standby中tick-jitter、同一hardware／contentでのTouchDesigner五試行比較である。専用Audio Rack、ASIO短時間smoke、100-cycleとfull native UI操作の合格はnamed descriptor coverageとproduct-level fail-closed contract、および1台での明示driver反復open／closeとoperator pathを示すが、TouchDesigner全般との同等以上、機能優位、end-to-end性能優位の根拠にはしない。受入境界は`qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md`と`qa/ASIO_INPUT_ACCEPTANCE.md`を正とする。
+2026-08-26にABI/schema-v2 bridge単体の連続soak証拠を追加した。canonical `syndocal_asio_bridge.dll`（SHA-256 `1E67038D4226F0C1857AEF2A2844500B6CD78158D5D89099B2BBA0446C05C60B`、v2 export 9シンボルのみ）をexact VS2022 Community 14.44 linker pin下でrebuildし、`asio:HOTONE AUDIO USB Audio Device`（Ampero Mini）の明示構成44.1kHz／2ch／i32／128 framesだけで3,600,031 msを連続運転し、typed Stop／Close status 0で終了した。1,240,463 callbacks、158,779,264 callback frames、bridge XRUN/API・terminal・warning・nonfinite・frame mismatchはすべて0、callback最大interarrival gap 16ms、duration p50 2,047ns／p95=p99 4,095ns／max 479,600ns。直後の明示48kHz probeはtyped `config_unsupported`（status 4）でfail-closedし、このdriverは44.1kHzのみadvertiseする。これはshow-specificな44.1kHz Amperoのbridge-continuity証拠行を閉じただけである。正式なmatched 48kHz ASIO/WASAPI gate（このdriverは48kHz非対応、48kHz ASIO stream未open、WASAPI一時間harness未実施）、最終DLLをネイティブアプリがloadするoperator path、fault注入、capture-to-engine／pixel latency、配布承認は未達のままである。生データは`target/qa/asio-ampero-v2-soak-20260826-014416/`を正とする。
+
+未達はASIO配布ライセンス／成果物方針（`distribution_approved: false`のまま）、最終ABI-v2 release DLLをネイティブアプリがloadしてのoperator path／persistence／再検証受入、advertised rate/buffer/channel matrix、同一構成でのASIOとWASAPIのmatched一時間soak、障害注入（occupied/reset/unplug/XRUN/no-callback）と自動復帰、WASAPIを含む汎用post-open applied-config、live spectrum／clearのengine出力適用ack、capture-to-analysis／engine／pixel latency percentile、frozen dataset精度、大規模showのsave／checkpoint／warm-standby中tick-jitter、同一hardware／contentでのTouchDesigner五試行比較である。専用Audio Rack、ASIO短時間smoke、100-cycle、full native UI操作、および上記Ampero ABI-v2 bridge-only 44.1kHz一時間soakの合格はnamed descriptor coverageとproduct-level fail-closed contract、1台での明示driver反復open／closeとoperator path、およびbridge単体の連続動作を示すが、TouchDesigner全般との同等以上、機能優位、end-to-end性能優位、ネイティブ成果物レベルのASIO受入の根拠にはしない。受入境界は`qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md`と`qa/ASIO_INPUT_ACCEPTANCE.md`を正とする。
+
+2026-08-25 packaging adversarial repair: 通常Windows packageの境界を名前照合から実体照合へ強化した。通常common resourceはTHIRD_PARTY_NOTICES.mdを含む4個の完全allowlistにし、追加／削除／remap／directory resourceを拒否する。qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.jsonは各FFmpeg DLLのファイル名、サイズ、SHA-256、PE32+ AMD64 identityをpinし、stagingは許可root配下の通常ファイルだけをopen-before/after同一identityで読む。symbolic link、reparse point、hard-link alias、target tripleの曖昧値、UNC／ADS／traversal／前後空白をrejectする。既知ASIO bridge hashは許可されたFFmpeg名へ改名しても拒否し、default NDI bundleは独立したライセンス済みoverlayが存在するまで拒否する。package self-testは66 assertions、Windows artifact self-testは14 assertionsで、通常CIではNSIS installとMSI administrative extractionの両方を再走査する。candidateはNSIS／MSI／updaterのrepository-owned deterministic extraction inventoryが必要だが、現時点で安全なextractorは実装されていないため、candidate acceptanceをtyped fail-closedに保つ。これは未検証installerを実行して成功扱いにするためのfallbackを追加しない意図的な境界である。
+
+2026-08-25 packaging adversarial findings implementation (Ox delegated lane): 上記境界へ5件の修正を追加した。(1) cold clean CI対応: `check:asio-packaging` self-testは未追跡の`target/`出力に依存せず、自前の合成PE fixture（AMD64正・1bit改変・ARM64 0xaa64）とtemp alias fixtureで検証し、`cross-platform.yml`はstage直後にinventory由来の7 DLL存在assert stepを追加した。(2) target tripleは`x86_64-pc-windows-msvc`のみへ縮小しaarch64/ARM64を明示拒否、ARM64 PE payloadもanchored 0x8664 identityで拒否する。(3) inventory承認値（7 DLL・4 common resource・既知bridge hash集合）を`windows-runtime-inventory.mjs`のcode anchorとして独立保持し、load時に完全一致を強制。JSON単独編集はload時fail-closedで、全field変異がself-testで失敗することを確認した。(4) NDI検出を階層化: 既知4 signal＋未知NDI系環境変数（allowlist: `WINDIR`, `NDI_SDK_DIR`, `NDI_RUNTIME_DIR_V2`〜`V6`のみ）＋package/workflow/tauri conf/Cargo manifestのtauri/cargo `--features…ndi…`表記scan＋bundle時ancestor process chain監視で直接CLI bypassもfail-closed。(5) Windows reparse point属性を属性レベルで拒否（symlink/junction/mount/cloud placeholder全tag、hard-link nlink拒否）し、作成不能なalias fixtureは`SKIP`行として目視可能にし、EPERM/EACCESを実行断言として数えない。検証: `pnpm --dir app run check:release`=release metadata ok+169 assertions、`pnpm --dir app run check:release:self-test`=102 assertion groups+169+25 assertions、`FFMPEG_DIR`設定下の実stagingで7 DLL stage+再検証成功。native build/installer/QAは本tranche範囲外のため未実施。
 
 Web Remoteは信頼済みLAN用、Active / Standbyは専用共有storage用の境界である。不特定LANやインターネットへ直接公開せず、Standby昇格前には旧PrimaryのDMX／video送信経路を必ずfenceする。
 

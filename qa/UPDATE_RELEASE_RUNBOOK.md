@@ -1,6 +1,6 @@
 # Signed Application Update Runbook
 
-Updated: 2026-07-13
+Updated: 2026-08-26
 
 Syndocal uses Tauri's signed updater. A normal local build deliberately has no
 update endpoint and shows that state in Project -> Application Updates. A
@@ -41,6 +41,80 @@ Publish the generated updater artifact and its `.sig`, then return either the
 Tauri dynamic manifest or static `platforms` manifest. Manifest artifact URLs
 must use HTTPS, `version` must be SemVer, and `signature` must contain the
 generated signature content rather than a path.
+
+## Local-only show-ASIO is not an updater channel
+
+The proposed non-default `show-asio` feature/overlay exists only for the
+controlled local 2026-08-30 performance path, whose development, acceptance,
+and show preparation must complete by 2026-08-29. The normal signed updater
+never governs that artifact: it must not discover, install, update, repair, replace, select,
+or attest a local-only show-ASIO build. Do not create a `stable`, `beta`, or
+`nightly` endpoint that serves it, and do not interpret updater metadata or a
+normal MIT package check as show-ASIO provenance.
+
+The local-only path requires its own exact source identity, separately licensed
+bridge identity, checkout-external runtime manifest, staging inventory, and
+artifact checker. No show-ASIO artifact is accepted yet. If that local-only
+artifact changes, rebuild and re-run its dedicated proof; never fall back to an
+older DLL, the normal WASAPI artifact, another driver, or the signed updater.
+This boundary does not approve public distribution.
+
+## Windows candidate package-content boundary
+
+The normal MIT artifact never contains an ASIO bridge. Before a Windows release
+candidate can be accepted, run the normal release metadata and ASIO packaging
+checks, then prove the installed/extracted contents of all three Windows
+delivery surfaces: NSIS, MSI, and updater payload.
+
+The proof must use a repository-owned deterministic extractor, record an
+immutable inventory, and reject canonical ASIO bridge names, retired names,
+third-party ASIO names, known bridge hashes under any filename, and every
+FFmpeg name/size/SHA-256/PE mismatch. The default CI already rechecks the
+materialized NSIS and MSI directories after its smoke steps.
+
+No repository-owned deterministic extractor currently exists for safe NSIS and
+updater payload extraction. Therefore release-candidate package acceptance is
+intentionally fail-closed. Do not execute or unpack an arbitrary candidate
+installer as a substitute. Implement and independently review that extractor
+and its extraction-inventory schema before changing this state.
+
+## Inventory authority, target scope, reparse policy, and the NDI signal contract
+
+The approved runtime values in `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` are
+mirrored as independent code anchors in
+`app/scripts/windows-runtime-inventory.mjs`
+(`canonicalPinnedRuntimeIdentity`, `canonicalPinnedCommonResourceIdentity`,
+`canonicalKnownAsioBridgeSha256`, `anchoredAmd64PeIdentity`). Loading the
+inventory enforces exact equality against these anchors; editing only the JSON
+can never redefine what is approved, and mutation self-tests prove each edited
+field fails. The anchors are part of the packaging ABI: change them only in a
+reviewed tranche that also refreshes the pinned SDK source evidence.
+
+The packaging target triple is exactly `x86_64-pc-windows-msvc`. ARM64
+(`aarch64-pc-windows-msvc`) is rejected by name, and every ingested DLL must
+match the anchored PE machine `0x8664`; no route copies AMD64 binaries to an
+ARM64 layout. Windows aliasing is rejected at attribute level: symlinks,
+junctions, mount points, cloud/on-demand placeholders (every reparse tag), and
+hard-link aliases (`nlink != 1`) fail closed on all staged, bundled, and
+extracted surfaces. Alias-coverage self-test cases that cannot be created on a
+host (for example symlink creation without privilege) are reported as explicit
+`SKIP` lines and are never counted as executed passing assertions; an EPERM or
+EACCES during fixture creation is never treated as a pass.
+
+NDI remains excluded from normal packaging. The sanctioned default feature set
+is exactly `libav + spout`. Detection is layered and repository-owned: (1) the
+four explicit feature-signal environment variables reject any NDI value;
+(2) any other NDI-named environment variable is rejected as an unknown bypass,
+except the reviewed SDK-path allowlist `WINDIR`, `NDI_SDK_DIR`, and
+`NDI_RUNTIME_DIR_V2`..`V6` (owner: release engineering; revisit when the NDI
+overlay route is formalized); (3) `app/package.json`,
+`.github/workflows/cross-platform.yml`, both Tauri conf overlays, and
+`app/src-tauri/Cargo.toml` are scanned for tauri/cargo invocations carrying an
+NDI feature flag (`--features …ndi…`, `--features=ndi`, `-F ndi`); (4) at
+bundle time (`beforeBundleCommand`) the ancestor process command-line chain is
+audited so a direct CLI `tauri/cargo … --features ndi` bypass fails closed.
+Any future NDI distribution requires the separately licensed overlay proof
+already described above; extending this contract requires its own review.
 
 ## Acceptance
 

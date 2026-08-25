@@ -19,6 +19,39 @@ Primary references:
 
 This file records an engineering gate and is not legal advice.
 
+## 2026-08-30 local-only show-ASIO boundary
+
+The performance is **2026-08-30**; development, acceptance, and show preparation
+must be complete by the separate **2026-08-29 completion deadline**. The
+proposed show path is a separately licensed, non-default local build selected only by the explicit
+`show-asio` feature and its dedicated Tauri overlay. It is not a variant of the
+normal MIT/WASAPI artifact and it must not be reached by default features,
+normal packaging, or an automatic fallback.
+
+The local-only build must establish its own exact source identity, bridge
+identity, checkout-external runtime manifest, staging inventory, and artifact
+check. The normal signed updater never governs this artifact: it must not
+discover, install, update, repair, replace, select, or attest the local-only
+show-ASIO build. Conversely, a local-only build result cannot be promoted to a
+normal installer/updater acceptance result. No local-only show-ASIO artifact has
+been accepted yet.
+
+Current evidence closes only the exact HOTONE/Ampero ABI-v2 **bridge-only**
+44.1 kHz / 2-channel `i32` / 128-frame continuous run of `3,600,031 ms`.
+Formal matched 48 kHz ASIO/WASAPI, current native application load and operator
+UI, persisted-selection revalidation, occupied/reset/resync/XRUN/unplug/
+no-callback recovery, restart, and measured capture/engine/pixel latency remain
+open. Warning evidence is limited to the focused bridge and application
+configurations named below; the artifact-wide first-party warning gate remains
+open. These boundaries fail closed and do not permit WASAPI, another ASIO
+driver, an older DLL, or a legacy ABI as a substitute.
+
+Cleanup commit `7ee3b8f` does not authorize deletion of an ASIO build or
+evidence tree. Its sole current candidate is `target/debug/incremental`; Apply
+has not run and reclaimed bytes are 0. Every ASIO-named path remains protected
+until its exact owner, artifact identity, and evidence-retention boundary are
+revalidated.
+
 ## Architecture gate
 
 - Keep the default Rodio 0.21.1 / CPAL 0.16 WASAPI path unchanged.
@@ -201,6 +234,49 @@ evidence. It does not prove that the final release DLL was loaded by the native
 application, that the operator UI can run and stop it, or that soak, fault
 injection, and latency thresholds pass.
 
+### Current-DLL Ampero continuous bridge soak (2026-08-26 JST; bridge-only)
+
+An isolated current-source ABI/schema-v2 DLL was rebuilt into its evidence
+directory under the exact local VS 2022 Community 14.44 linker pin. Its
+canonical filename was `syndocal_asio_bridge.dll`, its export inventory had
+exactly the nine v2 symbols, and its SHA-256 was
+`1E67038D4226F0C1857AEF2A2844500B6CD78158D5D89099B2BBA0446C05C60B`.
+The evidence build log records the required absolute MSVC linker first and
+Git's `link.exe` second; Cargo remained pinned to the former. This isolated
+DLL is not a native Syndocal application artifact.
+
+The bridge catalog and capability request explicitly selected only
+`asio:HOTONE AUDIO USB Audio Device`. That driver advertised 44.1 kHz,
+two-channel `i32`, and an 8..2048-frame range; exact Start at 44.1 kHz / two
+channels / `i32` applied 128 frames. A single continuous bridge-v2 run then
+held that one explicit stream for 3,600,031 ms and ended through typed Stop and
+Close, both status 0. It recorded 1,240,463 callbacks and 158,779,264 callback
+frames; bridge XRUN/API count, terminal events, warnings, nonfinite samples,
+and frame mismatches were each 0. The callback's maximum observed interarrival
+gap was 16 ms; bridge callback-duration telemetry was p50 2,047 ns, p95/p99
+4,095 ns, and max 479,600 ns. The raw report is
+`target/qa/asio-ampero-v2-soak-20260826-014416/soak-report-attempt2.jsonl`
+with SHA-256
+`527F41562A38717E307B4BB89B2F353345A4188C009F96A373AC0A8E873F60E7`.
+No default driver, first driver, other ASIO driver, or WASAPI path was selected
+or substituted.
+
+After that Stop/Close, one and only one explicit 48 kHz / two-channel / `i32`
+/ 128-frame probe ran against the same DLL and the same HOTONE ID. The catalog
+and exact capabilities listed 44.1 kHz only. Start returned typed status 4
+`config_unsupported` before any stream was accepted:
+`driver asio:HOTONE AUDIO USB Audio Device does not support exact 48000 Hz / 2 ch / i32 / 128 frame input`.
+It did not open another driver or fall back to WASAPI. The probe report is
+`target/qa/asio-ampero-v2-soak-20260826-014416/probe48-report.jsonl` with
+SHA-256 `5D39A2B3EEDDB8934D904A1029252B3FA79C90F6CD8AE86D01C213AEE054BEE5`.
+
+This closes only a show-specific, 44.1 kHz Ampero bridge-continuity evidence
+row. It does **not** satisfy the formal matched 48 kHz ASIO/WASAPI gate: this
+physical driver does not advertise 48 kHz, no 48 kHz ASIO stream was opened,
+and no WASAPI one-hour harness or native application/operator-path run was
+performed. Fault injection, capture-to-engine/pixel latency, distribution, and
+native final-artifact acceptance remain open.
+
 ## Hardware evidence (2026-07-14)
 
 | Driver | Requested / applied configuration | Result | Telemetry | Scope |
@@ -302,6 +378,8 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 - [ ] Current final ABI-v2 DLL proves an unavailable explicit driver fails without another-driver or WASAPI fallback. The recorded negative run predates the final v2 checkpoint.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
 - [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. Current-source v2 bridge code passed this exact 100-cycle test on 2026-08-26; final release-DLL/native-app loading remains open.
+- [x] Bridge-only HOTONE/Ampero ABI-v2 44.1 kHz / 2-channel / i32 / 128-frame continuous run completed for 3,600,031 ms. This closes only that bridge-continuity evidence row and does not check any native/operator or matched 48 kHz row.
+- [ ] Local-only non-default `show-asio` artifact passes its own source/runtime-manifest/staging/artifact checks and is accepted for the 2026-08-30 controlled show. No such artifact is accepted yet; the normal signed updater is explicitly out of scope and must never govern it.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
 - [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The current-source 2026-08-26 attempt failed explicitly on cycle 1 with the same backend hardware-malfunction result before and after the bounded vendor-control-panel isolation retry; no fallback occurred.
 - [ ] Current-source ABI-v2 native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc. The recorded run is ABI-v1 historical evidence only.

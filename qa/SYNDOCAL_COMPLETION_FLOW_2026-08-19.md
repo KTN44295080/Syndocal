@@ -347,10 +347,11 @@ evidence. No unavailable physical device is a passing hardware result.
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; the last synchronized committed ordinal is `1.2.0-alpha.11`.
-The in-progress alpha.12 tranche was based on pushed source checkpoint `763670c`,
-whose committed metadata remains `1.2.0-alpha.11`. Subsequent documentation and
-native-acceptance-harness checkpoints `0df10d2` and `a0c76c5` intentionally did
-not advance product metadata. The still-dirty implementation worktree synchronizes
+The in-progress alpha.12 tranche originally began from pushed source checkpoint
+`763670c`. Current pushed HEAD `07a9b75` still has committed
+`1.2.0-alpha.11` metadata; subsequent documentation, native-acceptance-harness,
+and cleanup-harness checkpoints `0df10d2`, `a0c76c5`, `7ee3b8f`, and `07a9b75`
+intentionally did not advance product metadata. The still-dirty implementation worktree synchronizes
 in-progress metadata to `1.2.0-alpha.12`. Until that advance is committed with
 tracked sources only and natively verified, `check:release` passes only with
 untracked supporting sources present, and alpha.12 must not be described as a

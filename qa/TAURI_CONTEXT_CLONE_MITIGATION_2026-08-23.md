@@ -1,7 +1,9 @@
 # Tauri Context clone crash mitigation (2026-08-23)
 
-Current-train notice (updated 2026-08-25): the active product train is
-`1.2.0-alpha.11`; the alpha.10 pause was rescinded before promotion. Follow
+Current-train notice (updated 2026-08-26): current pushed HEAD `07a9b75` metadata
+remains `1.2.0-alpha.11`; the dirty uncommitted worktree synchronizes
+in-progress `1.2.0-alpha.12` metadata that is not yet a reproducible checkpoint
+or native artifact. The alpha.10 pause was rescinded before promotion. Follow
 `AGENTS.md` and the active `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md`. The
 post-alpha.10 snapshot and the alpha.7/alpha.8
 checkpoints below are historical checkpoint evidence; their hashes, paths,
