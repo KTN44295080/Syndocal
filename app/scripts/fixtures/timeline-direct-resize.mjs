@@ -1,5 +1,6 @@
 import { createComponent, createSignal } from "solid-js";
 import { render } from "solid-js/web";
+import { inspectBankAuthority } from "../../src/bankAuthority.ts";
 import { TimelineOverview } from "../../src/components/TimelineOverview.tsx";
 import "../../src/styles.css";
 
@@ -100,6 +101,8 @@ const calls = { trim: [], scene: [], audio: [], video: [], automation: [] };
 window.__timelineDirectResizeFixture = { ready: false, calls };
 
 const props = {
+  bankAuthority: inspectBankAuthority([], [], []),
+  timelineChildCueId: null,
   layers,
   legacyMode: false,
   cueDrag: null,
@@ -135,6 +138,7 @@ const props = {
   onSelectAudioClip: (clipId) => setSelectedAudioIds([clipId]),
   onSelectVideoClip: (clipId) => setSelectedVideoIds([clipId]),
   onOpenItemContextMenu: () => {},
+  onSelectItemForContextMenu: () => {},
   onInspectOverlapCluster: () => {},
   onUpdateLayer: () => {},
   onOpenLayerMenu: () => {},

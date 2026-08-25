@@ -118,6 +118,18 @@ equal(
   REQUIRED_GITHUB_HOSTED_MSVS_LINKER,
   "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
 );
+// Exact composition, not substring: the pinned linkers must be exactly the
+// Hostx64/x64 link.exe under their exact edition toolset roots.
+equal(
+  REQUIRED_MSVS_LINKER,
+  `${REQUIRED_VCTOOLS_INSTALL_DIR}\\bin\\Hostx64\\x64\\link.exe`,
+  "the local pin must be exactly the Hostx64/x64 link.exe under the exact Community 14.44.35207 root",
+);
+equal(
+  REQUIRED_GITHUB_HOSTED_MSVS_LINKER,
+  `${REQUIRED_GITHUB_HOSTED_VCTOOLS_INSTALL_DIR}\\bin\\Hostx64\\x64\\link.exe`,
+  "the hosted pin must be exactly the Hostx64/x64 link.exe under the exact Enterprise 14.44.35207 root",
+);
 
 const requiredFileIsRegular = (candidate) => candidate === REQUIRED_MSVS_LINKER;
 const gitLinkerPath = "C:/Program Files/Git/usr/bin/link.exe";
@@ -592,33 +604,931 @@ match(
 );
 
 for (const [needle, reason] of [
-  ["14.44.35207", "pin the exact supported local MSVC toolset"],
   ["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER", "require the explicit Cargo linker pin"],
   ["where.exe link.exe", "prove the real linker resolution order"],
   ["Test-MsvcLinkerPinContract", "fail closed through the shared harness preflight contract"],
   ["[switch]$PreflightOnly", "provide a no-Cargo live preflight mode"],
   ["[switch]$SelfTest", "provide a hermetic no-Cargo negative-test mode"],
+  [
+    "resolves first instead of",
+    "fail closed when Git usr/bin/link.exe resolves ahead of the pinned MSVC linker",
+  ],
+  [
+    '@{ CargoLinkerPin = "C:\\Program Files\\Git\\usr\\bin\\link.exe" }',
+    "keep the Git-linker-pin negative fixture",
+  ],
+  [
+    '@{ LinkResolutionOrder = @("C:\\Program Files\\Git\\usr\\bin\\link.exe", $script:RequiredHostX64Linker) }',
+    "keep the Git-first resolution negative fixture",
+  ],
 ]) {
   ok(
     asioBuildHarnessSource.includes(needle),
     `ASIO direct-Cargo harness must ${reason}`,
   );
 }
-const asioLivePreflightIndex = asioBuildHarnessSource.indexOf(
-  "$linkerPinContract = Test-MsvcLinkerPinContract",
+// ---- Normalized PowerShell static seam -------------------------------------
+// Byte-offset-preserving normalization: comments and the interiors of strings
+// and here-strings become spaces (double-quoted strings honor $( )
+// subexpression nesting so nested quotes cannot shift the true terminator),
+// so every structural and Cargo-launch scan below sees real code positions
+// and cannot be evaded by hiding tokens inside strings, comments, or
+// here-strings. Detection is pattern-based (bare cargo, quoted call operator,
+// Start-Process, cmd/cmd.exe /c, Invoke-Expression/iex, non-Start-Process
+// spawners such as Invoke-Item/Start-Job/Start-ThreadJob/WMI/CIM/.NET
+// Process.Start/pwsh -Command, statically bound variable indirection
+// including env:/script:/global:/braced targets and "car" + "go" literal
+// concatenation) rather than a finite allowlist.
+const analyzePowerShellSource = (source) => {
+  const maskedCharacters = source.split("");
+  const literals = [];
+  const length = source.length;
+  const blankRange = (start, end) => {
+    for (let index = start; index < end; index += 1) {
+      if (maskedCharacters[index] !== "\r" && maskedCharacters[index] !== "\n") {
+        maskedCharacters[index] = " ";
+      }
+    }
+  };
+  const consumeSingleQuoted = (start) => {
+    let cursor = start + 1;
+    while (cursor < length) {
+      if (source[cursor] === "'") {
+        if (source[cursor + 1] === "'") {
+          cursor += 2;
+          continue;
+        }
+        break;
+      }
+      cursor += 1;
+    }
+    const end = Math.min(cursor, length);
+    const closeEnd = Math.min(cursor + 1, length);
+    literals.push({ end: closeEnd, index: start, value: source.slice(start + 1, end).replace(/''/g, "'") });
+    blankRange(start + 1, end);
+    return closeEnd;
+  };
+  // Double-quoted strings are expandable: a $( ) subexpression may contain
+  // nested quoted strings whose quotes must not terminate the outer string.
+  // The cursor therefore tracks subexpression depth plus any nested
+  // single/double-quoted string opened at depth > 0. The terminator search can
+  // only diverge toward exposing code early (never toward masking real code),
+  // which is the fail-closed direction for this audit. Offsets are stable:
+  // masking still blanks exactly [start + 1, end) of the true outer string.
+  const consumeDoubleQuoted = (start) => {
+    let cursor = start + 1;
+    let subexpressionDepth = 0;
+    let nestedQuote = null;
+    while (cursor < length) {
+      const character = source[cursor];
+      if (nestedQuote !== null) {
+        if (nestedQuote === "'") {
+          if (character === "'" && source[cursor + 1] === "'") {
+            cursor += 2;
+            continue;
+          }
+          if (character === "'") {
+            nestedQuote = null;
+            cursor += 1;
+            continue;
+          }
+        } else {
+          if (character === "`") {
+            cursor += 2;
+            continue;
+          }
+          if (character === '"' && source[cursor + 1] === '"') {
+            cursor += 2;
+            continue;
+          }
+          if (character === '"') {
+            nestedQuote = null;
+            cursor += 1;
+            continue;
+          }
+        }
+        cursor += 1;
+        continue;
+      }
+      if (character === "`") {
+        cursor += 2;
+        continue;
+      }
+      if (subexpressionDepth > 0) {
+        if (character === "'") {
+          nestedQuote = "'";
+          cursor += 1;
+          continue;
+        }
+        if (character === '"') {
+          nestedQuote = '"';
+          cursor += 1;
+          continue;
+        }
+        if (character === "(") {
+          subexpressionDepth += 1;
+          cursor += 1;
+          continue;
+        }
+        if (character === ")") {
+          subexpressionDepth -= 1;
+          cursor += 1;
+          continue;
+        }
+        cursor += 1;
+        continue;
+      }
+      if (character === "$" && source[cursor + 1] === "(") {
+        subexpressionDepth = 1;
+        cursor += 2;
+        continue;
+      }
+      if (character === '"') {
+        if (source[cursor + 1] === '"') {
+          cursor += 2;
+          continue;
+        }
+        break;
+      }
+      cursor += 1;
+    }
+    const end = Math.min(cursor, length);
+    const closeEnd = Math.min(cursor + 1, length);
+    const value = source.slice(start + 1, end).replace(/`(.)/gs, "$1").replace(/""/g, '"');
+    literals.push({ end: closeEnd, index: start, value });
+    blankRange(start + 1, end);
+    return closeEnd;
+  };
+  let index = 0;
+  while (index < length) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (character === "<" && next === "#") {
+      const end = source.indexOf("#>", index + 2);
+      const stop = end === -1 ? length : end + 2;
+      blankRange(index, stop);
+      index = stop;
+    } else if (character === "#") {
+      const relativeNewline = /\r?\n/.exec(source.slice(index));
+      const stop = relativeNewline ? index + relativeNewline.index : length;
+      blankRange(index, stop);
+      index = stop;
+    } else if (
+      character === "@"
+      && (next === "'" || next === '"')
+      && (source[index + 2] === "\r" || source[index + 2] === "\n")
+    ) {
+      const terminator = next === "'" ? "'@" : '"@';
+      let terminatorIndex = -1;
+      for (let cursor = index + 2; cursor < length; cursor += 1) {
+        if (source[cursor] === "\n" && source.startsWith(terminator, cursor + 1)) {
+          terminatorIndex = cursor + 1;
+          break;
+        }
+      }
+      const stop = terminatorIndex === -1 ? length : terminatorIndex + 2;
+      blankRange(index, stop);
+      index = stop;
+    } else if (character === "'") {
+      index = consumeSingleQuoted(index);
+    } else if (character === '"') {
+      index = consumeDoubleQuoted(index);
+    } else {
+      index += character === "`" ? 2 : 1;
+    }
+  }
+  return { literals, masked: maskedCharacters.join("") };
+};
+
+const CARGO_COMMAND_LITERAL = /^\s*cargo(?:\.exe)?\s*$/i;
+const CARGO_COMMAND_STRING = /^\s*cargo(?:\.exe)?(?:\s|$)/i;
+const CARGO_TOKEN_PATTERN = /\bcargo(?:\.exe)?(?![\w.\-])/gi;
+const DYNAMIC_EXECUTION_PATTERN = /\b(?:Invoke-Expression|iex)\b/gi;
+
+// Alias assignment heads: plain variables plus scope- and environment-
+// qualified targets ($env:C, $script:C, $global:C, ...) including braced
+// ${...} spellings. Any of these bound to an exact cargo literal makes later
+// invocations of that variable auditable.
+const ALIAS_ASSIGNMENT_PATTERN =
+  /\$(?:\{([^}\r\n]+)\}|(?:(env|script|global|local|private|using):([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)))\s+=\s+$/;
+
+const resolveAliasAssignmentKey = (assignmentMatch) => {
+  if (assignmentMatch[1] !== undefined) return assignmentMatch[1];
+  if (assignmentMatch[2] !== undefined) return `${assignmentMatch[2]}:${assignmentMatch[3]}`;
+  return assignmentMatch[4];
+};
+
+const aliasUsePattern = (key) =>
+  new RegExp(
+    `\\$\\{${escapeRegExp(key)}\\}|\\$${escapeRegExp(key)}(?![A-Za-z0-9_])`,
+    "g",
+  );
+
+// Adjacent string literals joined only by "+" compose one runtime value;
+// "car" + "go" must be audited exactly like the literal "cargo".
+const composeLiteralChains = (literals, maskedSource) => {
+  const chains = [];
+  for (let index = 0; index < literals.length; index += 1) {
+    const chain = { end: literals[index].end, index: literals[index].index, value: literals[index].value };
+    for (let next = index + 1; next < literals.length; next += 1) {
+      const separator = maskedSource.slice(chain.end, literals[next].index);
+      if (!/^\s*\+\s*$/.test(separator)) break;
+      chain.value += literals[next].value;
+      chain.end = literals[next].end;
+      index = next;
+    }
+    chains.push({ index: chain.index, value: chain.value });
+  }
+  return chains;
+};
+
+const statementHeadBefore = (masked, tokenIndex) => {
+  const window = masked.slice(Math.max(0, tokenIndex - 200), tokenIndex);
+  let boundary = -1;
+  for (const character of ["\n", "\r", ";", "{", "}", "("]) {
+    const position = window.lastIndexOf(character);
+    if (position > boundary) boundary = position;
+  }
+  return window.slice(boundary + 1).trim();
+};
+
+const classifyLaunchKind = (head) => {
+  if (head === "") return "bare-command";
+  if (/^&\s*$/.test(head)) return "call-operator";
+  if (/^&\s*\(/.test(head)) return "call-operator-expression";
+  if (/\bcmd(?:\.exe)?\b[^;{\r\n]*\/(?:c|k)\b/i.test(head)) return "cmd-indirection";
+  if (/\bstart-process\b/i.test(head)) return "start-process";
+  if (/\binvoke-item\b/i.test(head)) return "item-spawner";
+  if (/\bstart-(?:job|threadjob)\b/i.test(head)) return "background-job-spawner";
+  if (/\binvoke-(?:wmimethod|cimmethod)\b/i.test(head)) return "wmi-cim-process-spawner";
+  if (/\[\s*(?:system\.)?diagnostics\.process\s*\]\s*::\s*start\b/i.test(head)) {
+    return "dotnet-process-spawner";
+  }
+  if (/\bnew-object\b[^;{\r\n]*diagnostics\.process/i.test(head)) return "dotnet-process-spawner";
+  if (/\b(?:pwsh|powershell)(?:\.exe)?\b[^;{\r\n]*\s-(?:command|c)\b/i.test(head)) {
+    return "shell-indirection";
+  }
+  if (/\b(?:invoke-expression|iex)\b/i.test(head)) return "invoke-expression";
+  if (/[&|]\s*$/.test(head)) return "operator-chained";
+  return null;
+};
+
+const findStaticCargoLaunchAttempts = ({ literals, masked }) => {
+  const attempts = [];
+  const aliases = new Map();
+  const chains = composeLiteralChains(literals, masked);
+  for (const chain of chains) {
+    if (!CARGO_COMMAND_LITERAL.test(chain.value)) continue;
+    const head = masked.slice(Math.max(0, chain.index - 120), chain.index);
+    const assignment = ALIAS_ASSIGNMENT_PATTERN.exec(head);
+    if (assignment) aliases.set(resolveAliasAssignmentKey(assignment), chain.index);
+  }
+  const consider = (tokenIndex, description) => {
+    const kind = classifyLaunchKind(statementHeadBefore(masked, tokenIndex));
+    if (kind) attempts.push({ description, index: tokenIndex, kind });
+  };
+  for (const token of masked.matchAll(CARGO_TOKEN_PATTERN)) {
+    consider(token.index, "unquoted cargo token");
+  }
+  for (const chain of chains) {
+    if (CARGO_COMMAND_STRING.test(chain.value)) {
+      consider(chain.index, `quoted cargo command string '${chain.value.trim()}'`);
+    }
+  }
+  for (const [name] of aliases) {
+    for (const use of masked.matchAll(aliasUsePattern(name))) {
+      consider(use.index, `static cargo alias $${name}`);
+    }
+  }
+  return attempts;
+};
+
+const findDynamicExecutionPrimitives = ({ masked }) =>
+  [...masked.matchAll(DYNAMIC_EXECUTION_PATTERN)].map((primitive) => ({
+    index: primitive.index,
+    kind: "dynamic-execution",
+  }));
+
+const findBalancedBraceEnd = (masked, openBraceIndex) => {
+  let depth = 0;
+  for (let index = openBraceIndex; index < masked.length; index += 1) {
+    if (masked[index] === "{") depth += 1;
+    else if (masked[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+};
+
+const findFunctionExtent = (masked, functionName) => {
+  const header = new RegExp(`function\\s+${functionName}(?![A-Za-z0-9_-])`).exec(masked);
+  if (!header) return null;
+  const openBrace = masked.indexOf("{", header.index);
+  const closeBrace = openBrace === -1 ? -1 : findBalancedBraceEnd(masked, openBrace);
+  return { closeBrace, openBrace, start: header.index };
+};
+
+const findIfBlockExtent = (masked, condition) => {
+  const conditionMatch = condition.exec(masked);
+  if (!conditionMatch) return null;
+  const openBrace = masked.indexOf("{", conditionMatch.index);
+  const closeBrace = openBrace === -1 ? -1 : findBalancedBraceEnd(masked, openBrace);
+  return { closeBrace, openBrace, start: conditionMatch.index };
+};
+
+const MSVC_TOOLSET_ROOT_PATTERN =
+  /[A-Za-z]:\\Program Files\\Microsoft Visual Studio\\2022\\[^\\"]+\\VC\\Tools\\MSVC\\\d+\.\d+\.\d+/g;
+
+// Exact constant roots, not version substrings: every MSVC toolset literal in a
+// gated harness must equal REQUIRED_VCTOOLS_INSTALL_DIR exactly, and sources
+// that embed the absolute linker must state the full REQUIRED_MSVS_LINKER value.
+const verifyExactLocalCommunityToolsetRoots = (source, linkerLiteralRequired) => {
+  const violations = [];
+  const roots = [...new Set(source.match(MSVC_TOOLSET_ROOT_PATTERN) ?? [])];
+  if (!roots.includes(REQUIRED_VCTOOLS_INSTALL_DIR)) {
+    violations.push(
+      `source must state the exact required Community VCToolsInstallDir ${REQUIRED_VCTOOLS_INSTALL_DIR}`,
+    );
+  }
+  for (const root of roots) {
+    if (root !== REQUIRED_VCTOOLS_INSTALL_DIR) {
+      violations.push(
+        `MSVC toolset root drifted from the exact Community ${REQUIRED_VCTOOLS_VERSION} pin: ${root}`,
+      );
+    }
+  }
+  if (linkerLiteralRequired && !source.includes(REQUIRED_MSVS_LINKER)) {
+    violations.push(
+      `source must state the exact absolute linker ${REQUIRED_MSVS_LINKER}, not a version substring`,
+    );
+  }
+  return violations;
+};
+
+const EXPECTED_ASIO_CARGO_DISPATCH_SITES = 4;
+const EXPECTED_ASIO_DISPATCHER_CARGO_LAUNCHES = 2;
+// Exact occurrence inventory of Test-MsvcLinkerPinContract in the gated
+// harness: one function definition, two Invoke-SelfTest matrix calls, and
+// exactly one production gate call. The production call is identified
+// structurally (outside the definition name and the Invoke-SelfTest extent),
+// never by last-occurrence position.
+const EXPECTED_ASIO_LINKER_GATE_OCCURRENCES = 4;
+const EXPECTED_ASIO_PRODUCTION_LINKER_GATE_CALLS = 1;
+
+const verifyAsioBuildHarnessStructure = (source) => {
+  const violations = [...verifyExactLocalCommunityToolsetRoots(source, false)];
+  const { literals, masked } = analyzePowerShellSource(source);
+  if (!source.includes('"bin\\Hostx64\\x64\\link.exe"')) {
+    violations.push('the harness must compose the pinned linker as Join-Path ... "bin\\Hostx64\\x64\\link.exe"');
+  }
+  const dispatcher = findFunctionExtent(masked, "Invoke-CargoChecked");
+  if (!dispatcher || dispatcher.closeBrace === -1) {
+    violations.push("the single Invoke-CargoChecked dispatcher function must remain parseable");
+    return violations;
+  }
+
+  // The hermetic -SelfTest short-circuit must invoke Invoke-SelfTest and return
+  // before the Windows environment gate, the verified-linker gate, and any
+  // Cargo gate; deleting or reordering it must fail this checker.
+  const windowsGateIndex = masked.indexOf("[Environment]::OSVersion.Platform");
+  if (windowsGateIndex === -1) {
+    violations.push("the Windows-only environment gate must remain");
+  }
+  const preflightGuard = findIfBlockExtent(masked, /if\s*\(\s*\$PreflightOnly\s*\)/);
+  if (!preflightGuard || preflightGuard.closeBrace === -1) {
+    violations.push("the if ($PreflightOnly) no-Cargo exit must remain");
+  }
+  const whereLogIndex = source.indexOf("where.exe link.exe resolution order:");
+  if (whereLogIndex === -1) {
+    violations.push("where.exe link.exe resolution-order logging must remain");
+  }
+  const selfTestBlock = findIfBlockExtent(masked, /if\s*\(\s*\$SelfTest\s*\)/);
+  if (!selfTestBlock || selfTestBlock.closeBrace === -1) {
+    violations.push("the if ($SelfTest) short-circuit block must remain");
+  } else {
+    const body = source.slice(selfTestBlock.openBrace + 1, selfTestBlock.closeBrace).trim();
+    if (!/^Invoke-SelfTest\s*\r?\n\s*return\b/.test(body)) {
+      violations.push("the if ($SelfTest) block must invoke Invoke-SelfTest and then return");
+    }
+    if (windowsGateIndex !== -1 && selfTestBlock.closeBrace > windowsGateIndex) {
+      violations.push("the if ($SelfTest) short-circuit must return before the Windows environment gate");
+    }
+  }
+
+  // The production verified-linker gate is pinned structurally, not by
+  // last-occurrence position: the harness must carry exactly the required
+  // occurrence inventory, and the single production call must be uniquely
+  // identified outside the definition name and the Invoke-SelfTest extent,
+  // ordered after the Windows gate and the -SelfTest short-circuit but before
+  // the -PreflightOnly exit. A dead branch or a late decoy can no longer
+  // satisfy the gate merely by being the final mention.
+  const linkerGateHeader = /function\s+Test-MsvcLinkerPinContract(?![A-Za-z0-9_-])/.exec(masked);
+  if (!linkerGateHeader) {
+    violations.push("the Test-MsvcLinkerPinContract contract function definition must remain parseable");
+  }
+  const linkerGateDefinitionNameIndex = linkerGateHeader
+    ? linkerGateHeader.index + linkerGateHeader[0].indexOf("Test-MsvcLinkerPinContract")
+    : -1;
+  const linkerGateOccurrences = [...masked.matchAll(/\bTest-MsvcLinkerPinContract\b/g)]
+    .map((occurrence) => occurrence.index);
+  if (linkerGateOccurrences.length !== EXPECTED_ASIO_LINKER_GATE_OCCURRENCES) {
+    violations.push(
+      `expected exactly ${EXPECTED_ASIO_LINKER_GATE_OCCURRENCES} `
+      + "Test-MsvcLinkerPinContract occurrences (definition, two self-test calls, one production call), "
+      + `found ${linkerGateOccurrences.length}`,
+    );
+  }
+  const selfTestFunctionExtent = findFunctionExtent(masked, "Invoke-SelfTest");
+  const insideSelfTestFunction = (candidateIndex) =>
+    selfTestFunctionExtent !== null
+    && selfTestFunctionExtent.closeBrace !== -1
+    && candidateIndex >= selfTestFunctionExtent.start
+    && candidateIndex <= selfTestFunctionExtent.closeBrace;
+  const productionLinkerGates = linkerGateOccurrences.filter(
+    (occurrenceIndex) =>
+      occurrenceIndex !== linkerGateDefinitionNameIndex && !insideSelfTestFunction(occurrenceIndex),
+  );
+  if (productionLinkerGates.length !== EXPECTED_ASIO_PRODUCTION_LINKER_GATE_CALLS) {
+    violations.push(
+      `expected exactly ${EXPECTED_ASIO_PRODUCTION_LINKER_GATE_CALLS} production `
+      + "Test-MsvcLinkerPinContract gate call outside the definition and Invoke-SelfTest, "
+      + `found ${productionLinkerGates.length}`,
+    );
+  }
+  const productionLinkerGateIndex =
+    productionLinkerGates.length === EXPECTED_ASIO_PRODUCTION_LINKER_GATE_CALLS
+      ? productionLinkerGates[0]
+      : -1;
+  if (productionLinkerGateIndex === -1) {
+    violations.push("the production Test-MsvcLinkerPinContract verified-linker gate must remain");
+  } else {
+    if (
+      selfTestBlock
+      && selfTestBlock.closeBrace !== -1
+      && selfTestBlock.closeBrace > productionLinkerGateIndex
+    ) {
+      violations.push("the if ($SelfTest) short-circuit must return before the verified-linker gate");
+    }
+    if (windowsGateIndex !== -1 && productionLinkerGateIndex < windowsGateIndex) {
+      violations.push(
+        "the production Test-MsvcLinkerPinContract verified-linker gate must follow the Windows environment gate",
+      );
+    }
+    if (preflightGuard && preflightGuard.closeBrace !== -1 && productionLinkerGateIndex > preflightGuard.start) {
+      violations.push(
+        "the production Test-MsvcLinkerPinContract verified-linker gate must precede the -PreflightOnly no-Cargo exit",
+      );
+    }
+  }
+
+  // Dispatch-site discovery independent of parameter order: every production
+  // call site is found by name alone and each must sit after the where.exe
+  // log, the verified-linker gate, and the -PreflightOnly no-Cargo exit.
+  const definitionHeader = /function\s+Invoke-CargoChecked(?![A-Za-z0-9_-])/.exec(masked);
+  const definitionNameIndex = definitionHeader
+    ? definitionHeader.index + definitionHeader[0].indexOf("Invoke-CargoChecked")
+    : -1;
+  const dispatchSites = [...masked.matchAll(/\bInvoke-CargoChecked\b/g)]
+    .map((occurrence) => occurrence.index)
+    .filter((siteIndex) => siteIndex !== definitionNameIndex);
+  if (dispatchSites.length !== EXPECTED_ASIO_CARGO_DISPATCH_SITES) {
+    violations.push(
+      `expected exactly ${EXPECTED_ASIO_CARGO_DISPATCH_SITES} Invoke-CargoChecked production dispatch sites, found ${dispatchSites.length}`,
+    );
+  }
+  for (const siteIndex of dispatchSites) {
+    if (whereLogIndex !== -1 && siteIndex < whereLogIndex) {
+      violations.push(`dispatch site at offset ${siteIndex} precedes the where.exe resolution-order log`);
+    }
+    if (productionLinkerGateIndex !== -1 && siteIndex < productionLinkerGateIndex) {
+      violations.push(`dispatch site at offset ${siteIndex} precedes the verified-linker gate`);
+    }
+    if (preflightGuard && preflightGuard.closeBrace !== -1 && siteIndex < preflightGuard.closeBrace) {
+      violations.push(`dispatch site at offset ${siteIndex} precedes the -PreflightOnly no-Cargo exit`);
+    }
+  }
+
+  // Every Cargo launch attempt must lie inside the dispatcher interior; dynamic
+  // execution primitives are forbidden outright because they defeat static
+  // auditability.
+  const launchAttempts = findStaticCargoLaunchAttempts({ literals, masked });
+  if (launchAttempts.length !== EXPECTED_ASIO_DISPATCHER_CARGO_LAUNCHES) {
+    violations.push(
+      `the dispatcher must own exactly ${EXPECTED_ASIO_DISPATCHER_CARGO_LAUNCHES} static Cargo launches, found ${launchAttempts.length}`,
+    );
+  }
+  for (const attempt of launchAttempts) {
+    const insideDispatcher =
+      attempt.index >= dispatcher.start && attempt.index <= dispatcher.closeBrace;
+    if (!insideDispatcher) {
+      violations.push(
+        `Cargo launch outside the Invoke-CargoChecked dispatcher (${attempt.kind}: ${attempt.description}) at offset ${attempt.index}`,
+      );
+    }
+  }
+  for (const primitive of findDynamicExecutionPrimitives({ masked })) {
+    violations.push(`dynamic execution primitive at offset ${primitive.index} must not bypass the static Cargo audit`);
+  }
+  return violations;
+};
+
+deepEqual(
+  verifyAsioBuildHarnessStructure(asioBuildHarnessSource),
+  [],
+  "the real ASIO harness must satisfy the normalized static Cargo-containment contract",
 );
-const asioPreflightOnlyIndex = asioBuildHarnessSource.indexOf("if ($PreflightOnly)");
-const asioCargoIndex = asioBuildHarnessSource.indexOf("& cargo check");
+
+const asioSourceAnalysis = analyzePowerShellSource(asioBuildHarnessSource);
+equal(
+  asioSourceAnalysis.masked.length,
+  asioBuildHarnessSource.length,
+  "normalization must preserve byte offsets so structural indexes stay valid",
+);
 ok(
-  asioLivePreflightIndex > -1
-    && asioPreflightOnlyIndex > asioLivePreflightIndex
-    && asioCargoIndex > asioPreflightOnlyIndex,
-  "ASIO harness must validate the exact linker and allow a no-Cargo exit before its sole Cargo check",
+  !asioSourceAnalysis.masked.includes("$($Arguments"),
+  "string interiors must be masked so logged cargo text can never fake a launch",
 );
 equal(
-  [...asioBuildHarnessSource.matchAll(/&\s+cargo\b/g)].length,
-  1,
-  "ASIO harness must keep every direct Cargo launch behind the verified preflight",
+  [...asioSourceAnalysis.masked.matchAll(/\bTest-MsvcLinkerPinContract\b/g)].length,
+  EXPECTED_ASIO_LINKER_GATE_OCCURRENCES,
+  "the real ASIO harness must carry exactly the pinned Test-MsvcLinkerPinContract occurrence inventory",
+);
+
+// Paired quote-scanner probes: $( ) subexpressions inside double-quoted
+// strings may contain nested quotes, and the scanner must find the true outer
+// terminator both ways — string interiors stay masked (no under-mask) and
+// code after the string stays scannable (no over-mask).
+{
+  const nestedProbeSource = '$message = "count $(Get-Count "items") complete"\nDispatch-Next\n';
+  const nestedProbe = analyzePowerShellSource(nestedProbeSource);
+  equal(
+    nestedProbe.masked.length,
+    nestedProbeSource.length,
+    "nested-quote normalization must preserve byte offsets",
+  );
+  ok(
+    !nestedProbe.masked.includes("Get-Count"),
+    "subexpression interiors inside double-quoted strings must stay masked",
+  );
+  ok(
+    !nestedProbe.masked.includes("items"),
+    "quotes nested inside a string subexpression must not leak their text into code positions",
+  );
+  ok(
+    nestedProbe.masked.includes("Dispatch-Next"),
+    "code following a nested-quote subexpression string must remain scannable (no over-mask)",
+  );
+  deepEqual(
+    nestedProbe.literals.map((literal) => literal.value),
+    ['count $(Get-Count "items") complete'],
+    "the outer string literal must span to its true terminator despite the nested quotes",
+  );
+}
+{
+  const singleQuoteSubexpressionSource = "$log = \"run $('a' + 'b') done\"\nAfter-Sq\n";
+  const singleQuoteSubexpression = analyzePowerShellSource(singleQuoteSubexpressionSource);
+  equal(
+    singleQuoteSubexpression.masked.length,
+    singleQuoteSubexpressionSource.length,
+    "single-quote-in-subexpression normalization must preserve byte offsets",
+  );
+  ok(
+    !singleQuoteSubexpression.masked.includes("'a'"),
+    "single-quoted fragments inside a string subexpression must stay masked",
+  );
+  ok(
+    singleQuoteSubexpression.masked.includes("After-Sq"),
+    "a string containing quoted subexpression content must terminate at its true closing quote",
+  );
+}
+{
+  const plainParenStringSource = '$note = "totally (inert) text"\nAfter-Plain\n';
+  const plainParenString = analyzePowerShellSource(plainParenStringSource);
+  equal(
+    plainParenString.masked.length,
+    plainParenStringSource.length,
+    "plain-paren string normalization must preserve byte offsets",
+  );
+  ok(!plainParenString.masked.includes("inert"), "plain string interiors must remain fully masked");
+  ok(
+    plainParenString.masked.includes("After-Plain"),
+    "parentheses inside a plain string must never open subexpression tracking or delay its termination",
+  );
+}
+
+let hostileFixtureCount = 0;
+const expectHostileViolation = (label, violations, pattern) => {
+  hostileFixtureCount += 1;
+  ok(
+    violations.length > 0 && violations.some((violation) => pattern.test(violation)),
+    `hostile mutation fixture '${label}' must fail closed with a matching violation: ${JSON.stringify(violations)}`,
+  );
+};
+const rejectAsioMutation = (label, mutant, pattern) => {
+  ok(mutant !== asioBuildHarnessSource, `hostile mutation fixture '${label}' must alter the source`);
+  expectHostileViolation(label, verifyAsioBuildHarnessStructure(mutant), pattern);
+};
+const insertIntoAsioBeforePreflightGuard = (insertion) => {
+  const anchor = asioBuildHarnessSource.indexOf("if ($PreflightOnly)");
+  if (anchor === -1) throw new Error("fixture anchor missing: if ($PreflightOnly)");
+  return asioBuildHarnessSource.slice(0, anchor) + insertion + asioBuildHarnessSource.slice(anchor);
+};
+const asioSelfTestBlockExtent = () => {
+  const blockStart = asioBuildHarnessSource.indexOf("if ($SelfTest)");
+  const blockEnd = asioBuildHarnessSource.indexOf("}\n", blockStart);
+  if (blockStart === -1 || blockEnd === -1) throw new Error("fixture anchor missing: if ($SelfTest)");
+  return { blockEnd: blockEnd + "}\n".length, blockStart };
+};
+const asioSelfTestBlockText = asioBuildHarnessSource.slice(
+  asioSelfTestBlockExtent().blockStart,
+  asioSelfTestBlockExtent().blockEnd,
+);
+equal(asioSelfTestBlockText, "if ($SelfTest) {\n    Invoke-SelfTest\n    return\n}\n");
+
+rejectAsioMutation(
+  "bare cargo launch outside the dispatcher",
+  insertIntoAsioBeforePreflightGuard("cargo test --locked\n"),
+  /bare-command/,
+);
+rejectAsioMutation(
+  "quoted call-operator cargo launch",
+  insertIntoAsioBeforePreflightGuard('& "cargo" --version\n'),
+  /call-operator/,
+);
+rejectAsioMutation(
+  "Start-Process cargo launch",
+  insertIntoAsioBeforePreflightGuard('Start-Process -FilePath cargo -ArgumentList "build"\n'),
+  /start-process/,
+);
+rejectAsioMutation(
+  "cmd.exe /c cargo launch",
+  insertIntoAsioBeforePreflightGuard("cmd.exe /c cargo publish --dry-run\n"),
+  /cmd-indirection/,
+);
+rejectAsioMutation(
+  "cmd /c cargo launch",
+  insertIntoAsioBeforePreflightGuard("cmd /c cargo publish --dry-run\n"),
+  /cmd-indirection/,
+);
+rejectAsioMutation(
+  "cmd.exe with a quoted full cargo command string",
+  insertIntoAsioBeforePreflightGuard('cmd.exe /c "cargo build --locked"\n'),
+  /cmd-indirection/,
+);
+rejectAsioMutation(
+  "Invoke-Expression cargo launch",
+  insertIntoAsioBeforePreflightGuard('Invoke-Expression "cargo build"\n'),
+  /dynamic execution primitive/,
+);
+rejectAsioMutation(
+  "statically bound cargo variable indirection",
+  insertIntoAsioBeforePreflightGuard("$staticallyPinnedCargo = 'cargo'\n& $staticallyPinnedCargo test\n"),
+  /static cargo alias \$staticallyPinnedCargo/,
+);
+rejectAsioMutation(
+  "environment-variable cargo alias indirection",
+  insertIntoAsioBeforePreflightGuard("$env:CargoTool = 'cargo'\n& $env:CargoTool --version\n"),
+  /static cargo alias \$env:CargoTool/,
+);
+rejectAsioMutation(
+  "braced environment-variable cargo alias indirection",
+  insertIntoAsioBeforePreflightGuard('${env:CargoToolBraced} = "cargo"\n& ${env:CargoToolBraced} test\n'),
+  /static cargo alias \$env:CargoToolBraced/,
+);
+rejectAsioMutation(
+  "script-scope cargo alias indirection",
+  insertIntoAsioBeforePreflightGuard("$script:CargoExe = 'cargo'\n& $script:CargoExe test\n"),
+  /static cargo alias \$script:CargoExe/,
+);
+rejectAsioMutation(
+  "global-scope cargo alias indirection",
+  insertIntoAsioBeforePreflightGuard('$global:CargoExe = "cargo"\n& $global:CargoExe test\n'),
+  /static cargo alias \$global:CargoExe/,
+);
+rejectAsioMutation(
+  "concatenated-string cargo alias indirection",
+  insertIntoAsioBeforePreflightGuard('$assembledCommand = "car" + "go"\n& $assembledCommand test\n'),
+  /static cargo alias \$assembledCommand/,
+);
+rejectAsioMutation(
+  "direct concatenated-string cargo invocation",
+  insertIntoAsioBeforePreflightGuard('& ("car" + "go") --version\n'),
+  /bare-command/,
+);
+rejectAsioMutation(
+  "Invoke-Item cargo spawner",
+  insertIntoAsioBeforePreflightGuard("Invoke-Item cargo.exe\n"),
+  /item-spawner/,
+);
+rejectAsioMutation(
+  "Start-ThreadJob cargo spawner",
+  insertIntoAsioBeforePreflightGuard("Start-ThreadJob -Name soakgate cargo build\n"),
+  /background-job-spawner/,
+);
+rejectAsioMutation(
+  "Invoke-WmiMethod Win32_Process cargo spawner",
+  insertIntoAsioBeforePreflightGuard(
+    'Invoke-WmiMethod -Class Win32_Process -MethodName Create -ArgumentList "cargo build"\n',
+  ),
+  /wmi-cim-process-spawner/,
+);
+rejectAsioMutation(
+  ".NET Process.Start cargo spawner",
+  insertIntoAsioBeforePreflightGuard('[System.Diagnostics.Process]::Start("cargo", "build")\n'),
+  // The "(" call boundary collapses the statement head, so this paren-delimited
+  // form fails closed as a bare command outside the dispatcher; the dedicated
+  // dotnet-process-spawner classification remains for unparenthesized heads.
+  /bare-command|dotnet-process-spawner/,
+);
+rejectAsioMutation(
+  "pwsh -Command cargo re-invocation",
+  insertIntoAsioBeforePreflightGuard("pwsh -NoProfile -Command cargo test\n"),
+  /shell-indirection/,
+);
+
+// Negative controls: launch-shaped text in comments, string interiors, and
+// here-strings — plus benign literal concatenation — must never be flagged.
+deepEqual(
+  verifyAsioBuildHarnessStructure(
+    insertIntoAsioBeforePreflightGuard(
+      "# Invoke-Item cargo.exe would be rejected if it were code.\n# $env:CargoTool = 'cargo'\n",
+    ),
+  ),
+  [],
+  "comment-mentioned launch constructs must never be flagged",
+);
+deepEqual(
+  verifyAsioBuildHarnessStructure(
+    insertIntoAsioBeforePreflightGuard(
+      '$auditNote = "Invoke-Item cargo.exe; Start-Job { cargo publish }; & `$env:CargoTool test"\n',
+    ),
+  ),
+  [],
+  "string-interior launch constructs must never be flagged",
+);
+deepEqual(
+  verifyAsioBuildHarnessStructure(
+    insertIntoAsioBeforePreflightGuard("@'\nInvoke-Expression \"cargo build\"\ncargo publish --dry-run\n'@\n"),
+  ),
+  [],
+  "here-string launch constructs must never be flagged",
+);
+deepEqual(
+  verifyAsioBuildHarnessStructure(
+    insertIntoAsioBeforePreflightGuard('$salutation = "con" + "cat" + "enate"\nWrite-Host $salutation\n'),
+  ),
+  [],
+  "benign literal concatenation and variable use must never be flagged",
+);
+
+const relocateLastAsioDispatchBeforePreflight = () => {
+  const callStart = asioBuildHarnessSource.indexOf(
+    '    Invoke-CargoChecked -Label "ASIO canonical release DLL"',
+  );
+  const callEnd = asioBuildHarnessSource.indexOf("\n    )\n", callStart);
+  if (callStart === -1 || callEnd === -1) throw new Error("fixture anchor missing: release DLL dispatch");
+  const callText = asioBuildHarnessSource.slice(callStart, callEnd + "\n    )\n".length);
+  const withoutCall =
+    asioBuildHarnessSource.slice(0, callStart) + asioBuildHarnessSource.slice(callEnd + "\n    )\n".length);
+  const anchor = withoutCall.indexOf("if ($PreflightOnly)");
+  return withoutCall.slice(0, anchor) + callText + withoutCall.slice(anchor);
+};
+rejectAsioMutation(
+  "dispatch site relocated before the preflight exit",
+  relocateLastAsioDispatchBeforePreflight(),
+  /precedes the -PreflightOnly no-Cargo exit/,
+);
+
+rejectAsioMutation(
+  "deleted self-test short-circuit",
+  asioBuildHarnessSource.replace(asioSelfTestBlockText, ""),
+  /if \(\$SelfTest\) short-circuit block must remain/,
+);
+{
+  const { blockEnd, blockStart } = asioSelfTestBlockExtent();
+  const withoutBlock =
+    asioBuildHarnessSource.slice(0, blockStart) + asioBuildHarnessSource.slice(blockEnd);
+  const anchor = withoutBlock.indexOf("if ($PreflightOnly)");
+  const delayedMutant =
+    withoutBlock.slice(0, anchor) + `${asioSelfTestBlockText}\n` + withoutBlock.slice(anchor);
+  rejectAsioMutation(
+    "self-test short-circuit reordered past the environment and linker gates",
+    delayedMutant,
+    /short-circuit must return before the Windows environment gate|short-circuit must return before the verified-linker gate/,
+  );
+}
+
+{
+  const callStart = asioBuildHarnessSource.indexOf(
+    'Invoke-CargoChecked -Label "SDK-free ABI and lifecycle tests"',
+  );
+  const argumentsOpen = asioBuildHarnessSource.indexOf("-Arguments @(", callStart);
+  const callClose = asioBuildHarnessSource.indexOf(")\n", argumentsOpen);
+  ok(
+    callStart > -1 && argumentsOpen > callStart && callClose > argumentsOpen,
+    "the first SDK-free dispatch must be extractable for the parameter-order fixture",
+  );
+  const label = '"SDK-free ABI and lifecycle tests"';
+  const argumentsText = asioBuildHarnessSource.slice(argumentsOpen + "-Arguments @(".length, callClose + 1);
+  const parameterOrderMutant =
+    asioBuildHarnessSource.slice(0, callStart)
+    + `Invoke-CargoChecked -Arguments @(${argumentsText}) -Label ${label}`
+    + asioBuildHarnessSource.slice(callClose + 1);
+  deepEqual(
+    verifyAsioBuildHarnessStructure(parameterOrderMutant),
+    [],
+    "dispatch-site discovery and gating must be independent of named-parameter order",
+  );
+}
+
+// The former last-occurrence linker-gate bound was gameable: deleting the real
+// production gate while parking a decoy occurrence between the -PreflightOnly
+// exit and the dispatch sites kept every positional check green. The exact
+// occurrence inventory, unique structural production-call identification, and
+// authoritative post-selfTest/pre-PreflightOnly position replace it.
+const asioProductionGateStatement = () => {
+  const statementStart = asioBuildHarnessSource.indexOf(
+    "$linkerPinContract = Test-MsvcLinkerPinContract",
+  );
+  const statementTail = "-LinkResolutionOrder $whereLinkResolution.Entries\n";
+  const statementEnd =
+    statementStart === -1 ? -1 : asioBuildHarnessSource.indexOf(statementTail, statementStart);
+  if (statementStart === -1 || statementEnd === -1) {
+    throw new Error("fixture anchor missing: production Test-MsvcLinkerPinContract gate statement");
+  }
+  return asioBuildHarnessSource.slice(statementStart, statementEnd + statementTail.length);
+};
+const asioDeadBranchGate =
+  "if ($false) {\n    $linkerPinContract = Test-MsvcLinkerPinContract\n}\n";
+{
+  // Count-neutral gameable shape: the genuine production gate disappears and
+  // exactly one decoy lands between the -PreflightOnly exit and the dispatch
+  // sites, so the occurrence inventory (4) and uniqueness (1) both still hold
+  // while nothing enforces the linker pin before Cargo. Last-occurrence logic
+  // accepted this mutant; only the authoritative pre-PreflightOnly position
+  // pin rejects it.
+  const withoutGate = asioBuildHarnessSource.replace(asioProductionGateStatement(), "");
+  const dispatchAnchor = withoutGate.indexOf(
+    'Invoke-CargoChecked -Label "SDK-free ABI and lifecycle tests"',
+  );
+  if (dispatchAnchor === -1) throw new Error("fixture anchor missing: SDK-free dispatch");
+  const decoyLineStart = withoutGate.lastIndexOf("\n", dispatchAnchor) + 1;
+  const gameableMutant =
+    withoutGate.slice(0, decoyLineStart)
+    + "$linkerPinContract = Test-MsvcLinkerPinContract | Out-Null\n"
+    + withoutGate.slice(decoyLineStart);
+  rejectAsioMutation(
+    "removed linker gate with a pre-dispatch decoy (former gameable shape)",
+    gameableMutant,
+    /verified-linker gate must precede/,
+  );
+}
+{
+  // Mandated combined hostile: dead-branch gate relocation plus a late decoy
+  // plus an early relocated dispatch site must fail closed on the exact
+  // occurrence inventory and the unique structural production-call identity.
+  const withoutGate = asioBuildHarnessSource.replace(asioProductionGateStatement(), "");
+  const selfTestAnchor = withoutGate.indexOf("if ($SelfTest)");
+  const withDeadBranch =
+    withoutGate.slice(0, selfTestAnchor) + asioDeadBranchGate + withoutGate.slice(selfTestAnchor);
+  const callStart = withDeadBranch.indexOf(
+    '    Invoke-CargoChecked -Label "SDK-free ABI and lifecycle tests"',
+  );
+  const callEnd = withDeadBranch.indexOf("\n    )\n", callStart);
+  if (callStart === -1 || callEnd === -1) {
+    throw new Error("fixture anchor missing: SDK-free dispatch block");
+  }
+  const callText = withDeadBranch.slice(callStart, callEnd + "\n    )\n".length);
+  const hollowed =
+    withDeadBranch.slice(0, callStart) + withDeadBranch.slice(callEnd + "\n    )\n".length);
+  const guardMarker = 'Write-Host "ASIO preflight-only gate passed; Cargo was not invoked."';
+  const guardMarkerIndex = hollowed.indexOf(guardMarker);
+  if (guardMarkerIndex === -1) throw new Error("fixture anchor missing: preflight-only marker");
+  const guardClose = hollowed.indexOf("}\n", guardMarkerIndex) + "}\n".length;
+  const relocatedDispatch = hollowed.slice(0, guardClose) + "\n" + callText + hollowed.slice(guardClose);
+  rejectAsioMutation(
+    "dead-branch linker gate, late decoy, and early relocated dispatch",
+    `${relocatedDispatch}\nTest-MsvcLinkerPinContract | Out-Null\n`,
+    /exactly 4 Test-MsvcLinkerPinContract occurrences|exactly 1 production Test-MsvcLinkerPinContract gate call/,
+  );
+}
+{
+  // Count-preserving demotion: relocating the genuine gate above the -SelfTest
+  // short-circuit must violate the authoritative post-selfTest position pin.
+  const withoutGate = asioBuildHarnessSource.replace(asioProductionGateStatement(), "");
+  const anchor = withoutGate.indexOf("if ($SelfTest)");
+  rejectAsioMutation(
+    "production linker gate demoted above the self-test short-circuit",
+    withoutGate.slice(0, anchor) + asioProductionGateStatement() + withoutGate.slice(anchor),
+    /short-circuit must return before the verified-linker gate|must follow the Windows environment gate/,
+  );
+}
+
+rejectAsioMutation(
+  "Community-to-Enterprise edition-root drift",
+  asioBuildHarnessSource.split("2022\\Community\\").join("2022\\Enterprise\\"),
+  /drifted from the exact Community 14\.44\.35207 pin|exact required Community VCToolsInstallDir/,
 );
 match(
   asioBuildHarnessSource,
@@ -627,7 +1537,6 @@ match(
 );
 
 for (const [needle, reason] of [
-  ["14.44.35207", "pin the exact supported local MSVC toolset"],
   ["-vcvars_ver=14.44", "initialize the exact supported vcvars toolset"],
   ["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER", "pin Cargo to the exact Hostx64/x64 linker"],
   ["where.exe link.exe", "prove and print the real linker search order"],
@@ -636,25 +1545,65 @@ for (const [needle, reason] of [
 ]) {
   ok(soakHarnessSource.includes(needle), `soak direct-Cargo harness must ${reason}`);
 }
-const soakOverrideGuardIndex = soakHarnessSource.indexOf(
-  "if ($null -ne $global:SYNDOCAL_RUN_SOAK_TEST_DEPENDENCIES -and -not $PreflightOnly)",
+const verifySoakHarnessStructure = (source) => {
+  const violations = [...verifyExactLocalCommunityToolsetRoots(source, true)];
+  const { literals, masked } = analyzePowerShellSource(source);
+  const overrideGuardIndex = masked.indexOf(
+    "$null -ne $global:SYNDOCAL_RUN_SOAK_TEST_DEPENDENCIES",
+  );
+  const livePreflightIndex = masked.indexOf("$verifiedEnvironment = Invoke-SoakMsvcPreflight");
+  const preflightGuard = findIfBlockExtent(masked, /if\s*\(\s*\$PreflightOnly\s*\)/);
+  if (overrideGuardIndex === -1) {
+    violations.push("the hermetic test-dependency override guard must remain");
+  }
+  if (livePreflightIndex === -1) {
+    violations.push("the verified Invoke-SoakMsvcPreflight gate must remain");
+  }
+  if (!preflightGuard || preflightGuard.closeBrace === -1) {
+    violations.push("the if ($PreflightOnly) no-Cargo exit must remain");
+  }
+  if (overrideGuardIndex > -1 && livePreflightIndex > -1 && livePreflightIndex < overrideGuardIndex) {
+    violations.push("the verified MSVC preflight must follow the test-dependency override rejection");
+  }
+  if (
+    preflightGuard
+    && preflightGuard.closeBrace !== -1
+    && livePreflightIndex > -1
+    && preflightGuard.start < livePreflightIndex
+  ) {
+    violations.push("the -PreflightOnly exit must follow the verified MSVC preflight");
+  }
+  const launchAttempts = findStaticCargoLaunchAttempts({ literals, masked });
+  if (launchAttempts.length !== 1) {
+    violations.push(`the soak harness must contain exactly one direct Cargo launch, found ${launchAttempts.length}`);
+  }
+  for (const attempt of launchAttempts) {
+    if (livePreflightIndex > -1 && attempt.index < livePreflightIndex) {
+      violations.push(`Cargo launch at offset ${attempt.index} precedes the verified MSVC preflight`);
+    }
+    if (
+      preflightGuard
+      && preflightGuard.closeBrace !== -1
+      && attempt.index < preflightGuard.closeBrace
+    ) {
+      violations.push(`Cargo launch at offset ${attempt.index} precedes the -PreflightOnly no-Cargo exit`);
+    }
+  }
+  for (const primitive of findDynamicExecutionPrimitives({ masked })) {
+    violations.push(`dynamic execution primitive at offset ${primitive.index} must not bypass the static Cargo audit`);
+  }
+  return violations;
+};
+
+deepEqual(
+  verifySoakHarnessStructure(soakHarnessSource),
+  [],
+  "the real soak harness must satisfy the normalized static Cargo-containment contract",
 );
-const soakLivePreflightIndex = soakHarnessSource.indexOf(
-  "$verifiedEnvironment = Invoke-SoakMsvcPreflight",
-);
-const soakPreflightOnlyIndex = soakHarnessSource.indexOf("if ($PreflightOnly)");
-const soakCargoIndex = soakHarnessSource.indexOf("& cargo @cargoArguments");
-ok(
-  soakOverrideGuardIndex > -1
-    && soakLivePreflightIndex > soakOverrideGuardIndex
-    && soakPreflightOnlyIndex > soakLivePreflightIndex
-    && soakCargoIndex > soakPreflightOnlyIndex,
-  "soak harness must reject test-only overrides, verify the exact linker, and allow a no-Cargo exit before its sole Cargo build",
-);
-equal(
-  [...soakHarnessSource.matchAll(/&\s+cargo\b/g)].length,
-  1,
-  "soak harness must keep every direct Cargo launch behind the verified preflight",
+expectHostileViolation(
+  "soak Community-to-Enterprise edition-root drift",
+  verifySoakHarnessStructure(soakHarnessSource.split("2022\\Community\\").join("2022\\Enterprise\\")),
+  /drifted from the exact Community 14\.44\.35207 pin|exact required Community VCToolsInstallDir/,
 );
 for (const proof of [
   "Git usr/bin/link.exe resolving first must be rejected",
@@ -815,4 +1764,6 @@ const failingSpawnSeam = createSeamHarness({
 throws(() => failingSpawnSeam.runTauri(["build"]), /seam spawn failure/);
 equal(failingSpawnSeam.events[0][0], "stop", "even a failing spawn must have stopped the checkout executable first");
 
-console.log(`tauri build wrapper checks passed (${assertionCount} assertions)`);
+console.log(
+  `tauri build wrapper checks passed (${assertionCount} assertions, ${hostileFixtureCount} hostile mutation fixtures)`,
+);

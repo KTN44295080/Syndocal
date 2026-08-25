@@ -194,7 +194,13 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
       </header>
 
       <div class="sceneSettingsBody">
-        <div class="sceneSettingsScroller">
+        <div
+          class="sceneSettingsScroller"
+          role="region"
+          aria-label="Scene settings editor"
+          tabIndex={0}
+          data-wheel-scroll-surface="scene-settings"
+        >
           <Show when={props.activeSurface === "contents"}>
             <section class="sceneSettingsSection sceneContentsSurface" data-scene-contents>
               <header>
@@ -334,13 +340,6 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
               <EffectFamilyChooser
                 activeFamily={props.activeFamily}
                 onSelectFamily={props.onSelectFamily}
-                descriptions={{
-                  "COLOR FX": "Default Rainbow",
-                  "CHASER FX": "Dimmer chaser",
-                  "VALUE FX": "Black / White generator",
-                  "MOVE FX": props.moveFxEnabled ? "Pan/Tilt circle" : "Requires a Pan/Tilt fixture",
-                  "2D MAPPING": "Raster to lighting",
-                }}
                 disabledFamilies={{ "MOVE FX": !props.moveFxEnabled }}
               />
             </section>

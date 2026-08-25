@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syndocal.invalid/schemas/windows-show-asio-local-manifest-v1.json",
+  "title": "Syndocal same-host unbundled Windows Show ASIO artifact manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "artifactFlavor",
+    "platform",
+    "productVersion",
+    "commit",
+    "commitShort",
+    "distributionApproved",
+    "sameHostOnly",
+    "unbundled",
+    "featureSet",
+    "hostBindingSha256",
+    "artifactDirectory",
+    "buildTargets",
+    "sourceFiles",
+    "restrictions",
+    "verification",
+    "files"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "artifactFlavor": { "const": "windows-show-asio-local-only" },
+    "platform": { "const": "windows-x86_64" },
+    "productVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "commitShort": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+    "distributionApproved": { "const": false },
+    "sameHostOnly": { "const": true },
+    "unbundled": { "const": true },
+    "featureSet": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "libav" },
+        { "const": "spout" },
+        { "const": "show-asio" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "hostBindingSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactDirectory": {
+      "type": "string",
+      "pattern": "^target/show-asio-local/Syndocal_Show_ASIO_[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?_[0-9a-f]{12}_x64$"
+    },
+    "buildTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application", "bridge"],
+      "properties": {
+        "application": { "const": "target/show-asio-build/app" },
+        "bridge": { "const": "target/show-asio-build/bridge" }
+      }
+    },
+    "sourceFiles": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "items": { "$ref": "#/$defs/sourceFile" }
+    },
+    "restrictions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installer", "updater", "archive", "copy", "publish", "signing", "ndi"],
+      "properties": {
+        "installer": { "const": false },
+        "updater": { "const": false },
+        "archive": { "const": false },
+        "copy": { "const": false },
+        "publish": { "const": false },
+        "signing": { "const": false },
+        "ndi": { "const": false }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checker", "requiredBeforeEveryUse", "manifestWrittenLast"],
+      "properties": {
+        "checker": { "const": "app/scripts/check-show-asio-artifact.mjs" },
+        "requiredBeforeEveryUse": { "const": true },
+        "manifestWrittenLast": { "const": true }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/applicationFile" },
+          { "$ref": "#/$defs/bridgeFile" },
+          { "$ref": "#/$defs/runtimeFile" },
+          { "$ref": "#/$defs/noticeFile" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:])[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$"
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "pe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signature", "machine", "characteristics", "optionalMagic"],
+      "properties": {
+        "signature": { "const": "PE\u0000\u0000" },
+        "machine": { "const": 34404 },
+        "characteristics": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "optionalMagic": { "const": 523 }
+      }
+    },
+    "applicationFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "byteSize", "sha256", "pe"],
+      "properties": {
+        "role": { "const": "application" },
+        "path": { "const": "syndocal-show-asio.exe" },
+        "byteSize": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "pe": { "$ref": "#/$defs/pe" }
+      }
+    },
+    "bridgeFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "byteSize", "sha256", "pe", "bridgeAbiVersion", "exports"],
+      "properties": {
+        "role": { "const": "asio-bridge" },
+        "path": { "const": "syndocal_asio_bridge.dll" },
+        "byteSize": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "pe": { "$ref": "#/$defs/pe" },
+        "bridgeAbiVersion": { "const": 2 },
+        "exports": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "syndocal_asio_v2_abi_version" },
+            { "const": "syndocal_asio_v2_build_flags" },
+            { "const": "syndocal_asio_v2_capabilities_json" },
+            { "const": "syndocal_asio_v2_close" },
+            { "const": "syndocal_asio_v2_drivers_json" },
+            { "const": "syndocal_asio_v2_start" },
+            { "const": "syndocal_asio_v2_stop" },
+            { "const": "syndocal_asio_v2_string_free" },
+            { "const": "syndocal_asio_v2_telemetry_json" }
+          ],
+          "minItems": 9,
+          "maxItems": 9
+        }
+      }
+    },
+    "runtimeFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "byteSize", "sha256", "pe"],
+      "properties": {
+        "role": { "const": "ffmpeg-runtime" },
+        "path": {
+          "enum": [
+            "avcodec-62.dll",
+            "avdevice-62.dll",
+            "avfilter-11.dll",
+            "avformat-62.dll",
+            "avutil-60.dll",
+            "swresample-6.dll",
+            "swscale-9.dll"
+          ]
+        },
+        "byteSize": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "pe": { "$ref": "#/$defs/pe" }
+      }
+    },
+    "noticeFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "byteSize", "sha256"],
+      "properties": {
+        "role": { "const": "notice" },
+        "path": {
+          "enum": [
+            "THIRD_PARTY_NOTICES.md",
+            "licenses/FFmpeg-LGPL-3.0.txt",
+            "licenses/Spout2-BSD-2-Clause.txt",
+            "licenses/bcdec_rs-MIT.txt",
+            "ASIO_SHOW_LOCAL_ONLY.md"
+          ]
+        },
+        "byteSize": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

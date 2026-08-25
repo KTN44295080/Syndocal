@@ -16,12 +16,14 @@ import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { controlMappingTargetData } from "../controlMappingLearn";
+import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
 
 interface SceneMatrixPanelProps {
   toolbar?: JSX.Element;
-  cues: CueSummary[];
-  cueLists: CueListSummary[];
-  selectedCueListId: number;
+  bankAuthority: FullBankAuthoritySnapshot;
+  /** Authoritative backend rejection text for a failed Bank create/rename. */
+  bankMutationFailureMessage?: string;
+  selectedCueListId: number | null;
   onSelectCueList: (cueListId: number) => void;
   onCueListLabel: (label: string) => void;
   onCreateCueList: () => void | boolean | Promise<void | boolean>;
@@ -29,6 +31,13 @@ interface SceneMatrixPanelProps {
   onRemoveCueList?: (cueListId?: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
   onReorderCueLists?: (orderedCueListIds: number[]) => void | boolean | Promise<void | boolean>;
   onCreateSceneForCueList?: (cueListId: number) => void | boolean | Promise<void | boolean>;
+  onRenameCue?: (cueId: number) => void | Promise<void>;
+  onDuplicateCue?: (cue: CueSummary) => void | Promise<void>;
+  onRemoveCue?: (cueId: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
+  cueRemovalImpact?: (cueId: number) => {
+    linkedPlacements: number;
+    incomingJumps: number;
+  };
   groupColors?: Record<string, string>;
   onSetGroupColor?: (groupId: string, color: string | null) => void | Promise<void>;
   groupIds: string[];
@@ -76,12 +85,19 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const [bankEditorMode, setBankEditorMode] = createSignal<"create" | "rename" | null>(null);
   const [bankDraft, setBankDraft] = createSignal("");
   const [bankEditorError, setBankEditorError] = createSignal<string | null>(null);
+  const [bankEditorSubmitting, setBankEditorSubmitting] = createSignal(false);
   const [bankContextMenu, setBankContextMenu] = createSignal<{
     cueListId: number;
     left: number;
     top: number;
   } | null>(null);
+  const [sceneContextMenu, setSceneContextMenu] = createSignal<{
+    cueId: number;
+    left: number;
+    top: number;
+  } | null>(null);
   const [bankDeleteRequest, setBankDeleteRequest] = createSignal<CueListSummary | null>(null);
+  const [sceneDeleteRequest, setSceneDeleteRequest] = createSignal<CueSummary | null>(null);
   const [bankDragId, setBankDragId] = createSignal<number | null>(null);
   const [bankDropTargetId, setBankDropTargetId] = createSignal<number | null>(null);
   const [dropTargetColumnId, setDropTargetColumnId] = createSignal<string | null>(null);
@@ -93,7 +109,10 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   let bankInputElement: HTMLInputElement | undefined;
   let bankContextMenuElement: HTMLDivElement | undefined;
   let bankContextMenuInvoker: HTMLElement | null = null;
+  let sceneContextMenuElement: HTMLDivElement | undefined;
+  let sceneContextMenuInvoker: HTMLElement | null = null;
   let bankDeleteDialogElement: HTMLDialogElement | undefined;
+  let sceneDeleteDialogElement: HTMLDialogElement | undefined;
   let preferredBankId: string | null = null;
   let dragPointer: {
     pointerId: number;
@@ -103,26 +122,54 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     cue: CueSummary;
   } | null = null;
   let suppressClickCueId: number | null = null;
+  let sceneMatrixMounted = true;
+  onCleanup(() => {
+    sceneMatrixMounted = false;
+  });
 
   // Engine snapshots deserialize every Cue into a fresh object. Keep the
   // rendered Cue objects keyed by id so a polling-only snapshot cannot remount
   // an active card and dismiss its native select/input interaction.
-  const [stableCues, setStableCues] = createStore<CueSummary[]>(props.cues);
+  const [stableCues, setStableCues] = createStore<CueSummary[]>(
+    props.bankAuthority.issue === null ? [...props.bankAuthority.cues] : [],
+  );
   createEffect(() => {
-    setStableCues(reconcile(props.cues, { key: "id" }));
+    setStableCues(reconcile(
+      props.bankAuthority.issue === null ? [...props.bankAuthority.cues] : [],
+      { key: "id" },
+    ));
   });
 
-  const cueLists = createMemo<CueListSummary[]>(() => props.cueLists.length > 0
-    ? props.cueLists.map((cueList) => cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
-      ? { ...cueList, label: "Bank 1" }
-      : cueList)
-    : [{ id: 1, label: "Bank 1", active_cue_id: null }]);
-  const selectedCueList = createMemo<CueListSummary>(() =>
+  // Persisted Bank labels are the display authority. Never rewrite an authored
+  // `Main` label to `Bank 1` in only one surface.
+  const cueLists = createMemo<readonly CueListSummary[]>(() => props.bankAuthority.issue
+    ? []
+    : props.bankAuthority.cueLists);
+  const selectedCueList = createMemo<CueListSummary | null>(() =>
     cueLists().find((cueList) => cueList.id === props.selectedCueListId)
-      ?? cueLists()[0],
+      ?? null,
   );
+  createEffect(() => {
+    if (!props.bankAuthority.issue) return;
+    // Keep an already-open create/rename form visible. Its authoritative
+    // callback can reject for this operator-lock transition, and closing it
+    // would discard both the draft and the actionable inline failure.
+    setBankContextMenu(null);
+    setSceneContextMenu(null);
+    setBankDeleteRequest(null);
+    setSceneDeleteRequest(null);
+    setBankDragId(null);
+    setBankDropTargetId(null);
+    setDropTargetColumnId(null);
+    setDropIndicator(null);
+  });
   const cancelBankEditor = () => {
-    if (bankEditorMode() === "rename") props.onCueListLabel(selectedCueList().label);
+    if (bankEditorSubmitting()) {
+      if (sceneMatrixMounted) bankInputElement?.focus();
+      return;
+    }
+    const selected = selectedCueList();
+    if (bankEditorMode() === "rename" && selected) props.onCueListLabel(selected.label);
     setBankEditorMode(null);
     setBankDraft("");
     setBankEditorError(null);
@@ -140,14 +187,17 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     return `Bank ${index}`;
   };
   const beginCreateBank = () => {
+    if (props.bankAuthority.issue) return;
     setBankEditorMode("create");
     setBankDraft(nextAutomaticBankLabel());
     setBankEditorError(null);
     setBankContextMenu(null);
   };
   const beginRenameBank = () => {
+    const selected = selectedCueList();
+    if (!selected) return;
     setBankEditorMode("rename");
-    setBankDraft(selectedCueList().label);
+    setBankDraft(selected.label);
     setBankEditorError(null);
     setBankContextMenu(null);
   };
@@ -168,8 +218,25 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     bankContextMenuInvoker = event.currentTarget instanceof HTMLElement
       ? event.currentTarget
       : null;
-    setBankContextMenu({ cueListId, left: pointerX, top: pointerY });
-    queueMicrotask(() => bankContextMenuElement?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus());
+    closeSceneContextMenu(false);
+    setBankContextMenu({
+      cueListId,
+      left: Math.max(8, Math.min(pointerX, window.innerWidth - 188)),
+      top: Math.max(8, Math.min(pointerY, window.innerHeight - 164)),
+    });
+    queueMicrotask(() => {
+      const menu = bankContextMenuElement;
+      const target = bankContextMenu();
+      if (menu && target) {
+        const rect = menu.getBoundingClientRect();
+        setBankContextMenu({
+          ...target,
+          left: Math.max(8, Math.min(target.left, window.innerWidth - rect.width - 8)),
+          top: Math.max(8, Math.min(target.top, window.innerHeight - rect.height - 8)),
+        });
+      }
+      menu?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    });
   };
   const closeContextMenu = (restoreFocus = true) => {
     const invoker = bankContextMenuInvoker;
@@ -181,7 +248,14 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     const target = bankContextMenu();
     if (!target) return;
     selectCueList(target.cueListId);
+    closeContextMenu(false);
     beginRenameBank();
+  };
+  const createContextScene = () => {
+    const target = bankContextMenu();
+    if (!target) return;
+    closeContextMenu(false);
+    createScene(target.cueListId);
   };
   const requestContextDelete = () => {
     const target = bankContextMenu();
@@ -212,6 +286,111 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     setBankDeleteRequest(null);
     bankDeleteDialogElement?.close();
   };
+  const requestSceneContextMenu = (event: MouseEvent | KeyboardEvent, cue: CueSummary) => {
+    event.preventDefault();
+    const anchor = event.currentTarget instanceof HTMLElement
+      ? event.currentTarget.getBoundingClientRect()
+      : null;
+    const pointerX = event instanceof MouseEvent ? event.clientX : anchor?.left ?? 0;
+    const pointerY = event instanceof MouseEvent ? event.clientY : anchor?.bottom ?? 0;
+    closeContextMenu(false);
+    props.onSelectCue(cue.id);
+    sceneContextMenuInvoker = event.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : null;
+    setSceneContextMenu({
+      cueId: cue.id,
+      left: Math.max(8, Math.min(pointerX, window.innerWidth - 188)),
+      top: Math.max(8, Math.min(pointerY, window.innerHeight - 212)),
+    });
+    queueMicrotask(() => {
+      const menu = sceneContextMenuElement;
+      const target = sceneContextMenu();
+      if (menu && target) {
+        const rect = menu.getBoundingClientRect();
+        setSceneContextMenu({
+          ...target,
+          left: Math.max(8, Math.min(target.left, window.innerWidth - rect.width - 8)),
+          top: Math.max(8, Math.min(target.top, window.innerHeight - rect.height - 8)),
+        });
+      }
+      menu?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    });
+  };
+  const closeSceneContextMenu = (restoreFocus = true) => {
+    const invoker = sceneContextMenuInvoker;
+    sceneContextMenuInvoker = null;
+    setSceneContextMenu(null);
+    if (restoreFocus) queueMicrotask(() => invoker?.focus());
+  };
+  const sceneContextCue = () => {
+    const target = sceneContextMenu();
+    return target ? stableCues.find((cue) => cue.id === target.cueId) ?? null : null;
+  };
+  const renameContextScene = () => {
+    const cue = sceneContextCue();
+    closeSceneContextMenu(false);
+    if (cue && props.onRenameCue) void props.onRenameCue(cue.id);
+  };
+  const duplicateContextScene = () => {
+    const cue = sceneContextCue();
+    closeSceneContextMenu(false);
+    if (cue && props.onDuplicateCue) void props.onDuplicateCue(cue);
+  };
+  const openContextSceneTimeline = () => {
+    const cue = sceneContextCue();
+    closeSceneContextMenu(false);
+    if (cue?.child_timeline) void props.onOpenSuperScene(cue.id);
+  };
+  const requestContextSceneDelete = () => {
+    const cue = sceneContextCue();
+    closeSceneContextMenu(false);
+    if (cue && props.onRemoveCue) setSceneDeleteRequest(cue);
+  };
+  const confirmContextSceneDelete = async () => {
+    const cue = sceneDeleteRequest();
+    if (!cue || !props.onRemoveCue) return;
+    const result = await props.onRemoveCue(cue.id, true);
+    if (result === false) {
+      queueMicrotask(() => sceneDeleteDialogElement
+        ?.querySelector<HTMLButtonElement>("[data-scene-matrix-scene-delete-confirm]")
+        ?.focus());
+      return;
+    }
+    setSceneDeleteRequest(null);
+    sceneDeleteDialogElement?.close();
+  };
+  const cancelContextSceneDelete = () => {
+    setSceneDeleteRequest(null);
+    sceneDeleteDialogElement?.close();
+  };
+  const handleContextMenuKeyDown = (
+    event: KeyboardEvent & { currentTarget: HTMLDivElement },
+    close: (restoreFocus?: boolean) => void,
+  ) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "Tab") {
+      window.setTimeout(() => close(false), 0);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)',
+    )];
+    if (items.length === 0) return;
+    event.preventDefault();
+    const current = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  };
   const createScene = (cueListId: number) => {
     props.onSelectCueList(cueListId);
     if (props.onCreateSceneForCueList) void props.onCreateSceneForCueList(cueListId);
@@ -231,13 +410,19 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   };
   const submitBankEditor = async (event: SubmitEvent) => {
     event.preventDefault();
+    if (bankEditorSubmitting()) return;
     const label = bankDraft().trim();
     if (!label) {
       setBankEditorError("Bank name is required.");
       bankInputElement?.focus();
       return;
     }
-    const editingId = bankEditorMode() === "rename" ? selectedCueList().id : null;
+    const selected = selectedCueList();
+    if (bankEditorMode() === "rename" && !selected) {
+      setBankEditorError("The selected Bank is no longer available.");
+      return;
+    }
+    const editingId = bankEditorMode() === "rename" ? selected!.id : null;
     const duplicate = cueLists().some((cueList) =>
       cueList.id !== editingId && cueList.label.trim().toLowerCase() === label.toLowerCase(),
     );
@@ -247,24 +432,62 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       bankInputElement?.select();
       return;
     }
-    props.onCueListLabel(label);
+    const mode = bankEditorMode();
+    if (mode === null) {
+      setBankEditorError("Bank editing is no longer available.");
+      bankInputElement?.focus();
+      return;
+    }
+    const failureMessage = (error?: unknown) => {
+      const authoritative = props.bankMutationFailureMessage?.trim();
+      if (authoritative) return authoritative;
+      const operationSpecific = mode === "create"
+        ? "Unable to create this Bank. Please try again."
+        : "Unable to rename this Bank. Please try again.";
+      if (operationSpecific) return operationSpecific;
+      return String(error);
+    };
+    setBankEditorError(null);
+    setBankEditorSubmitting(true);
     try {
-      if (bankEditorMode() === "create") {
+      props.onCueListLabel(label);
+      if (!sceneMatrixMounted) return;
+      if (mode === "create") {
         const result = await props.onCreateCueList();
-        if (result === false) return;
-      } else if (bankEditorMode() === "rename") {
+        if (!sceneMatrixMounted) return;
+        if (result === false) {
+          setBankEditorError(failureMessage());
+          if (!sceneMatrixMounted) return;
+          bankInputElement?.focus();
+          return;
+        }
+      } else {
         const result = await props.onRenameCueList();
-        if (result === false) return;
+        if (!sceneMatrixMounted) return;
+        if (result === false) {
+          setBankEditorError(failureMessage());
+          if (!sceneMatrixMounted) return;
+          bankInputElement?.focus();
+          return;
+        }
       }
       setBankEditorMode(null);
+      if (!sceneMatrixMounted) return;
       setBankDraft("");
+      if (!sceneMatrixMounted) return;
       setBankEditorError(null);
     } catch (error) {
-      setBankEditorError(String(error));
+      if (!sceneMatrixMounted) return;
+      setBankEditorError(failureMessage(error));
+      if (!sceneMatrixMounted) return;
+      bankInputElement?.focus();
+    } finally {
+      if (sceneMatrixMounted) setBankEditorSubmitting(false);
     }
   };
   createEffect(() => {
     if (bankEditorMode()) queueMicrotask(() => {
+      if (!sceneMatrixMounted) return;
       bankInputElement?.focus();
       bankInputElement?.select();
     });
@@ -305,7 +528,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       }
       preferredBankId = null;
     }
-    let bestColumnId = columns()[0]?.id ?? String(selectedCueList().id);
+    let bestColumnId = columns()[0]?.id ?? "";
     let bestVisibleWidth = -1;
     for (const column of scrollerElement.querySelectorAll<HTMLElement>("[data-scene-matrix-column]")) {
       const rect = column.getBoundingClientRect();
@@ -336,6 +559,8 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   };
 
   const handleMatrixWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
+    if (bankContextMenu()) closeContextMenu(false);
+    if (sceneContextMenu()) closeSceneContextMenu(false);
     const columnScroller = event.target instanceof Element
       ? event.target.closest<HTMLElement>("[data-scene-matrix-column-scroll]")
       : null;
@@ -358,14 +583,23 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     const closeMenuOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (bankContextMenuElement?.contains(target)) return;
+      if (bankContextMenuElement?.contains(target) || sceneContextMenuElement?.contains(target)) return;
       const targetElement = target instanceof Element ? target : target.parentElement;
-      if (targetElement?.closest("[data-scene-matrix-bank-jump], [data-scene-matrix-column-header]")) return;
+      if (
+        event.button === 2 &&
+        targetElement?.closest("[data-scene-matrix-bank-jump], [data-scene-matrix-column-header]")
+      ) return;
       if (bankContextMenu()) {
         const focusableOutside = targetElement?.closest(
           "button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
         );
         closeContextMenu(!focusableOutside);
+      }
+      if (sceneContextMenu()) {
+        const focusableOutside = targetElement?.closest(
+          "button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+        );
+        closeSceneContextMenu(!focusableOutside);
       }
     };
     document.addEventListener("pointerdown", closeMenuOnOutsidePointer);
@@ -605,6 +839,10 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                 type="button"
                 data-scene-matrix-create-bank
                 aria-label="Add bank"
+                disabled={Boolean(props.bankAuthority.issue)}
+                title={props.bankAuthority.issue
+                  ? "Scene Bank editing is unavailable until the invalid Bank identity is repaired."
+                  : undefined}
                 onClick={beginCreateBank}
               >
                 + Bank
@@ -629,8 +867,22 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                     }}
                   />
                 </label>
-                <button type="submit" data-scene-matrix-save-bank>Save</button>
-                <button type="button" data-scene-matrix-cancel-bank onClick={cancelBankEditor}>Cancel</button>
+                <button
+                  type="submit"
+                  data-scene-matrix-save-bank
+                  disabled={bankEditorSubmitting()}
+                  aria-busy={bankEditorSubmitting() ? "true" : undefined}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  data-scene-matrix-cancel-bank
+                  disabled={bankEditorSubmitting()}
+                  onClick={cancelBankEditor}
+                >
+                  Cancel
+                </button>
                 <Show when={bankEditorError()}>
                   {(error) => <span id="scene-matrix-bank-editor-error" data-scene-matrix-bank-editor-error role="alert">{error()}</span>}
                 </Show>
@@ -644,18 +896,24 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
             ref={(element) => { bankContextMenuElement = element; }}
             class="sceneMatrixBankContextMenu"
             role="menu"
+            aria-label="Bank actions"
             tabindex="-1"
             style={{
               left: `${bankContextMenu()?.left ?? 0}px`,
               top: `${bankContextMenu()?.top ?? 0}px`,
             }}
             onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeContextMenu();
-              }
+              handleContextMenuKeyDown(event, closeContextMenu);
             }}
           >
+            <button
+              type="button"
+              role="menuitem"
+              data-scene-matrix-context-create-scene
+              onClick={createContextScene}
+            >
+              New Scene
+            </button>
             <button
               type="button"
               role="menuitem"
@@ -687,6 +945,59 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
           </div>
         </Show>
       </header>
+      <Show when={sceneContextMenu()}>
+        <div
+          ref={(element) => { sceneContextMenuElement = element; }}
+          class="sceneMatrixBankContextMenu sceneMatrixSceneContextMenu"
+          role="menu"
+          aria-label="Scene actions"
+          tabindex="-1"
+          style={{
+            left: `${sceneContextMenu()?.left ?? 0}px`,
+            top: `${sceneContextMenu()?.top ?? 0}px`,
+          }}
+          onKeyDown={(event) => handleContextMenuKeyDown(event, closeSceneContextMenu)}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            data-scene-matrix-scene-context-rename
+            disabled={!props.onRenameCue}
+            onClick={renameContextScene}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-scene-matrix-scene-context-duplicate
+            disabled={!props.onDuplicateCue}
+            onClick={duplicateContextScene}
+          >
+            Duplicate
+          </button>
+          <Show when={sceneContextCue()?.child_timeline}>
+            <button
+              type="button"
+              role="menuitem"
+              data-scene-matrix-scene-context-open-timeline
+              onClick={openContextSceneTimeline}
+            >
+              Open Timeline
+            </button>
+          </Show>
+          <button
+            type="button"
+            role="menuitem"
+            class="danger"
+            data-scene-matrix-scene-context-delete
+            disabled={!props.onRemoveCue}
+            onClick={requestContextSceneDelete}
+          >
+            Delete
+          </button>
+        </div>
+      </Show>
       <div
         class="sceneMatrixScroller"
         ref={(element) => {
@@ -696,6 +1007,17 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
         data-wheel-scroll-surface="scene-matrix-banks"
         onWheel={handleMatrixWheel}
       >
+        <Show when={props.bankAuthority.issue}>
+          {(issue) => (
+            <p
+              class="sceneMatrixAuthorityUnavailable"
+              role="alert"
+              data-scene-matrix-bank-authority-unavailable={issue().kind}
+            >
+              {bankAuthorityIssueMessage(issue())}
+            </p>
+          )}
+        </Show>
         <div class="sceneMatrixColumns">
           <For each={columns()}>
             {(column) => {
@@ -754,18 +1076,20 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                       <strong data-no-localize>{column.label}</strong>
                       <span>{column.cues.length}</span>
                     </div>
-                    <button
-                      type="button"
-                      class="sceneMatrixCreateScene"
-                      data-scene-matrix-create-scene={column.cueListId}
-                      aria-label={`Add scene to ${column.label}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        createScene(column.cueListId);
-                      }}
-                    >
-                      + Scene
-                    </button>
+                    <Show when={column.cues.length > 0}>
+                      <button
+                        type="button"
+                        class="sceneMatrixCreateScene"
+                        data-scene-matrix-create-scene={column.cueListId}
+                        aria-label={`Add scene to ${column.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          createScene(column.cueListId);
+                        }}
+                      >
+                        + Scene
+                      </button>
+                    </Show>
                   </header>
                   <div
                     class="sceneMatrixCards"
@@ -824,6 +1148,13 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   : undefined
                               }
                               data-timeline-cue-drag-source={cue.id}
+                              onContextMenu={(event) => requestSceneContextMenu(event, cue)}
+                              onKeyDown={(event) => {
+                                if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                                  event.preventDefault();
+                                  requestSceneContextMenu(event, cue);
+                                }
+                              }}
                             >
                               <button
                                 type="button"
@@ -1069,6 +1400,74 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
             </section>
           </dialog>
         )}
+      </Show>
+      <Show when={sceneDeleteRequest()}>
+        {(request) => {
+          const impact = () => props.cueRemovalImpact?.(request().id) ?? {
+            linkedPlacements: 0,
+            incomingJumps: 0,
+          };
+          return (
+            <dialog
+              ref={(dialog) => {
+                sceneDeleteDialogElement = dialog;
+                queueMicrotask(() => {
+                  if (!dialog.open) dialog.showModal();
+                  dialog.querySelector<HTMLButtonElement>("[data-scene-matrix-scene-delete-cancel]")?.focus();
+                });
+              }}
+              class="protectedCloseDialog"
+              data-scene-matrix-scene-delete-dialog
+              role="alertdialog"
+              aria-labelledby="scene-matrix-scene-delete-title"
+              aria-describedby="scene-matrix-scene-delete-detail"
+              onCancel={(event) => {
+                event.preventDefault();
+                cancelContextSceneDelete();
+              }}
+            >
+              <section class="protectedCloseFrame">
+                <header>
+                  <span>REMOVE SCENE</span>
+                  <strong data-no-localize>{request().label}</strong>
+                </header>
+                <div class="protectedCloseBody">
+                  <div class="protectedCloseMark" aria-hidden="true">!</div>
+                  <div>
+                    <h2 id="scene-matrix-scene-delete-title" class="textBalance">Delete this scene?</h2>
+                    <p id="scene-matrix-scene-delete-detail" class="textPretty">
+                      <strong data-scene-matrix-scene-delete-placement-count>
+                        {impact().linkedPlacements} Timeline placement{impact().linkedPlacements === 1 ? "" : "s"}
+                      </strong>{" "}
+                      and{" "}
+                      <strong data-scene-matrix-scene-delete-jump-count>
+                        {impact().incomingJumps} incoming jump{impact().incomingJumps === 1 ? "" : "s"}
+                      </strong>{" "}
+                      reference this scene.
+                    </p>
+                  </div>
+                </div>
+                <div class="protectedCloseActions">
+                  <button
+                    type="button"
+                    data-scene-matrix-scene-delete-cancel
+                    onClick={cancelContextSceneDelete}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    class="danger"
+                    data-scene-matrix-scene-delete-confirm
+                    onClick={() => void confirmContextSceneDelete()}
+                  >
+                    Delete scene
+                  </button>
+                </div>
+              </section>
+            </dialog>
+          );
+        }}
       </Show>
     </section>
   );

@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { VerticalFaderInput } from "./VerticalFaderInput";
 
 import {
@@ -25,10 +25,13 @@ import {
   controlMappingTargetsForTouchBinding,
 } from "../controlMappingLearn";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
+import type { FullBankAuthoritySnapshot } from "../bankAuthority";
 
 type TouchSurfaceMode = "edit" | "live";
 
 interface EditableTouchSurfaceProps {
+  /** The one App-owned Bank/Cue/Executor authority; never recompute a subset here. */
+  bankAuthority: FullBankAuthoritySnapshot;
   snapshot: EngineSnapshot;
   surface?: TouchSurfaceSummary;
   selectedFixtureId?: number | null;
@@ -118,10 +121,49 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const [localValues, setLocalValues] = createSignal<Record<number, number>>({});
   const [localXy, setLocalXy] = createSignal<Record<number, { x: number; y: number }>>({});
   const [liveActivations, setLiveActivations] = createSignal<Record<number, boolean>>({});
+  const [cueBindingPending, setCueBindingPending] = createSignal(false);
+  const activeFlashCueByControl = new Map<number, number>();
   let gridElement: HTMLDivElement | undefined;
   let dragState: TouchDragState | null = null;
 
-  const surface = createMemo(() => effectiveTouchSurface(props.surface, props.snapshot.cues));
+  const releaseFlashControl = (controlId: number) => {
+    const cueId = activeFlashCueByControl.get(controlId);
+    if (cueId === undefined) return;
+    activeFlashCueByControl.delete(controlId);
+    // This is the safety-lowering half of an activation already issued while
+    // the Cue was authoritative. It must survive a later authority fault.
+    void props.onReleaseCue?.(cueId);
+  };
+  const releaseAllFlashControls = () => {
+    for (const controlId of [...activeFlashCueByControl.keys()]) {
+      releaseFlashControl(controlId);
+    }
+  };
+
+  createEffect(() => {
+    if (mode() !== "live" || props.bankAuthority.issue !== null) {
+      releaseAllFlashControls();
+    }
+  });
+  onCleanup(releaseAllFlashControls);
+
+  const bankAuthorityAvailable = () => props.bankAuthority.issue === null;
+  const isCueTransportBinding = (binding: TouchControlBinding | null | undefined) =>
+    binding?.kind === "cue"
+    || binding?.kind === "cue_next"
+    || binding?.kind === "cue_previous"
+    || binding?.kind === "cue_fade_pause";
+  const cueBindingIsAuthoritative = (cueId: number) =>
+    bankAuthorityAvailable() && props.bankAuthority.cueById.has(cueId);
+  const touchBindingUnavailable = (binding: TouchControlBinding | null | undefined) => {
+    if (!binding) return false;
+    if (binding.kind === "cue") return !cueBindingIsAuthoritative(binding.cue_id);
+    return isCueTransportBinding(binding) && !bankAuthorityAvailable();
+  };
+  const surface = createMemo(() => effectiveTouchSurface(
+    props.surface,
+    bankAuthorityAvailable() ? props.bankAuthority.cues : [],
+  ));
   const activePage = createMemo<TouchPageSummary | undefined>(() =>
     surface().pages.find((page) => page.id === selectedPageId()) ?? surface().pages[0],
   );
@@ -288,7 +330,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
     localValues()[control.id] ?? valueForBinding(control.binding);
 
   const setControlValue = (control: TouchControlSummary, value: number) => {
-    if (mode() !== "live" || !control.binding) return;
+    if (mode() !== "live" || !control.binding || touchBindingUnavailable(control.binding)) return;
     const next = clamp01(value);
     setLocalValues((current) => ({ ...current, [control.id]: next }));
     setLiveActivations((current) => ({ ...current, [control.id]: true }));
@@ -296,19 +338,19 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   };
 
   const triggerControl = (control: TouchControlSummary) => {
-    if (mode() !== "live" || !control.binding) return;
+    if (mode() !== "live" || !control.binding || touchBindingUnavailable(control.binding)) return;
     setLiveActivations((current) => ({ ...current, [control.id]: true }));
     void props.onTrigger(control.binding);
   };
 
   const setControlColor = (control: TouchControlSummary, color: string) => {
-    if (mode() !== "live" || !control.binding) return;
+    if (mode() !== "live" || !control.binding || touchBindingUnavailable(control.binding)) return;
     setLiveActivations((current) => ({ ...current, [control.id]: true }));
     void props.onColor(control.binding, color);
   };
 
   const setControlXy = (event: PointerEvent, control: TouchControlSummary) => {
-    if (mode() !== "live" || !control.binding) return;
+    if (mode() !== "live" || !control.binding || touchBindingUnavailable(control.binding)) return;
     const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const x = clamp01((event.clientX - bounds.left) / bounds.width);
     const y = clamp01(1 - (event.clientY - bounds.top) / bounds.height);
@@ -320,7 +362,6 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const bindingFromOption = (option: string): TouchControlBinding | null => {
     const fixtureId = selectedFixtureId();
     const groupId = groupIds()[0] ?? "front";
-    const cueId = props.snapshot.cues[0]?.id ?? 1;
     switch (option) {
       case "fixture_attribute":
         return { kind: option, fixture_id: fixtureId, attribute: "Dimmer" };
@@ -339,7 +380,9 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
       case "group_pan_tilt":
         return { kind: option, group_id: groupId, pan_attribute: "Pan", tilt_attribute: "Tilt" };
       case "cue":
-        return { kind: option, cue_id: cueId };
+        // A Cue binding must be selected explicitly from the exact authority
+        // below. Never fabricate snapshot.cues[0] (or ID 1) as its target.
+        return null;
       case "group_submaster":
         return { kind: option, group_id: groupId };
       case "group_select":
@@ -365,6 +408,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   };
 
   const replaceBinding = (binding: TouchControlBinding | null) => {
+    if (touchBindingUnavailable(binding)) return;
     const control = selectedControl();
     if (control) updateControl({ ...control, binding });
   };
@@ -372,7 +416,9 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const boundCue = (control: TouchControlSummary): CueSummary | null => {
     if (control.binding?.kind !== "cue") return null;
     const cueId = control.binding.cue_id;
-    return props.snapshot.cues.find((cue) => cue.id === cueId) ?? null;
+    return cueBindingIsAuthoritative(cueId)
+      ? props.bankAuthority.cueById.get(cueId) ?? null
+      : null;
   };
 
   const boundFlashCue = (control: TouchControlSummary): CueSummary | null => {
@@ -416,7 +462,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   };
 
   const renderLiveControl = (control: TouchControlSummary) => {
-    const disabled = mode() !== "live" || !control.binding;
+    const disabled = mode() !== "live" || !control.binding || touchBindingUnavailable(control.binding);
     switch (control.kind) {
       case "Label":
         return <strong class="touchPlacedLabel">{control.label}</strong>;
@@ -424,10 +470,12 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         return <div class="touchPlacedImage" role="img" aria-label={control.label}><span aria-hidden="true">▧</span><strong>{control.label}</strong></div>;
       case "Button": {
         const flashCue = () => (mode() === "live" ? boundFlashCue(control) : null);
-        const flashRelease = () => {
-          const cue = flashCue();
-          if (cue) void props.onReleaseCue?.(cue.id);
+        const beginFlash = (cue: CueSummary) => {
+          if (activeFlashCueByControl.has(control.id)) return;
+          activeFlashCueByControl.set(control.id, cue.id);
+          triggerControl(control);
         };
+        const flashRelease = () => releaseFlashControl(control.id);
         return (
           <button
             class="touchPlacedButton"
@@ -448,19 +496,19 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
               // releases it; the click handler must not re-trigger.
               event.preventDefault();
               event.currentTarget.setPointerCapture(event.pointerId);
-              triggerControl(control);
+              beginFlash(cue);
             }}
             onPointerUp={flashRelease}
             onPointerCancel={flashRelease}
             onKeyDown={(event) => {
-              if (!flashCue() || event.repeat) return;
+              const cue = flashCue();
+              if (!cue || event.repeat) return;
               if (event.key === " " || event.key === "Enter") {
                 event.preventDefault();
-                triggerControl(control);
+                beginFlash(cue);
               }
             }}
             onKeyUp={(event) => {
-              if (!flashCue()) return;
               if (event.key === " " || event.key === "Enter") {
                 event.preventDefault();
                 flashRelease();
@@ -669,6 +717,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                  data-touch-control={control.id}
                  data-touch-kind={control.kind}
                  data-touch-binding={control.binding?.kind ?? "unassigned"}
+                 data-touch-binding-unavailable={touchBindingUnavailable(control.binding) ? "true" : undefined}
                  data-no-localize
                  {...controlMappingTargetData(controlMappingTargetsForTouchBinding(
                    control.binding,
@@ -677,6 +726,11 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                  ))}
               >
                 {renderLiveControl(control)}
+                <Show when={touchBindingUnavailable(control.binding)}>
+                  <small class="touchBindingUnavailable" role="alert" data-touch-binding-invalid>
+                    Timeline source unavailable
+                  </small>
+                </Show>
                 <Show when={mode() === "edit"}>
                   <button
                     class="touchEditMoveHandle"
@@ -743,12 +797,54 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
               <label>
                 Binding
                 <select
-                  value={bindingKey(binding())}
-                  onChange={(event) => replaceBinding(bindingFromOption(event.currentTarget.value))}
+                  value={touchBindingUnavailable(binding()) ? "" : bindingKey(binding())}
+                  onChange={(event) => {
+                    const option = event.currentTarget.value;
+                    if (option === "cue") {
+                      if (bankAuthorityAvailable()) setCueBindingPending(true);
+                      return;
+                    }
+                    setCueBindingPending(false);
+                    replaceBinding(bindingFromOption(option));
+                  }}
                 >
-                  <For each={bindingOptions}>{(option) => <option value={option.value}>{option.label}</option>}</For>
+                  <For each={bindingOptions.filter((option) =>
+                    bankAuthorityAvailable() || ![
+                      "cue",
+                      "cue_next",
+                      "cue_previous",
+                      "cue_fade_pause",
+                    ].includes(option.value))}>
+                    {(option) => <option value={option.value}>{option.label}</option>}
+                  </For>
                 </select>
               </label>
+              <Show when={bankAuthorityAvailable() && (cueBindingPending() || binding()?.kind === "cue")}>
+                <label>
+                  Cue
+                  <select
+                    value={binding()?.kind === "cue"
+                      ? (binding() as Extract<TouchControlBinding, { kind: "cue" }>).cue_id
+                      : ""}
+                    onChange={(event) => {
+                      const cueId = Number(event.currentTarget.value);
+                      if (!cueBindingIsAuthoritative(cueId)) return;
+                      replaceBinding({ kind: "cue", cue_id: cueId });
+                      setCueBindingPending(false);
+                    }}
+                  >
+                    <option value="" disabled data-no-localize>—</option>
+                    <For each={props.bankAuthority.cues}>
+                      {(cue) => <option value={cue.id} data-no-localize>{cue.label}</option>}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+              <Show when={touchBindingUnavailable(binding())}>
+                <p class="empty" role="alert" data-touch-binding-invalid>
+                  Timeline source unavailable
+                </p>
+              </Show>
               <Show when={binding()?.kind === "feature_preset"}>
                 <div class="touchBindingPair">
                   <span>
@@ -818,17 +914,6 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                   />
                 </label>
               </Show>
-              <Show when={binding()?.kind === "cue"}>
-                <label>
-                  Cue
-                  <select
-                    value={(binding() as Extract<TouchControlBinding, { kind: "cue" }>).cue_id}
-                    onChange={(event) => replaceBinding({ kind: "cue", cue_id: Number(event.currentTarget.value) })}
-                  >
-                    <For each={props.snapshot.cues}>{(cue) => <option value={cue.id} data-no-localize>{cue.label}</option>}</For>
-                  </select>
-                </label>
-              </Show>
               <Show when={binding()?.kind.includes("pan_tilt")}>
                 <div class="touchBindingPair">
                   <label>
@@ -859,8 +944,8 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
       </Show>
       <Show
         when={
-          mode() === "live" && props.onSetCueLiveModifier && props.onClearCueLiveModifier
-            ? props.snapshot.cues.find((cue) => cue.id === props.snapshot.active_cue_id) ?? null
+          mode() === "live" && bankAuthorityAvailable() && props.onSetCueLiveModifier && props.onClearCueLiveModifier
+            ? props.bankAuthority.cueById.get(props.snapshot.active_cue_id ?? -1) ?? null
             : null
         }
       >

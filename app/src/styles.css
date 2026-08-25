@@ -16689,16 +16689,40 @@ input[type="color"] {
   min-width: 0;
 }
 
-.liveAudioBackendState.not_built,
-.liveAudioBackendState.fault,
+.liveAudioBackendState.not_packaged,
 .liveAudioBackendState.empty {
   border-color: #9d633c;
 }
 
-.liveAudioBackendState.not_built > b,
-.liveAudioBackendState.fault > b,
+.liveAudioBackendState.not_packaged > b,
 .liveAudioBackendState.empty > b {
   color: #ffb184;
+}
+
+/* Availability is an exact probe result. Keep each fail-closed state visually
+ * distinguishable without changing the established rail geometry or targets. */
+.liveAudioBackendState.fault {
+  border-color: #ae5656;
+}
+
+.liveAudioBackendState.fault > b {
+  color: #ffaaaa;
+}
+
+.liveAudioBackendState.unsupported {
+  border-color: #746a92;
+}
+
+.liveAudioBackendState.unsupported > b {
+  color: #c6b6ff;
+}
+
+.liveAudioBackendState.contract_invalid {
+  border-color: #d24b4b;
+}
+
+.liveAudioBackendState.contract_invalid > b {
+  color: #ff7d7d;
 }
 
 .liveAudioBackendState.open > b,
@@ -32504,6 +32528,23 @@ h3 {
   scrollbar-width: thin;
 }
 
+.sceneMatrixAuthorityUnavailable {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: min(620px, calc(100% - 12px));
+  margin: 6px;
+  border: 1px solid #9a5b5b;
+  background: #2a1919;
+  padding: 8px 10px;
+  color: #f1caca;
+}
+
+.sceneMatrixAuthorityUnavailable strong {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
 .sceneMatrixColumns {
   gap: 3px;
   height: 100%;
@@ -33496,16 +33537,17 @@ h3 {
   bottom: 0;
   display: block;
   width: 100%;
-  background: var(--cue-identity);
+  background: color-mix(in srgb, var(--cue-identity) 24%, #111619);
   pointer-events: auto;
 }
 
-.sceneMatrixCard.active .sceneMatrixEditStripBand {
-  background: var(--cue-identity);
+.sceneMatrixCard:not(.selected) .sceneMatrixEditStrip:hover .sceneMatrixEditStripBand,
+.sceneMatrixCard:not(.selected) .sceneMatrixEditStrip:focus-visible .sceneMatrixEditStripBand {
+  background: color-mix(in srgb, var(--cue-identity) 38%, #111619);
 }
 
 .sceneMatrixCard.selected .sceneMatrixEditStrip {
-  background: var(--cue-identity);
+  background: #191d20;
   box-shadow: none;
 }
 
@@ -34876,7 +34918,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
    status rail becomes a scene-owned authoring inspector. The rail grows only
    while a scene is selected; all scrolling remains inside the rail. */
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel:has(.sceneSettingsPane) {
-  grid-template-columns: minmax(0, 1fr) clamp(340px, 28vw, 420px);
+  grid-template-columns: minmax(0, 1fr) clamp(480px, 36vw, 680px);
 }
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid.sceneSettingsVisible {
@@ -34912,6 +34954,8 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .sceneSettingsPane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   border-top: 3px solid var(--cue-identity);
   background: #141719;
@@ -34921,6 +34965,9 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .sceneSettingsBody {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 46px;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  max-height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -35086,12 +35133,22 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   display: grid;
   align-content: start;
   gap: 6px;
+  height: 100%;
+  max-height: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: hidden auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
+  touch-action: pan-y;
+}
+
+.sceneSettingsScroller:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }
 
 .sceneSettingsSurfaceRail {
@@ -35219,7 +35276,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .sceneFxChooserSection .effectFamilyChooser {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 3px;
   min-height: 0;
   overflow: visible;
@@ -35227,26 +35284,13 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .sceneFxChooserSection .effectFamilyChooser button {
   min-width: 0;
-  min-height: 48px;
+  min-height: 40px;
   padding: 3px;
 }
 
 .sceneFxChooserSection .effectFamilyChooser button strong {
   font-size: 11px;
   white-space: normal;
-}
-
-.sceneFxChooserSection .effectFamilyChooser button small {
-  grid-column: 1 / -1;
-  overflow: hidden;
-  color: #929ba1;
-  font-size: 11px !important;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sceneFxChooserSection .effectFamilyChooser button:disabled small {
-  color: #747d82;
 }
 
 .sceneOwnedFxList {
@@ -35334,8 +35378,8 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .sceneOwnedFxToolbar button {
   min-width: 0;
-  min-height: 40px !important;
-  padding: 4px 6px;
+  min-height: 32px !important;
+  padding: 2px 6px;
 }
 
 .sceneFxEditor {
@@ -37467,7 +37511,7 @@ a[href]:focus-visible,
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeEdit
   > .editDomainUpperPanel.lightingSceneSettingsVisible {
-  grid-template-columns: minmax(0, 1fr) clamp(340px, 28vw, 420px);
+  grid-template-columns: minmax(0, 1fr) clamp(480px, 36vw, 680px);
   gap: 3px;
 }
 
@@ -38388,6 +38432,134 @@ button.timelineExternalSourceCard:active,
   }
 }
 
+/* Timeline source shelf Banks/Scenes: the same recognizable Scene Matrix
+   representation as compact read-only placement cards. Space pressure is
+   solved by reflow and internal scrolling only; typography, spacing, and
+   hit-target sizes are inherited unchanged. */
+.timelineExternalSourceShelfBanks {
+  display: flex;
+  align-items: start;
+  gap: 0.55rem;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.1rem 0.1rem 0.25rem;
+}
+
+.timelineExternalSourceShelfBank {
+  /* Scene Matrix rule carried over: every card shares the owning Bank accent,
+     so the shared badge styles resolve against the standard identity names. */
+  --cue-identity: var(--bank-identity, rgba(148, 176, 196, 0.55));
+  --cue-identity-text: var(--bank-identity-text, #c4cbd0);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+  min-width: 12.5rem;
+  max-width: 17rem;
+  padding: 0.45rem 0.55rem 0.55rem;
+  border: 1px solid rgba(148, 176, 196, 0.28);
+  border-radius: 0.35rem;
+  background: rgba(23, 33, 43, 0.72);
+}
+
+.timelineExternalSourceShelfBankHeader {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.timelineExternalSourceShelfBankStrip {
+  width: 100%;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--bank-identity, rgba(148, 176, 196, 0.55));
+}
+
+.timelineExternalSourceShelfBankTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.timelineExternalSourceShelfBankTitle strong {
+  color: var(--bank-identity-text, #e8f3f7);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineExternalSourceShelfBankTitle span {
+  color: #aebdca;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.timelineExternalSourceShelfBankScenes {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  max-height: 8.5rem;
+  overflow-y: auto;
+  padding: 0 0.05rem 0.15rem;
+}
+
+.timelineExternalSourceShelfBankScenes .timelineExternalSourceCard {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  width: 100%;
+  gap: 0.3rem;
+}
+
+/* A Shelf Scene is Bank-owned just like a Scene Matrix card.  The edge stays
+   Bank-coloured even when its type/flash/replace badges are present. */
+.timelineExternalSourceShelfBankScenes .timelineExternalSourceCard.lighting {
+  border-left: 3px solid var(--cue-identity);
+}
+
+.timelineExternalSourceCardPrimaryRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.timelineExternalSourceCueNumber {
+  color: #aebdca;
+  white-space: nowrap;
+}
+
+.timelineExternalSourceCardPrimaryRow > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineExternalSourceCardMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.timelineExternalSourceCardMetaRow small {
+  margin-left: auto;
+  color: #aebdca;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.timelineExternalSuperSceneMark {
+  justify-self: start;
+  cursor: default;
+}
+
+.timelineExternalSourceBankEmpty {
+  margin: 0;
+}
+
 /* Video Setup uses two clear regions: outputs/sources at left and the
    selected-output status/action surface at right. The advanced correction
    disclosure owns its own scroll area so collapsed content never steals focus
@@ -38566,31 +38738,46 @@ button.timelineExternalSourceCard:active,
    narrow widths so controls keep their existing typography and hit targets. */
 .sceneMatrixSurfaceHeader {
   flex-direction: row;
+  width: 100%;
   min-height: 32px;
-  overflow-x: auto;
-  overflow-y: visible;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 .sceneMatrixCueListHeader.sceneMatrixBankToolbarRow {
-  width: max-content;
-  min-width: max-content;
+  width: 100%;
+  min-width: 0;
   min-height: 32px;
   overflow: visible;
   border-bottom: 0;
 }
 
 .sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .sceneMatrixCueListTabs {
-  flex: 0 0 auto;
-  width: max-content;
-  max-width: none;
-  overflow: visible;
+  flex: 1 1 auto;
+  width: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .liveDeskToolbarActions {
   flex: 0 0 auto;
   align-self: center;
+  margin-left: auto;
   padding: 0 2px;
+}
+
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .liveDeskToolbarActions .liveDeskViewToggle {
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .liveDeskToolbarActions .liveDeskViewToggle button,
+.sceneMatrixCueListHeader.sceneMatrixBankToolbarRow > .liveDeskToolbarActions .liveStatusToggle {
+  width: var(--ui-icon-button-width);
+  min-width: var(--ui-icon-button-width);
+  max-width: var(--ui-icon-button-width);
 }
 
 .sceneMatrixCueListTabs button.bankDropTarget {

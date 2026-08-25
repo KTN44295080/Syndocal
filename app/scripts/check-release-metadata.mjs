@@ -17,12 +17,178 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
+import {
+  canonicalWindowsFfmpegRuntimeDllNames,
+  commonBundleResourceMap,
+  loadWindowsRuntimeInventory,
+  verifyPinnedCommonResource,
+  verifyPinnedRuntimeFile,
+  windowsFfmpegBundleResourceMap,
+} from "./windows-runtime-inventory.mjs";
+import { StrictJsonError, parseStrictJson } from "./strict-json.mjs";
 
-export const expectedVersion = "1.2.0-alpha.11";
+export const expectedVersion = "1.2.0-alpha.12";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
+
+export const windowsFfmpegRuntimeDlls = canonicalWindowsFfmpegRuntimeDllNames;
+
+export const blockedAsioRuntimeDlls = Object.freeze([
+  "syndocal_asio_bridge.dll",
+  "syndocal-asio-bridge.dll",
+]);
+
+const asioDllName = /asio.*\.dll$/iu;
+
+function parseRequiredJson(text, label) {
+  try {
+    return parseStrictJson(text, label);
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error instanceof StrictJsonError ? error.detail : error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function isBlockedAsioRuntimeDllName(name) {
+  const normalized = String(name).replaceAll("\\", "/").split("/").at(-1)?.toLocaleLowerCase("en-US") ?? "";
+  return blockedAsioRuntimeDlls.includes(normalized) || asioDllName.test(normalized);
+}
+
+function assertExactResourceMap(actual, expected, label) {
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) {
+    throw new Error(`${label} must be a JSON object with explicitly mapped resources.`);
+  }
+  const actualEntries = Object.entries(actual).sort(([left], [right]) => left.localeCompare(right));
+  const expectedEntries = Object.entries(expected).sort(([left], [right]) => left.localeCompare(right));
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error(`${label} is not the exact approved explicit runtime-resource map.`);
+  }
+}
+
+const exactAsioSdkPin = Object.freeze({
+  schema_version: 2,
+  bridge_abi_version: 2,
+  canonical_dll_filename: "syndocal_asio_bridge.dll",
+  sdk_name: "Steinberg ASIO SDK",
+  version: "2.3.4",
+  archive_filename: "ASIO-SDK_2.3.4_2025-10-15.zip",
+  sha256: "D5EBF0C20DD2C5F43771FD0C1418F4B361BF52434EE670097CFA6B3A335E2ECA",
+  archive_root: "ASIOSDK",
+  source_page: "https://www.steinberg.net/developers/asiosdk-open/",
+  acquisition: "manual",
+  distribution_approved: false,
+  distribution_gate: "Select and record either a separate GPLv3 distribution path or a signed Steinberg proprietary ASIO SDK agreement before packaging the ASIO artifact.",
+});
+
+export function validateAsioSdkPin(sdkPin) {
+  if (typeof sdkPin !== "object" || sdkPin === null || Array.isArray(sdkPin)) {
+    throw new Error("qa/ASIO_SDK_PIN.json must be an object.");
+  }
+  const actualKeys = Object.keys(sdkPin).sort();
+  const expectedKeys = Object.keys(exactAsioSdkPin).sort();
+  if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+    throw new Error("qa/ASIO_SDK_PIN.json keys are not exact; future or retired schema fields are rejected.");
+  }
+  for (const [key, expected] of Object.entries(exactAsioSdkPin)) {
+    if (sdkPin[key] !== expected) {
+      throw new Error("qa/ASIO_SDK_PIN.json has unexpected " + key + "; schema, ABI, canonical filename, and distribution boundary are pinned.");
+    }
+  }
+  return Object.freeze(structuredClone(sdkPin));
+}
+
+export const requiredPrepareRuntimeLibsCommand = "pnpm --dir app run prepare:runtime-libs";
+
+export class MissingStagedWindowsRuntimeError extends Error {
+  constructor(missingPaths, requiredCommand = requiredPrepareRuntimeLibsCommand) {
+    super(
+      "Windows release metadata verification requires the pinned FFmpeg runtime DLLs staged under target/release before this gate runs, and they are absent from this checkout."
+        + ` Run the required prior command exactly as printed, then rerun this check: ${requiredCommand}.`
+        + ` Missing exact staged runtime path${missingPaths.length === 1 ? "" : "s"}: ${missingPaths.join("; ")}`,
+    );
+    this.name = "MissingStagedWindowsRuntimeError";
+    this.missingPaths = Object.freeze([...missingPaths]);
+    this.requiredCommand = requiredCommand;
+  }
+}
+
+function assertDefaultBundleDoesNotEnableNdi(readManifest) {
+  const cargoManifest = readManifest("app/src-tauri/Cargo.toml");
+  if (!/^\s*default\s*=\s*\[\s*"libav"\s*,\s*"spout"\s*\]\s*$/mu.test(cargoManifest)) {
+    throw new Error("Default Tauri feature selection must remain exactly libav + spout; NDI-enabled bundling needs a separately licensed overlay.");
+  }
+  const packageManifest = readManifest("app/package.json");
+  const workflow = readManifest(".github/workflows/cross-platform.yml");
+  const bundleCommandEnablesNdi = /tauri\s+build[^\r\n]*--features[^\r\n]*\bndi\b/iu;
+  if (bundleCommandEnablesNdi.test(packageManifest) || bundleCommandEnablesNdi.test(workflow)) {
+    throw new Error("NDI-enabled bundling is forbidden until a separate licensed runtime overlay is proven.");
+  }
+}
+
+export function validateAsioPackagingBoundary(
+  readManifest = read,
+  { workspace = workspaceRoot, verifyWindowsRuntimeSources = process.platform === "win32" } = {},
+) {
+  const inventory = loadWindowsRuntimeInventory({ workspace });
+  const sdkPin = validateAsioSdkPin(
+    parseRequiredJson(readManifest("qa/ASIO_SDK_PIN.json"), "qa/ASIO_SDK_PIN.json"),
+  );
+  if (sdkPin.distribution_approved !== false) {
+    throw new Error("ASIO distribution_approved must remain exactly false until a separately reviewed artifact workflow is approved.");
+  }
+  const windowsConfig = parseRequiredJson(
+    readManifest("app/src-tauri/tauri.windows.conf.json"),
+    "app/src-tauri/tauri.windows.conf.json",
+  );
+  assertExactResourceMap(
+    windowsConfig.bundle?.resources,
+    windowsFfmpegBundleResourceMap(inventory),
+    "Windows bundle resources",
+  );
+  const tauri = parseRequiredJson(readManifest("app/src-tauri/tauri.conf.json"), "app/src-tauri/tauri.conf.json");
+  assertExactResourceMap(
+    tauri.bundle?.resources,
+    commonBundleResourceMap(inventory),
+    "Main Tauri bundle resources",
+  );
+  const updater = parseRequiredJson(
+    readManifest("app/src-tauri/tauri.updater.conf.json"),
+    "app/src-tauri/tauri.updater.conf.json",
+  );
+  if (Object.hasOwn(updater.bundle ?? {}, "resources")) {
+    throw new Error("Updater overlay must not add or remap normal bundle resources.");
+  }
+  assertDefaultBundleDoesNotEnableNdi(readManifest);
+
+  const tauriRoot = resolve(workspace, "app", "src-tauri");
+  for (const resource of inventory.common_resources) {
+    verifyPinnedCommonResource(
+      resolve(tauriRoot, resource.source),
+      resource,
+      "Normal bundle resource " + resource.destination,
+      { allowedRoots: [workspace] },
+    );
+  }
+  if (verifyWindowsRuntimeSources) {
+    if (process.platform === "win32") {
+      const missingStagedRuntimePaths = inventory.runtime_dlls
+        .map((runtime) => resolve(tauriRoot, "../../target/release/" + runtime.filename))
+        .filter((stagedPath) => !existsSync(stagedPath));
+      if (missingStagedRuntimePaths.length > 0) {
+        throw new MissingStagedWindowsRuntimeError(missingStagedRuntimePaths);
+      }
+    }
+    for (const runtime of inventory.runtime_dlls) {
+      verifyPinnedRuntimeFile(
+        resolve(tauriRoot, "../../target/release/" + runtime.filename),
+        runtime,
+        "Windows FFmpeg bundle resource " + runtime.filename,
+        { allowedRoots: [resolve(workspace, "target")] },
+      );
+    }
+  }
+}
 
 export const requiredWorkspaceMembers = Object.freeze([
   "crates/audio",
@@ -259,9 +425,11 @@ function assertReadmeVersionLines(markdown, productVersion) {
 }
 
 export function validateStaticReleaseMetadata(readManifest = read, productVersion = expectedVersion) {
-  const appPackage = JSON.parse(readManifest("app/package.json"));
-  const tauri = JSON.parse(readManifest("app/src-tauri/tauri.conf.json"));
-  const updaterOverlay = JSON.parse(readManifest("app/src-tauri/tauri.updater.conf.json"));
+  const appPackage = parseRequiredJson(readManifest("app/package.json"), "app/package.json");
+  const tauri = parseRequiredJson(readManifest("app/src-tauri/tauri.conf.json"), "app/src-tauri/tauri.conf.json");
+  const updaterOverlay = parseRequiredJson(readManifest("app/src-tauri/tauri.updater.conf.json"), "app/src-tauri/tauri.updater.conf.json");
+
+  validateAsioPackagingBoundary(readManifest);
 
   if (appPackage.name !== "syndocal" || appPackage.version !== productVersion) {
     throw new Error(`Frontend package metadata is not Syndocal ${productVersion}.`);
@@ -474,9 +642,12 @@ export function parseRuntimeUpdaterIdentity(output) {
   }
   let identity;
   try {
-    identity = JSON.parse(trimmed);
-  } catch {
-    throw new Error("Windows executable updater diagnostic is not valid JSON.");
+    identity = parseStrictJson(trimmed, "Windows executable updater diagnostic");
+  } catch (error) {
+    throw new Error(
+      "Windows executable updater diagnostic is not valid JSON: "
+        + (error instanceof StrictJsonError ? error.detail : error instanceof Error ? error.message : String(error)),
+    );
   }
   if (typeof identity !== "object" || identity === null || Array.isArray(identity)) {
     throw new Error("Windows executable updater diagnostic is not an object.");
@@ -651,9 +822,12 @@ export function validateCandidateEvidence(manifest, options) {
   }
   let updaterManifest;
   try {
-    updaterManifest = JSON.parse(updaterManifestRecord.bytes.toString("utf8"));
-  } catch {
-    throw new Error("Updater manifest is not valid JSON.");
+    updaterManifest = parseStrictJson(updaterManifestRecord.bytes.toString("utf8"), "Updater manifest");
+  } catch (error) {
+    throw new Error(
+      "Updater manifest is not valid JSON: "
+        + (error instanceof StrictJsonError ? error.detail : error instanceof Error ? error.message : String(error)),
+    );
   }
   if (updaterManifest.version !== productVersion || typeof updaterManifest.platforms !== "object" || updaterManifest.platforms === null) {
     throw new Error("Updater manifest version/platforms do not match the release candidate.");
@@ -844,8 +1018,8 @@ export function parseCli(argv, productVersion = expectedVersion) {
 function validateCandidateFromCli(manifestPath) {
   if (!existsSync(manifestPath)) throw new Error(`Release evidence manifest is missing: ${manifestPath}`);
   const manifestRecord = readVerifiedEvidenceFile(dirname(manifestPath), basename(manifestPath), "release evidence manifest");
-  const manifest = JSON.parse(manifestRecord.bytes.toString("utf8"));
-  const schema = JSON.parse(read("qa/release/release-evidence-manifest.schema.json"));
+  const manifest = parseRequiredJson(manifestRecord.bytes.toString("utf8"), "Release evidence manifest");
+  const schema = parseRequiredJson(read("qa/release/release-evidence-manifest.schema.json"), "Release evidence manifest schema");
   const ajv = new Ajv({ allErrors: true, strict: true });
   const validate = ajv.compile(schema);
   if (!validate(manifest)) {

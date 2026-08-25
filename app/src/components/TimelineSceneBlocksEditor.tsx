@@ -12,13 +12,22 @@ import {
   timelineSceneBlockSourcePickerOptions,
 } from "../timelineSceneBlocks";
 import type { TimelineCueEventSummary, TimelineTrackKind } from "../types";
+import type { SceneCueKind } from "../sceneCueKind";
 import { formatTimelineTimeInput, parseTimelineTimeInput } from "../timelineTimeInput";
+import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
 
 export interface TimelineSceneBlockCueOption {
   id: number;
   cue_list_id: number;
   cue_number: string;
   label: string;
+  /** Authored source fade, mirrored from CueSummary for read-only surfaces. */
+  fade_ms: number;
+  /** sceneCueKind semantics: TIMELINE (super scene), FX, or STATIC. */
+  kind: SceneCueKind;
+  replace_group: boolean;
+  flash: boolean;
+  super_scene: boolean;
   authored_beats: number | null;
   step_count: number;
   source_summary: string;
@@ -32,6 +41,7 @@ export interface TimelineSceneBlockRow extends TimelineCueEventSummary {
 }
 
 interface TimelineSceneBlocksEditorProps {
+  bankAuthority: FullBankAuthoritySnapshot;
   inspectorOnly?: boolean;
   positionMs: number;
   bpm: number;
@@ -368,6 +378,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
     }
   });
   createEffect(() => {
+    if (props.bankAuthority.issue) return;
     const reconciledJumpTarget = reconcileTimelineSceneBlockJumpTarget(
       props.eventRows.map((event) => event.id),
       props.jumpToEventId,
@@ -524,6 +535,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
       data-scene-block-inspector-only={props.inspectorOnly ? "true" : undefined}
       ref={(element) => { workspaceElement = element; }}
     >
+      <Show
+        when={props.bankAuthority.issue === null}
+        fallback={
+          <p class="empty" role="alert" data-bank-authority-unavailable={props.bankAuthority.issue?.kind}>
+            {props.bankAuthority.issue ? bankAuthorityIssueMessage(props.bankAuthority.issue) : ""}
+          </p>
+        }
+      >
       <Show when={!props.inspectorOnly}>
       <>
       <header class="sceneBlockWorkspaceHeader">
@@ -1394,6 +1413,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
           </For>
         </Show>
       </div>
+      </Show>
       </Show>
     </section>
   );

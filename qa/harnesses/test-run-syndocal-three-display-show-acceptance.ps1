@@ -43,7 +43,9 @@ $script:SeamNames = @(
   "Get-ThreeDisplayWindowTitle",
   "Test-ThreeDisplayNativeIsWindow",
   "Get-ThreeDisplayNativeOwnerProcessId",
-  "Invoke-ThreeDisplayNativeShowWindow"
+  "Invoke-ThreeDisplayNativeShowWindow",
+  "Invoke-ThreeDisplayShowAsioArtifactVerification",
+  "Test-ThreeDisplaySingleLinkFile"
 )
 
 function Save-TestSeams {
@@ -171,7 +173,12 @@ function New-GoodWorld {
 
 function Install-GoodWorldSeams {
   param($World)
-  Set-TestSeam "Get-SyndocalCandidateProcesses" { @($script:World.candidate) }
+  $script:CandidateProcessNameCalls = [System.Collections.Generic.List[string]]::new()
+  Set-TestSeam "Get-SyndocalCandidateProcesses" {
+    param($ProcessName)
+    [void]$script:CandidateProcessNameCalls.Add([string]$ProcessName)
+    @($script:World.candidate)
+  }
   Set-TestSeam "Get-ExecutableSha256" { param($Path) $script:CurrentHash }
   Set-TestSeam "Get-ExecutableProductVersion" { param($Path) $script:CurrentVersion }
   Set-TestSeam "Resolve-ThreeDisplayGitHead" { param($CheckoutRootPath) $script:CurrentHead }
@@ -194,7 +201,88 @@ function Install-GoodWorldSeams {
 
 function New-GoodConfiguration {
   param([bool]$Apply = $true)
-  New-ThreeDisplayConfiguration -IsApply $Apply -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot
+  New-ThreeDisplayConfiguration -IsApply $Apply -AuthorityMode StandardRelease -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
+}
+
+# ---- ShowAsioLocal authority-mode fixtures -------------------------------
+
+$script:GoodCommit12 = "facefaceface"
+$script:WrongCommit12 = "deaddeaddead"
+$script:ShowCheckerSha = ("ef" * 32)
+
+function Get-TestShowArtifactDirectory {
+  param([string]$Commit12 = $script:GoodCommit12)
+  return Join-Path $script:CheckoutRoot ("target\show-asio-local\Syndocal_Show_ASIO_{0}_{1}_x64" -f @($script:GoodVersion, $Commit12))
+}
+
+function New-ShowArtifactFixture {
+  # Real directories/files so the real derivation contract (containment,
+  # parent/leaf naming, reparse ancestry, existence) executes over the
+  # sandbox; hashes stay behind deterministic seams.
+  param([string]$Commit12 = $script:GoodCommit12)
+  $artifactDirectory = Get-TestShowArtifactDirectory -Commit12 $Commit12
+  [void](New-Item -ItemType Directory -Path $artifactDirectory -Force)
+  $executablePath = Join-Path $artifactDirectory "syndocal-show-asio.exe"
+  if (-not (Test-Path -LiteralPath $executablePath)) {
+    [IO.File]::WriteAllText($executablePath, "synthetic show-asio self-test executable", (New-Object Text.UTF8Encoding($false)))
+  }
+  return $executablePath
+}
+
+function New-ShowWorld {
+  $world = New-GoodWorld
+  $showExecutable = Join-Path (Get-TestShowArtifactDirectory) "syndocal-show-asio.exe"
+  $world.candidate = [pscustomobject]@{ process_id = $script:GoodPid; native_image_path = $showExecutable }
+  return $world
+}
+
+function New-ShowConfiguration {
+  param(
+    [bool]$Apply = $true,
+    [string]$Commit12 = $script:GoodCommit12,
+    [string]$ExecutablePath = ""
+  )
+  $expectedShowExecutable = Join-Path (Get-TestShowArtifactDirectory -Commit12 $Commit12) "syndocal-show-asio.exe"
+  $effectivePath = if ($ExecutablePath -ne "") { $ExecutablePath } else { $expectedShowExecutable }
+  New-ThreeDisplayConfiguration -IsApply $Apply -AuthorityMode ShowAsioLocal -ExecutablePath $effectivePath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
+}
+
+function New-PassLine {
+  param([string]$ArtifactDirectory, [int]$Files = 14)
+  return "Show-ASIO local artifact PASS: $ArtifactDirectory files=$Files distributionApproved=false"
+}
+
+function New-CheckerVerification {
+  param([int]$ExitCode = 0, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$StandardOut, [string]$StandardError = "")
+  return [pscustomobject]@{
+    exit_code = [int]$ExitCode
+    standard_out = $StandardOut
+    standard_error = $StandardError
+    checker_path = Join-Path $script:CheckoutRoot "app\scripts\check-show-asio-artifact.mjs"
+    checker_sha256 = $script:ShowCheckerSha
+    node_executable_path = "C:\synthetic\node.exe"
+    invoked_at_utc = [DateTime]::UtcNow.ToString("o")
+  }
+}
+
+function Install-ShowAuthoritySeams {
+  # Replaces only the Node/checker process boundary and the kernel32 hard-link
+  # probe; parsing, path derivation, containment, leaf naming, reparse
+  # ancestry, existence, and expectation cross-checks run for real.  The
+  # ShowChecker* knobs are mutable between calls so mutation-between-checks is
+  # deterministically testable.
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$StandardOut)
+  $script:ShowCheckerInvocations = [System.Collections.Generic.List[object]]::new()
+  Set-TestSeam "Invoke-ThreeDisplayShowAsioArtifactVerification" {
+    param($CheckoutRootPath, $NodeExecutablePath)
+    [void]$script:ShowCheckerInvocations.Add([pscustomobject]@{ checkout_root = [string]$CheckoutRootPath; node = [string]$NodeExecutablePath })
+    return (New-CheckerVerification -ExitCode $script:ShowCheckerExitCode -StandardOut $script:ShowCheckerStdOut -StandardError $script:ShowCheckerStdErr)
+  }
+  Set-TestSeam "Test-ThreeDisplaySingleLinkFile" { param($Path) [bool]$script:ShowSingleLinkResult }
+  $script:ShowCheckerExitCode = 0
+  $script:ShowCheckerStdOut = $StandardOut
+  $script:ShowCheckerStdErr = ""
+  $script:ShowSingleLinkResult = $true
 }
 
 function Assert-Throws {
@@ -479,10 +567,260 @@ function Invoke-FocusedChecks {
         $ignoresTarget
       ) -Detail "default evidence root '$defaultRoot' equals checkout target\\qa and .gitignore excludes /target/"
     } })
+    # ---- ShowAsioLocal authority-mode hostile and success checks ----------
+
+    $checks.Add([pscustomobject]@{ Name = "unknown Show-ASIO authority mode value is rejected"; Run = {
+      $r = Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -AuthorityMode "ShowAsioGeneric" -ExecutablePath "" -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath "" } "AuthorityMode"
+      New-Check -Passed ($r.Passed) -Detail $r.Detail
+    } })
+    $checks.Add([pscustomobject]@{ Name = "StandardRelease Apply generic alternate exe remains rejected"; Run = {
+      $r = Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -AuthorityMode StandardRelease -ExecutablePath "C:\foreign\syndocal.exe" -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath "" } "target\\release\\syndocal.exe"
+      New-Check -Passed ($r.Passed) -Detail $r.Detail
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal caller path outside the show tree is rejected"; Run = {
+      $r = Assert-Throws { New-ShowConfiguration -ExecutablePath (Join-Path $script:CheckoutRoot "target\release\syndocal.exe") } "generic alternate executables"
+      New-Check -Passed ($r.Passed) -Detail $r.Detail
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal caller path with wrong executable leaf is rejected"; Run = {
+      $foreignLeaf = Join-Path (Get-TestShowArtifactDirectory) "other-tool.exe"
+      $r = Assert-Throws { New-ShowConfiguration -ExecutablePath $foreignLeaf } "must end in exactly syndocal-show-asio.exe"
+      New-Check -Passed ($r.Passed) -Detail $r.Detail
+    } })
+    $checks.Add([pscustomobject]@{ Name = "nonzero Show-ASIO checker exit fails closed before any derivation"; Run = {
+      [void](New-ShowArtifactFixture)
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      $script:ShowCheckerExitCode = 1
+      try {
+        $config = New-ShowConfiguration
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "exited with '1'"
+        New-Check -Passed ($r.Passed -and $script:ShowCheckerInvocations.Count -eq 1) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "fake checker stdout shapes are rejected by the exact PASS parser"; Run = {
+      $validLine = New-PassLine (Get-TestShowArtifactDirectory)
+      $hostileLines = @(
+        @{ name = "multi-line stdout"; stdout = "noise$([Environment]::NewLine)$validLine"; stderr = ""; exit = 0; expect = "not exactly one line" },
+        @{ name = "wrong prefix"; stdout = "PASS: $(Get-TestShowArtifactDirectory) files=14 distributionApproved=false"; stderr = ""; exit = 0; expect = "not the exact single-line PASS contract" },
+        @{ name = "future approval true"; stdout = "$(Get-TestShowArtifactDirectory) files=14 distributionApproved=true"; stderr = ""; exit = 0; expect = "not the exact single-line PASS contract" },
+        @{ name = "missing files clause"; stdout = "Show-ASIO local artifact PASS: $(Get-TestShowArtifactDirectory) distributionApproved=false"; stderr = ""; exit = 0; expect = "not the exact single-line PASS contract" },
+        @{ name = "zero files"; stdout = "Show-ASIO local artifact PASS: $(Get-TestShowArtifactDirectory) files=0 distributionApproved=false"; stderr = ""; exit = 0; expect = "not the exact single-line PASS contract" },
+        @{ name = "empty stdout"; stdout = ""; stderr = ""; exit = 0; expect = "not exactly one line" },
+        @{ name = "padded line"; stdout = " $validLine"; stderr = ""; exit = 0; expect = "leading or trailing whitespace" },
+        @{ name = "stderr noise"; stdout = $validLine; stderr = "[show-asio-check] hint"; exit = 0; expect = "unexpected stderr" },
+        @{ name = "relative directory"; stdout = "Show-ASIO local artifact PASS: target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.12_facefaceface_x64 files=3 distributionApproved=false"; stderr = ""; exit = 0; expect = "plain rooted Windows path" }
+      )
+      $allRejected = $true
+      foreach ($hostile in $hostileLines) {
+        $r = Assert-Throws { ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification (New-CheckerVerification -ExitCode $hostile.exit -StandardOut $hostile.stdout -StandardError $hostile.stderr) } $hostile.expect
+        if (-not $r.Passed) { $allRejected = $false; break }
+      }
+      New-Check -Passed $allRejected -Detail "nine hostile stdout/stderr shapes failed closed at '$($hostile.expect)'"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "exact PASS parser succeeds and derives only the attested directory"; Run = {
+      $parsed = ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification (New-CheckerVerification -StandardOut (New-PassLine (Get-TestShowArtifactDirectory) -Files 14))
+      New-Check -Passed (($parsed.files_verified -eq 14) -and ($parsed.artifact_directory_raw -ceq (Get-TestShowArtifactDirectory))) -Detail "one exact PASS contract parsed"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "checker-derived directory outside this checkout is rejected"; Run = {
+      [void](New-ShowArtifactFixture)
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.12_facefaceface_x64")
+      try {
+        $config = New-ShowConfiguration
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "outside this checkout"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "artifact directory leaf commit12 mismatch is rejected"; Run = {
+      $driftedExe = New-ShowArtifactFixture -Commit12 $script:WrongCommit12
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Split-Path -Parent $driftedExe))
+      try {
+        $config = New-ShowConfiguration
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "binds commit '$($script:WrongCommit12)'"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "artifact directory leaf version drift is rejected"; Run = {
+      $driftedDirectory = Join-Path $script:CheckoutRoot "target\show-asio-local\Syndocal_Show_ASIO_9.9.9_$($script:GoodCommit12)_x64"
+      [void](New-Item -ItemType Directory -Path $driftedDirectory -Force)
+      [void](New-ShowArtifactFixture -Commit12 $script:GoodCommit12)
+      Copy-Item -LiteralPath (Join-Path (Get-TestShowArtifactDirectory) "syndocal-show-asio.exe") -Destination (Join-Path $driftedDirectory "syndocal-show-asio.exe") -Force
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine $driftedDirectory)
+      try {
+        $config = New-ShowConfiguration
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "binds version '9.9.9'"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "caller executable expectation differing from the derived artifact is rejected"; Run = {
+      # Caller pins the wrong-commit artifact directory (a fully valid shape),
+      # while the verified checker result derives the HEAD-matching directory;
+      # only the explicit caller cross-check may reject this.
+      [void](New-ShowArtifactFixture -Commit12 $script:WrongCommit12)
+      [void](New-ShowArtifactFixture -Commit12 $script:GoodCommit12)
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory -Commit12 $script:GoodCommit12))
+      try {
+        $config = New-ShowConfiguration -Commit12 $script:WrongCommit12
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "caller ExpectedExecutablePath"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "mutation between the two authority checks fails closed"; Run = {
+      [void](New-ShowArtifactFixture)
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      try {
+        $config = New-ShowConfiguration
+        $first = Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation"
+        $prior = $script:CurrentHash
+        $script:CurrentHash = $script:WrongHash
+        try {
+          $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-executable-use" } "SHA-256 mismatch between checks or versus caller expectation"
+          New-Check -Passed ($r.Passed -and ([string]$first.phase -ceq "pre-mutation") -and $script:ShowCheckerInvocations.Count -eq 2) -Detail $r.Detail
+        } finally { $script:CurrentHash = $prior }
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "hard-linked artifact executable is rejected"; Run = {
+      [void](New-ShowArtifactFixture)
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      $script:ShowSingleLinkResult = $false
+      try {
+        $config = New-ShowConfiguration
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "hard link"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "reparse-backed artifact directory ancestry is rejected"; Run = {
+      # A separate sandbox checkout keeps every earlier leaf/commit expectation
+      # valid so derivation reaches the real reparse-ancestry probe.
+      $alternateCheckout = Join-Path $script:SandboxRoot "show-checkout-reparse"
+      $junctionDirectory = Join-Path $alternateCheckout (Join-Path "target\show-asio-local" ("Syndocal_Show_ASIO_{0}_{1}_x64" -f @($script:GoodVersion, $script:GoodCommit12)))
+      $junctionTarget = Join-Path $script:SandboxRoot "show-junction-target"
+      [void](New-Item -ItemType Directory -Path $junctionTarget -Force)
+      $createdJunction = $false
+      try {
+        [void](New-Item -ItemType Junction -Path $junctionDirectory -Target $junctionTarget -ErrorAction Stop)
+        $createdJunction = $true
+        Install-ShowAuthoritySeams -StandardOut (New-PassLine $junctionDirectory)
+        $config = New-ThreeDisplayConfiguration -IsApply $true -AuthorityMode ShowAsioLocal -ExecutablePath (Join-Path $junctionDirectory "syndocal-show-asio.exe") -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $alternateCheckout -ShowAsioNodeExecutablePath ""
+        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "reparse point"
+        New-Check -Passed ($r.Passed) -Detail $r.Detail
+      } catch {
+        if (-not $createdJunction) { return New-Check $false "could not create a junction to prove rejection: $($_.Exception.Message)" }
+        throw
+      } finally {
+        Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null
+        if ($createdJunction -and (Test-Path -LiteralPath $junctionDirectory)) { [void][IO.Directory]::Delete($junctionDirectory, $false) }
+      }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "real kernel32 hard-link probe proves one link for the fixture executable"; Run = {
+      $showExecutable = New-ShowArtifactFixture
+      $realProbe = [scriptblock]::Create($script:SavedRunnerFunctions["Test-ThreeDisplaySingleLinkFile"].ToString())
+      New-Check -Passed ([bool](& $realProbe -Path $showExecutable)) -Detail "GetFileInformationByHandle reports NumberOfLinks=1 for the synthetic artifact executable"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal Apply succeeds only through the exact manifest-validated path"; Run = {
+      $showExecutable = New-ShowArtifactFixture
+      $script:World = New-ShowWorld
+      Install-GoodWorldSeams -World $script:World
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      try {
+        $config = New-ShowConfiguration
+        $result = Invoke-ThreeDisplayApplyAcceptance -Configuration $config
+        $verifications = @($result.authority_verifications)
+        $passed =
+          ([bool]$result.accepted) -and ($verifications.Count -eq 2) -and
+          ((@($verifications | ForEach-Object { $_.phase }) -join ",") -ceq "pre-mutation,pre-executable-use") -and
+          ($script:ShowCheckerInvocations.Count -eq 2) -and
+          (@($script:CandidateProcessNameCalls | Where-Object { $_ -cne "syndocal-show-asio" })).Count -eq 0 -and          ([string]$verifications[0].executable_path -ieq $showExecutable) -and
+          ([string]$verifications[1].executable_sha256 -ceq $script:GoodHash) -and
+          ([string]$verifications[1].executable_product_version -ceq $script:GoodVersion) -and
+          ([string]$verifications[1].checkout_git_head -ceq $script:GoodHead) -and
+          ([string]$verifications[1].checker_sha256 -ceq $script:ShowCheckerSha) -and
+          ([string]$verifications[1].artifact_flavor -ceq "windows-show-asio-local-only") -and
+          ($verifications[1].distribution_approved -eq $false) -and
+          ([string]$verifications[1].pass_line.StartsWith("Show-ASIO local artifact PASS: ")) -and
+          ([long]$verifications[1].files_verified -gt 0) -and
+          (-not [string]::IsNullOrWhiteSpace([string]$verifications[1].verified_at_utc)) -and
+          ([string]$config.expected_executable_path -ieq $showExecutable)
+        New-Check -Passed $passed -Detail "two-phase authority verifications bound flavor/checker/path/hash/version/HEAD and both times"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal Apply maximize path re-verifies immediately before the UI mutation"; Run = {
+      [void](New-ShowArtifactFixture)
+      $script:World = New-ShowWorld
+      $priorMetrics = $script:World.metrics[11]
+      $script:World.metrics[11] = New-TestMetrics 11 "Syndocal" $script:GoodPid $script:World.monitors[0] 1920 1080 $false
+      Install-GoodWorldSeams -World $script:World
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      $script:MaximizeObservation = $null
+      Set-TestSeam "Invoke-ThreeDisplayWindowMaximize" {
+        param($HandleDecimal, $ExpectedProcessId, $ExpectedTitle)
+        $script:MaximizeObservation = [pscustomobject]@{ handle = $HandleDecimal; process_id = $ExpectedProcessId; title = $ExpectedTitle }
+        $script:World.metrics[11].maximized = $true
+        return $true
+      }
+      try {
+        $config = New-ShowConfiguration
+        $result = Invoke-ThreeDisplayApplyAcceptance -Configuration $config
+        $verifications = @($result.authority_verifications)
+        New-Check -Passed (
+          ([bool]$result.accepted) -and ($verifications.Count -eq 2) -and
+          ([string]$verifications[1].phase -ceq "pre-executable-use") -and
+          ([bool]$result.operation.performed) -and ($script:MaximizeObservation.handle -eq 11)
+        ) -Detail "second authority verification ran immediately before the only UI mutation"
+      } finally {
+        $script:World.metrics[11] = $priorMetrics
+        Install-GoodWorldSeams -World $script:World
+      }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal strict sample refuses a bypassed or unresolved executable path"; Run = {
+      [void](New-ShowArtifactFixture)
+      $script:World = New-ShowWorld
+      Install-GoodWorldSeams -World $script:World
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      try {
+        $config = New-ShowConfiguration -ExecutablePath " "
+        $unresolved = Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "before the authority gate resolved"
+        $config.expected_executable_path = Join-Path $script:CheckoutRoot "target\release\syndocal.exe"
+        $bypassed = Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "refuses generic alternate executable"
+        if (-not ($unresolved.Passed -and $bypassed.Passed)) {
+          return New-Check $false "unresolved=$($unresolved.Detail) | bypassed=$($bypassed.Detail)"
+        }
+        New-Check -Passed $true -Detail "unresolved and bypassed paths both fail closed at sample time"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal dry-run binds one gate verification and stays read-only"; Run = {
+      [void](New-ShowArtifactFixture)
+      $script:World = New-ShowWorld
+      Install-GoodWorldSeams -World $script:World
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+      try {
+        $config = New-ShowConfiguration -Apply $false
+        $evidence = New-TestEvidenceDirectory
+        $result = Invoke-ThreeDisplayAcceptance -Configuration $config -EvidenceDirectory $evidence
+        $provenance = (Get-Content -LiteralPath (Join-Path $evidence "provenance.json") -Raw | ConvertFrom-Json)
+        $finalEvidence = (Get-Content -LiteralPath (Join-Path $evidence "final.json") -Raw | ConvertFrom-Json)
+        $passed =
+          ($result.succeeded) -and ([string]$result.verdict -ceq "dry-run-would-accept") -and
+          (@($finalEvidence.authority_verifications).Count -eq 1) -and
+          ([string]@($finalEvidence.authority_verifications)[0].phase -ceq "dry-run-pre-executable-use") -and
+          ([string]$provenance.authority_mode -ceq "ShowAsioLocal") -and
+          ([string]$provenance.show_asio_authority_contract.artifact_flavor -ceq "windows-show-asio-local-only") -and
+          ($provenance.safety.launches_or_terminates_processes -eq $false)
+        New-Check -Passed $passed -Detail "single dry-run authority verification bound into final.json and provenance.json"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "StandardRelease samples keep querying exactly the syndocal image name"; Run = {
+      $script:World = New-GoodWorld
+      Install-GoodWorldSeams -World $script:World
+      $sampleCountBefore = $script:CandidateProcessNameCalls.Count
+      [void](Get-ThreeDisplayStrictSample -Configuration (New-GoodConfiguration) -RequireEditorMaximized $true)
+      $observed = @($script:CandidateProcessNameCalls | Select-Object -Skip $sampleCountBefore)
+      New-Check -Passed (($observed.Count -ge 1) -and (@($observed | Where-Object { $_ -cne "syndocal" }).Count -eq 0)) -Detail "standard release process selection is unchanged"
+    } })
+
     $checks.Add([pscustomobject]@{ Name = "runner static contract forbids process and output mutations"; Run = {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.12", "\\.\DISPLAY2", "\\.\DISPLAY5", "\\.\DISPLAY3", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"')) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.12", "\\.\DISPLAY2", "\\.\DISPLAY5", "\\.\DISPLAY3", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"',
+        "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
       $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }
       foreach ($retired in @("plugin:window|get_current_window", "__TAURI_INTERNALS__")) { if ($text.Contains($retired)) { return New-Check $false "retired or raw window-label path $retired remains" } }
@@ -491,7 +829,7 @@ function Invoke-FocusedChecks {
 
     foreach ($definition in $checks) {
       try { $outcome = & $definition.Run; $passed = [bool]$outcome.Passed; $detail = [string]$outcome.Detail }
-      catch { $passed = $false; $detail = "UNEXPECTED: $($_.Exception.Message)" }
+      catch { $passed = $false; $detail = "UNEXPECTED: $($_.Exception.Message) [$($_.InvocationInfo.PositionMessage.Trim())]" }
       $definition | Add-Member -NotePropertyName Passed -NotePropertyValue $passed
       $definition | Add-Member -NotePropertyName Detail -NotePropertyValue $detail
     }

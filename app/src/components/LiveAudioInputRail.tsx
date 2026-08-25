@@ -1,6 +1,7 @@
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, For, Show } from "solid-js";
 import type {
   LiveAudioChannelMix,
+  LiveAudioInputBackendAvailability,
   LiveAudioInputBackendId,
   LiveAudioInputBackendSummary,
   LiveAudioInputCapabilities,
@@ -10,11 +11,24 @@ import type {
 import {
   liveAudioChannelMixLabel,
   liveAudioInputAnnouncement,
+  liveAudioInputAsioSelectionVerdict,
+  liveAudioInputBackendCanDispatch,
+  liveAudioInputBackendScopeLabel,
+  liveAudioInputBackendSelectOptions,
   liveAudioInputBackendState,
   liveAudioInputBackendStateLabel,
   liveAudioInputDetail,
   liveAudioInputHealth,
+  liveAudioInputBackendVisibleValue,
+  parseLiveAudioInputBackendSummary,
 } from "../liveAudioInputPresentation";
+
+export interface LiveAudioInputSavedSelectionState {
+  phase: "stale" | "invalid" | "ready";
+  reason_code: string | null;
+  message: string;
+  backend: LiveAudioInputBackendId | null;
+}
 
 export interface LiveAudioInputRailProps {
   compact?: boolean;
@@ -33,12 +47,22 @@ export interface LiveAudioInputRailProps {
   liveAudioInputStatus: LiveAudioInputStatus;
   liveAudioInputStatusKnown: boolean;
   liveAudioInputBusy: boolean;
+  liveAudioInputSavedSelection: LiveAudioInputSavedSelectionState | null;
+  liveAudioInputPersistError: string | null;
+  /**
+   * A one-attempt, session-only arm emitted by the App only after the operator
+   * explicitly requests revalidation of the current invalid ASIO selection.
+   */
+  liveAudioInputAsioRevalidationEligible: boolean;
+  /** The exact current arm may unlock the otherwise-invalid ASIO Start once. */
+  liveAudioInputAsioRevalidationArmed: boolean;
   onSetLiveAudioInputBackend: (backend: LiveAudioInputBackendId) => void;
   onSetLiveAudioInputDevice: (deviceName: string) => void;
   onSetLiveAudioInputSampleRate: (sampleRate: number | null) => void;
   onSetLiveAudioInputBufferFrames: (bufferFrames: number | null) => void;
   onSetLiveAudioInputChannelMix: (channelMix: LiveAudioChannelMix) => void;
   onRefreshLiveAudioInputDevices: () => void | Promise<void>;
+  onArmLiveAudioInputAsioRevalidation: () => void;
   onStartLiveAudioInput: () => void | Promise<void>;
   onStopLiveAudioInput: () => void | Promise<void>;
 }
@@ -143,6 +167,22 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
       (backend) => backend.id === props.selectedLiveAudioInputBackend,
     ),
   );
+  const selectedBackendParse = createMemo(() =>
+    selectedBackend() ? parseLiveAudioInputBackendSummary(selectedBackend()) : null,
+  );
+  const selectedBackendAvailability = createMemo<LiveAudioInputBackendAvailability | null>(() => {
+    const parsed = selectedBackendParse();
+    return parsed && parsed.ok ? parsed.summary.availability : null;
+  });
+  const selectedBackendStartable = createMemo(() => {
+    const backend = selectedBackend();
+    return backend !== undefined && liveAudioInputBackendCanDispatch(backend);
+  });
+  const selectedAvailabilityTag = createMemo(() => {
+    const parsed = selectedBackendParse();
+    if (!parsed) return "none";
+    return parsed.ok ? parsed.summary.availability : "invalid";
+  });
   const backendRequiresExplicitDevice = createMemo(
     () => selectedBackend()?.requires_explicit_device ?? props.selectedLiveAudioInputBackend === "asio",
   );
@@ -186,8 +226,22 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
     const backend = selectedBackend();
     if (props.liveAudioInputBackendError?.trim()) return props.liveAudioInputBackendError;
     if (!backend) return "Audio capture backend unavailable.";
-    if (!backend.built) {
-      return `${backend.label} is not built into this application · ${backend.distribution}`;
+    const parsed = selectedBackendParse();
+    if (!parsed || !parsed.ok) {
+      return `${backend.label} reported an invalid availability contract (${parsed?.reason_code ?? "PARSER_UNAVAILABLE"}) · Start stays locked.`;
+    }
+    const probeDetail = parsed.summary.availability_detail?.trim()
+      ? ` · ${parsed.summary.availability_detail}`
+      : "";
+    switch (parsed.summary.availability) {
+      case "not_packaged":
+        return `${parsed.summary.label} is not packaged in this application${probeDetail} · ${parsed.summary.distribution}`;
+      case "fault":
+        return `${parsed.summary.label} driver probe failed${probeDetail}`;
+      case "unsupported":
+        return `${parsed.summary.label} is unsupported on this platform${probeDetail}`;
+      case "ready":
+        break;
     }
     if (backendState() === "empty") return `${backend.label} has no available input drivers.`;
     if (backendState() === "select_device") {
@@ -208,11 +262,13 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
     props.liveAudioInputStatus.safety_clear_pending;
   const backendStartLocked = () =>
     !props.liveAudioInputBackendsKnown ||
-    !selectedBackend()?.built ||
+    selectedBackendAvailability() !== "ready" ||
+    !selectedBackendStartable() ||
     (backendRequiresExplicitDevice() && !props.selectedLiveAudioInputDevice.trim()) ||
     (backendRequiresExplicitDevice() && props.liveAudioInputSampleRate === null) ||
     (backendRequiresExplicitDevice() && props.liveAudioInputBufferFrames === null) ||
-    selectedDeviceRequiresReselection();
+    selectedDeviceRequiresReselection() ||
+    asioVerdictStartLocked();
   const visualBandPercent = (index: number) =>
     Math.round(
       Math.max(0, Math.min(1, props.liveAudioInputStatus.bands?.[index] ?? 0)) * 100,
@@ -228,6 +284,68 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
     const frames = props.liveAudioInputStatus.applied_buffer_frames;
     return frames === null || frames === undefined ? "pending" : `${frames}f`;
   });
+  const savedSelection = createMemo(() => props.liveAudioInputSavedSelection);
+  const savedSelectionScope = createMemo(() => {
+    const saved = savedSelection();
+    if (!saved?.backend) return "INPUT";
+    return liveAudioInputBackendScopeLabel(saved.backend);
+  });
+  const savedSelectionLabel = createMemo(() => {
+    const saved = savedSelection();
+    if (!saved) return "";
+    if (saved.phase === "ready") return `SAVED ${savedSelectionScope()} READY`;
+    if (saved.phase === "stale") return `SAVED ${savedSelectionScope()} LOCKED`;
+    return "SAVED INPUT INVALID";
+  });
+  const savedSelectionLockActive = () => {
+    const saved = savedSelection();
+    return saved !== null &&
+      saved.backend === props.selectedLiveAudioInputBackend &&
+      saved.phase !== "ready";
+  };
+  const asioVerdict = createMemo(() => {
+    const raw = props.liveAudioInputStatus.asio_selection;
+    return raw === null || raw === undefined ? null : liveAudioInputAsioSelectionVerdict(raw);
+  });
+  const asioVerdictStartLocked = createMemo(() => {
+    const verdict = asioVerdict();
+    if (props.selectedLiveAudioInputBackend !== "asio" || !verdict) return false;
+    // `restored` prevents automatic resume only. A current explicit ASIO Start
+    // reaches native revalidation. An `invalid` verdict stays locked unless
+    // the App has proved a one-attempt exact-request revalidation arm.
+    if (verdict.state === "invalid" && props.liveAudioInputAsioRevalidationArmed) return false;
+    return verdict.start_locked && verdict.state !== "restored";
+  });
+  const asioInvalidRevalidationActionVisible = createMemo(() => {
+    const verdict = asioVerdict();
+    return props.selectedLiveAudioInputBackend === "asio" &&
+      verdict?.contract_valid === true &&
+      verdict.state === "invalid";
+  });
+  const asioVerdictTitle = createMemo(() => {
+    const verdict = asioVerdict();
+    if (!verdict) return "";
+    const reasonSuffix = verdict.reason === null ? "" : ` · ${verdict.reason}`;
+    return `${verdict.state_label}${reasonSuffix} · ${verdict.message}`;
+  });
+  const backendSelectOptions = createMemo(() =>
+    liveAudioInputBackendSelectOptions({
+      selectedBackend: props.selectedLiveAudioInputBackend,
+      backends: props.liveAudioInputBackends,
+      backendsKnown: props.liveAudioInputBackendsKnown,
+      savedBackend: savedSelection()?.backend ?? null,
+    }),
+  );
+  let backendSelect: HTMLSelectElement | undefined;
+  createEffect(() => {
+    const select = backendSelect;
+    if (!select) return;
+    const visible = liveAudioInputBackendVisibleValue(
+      backendSelectOptions(),
+      props.selectedLiveAudioInputBackend,
+    );
+    if (visible !== null && select.value !== visible) select.value = visible;
+  });
 
   return (
     <section
@@ -235,6 +353,9 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
       data-health={health()}
       data-live-audio-backend={props.selectedLiveAudioInputBackend}
       data-live-audio-backend-state={backendState()}
+      data-live-audio-backend-availability={
+        props.liveAudioInputBackendsKnown ? selectedAvailabilityTag() : "unknown"
+      }
       data-live-audio-backend-built={selectedBackend()?.built ? "true" : "false"}
       aria-label="Live audio analysis input"
     >
@@ -244,7 +365,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           <select
             aria-label="Live audio input device"
             data-live-audio-control="device"
-            disabled={inputLocked() || !selectedBackend()?.built}
+            disabled={inputLocked() || !selectedBackendStartable()}
             value={props.selectedLiveAudioInputDevice}
             title={selectedDeviceLabel()}
             aria-invalid={selectedDeviceRequiresReselection() ? "true" : undefined}
@@ -284,6 +405,7 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           disabled={
             props.liveAudioInputBusy ||
             props.liveAudioInputBackendsBusy ||
+            (!props.liveAudioInputStatus.running && savedSelectionLockActive()) ||
             (!props.liveAudioInputStatus.running && backendStartLocked()) ||
             (!props.liveAudioInputStatus.running && props.liveAudioInputCapabilitiesBusy) ||
             (!props.liveAudioInputStatus.running && !props.liveAudioInputCapabilities) ||
@@ -306,6 +428,46 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
                   ? "Start"
                   : "Checking"}
         </button>
+        <Show when={savedSelection()}>
+          <span
+            class={`liveAudioConfigFormat liveAudioSavedSelection ${savedSelection()?.phase ?? ""}`}
+            data-live-audio-saved-state={savedSelection()?.phase ?? ""}
+            data-live-audio-saved-reason={savedSelection()?.reason_code ?? ""}
+            title={`${savedSelection()?.message ?? ""}${
+              props.liveAudioInputPersistError ? ` · Save failed: ${props.liveAudioInputPersistError}` : ""
+            }`}
+          >
+            <b>{savedSelectionLabel()}</b>
+            <Show when={props.liveAudioInputPersistError}>
+              <i aria-hidden="true">·</i>
+              <span>SAVE FAILED</span>
+            </Show>
+          </span>
+        </Show>
+        <Show when={!savedSelection() && props.liveAudioInputPersistError}>
+          <span
+            class="liveAudioConfigFormat liveAudioSavedSelection persist-failed"
+            data-live-audio-saved-state="persist-failed"
+            title={`Save failed: ${props.liveAudioInputPersistError ?? ""}`}
+          >
+            <b>SAVE FAILED</b>
+          </span>
+        </Show>
+        <Show when={asioVerdict()}>
+          <span
+            class={`liveAudioConfigFormat liveAudioAsioVerdict ${asioVerdict()?.contract_valid ? "" : "contract-invalid"}`}
+            data-live-audio-asio-verdict={asioVerdict()?.state ?? ""}
+            data-live-audio-asio-contract={asioVerdict()?.contract_valid ? "valid" : "invalid"}
+            data-live-audio-asio-start-locked={asioVerdict()?.start_locked ? "true" : "false"}
+            data-live-audio-asio-reason={asioVerdict()?.reason ?? ""}
+            data-live-audio-asio-message={asioVerdict()?.message ?? ""}
+            title={asioVerdictTitle()}
+          >
+            <b>{asioVerdict()?.state_label}</b>
+            <i aria-hidden="true">·</i>
+            <span>{asioVerdict()?.reason ? `${asioVerdict()?.reason} · ${asioVerdict()?.message}` : asioVerdict()?.message}</span>
+          </span>
+        </Show>
       </div>
       <div
         class={`liveAudioMeters ${props.liveAudioInputStatus.onset ? "onset" : ""}`}
@@ -350,20 +512,21 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
           <label class="liveAudioBackendControl">
             <span>Backend</span>
             <select
+              ref={backendSelect}
               aria-label="Audio input backend"
               data-live-audio-control="backend"
               disabled={inputLocked()}
               value={props.selectedLiveAudioInputBackend}
               onInput={(event) => props.onSetLiveAudioInputBackend(event.currentTarget.value as LiveAudioInputBackendId)}
             >
-              <Show when={props.liveAudioInputBackends.length === 0}>
-                <option value={props.selectedLiveAudioInputBackend}>
-                  {props.liveAudioInputBackendsKnown ? "Backend unavailable" : "Checking backends"}
-                </option>
-              </Show>
-              <For each={props.liveAudioInputBackends}>
-                {(backend) => (
-                  <option value={backend.id} data-no-localize>{backend.label}</option>
+              <For each={backendSelectOptions()}>
+                {(option) => (
+                  <option
+                    value={option.value}
+                    data-no-localize={option.noLocalize || undefined}
+                  >
+                    {option.label}
+                  </option>
                 )}
               </For>
             </select>
@@ -438,15 +601,33 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
               </For>
             </select>
           </label>
-          <span
-            class={`liveAudioConfigFormat liveAudioBackendState ${backendState()}`}
-            data-live-audio-backend-state-label={backendStateLabel()}
-            title={`${backendStateLabel()} · ${backendDetail()} · ${configFormat()}`}
+          <Show
+            when={asioInvalidRevalidationActionVisible()}
+            fallback={
+              <span
+                class={`liveAudioConfigFormat liveAudioBackendState ${backendState()}`}
+                data-live-audio-backend-state-label={backendStateLabel()}
+                title={`${backendStateLabel()} · ${backendDetail()} · ${configFormat()}`}
+              >
+                <b>{backendStateLabel()}</b>
+                <i aria-hidden="true">·</i>
+                <span>{selectedBackendStartable() ? configFormat() : backendDetail()}</span>
+              </span>
+            }
           >
-            <b>{backendStateLabel()}</b>
-            <i aria-hidden="true">·</i>
-            <span>{configFormat()}</span>
-          </span>
+            <button
+              data-live-audio-action="asio-revalidate"
+              disabled={
+                inputLocked() ||
+                props.liveAudioInputBackendsBusy ||
+                !props.liveAudioInputAsioRevalidationEligible
+              }
+              title="Arm one exact current ASIO Start for native revalidation"
+              onClick={() => props.onArmLiveAudioInputAsioRevalidation()}
+            >
+              Revalidate current ASIO selection
+            </button>
+          </Show>
         </div>
       </Show>
       <Show when={health() === "live"}>

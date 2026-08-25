@@ -1,5 +1,9 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { shouldCommitTimelineMarkerDrag, timelineConformRateBadge } from "../timelineSceneBlocks";
+import {
+  shouldCommitTimelineMarkerDrag,
+  timelineConformRateBadge,
+  timelineSceneBlockCueAllowedByAuthority,
+} from "../timelineSceneBlocks";
 import {
   beginTimelineAbsoluteDragProjection,
   buildTimelineRulerTicks,
@@ -47,6 +51,7 @@ import {
   timelineBlockGestureZone,
   type TimelineStretchMode,
 } from "../timelineBlockGestures";
+import type { FullBankAuthoritySnapshot } from "../bankAuthority";
 
 export interface TimelineOverviewEvent {
   id: number;
@@ -105,6 +110,10 @@ export interface TimelineOverviewOverlapCluster {
 }
 
 interface TimelineOverviewProps {
+  /** Complete App-owned Bank/Cue/Executor authority for Scene placement. */
+  bankAuthority: FullBankAuthoritySnapshot;
+  /** Exact owner identity for child authoring; null means the root Timeline. */
+  timelineChildCueId: number | null;
   layers: TimelineLayerSummary[];
   legacyMode: boolean;
   cueIdentities?: Record<number, CueIdentitySource>;
@@ -413,8 +422,12 @@ const timelineAudioClipName = (path: string) => {
 export const timelineOverviewExternalDropPreflight = (
   source: TimelineExternalDragPayload | null,
   targetLayer: TimelineLayerSummary | null,
+  sceneSourceAuthoritative: boolean,
 ): string | null => {
   if (!source) return "This Timeline drop is not a recognized source.";
+  if (source.kind === "scene" && !sceneSourceAuthoritative) {
+    return `Scene ${source.cue_id} is unavailable until Bank authority is repaired.`;
+  }
   if (!targetLayer) return "Choose a Timeline lane before dropping a source.";
   if (source.lane_kind !== targetLayer.kind) {
     return `${source.lane_kind} sources can only be dropped on a ${source.lane_kind} lane.`;
@@ -582,6 +595,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const layerId = layerIdFromPoint(clientX, clientY);
     return layerId === null ? null : layerById().get(layerId) ?? null;
   };
+  const sceneSourceAuthoritative = (source: TimelineExternalDragPayload | null) =>
+    source?.kind !== "scene"
+    || timelineSceneBlockCueAllowedByAuthority(
+      source.cue_id,
+      props.bankAuthority,
+      props.timelineChildCueId,
+    );
   const handleExternalDragOver = (event: DragEvent) => {
     const targetLayer = layerFromDropPoint(event.clientX, event.clientY);
     // Chromium protects drag data during dragover: getData() is commonly
@@ -598,7 +618,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     event.preventDefault();
     const source = parseTimelineExternalDragDataTransfer(event.dataTransfer);
     const targetLayer = layerFromDropPoint(event.clientX, event.clientY);
-    const rejection = timelineOverviewExternalDropPreflight(source, targetLayer);
+    const rejection = timelineOverviewExternalDropPreflight(
+      source,
+      targetLayer,
+      sceneSourceAuthoritative(source),
+    );
     if (rejection) {
       props.onStatus(rejection);
       return;
@@ -616,6 +640,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return drag?.moved ? layerIdFromPoint(drag.client_x, drag.client_y) : null;
   });
   const cueDropStateForLayer = (layerId: number) => {
+    if (props.bankAuthority.issue) return "rejected" as const;
     if (cueDragTargetLayerId() !== layerId) return "none" as const;
     const layer = layerById().get(layerId);
     return layer?.kind === "Lighting" && !layer.locked ? "valid" as const : "rejected" as const;
@@ -627,7 +652,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
   const safeCueDrag = createMemo(() => {
     const drag = props.cueDrag;
-    return drag?.moved && Number.isFinite(drag.client_x) && Number.isFinite(drag.client_y) ? drag : null;
+    return props.bankAuthority.issue === null
+      && drag?.moved
+      && props.bankAuthority.cueById.has(drag.cue_id)
+      && Number.isFinite(drag.client_x)
+      && Number.isFinite(drag.client_y)
+      ? drag
+      : null;
   });
   const matrixCueDropState = () => {
     const drag = safeCueDrag();
@@ -1476,6 +1507,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
 
   const validatePlacementLayer = (layerId: number | null) => {
+    if (props.bankAuthority.issue) {
+      props.onStatus("Scene placement is unavailable until Bank authority is repaired.");
+      return null;
+    }
     const layer = layerId === null ? undefined : layerById().get(layerId);
     if (!layer) {
       props.onStatus("Choose a timeline lane before placing the armed Cue.");
@@ -1494,7 +1529,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
 
   const beginCanvasPointer = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     if (!isCanvasTarget(event.target) || event.button !== 0) return;
-    const armedCue = props.armedCue;
+    const armedCue = props.armedCue && props.bankAuthority.issue === null
+      && props.bankAuthority.cueById.has(props.armedCue.id)
+      ? props.armedCue
+      : null;
     const layerId = layerIdFromPoint(event.clientX, event.clientY);
     if (armedCue) {
       const layer = validatePlacementLayer(layerId);
@@ -1558,6 +1596,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       setPlacementDrag(null);
       if (!canceled && placement.moved) {
+        if (!timelineSceneBlockCueAllowedByAuthority(
+          placement.cueId,
+          props.bankAuthority,
+          props.timelineChildCueId,
+        )) {
+          props.onStatus("Scene placement was canceled because Bank authority changed.");
+          setSuppressCanvasClick(true);
+          return;
+        }
         const startMs = Math.min(placement.startMs, placement.endMs);
         const durationMs = Math.max(1, Math.abs(placement.endMs - placement.startMs));
         props.onPlaceArmedCue(
@@ -1581,7 +1628,14 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
 
   const placeArmedCueAtDoubleClick = (event: MouseEvent & { currentTarget: SVGSVGElement }) => {
-    const armedCue = props.armedCue;
+    const armedCue = props.armedCue
+      && timelineSceneBlockCueAllowedByAuthority(
+        props.armedCue.id,
+        props.bankAuthority,
+        props.timelineChildCueId,
+      )
+      ? props.armedCue
+      : null;
     if (!armedCue || !isCanvasTarget(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -3102,6 +3156,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               !props.legacyMode && layerById().get(event.layer_id)?.muted ? "layerMuted" : "",
             ].filter(Boolean).join(" ")}
             data-timeline-event-id={event.id}
+            data-timeline-cue-id={event.cue_id}
             data-super-scene={event.is_super_scene ? "true" : undefined}
             data-timeline-layer-id={eventPreviewLayerId(event)}
             data-timeline-layer-kind={layerById().get(eventPreviewLayerId(event))?.kind ?? event.track}

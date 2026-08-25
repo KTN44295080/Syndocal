@@ -240,6 +240,15 @@ pub const TIMELINE_CLICK_EXPONENTIAL_DECAY: bool = true;
 /// clock tracking. A larger forward locate is a discontinuity and rotates
 /// the Timeline output fence so no pre-locate frames survive.
 pub const TIMELINE_TIMECODE_FORWARD_DISCONTINUITY_THRESHOLD_MS: u64 = 250;
+/// Headroom added to elapsed wall-clock time when classifying DJ-Link
+/// forward playhead progression as ordinary cadence tracking instead of a
+/// locate. The externally-owned playhead is frozen between admitted SYNC
+/// observations, so raw position deltas grow with the delivery cadence;
+/// progression is compared against real-time coverage since the last
+/// admitted observation plus this scheduling/cadence tolerance. Genuine
+/// seeks exceed what real-time playback could cover and still locate.
+const TIMELINE_DJ_LINK_FORWARD_TRACKING_TOLERANCE_MS: u64 =
+    TIMELINE_TIMECODE_FORWARD_DISCONTINUITY_THRESHOLD_MS;
 const TIMELINE_CLICK_QUEUE_CAPACITY: usize = 4096;
 const TIMELINE_CLICK_BATCH_CAPACITY: usize = 4096;
 const TIMELINE_CLICK_QUARTER_UNITS: u64 = 16;
@@ -3091,6 +3100,111 @@ impl std::fmt::Display for SnapshotPublicationFailure {
     }
 }
 
+/// Maximum accepted Bank label length in Unicode scalar values.
+pub const CUE_LIST_LABEL_MAX_SCALARS: usize = 64;
+
+/// Classified disconnect messages for the two authoritative Bank mutations.
+/// They are shared verbatim by the handle submission paths and their tests so
+/// the indeterminate classification stays pinned to one exact string.
+const BANK_CREATE_ACK_DISCONNECTED_MESSAGE: &str = "Bank create acknowledgement disconnected after engine admission; the reserved Bank ID stays reserved because publication outcome is indeterminate";
+const BANK_RENAME_ACK_DISCONNECTED_MESSAGE: &str =
+    "Bank rename acknowledgement disconnected after engine admission; publication outcome is indeterminate";
+
+/// The single authoritative Bank label policy. The backend candidate staging
+/// and the engine mutation state both call this exact function with the exact
+/// submitted string: no trim, truncation, case folding, or normalization is
+/// ever applied by either side.
+///
+/// Accepted labels:
+/// - are non-empty,
+/// - contain at most [`CUE_LIST_LABEL_MAX_SCALARS`] Unicode scalar values,
+/// - have no leading or trailing whitespace (padded input is rejected), and
+/// - use only the explicit visible alphabet in
+///   [`is_supported_cue_list_label_character`].
+///
+/// This is deliberately a *positive* alphabet, not a partial denylist. It
+/// accepts ASCII graphics, precomposed Latin/Greek/Cyrillic letters, ordinary
+/// punctuation, Japanese Kana/CJK, Hangul syllables, and ordinary full-width
+/// forms. Every other scalar is rejected. That makes all current Unicode
+/// format and invisible characters unreachable, and also rejects every
+/// combining mark rather than only the legacy U+0300..=U+036F subset. In
+/// particular, U+2066 (LEFT-TO-RIGHT ISOLATE), U+1AB0 (COMBINING DOUBLED
+/// CIRCUMFLEX ACCENT), U+302A..=U+302F, U+3099..=U+309A, and
+/// U+FF9E..=U+FF9F are outside the accepted alphabet.
+///
+/// The bounded alphabet is intentional: this crate has no directly owned
+/// Unicode general-category table, and guessing category membership from a
+/// short denylist would reopen the invisible/combining-name ambiguity. A
+/// future expansion must add exact accepted ranges and rejection tests; it
+/// must not silently admit an entire unclassified block.
+///
+/// Equivalence/case policy (std-only): two Bank labels collide when they are
+/// byte-equal or equal under full Unicode lowercasing (`str::to_lowercase`),
+/// so case-insensitive visually equivalent duplicates can never coexist.
+/// Full NFC normalization would require a new direct dependency outside this
+/// file's ownership; until one is introduced the policy rejects every
+/// combining-mark spelling before duplicate comparison. Accepted non-ASCII
+/// bytes are otherwise never normalized or rewritten.
+pub fn validate_cue_list_label(label: &str) -> Result<(), String> {
+    if label.is_empty() {
+        return Err("Cue List label is required".to_string());
+    }
+    if label.trim() != label {
+        return Err("Cue List label must not have leading or trailing whitespace".to_string());
+    }
+    if label.chars().count() > CUE_LIST_LABEL_MAX_SCALARS {
+        return Err(format!(
+            "Cue List label must contain at most {CUE_LIST_LABEL_MAX_SCALARS} characters"
+        ));
+    }
+    if let Some(character) = label
+        .chars()
+        .find(|c| !is_supported_cue_list_label_character(*c))
+    {
+        return Err(format!(
+            "Cue List label contains an unsupported, format, invisible, or combining character (U+{:04X})",
+            u32::from(character)
+        ));
+    }
+    Ok(())
+}
+
+/// Exact visible character ranges accepted in a Bank label. Keep ranges split
+/// around Unicode Mark and Format code points; the exclusions are part of the
+/// safety contract, not formatting trivia.
+fn is_supported_cue_list_label_character(character: char) -> bool {
+    matches!(
+        character,
+        ' '..='~' // printable ASCII, including an interior ASCII space only
+        | '\u{00C0}'..='\u{02AF}' // precomposed Latin and visible phonetic letters
+        | '\u{0370}'..='\u{03FF}' // Greek (all combining Greek marks are below U+0370)
+        | '\u{0400}'..='\u{0482}' // Cyrillic before U+0483..=U+0489 marks
+        | '\u{048A}'..='\u{052F}' // Cyrillic after U+0483..=U+0489 marks
+        | '\u{0531}'..='\u{058F}' // Armenian visible letters and punctuation
+        | '\u{2010}'..='\u{2027}' // visible general punctuation before bidi controls
+        | '\u{2030}'..='\u{205E}' // visible punctuation before U+2060 format controls
+        | '\u{3000}'..='\u{3029}' // CJK punctuation before U+302A..=U+302F marks
+        | '\u{3030}'..='\u{303F}' // remaining CJK punctuation
+        | '\u{3041}'..='\u{3098}' // Hiragana before U+3099..=U+309A marks
+        | '\u{309B}'..='\u{309F}' // visible Hiragana iteration/prolongation signs
+        | '\u{30A1}'..='\u{30FF}' // Katakana and visible punctuation
+        | '\u{31F0}'..='\u{31FF}' // Katakana phonetic extensions
+        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7A3}' // precomposed Hangul syllables
+        | '\u{F900}'..='\u{FAFF}' // CJK compatibility ideographs
+        | '\u{FF01}'..='\u{FF9D}' // full/half-width visible forms before voiced marks
+    )
+}
+
+/// Duplicate identity for Bank labels: exact equality or full Unicode
+/// case-insensitive equality. The backend candidate staging shares this
+/// exact predicate so a staged image and the engine can never disagree about
+/// which labels collide.
+pub fn cue_list_labels_collide(candidate: &str, existing: &str) -> bool {
+    candidate == existing || candidate.to_lowercase() == existing.to_lowercase()
+}
+
 /// One bounded Stage project mutation for the acknowledged D4 surface. Every
 /// variant maps onto an existing Engine primitive and is executed through the
 /// same admitted shared-snapshot publication machinery as the D3/PATCH
@@ -4108,10 +4222,6 @@ define_engine_command! {
         cue_id: CueId,
         label: String,
     },
-    UpsertCueList {
-        cue_list_id: CueListId,
-        label: String,
-    },
     /// Acknowledgement-bearing authored bank reorder. The complete ordered
     /// ID set is validated and published as one image; no cue membership or
     /// active-cue state is inferred from the order.
@@ -4128,10 +4238,31 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
-    RemoveCueList(CueListId),
-    SetCueList {
-        cue_id: CueId,
+    /// Acknowledgement-bearing authoritative Bank creation with the shared
+    /// admission protocol. An existing target ID and every label-policy
+    /// rejection are definitive; a queued cancellation before admission is
+    /// definitive; only an ACK disconnect after engine admission is
+    /// indeterminate. Validation, expiration, exact snapshot publication, and
+    /// publication-failure rollback follow the ReorderCueListsPublished
+    /// contract. Only `cue_lists` is mutable, so `RestoreCueLists` is an
+    /// exact rollback image.
+    CreateCueListPublished {
         cue_list_id: CueListId,
+        label: String,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Acknowledgement-bearing authoritative in-place Bank rename with the
+    /// shared admission protocol. A missing ID fails definitively and is
+    /// never recreated; classification otherwise matches
+    /// [`EngineCommand::CreateCueListPublished`].
+    RenameCueListPublished {
+        cue_list_id: CueListId,
+        label: String,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     UpsertPlaybackExecutor(PlaybackExecutorSummary),
     RemovePlaybackExecutor(ExecutorId),
@@ -4416,6 +4547,17 @@ define_engine_command! {
     /// runtime; it never mutates the authored project/history image.
     DjLinkStartTimeline {
         timeline_id: TimelineId,
+        position_ms: u64,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Acknowledgement-bearing absolute DJ playhead convergence. The active
+    /// authored Timeline identity is revalidated in the worker and the
+    /// canonical snapshot is returned only after the position is published.
+    DjLinkSyncTimelinePosition {
+        timeline_id: TimelineId,
+        position_ms: u64,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -4895,6 +5037,329 @@ define_engine_command! {
     },
 }
 
+/// Deliberate video-presentation classification table over every
+/// [`EngineCommand`] variant. It stays a real, hand-classified,
+/// wildcard-free `match`: adding or renaming a variant fails compilation
+/// right here until it is classified deliberately, so no command can ever
+/// silently inherit a permissive presentation default.
+///
+/// The table lives in this zero-state macro rather than an inherent method
+/// body purely so the physical line count of the classification never
+/// trips a function-length lint; rustc still type-checks and
+/// exhaustiveness-checks the expanded `match` exactly as before. Each
+/// commented arm group below is the typed category contract shared with
+/// [`EngineHandle::video_presentation_sample`] consumers.
+macro_rules! engine_command_video_presentation_relevance {
+    ($command:expr) => {
+        match $command {
+            // Project / video replacement and media authority.
+            EngineCommand::LoadProjectSnapshot(_)
+            | EngineCommand::LoadProjectSnapshotPublished { .. }
+            | EngineCommand::MediaAssetTransactionPublished { .. }
+            | EngineCommand::SetMediaAssetAvailability { .. }
+            | EngineCommand::BootstrapVjShow { .. }
+            | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. } => true,
+            // Safety blackout where final video bytes or presentation
+            // permission change (lighting blackout gates rendered output too).
+            EngineCommand::Blackout(_)
+            | EngineCommand::SetAllBlackout(_)
+            | EngineCommand::SafetyBlackoutEngagePublished { .. }
+            | EngineCommand::SafetyBlackoutReleasePublished { .. }
+            | EngineCommand::SetVideoBlackout(_)
+            | EngineCommand::SetVideoOutputBlackout { .. } => true,
+            // Output add/remove/kind/endpoint/enabled/size/mapping/opacity/
+            // routing. Catalog-only preset writes do not touch a live route.
+            EngineCommand::AddVideoOutput(_)
+            | EngineCommand::AddVideoOutputPublished { .. }
+            | EngineCommand::RemoveVideoOutput(_)
+            | EngineCommand::RemoveVideoOutputPublished { .. }
+            | EngineCommand::SetVideoOutputConfig { .. }
+            | EngineCommand::SetVideoOutputEnabled { .. }
+            | EngineCommand::SetVideoOutputRouting { .. }
+            | EngineCommand::SetVideoOutputOpacity { .. }
+            | EngineCommand::FadeVideoOutputOpacity { .. }
+            | EngineCommand::SetVideoOutputMapping { .. }
+            | EngineCommand::SetVideoOutputMappingField { .. }
+            | EngineCommand::ApplyVideoOutputMappingPreset { .. } => true,
+            // Video source/layer configuration.
+            EngineCommand::AddVideoLayer { .. }
+            | EngineCommand::AddVideoLayerWithAllocatedAsset { .. }
+            | EngineCommand::DuplicateVideoLayer { .. }
+            | EngineCommand::DuplicateVideoLayerWithAllocatedSlots { .. }
+            | EngineCommand::DuplicateVideoLayerPublished { .. }
+            | EngineCommand::DuplicateVideoLayerPublishedWithAllocatedSlots { .. }
+            | EngineCommand::RemoveVideoLayer(_)
+            | EngineCommand::SetVideoLayerOrder(_)
+            | EngineCommand::SetVideoLayerLabel { .. }
+            | EngineCommand::SetVideoLayerSource { .. }
+            | EngineCommand::SetVideoLayerState { .. }
+            | EngineCommand::ExclusiveVideoTake { .. }
+            | EngineCommand::SetVideoLayerParam { .. }
+            | EngineCommand::FadeVideoLayerOpacity { .. }
+            | EngineCommand::SetVideoLayerEnabled { .. }
+            | EngineCommand::SetVideoLayerSolo { .. }
+            | EngineCommand::SetVideoLayerPlaying { .. }
+            | EngineCommand::SetVideoLayerLoop { .. }
+            | EngineCommand::SetVideoLayerBlendMode { .. }
+            | EngineCommand::SetVideoMasterOpacity(_) => true,
+            // Clip-slot transport and source assignment.
+            EngineCommand::VideoClipSlotImportAndAssignPublished { .. }
+            | EngineCommand::CreateVideoClipSlotPublished { .. }
+            | EngineCommand::AssignVideoClipSlotAssetPublished { .. }
+            | EngineCommand::UpdateVideoClipSlotPublished { .. }
+            | EngineCommand::RemoveVideoClipSlotPublished { .. }
+            | EngineCommand::ReorderVideoClipSlotsPublished { .. }
+            | EngineCommand::DuplicateVideoClipSlotPublished { .. }
+            | EngineCommand::SetDefaultVideoClipSlotPublished { .. }
+            | EngineCommand::QueueVideoClipSlotPublished { .. }
+            | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
+            | EngineCommand::LaunchVideoClipSlotPublished { .. }
+            | EngineCommand::SeekVideoClipSlotPublished { .. } => true,
+            // Layer transitions and ISF/effect configuration.
+            EngineCommand::LaunchVideoLayerTransitionBusPublished { .. }
+            | EngineCommand::ReleaseVideoLayerTransitionBusPublished { .. }
+            | EngineCommand::SetVideoLayerIsfEffect { .. }
+            | EngineCommand::SetVideoLayerIsfEffectWithAllocatedIds { .. }
+            | EngineCommand::SetVideoLayerIsfEffectPublished { .. }
+            | EngineCommand::SetVideoLayerIsfEffectPublishedWithAllocatedIds { .. }
+            | EngineCommand::ApplyVideoEffectCatalogPublished { .. }
+            | EngineCommand::MutateVideoLayerIsfStack { .. }
+            | EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds { .. }
+            | EngineCommand::PulseVideoLayerIsfEvent { .. } => true,
+            // Compositions and video cue points.
+            EngineCommand::AddVideoComposition(_)
+            | EngineCommand::RemoveVideoComposition(_)
+            | EngineCommand::SetVideoCompositionLayers { .. }
+            | EngineCommand::AddVideoCuePoint { .. }
+            | EngineCommand::RemoveVideoCuePoint { .. }
+            | EngineCommand::SetVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePointRelative { .. } => true,
+            // AutoVJ configuration.
+            EngineCommand::SetAutoVjConfig(_)
+            | EngineCommand::SetAutoVjArmed(_)
+            | EngineCommand::SetAutoVjHold(_)
+            | EngineCommand::SetAutoVjConfigPublished { .. }
+            | EngineCommand::SetAutoVjArmedPublished { .. }
+            | EngineCommand::SetAutoVjHoldPublished { .. } => true,
+            // Lighting effects whose targets reach video layers.
+            EngineCommand::SetEffectVideoTargetPosition { .. } => true,
+            // Authored video automation on the timeline.
+            EngineCommand::AddTimelineVideoAutomation { .. }
+            | EngineCommand::SetTimelineVideoAutomation { .. } => true,
+            // Explicit timeline transport intent that changes the intended
+            // rendered frame: start/play/seek/jump/loop/release/follow abort.
+            EngineCommand::StartTimeline { .. }
+            | EngineCommand::DjLinkStartTimeline { .. }
+            | EngineCommand::DjLinkSyncTimelinePosition { .. }
+            | EngineCommand::SetTimelinePlaying(_)
+            | EngineCommand::SetTimelinePlayingPublished { .. }
+            | EngineCommand::SeekTimeline(_)
+            | EngineCommand::SeekDirectChildTimeline { .. }
+            | EngineCommand::SeekTimelineBeat { .. }
+            | EngineCommand::DjLinkTimelineBeatJump { .. }
+            | EngineCommand::DjLinkRelease { .. }
+            | EngineCommand::SetTimelineLoopEnabled(_)
+            | EngineCommand::SetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+            | EngineCommand::ToggleTimelineLoop
+            | EngineCommand::ScaleTimelineLoop(_)
+            | EngineCommand::SetDirectChildTimelinePlaying { .. }
+            | EngineCommand::AbortTimelineFollow { .. }
+            | EngineCommand::ReconformTimelineToBpm { .. } => true,
+
+            // Lighting fixtures, patch, profiles, groups, programmer.
+            EngineCommand::PatchFixture { .. }
+            | EngineCommand::PatchFixturesPublished { .. }
+            | EngineCommand::RepairFixtureProfilePublished { .. }
+            | EngineCommand::ReplaceFixtureProfile { .. }
+            | EngineCommand::RemoveFixture(_)
+            | EngineCommand::SetAttribute { .. }
+            | EngineCommand::SetFixtureAttributeBatch { .. }
+            | EngineCommand::SetGroupAttribute { .. }
+            | EngineCommand::SetProgrammerMode { .. }
+            | EngineCommand::SetProgrammerAttribute { .. }
+            | EngineCommand::SetProgrammerFixtureAttributeBatch { .. }
+            | EngineCommand::SetProgrammerGroupAttribute { .. }
+            | EngineCommand::ClearProgrammer
+            | EngineCommand::CommitProgrammer { .. }
+            | EngineCommand::SetGroupHighlight { .. }
+            | EngineCommand::SetGroupSolo { .. }
+            | EngineCommand::SetGroupStrobe { .. }
+            | EngineCommand::SetGroupPark { .. }
+            | EngineCommand::SetGroupFixtureLimits { .. }
+            | EngineCommand::SetFixtureTransform { .. }
+            | EngineCommand::SetFixturePatch { .. }
+            | EngineCommand::SetFixtureLimits { .. }
+            | EngineCommand::SetFixtureGroups { .. }
+            | EngineCommand::ApplyFixtureGroupStatePublished { .. }
+            | EngineCommand::SetFixtureHighlight { .. }
+            | EngineCommand::SetFixtureSolo { .. }
+            | EngineCommand::SetFixturePark { .. }
+            | EngineCommand::ClearFixtureFlags(_)
+            | EngineCommand::ApplyAttributeValues { .. } => false,
+            // Persistence reads, telemetry, introspection, test probes.
+            EngineCommand::RequestPersistenceSnapshot { .. } | EngineCommand::ResetTelemetry => {
+                false
+            }
+            #[cfg(test)]
+            EngineCommand::InspectMediaAssetRollbackTestState { .. } => false,
+            // Touch/layout and stage visualization are UI-only state.
+            EngineCommand::SetTouchSurface { .. }
+            | EngineCommand::SetStageMapConfig(_)
+            | EngineCommand::SaveStageMapPreset { .. }
+            | EngineCommand::UpsertStageMapPresetPublished { .. }
+            | EngineCommand::ApplyStageMapPreset { .. }
+            | EngineCommand::RemoveStageMapPreset { .. }
+            | EngineCommand::UpsertStageObject(_)
+            | EngineCommand::RemoveStageObject(_)
+            | EngineCommand::StageProjectMutationPublished { .. } => false,
+            // DMX output routing and DMX input streams are lighting-domain.
+            EngineCommand::SetOutput(_)
+            | EngineCommand::SetDmxOutputs(_)
+            | EngineCommand::SetDmxInputFrame { .. }
+            | EngineCommand::ClearDmxInput(_) => false,
+            // Output ownership is fenced by its own epoch in every transport;
+            // it is not a rendered-frame configuration mutation.
+            EngineCommand::SetOutputOwnershipRole { .. }
+            | EngineCommand::FenceOutputOwnership { .. }
+            | EngineCommand::PrepareOutputOwnershipRole { .. } => false,
+            // External clock domains are normal show-rate progress.
+            EngineCommand::SetBpm(_)
+            | EngineCommand::TapBpm
+            | EngineCommand::MidiClockPulse
+            | EngineCommand::SyncExternalClock { .. }
+            | EngineCommand::MidiSongPositionPointer(_)
+            | EngineCommand::SyncTimelineTimecode { .. } => false,
+            // Live audio input streams never invalidate rendered video.
+            EngineCommand::SetLiveAudioSpectrum(_)
+            | EngineCommand::PublishLiveAudioFrame { .. }
+            | EngineCommand::ClearLiveAudioInput { .. }
+            | EngineCommand::ClearLiveAudioInputPublished { .. }
+            | EngineCommand::ReportLiveAudioOnset { .. } => false,
+            // Lighting masters, submasters, live modifiers.
+            EngineCommand::SetLightingMaster(_)
+            | EngineCommand::SetGroupSubmaster { .. }
+            | EngineCommand::SetCueLiveModifier { .. }
+            | EngineCommand::ClearCueLiveModifier(_)
+            | EngineCommand::SetCueLiveModifierDefaults { .. }
+            | EngineCommand::SetCueFadePaused(_) => false,
+            // Lighting effect catalog (LFO/wave/color/chaser/move/value/
+            // curve/mapping) never reaches the video renderer except through
+            // the explicitly classified video-target command above.
+            EngineCommand::AddLfoEffect { .. }
+            | EngineCommand::AddPositionWaveEffect { .. }
+            | EngineCommand::AddColorEffect { .. }
+            | EngineCommand::AddChaserEffect { .. }
+            | EngineCommand::AddMoveEffect { .. }
+            | EngineCommand::AddValueEffect { .. }
+            | EngineCommand::AddCurveEffect { .. }
+            | EngineCommand::AddMappingEffect { .. }
+            | EngineCommand::AddColorMappingEffect { .. }
+            | EngineCommand::UpdateLfoEffect { .. }
+            | EngineCommand::UpdatePositionWaveEffect { .. }
+            | EngineCommand::UpdateColorEffect { .. }
+            | EngineCommand::UpdateChaserEffect { .. }
+            | EngineCommand::UpdateMoveEffect { .. }
+            | EngineCommand::UpdateValueEffect { .. }
+            | EngineCommand::UpdateCurveEffect { .. }
+            | EngineCommand::UpdateMappingEffect { .. }
+            | EngineCommand::UpdateColorMappingEffect { .. }
+            | EngineCommand::SetEffectEnabled { .. }
+            | EngineCommand::SetEffectEnabledPublished { .. }
+            | EngineCommand::MoveEffect { .. }
+            | EngineCommand::RemoveEffect(_) => false,
+            // Node graphs drive lighting attributes from audio analysis.
+            EngineCommand::UpsertNodeGraph(_)
+            | EngineCommand::UpsertNodeGraphPublished { .. }
+            | EngineCommand::SetNodeGraphEnabled { .. }
+            | EngineCommand::SetNodeGraphEnabledPublished { .. }
+            | EngineCommand::RemoveNodeGraph(_)
+            | EngineCommand::RemoveNodeGraphPublished { .. } => false,
+            // Cue authoring, palettes, colors, metadata, MIB.
+            EngineCommand::CreateCue { .. }
+            | EngineCommand::CreateCuePublished { .. }
+            | EngineCommand::CreateEmptyCuePublished { .. }
+            | EngineCommand::UpdateCue { .. }
+            | EngineCommand::UpdateCuePublished { .. }
+            | EngineCommand::MoveCueBetweenBanksPublished { .. }
+            | EngineCommand::SetCueEffectTargetsPublished { .. }
+            | EngineCommand::SetCueStepsPublished { .. }
+            | EngineCommand::SetCueDetailsPublished { .. }
+            | EngineCommand::SetCueChildTimeline { .. }
+            | EngineCommand::SetCueColor { .. }
+            | EngineCommand::SetGroupColor { .. }
+            | EngineCommand::SetCueMetadata { .. }
+            | EngineCommand::SetCueParts { .. }
+            | EngineCommand::SetCueMark { .. }
+            | EngineCommand::SetCueMibFixtureIds { .. }
+            | EngineCommand::UpsertPalette(_)
+            | EngineCommand::RemovePalette(_)
+            | EngineCommand::ApplyPalette { .. }
+            | EngineCommand::SetCuePaletteTargets { .. }
+            | EngineCommand::MoveCue { .. }
+            | EngineCommand::DuplicateCue { .. } => false,
+            // Cue list / bank authoring.
+            EngineCommand::ReorderCueListsPublished { .. }
+            | EngineCommand::DeleteCueListPublished { .. }
+            | EngineCommand::CreateCueListPublished { .. }
+            | EngineCommand::RenameCueListPublished { .. } => false,
+            // Saving or removing a mapping preset edits only the preset
+            // catalog. Applying one is classified above because that changes
+            // a live output mapping.
+            EngineCommand::SaveVideoOutputMappingPreset { .. }
+            | EngineCommand::RemoveVideoOutputMappingPreset { .. } => false,
+            // Playback executors trigger lighting content only.
+            EngineCommand::UpsertPlaybackExecutor(_)
+            | EngineCommand::RemovePlaybackExecutor(_)
+            | EngineCommand::SetPlaybackExecutorLevel { .. }
+            | EngineCommand::SetPlaybackMaster(_)
+            | EngineCommand::TriggerPlaybackExecutorNext(_)
+            | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::TriggerCue(_)
+            | EngineCommand::TriggerCueWithDirection { .. }
+            | EngineCommand::TriggerNextCue
+            | EngineCommand::TriggerPreviousCue
+            | EngineCommand::TriggerCueListNext(_)
+            | EngineCommand::TriggerCueListPrevious(_)
+            | EngineCommand::ReleaseCue(_)
+            | EngineCommand::RemoveCue(_)
+            | EngineCommand::RemoveCuePublished { .. } => false,
+            // Timeline authoring for lighting scenes/events/banks/layers and
+            // audio clips never rewrites the current rendered video frame.
+            EngineCommand::AddTimelineCueEvent { .. }
+            | EngineCommand::SetTimelineCueEvent { .. }
+            | EngineCommand::RemoveTimelineEvent(_)
+            | EngineCommand::AddTimelineCueEventPublished { .. }
+            | EngineCommand::SetTimelineCueEventPublished { .. }
+            | EngineCommand::RemoveTimelineEventPublished { .. }
+            | EngineCommand::AddTimelineSceneBlockPublished { .. }
+            | EngineCommand::SetTimelineSceneBlockPublished { .. }
+            | EngineCommand::RemoveTimelineSceneBlockPublished { .. }
+            | EngineCommand::SnapTimelineItemsPublished { .. }
+            | EngineCommand::AddTimelineLayer { .. }
+            | EngineCommand::UpdateTimelineLayer { .. }
+            | EngineCommand::RemoveTimelineLayer { .. }
+            | EngineCommand::ReorderTimelineLayers { .. }
+            | EngineCommand::AddTimelineAudioClip { .. }
+            | EngineCommand::UpdateTimelineAudioClip { .. }
+            | EngineCommand::RemoveTimelineAudioClip { .. }
+            | EngineCommand::SetTimelineAudioMaster { .. }
+            | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
+            | EngineCommand::ApplyTimelineBankPublished { .. }
+            | EngineCommand::AddTimelineAutomation { .. }
+            | EngineCommand::SetTimelineAutomation { .. }
+            | EngineCommand::SetTimelineAutomationEnabled { .. }
+            | EngineCommand::RemoveTimelineAutomation(_)
+            | EngineCommand::SetTimelineAudio(_)
+            | EngineCommand::SetTimelineMetronome { .. } => false,
+            // Follow settlement bookkeeping does not change presentation
+            // identity; the follow-abort transport operation above does.
+            EngineCommand::AcknowledgeTimelineFollowSettlement { .. } => false,
+        }
+    };
+}
+
 impl EngineCommand {
     /// Whether enqueueing this command can change the canonical project image
     /// returned by [`EngineHandle::persistence_snapshot`].  External-input
@@ -4942,6 +5407,7 @@ impl EngineCommand {
                 | EngineCommand::SetMediaAssetAvailability { .. }
                 | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::DjLinkStartTimeline { .. }
+                | EngineCommand::DjLinkSyncTimelinePosition { .. }
                 | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
                 | EngineCommand::DjLinkTimelineBeatJump { .. }
                 | EngineCommand::DjLinkRelease { .. }
@@ -4959,6 +5425,34 @@ impl EngineCommand {
                 | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                 | EngineCommand::PulseVideoLayerIsfEvent { .. }
         )
+    }
+
+    /// Whether enqueueing this command is a semantic video presentation
+    /// invalidator: only these commands may advance the engine-issued even/
+    /// odd video presentation generation at their next publication so native
+    /// transports revalidate before the physical SDK boundary.
+    ///
+    /// The classification is exhaustive over `EngineCommand` with no wildcard
+    /// arm. Adding or renaming a variant fails compilation here instead of
+    /// silently inheriting a permissive default; the new variant must be
+    /// classified deliberately. Known lighting/DMX/patch/programmer/group/
+    /// palette/cue-authoring/playback-executor/control/telemetry/live-audio
+    /// traffic occurs at show rate and must never revoke a prepared output
+    /// frame, while a missed revocation could present stale configuration.
+    ///
+    /// The `true` set covers exactly: project/video replacement; safety
+    /// blackout where final video bytes or presentation permission change;
+    /// output add/remove/kind/endpoint/enabled/size/mapping/opacity/routing;
+    /// video source/layer/composition/effect/transition/AutoVJ config;
+    /// explicit video/timeline seek/play/loop/jump/follow identity operations
+    /// that change the intended rendered frame; and timeline reconform, which
+    /// repositions authored video-relevant items under the live playhead.
+    /// Ordinary clock/playhead/transition progress stays `false`.
+    /// `SyncTimelineTimecode` is `false` because continuous external timecode
+    /// tracking is normal playhead progress; its handler marks the generation
+    /// dirty only for a true discontinuity (an explicit locate).
+    pub fn mutates_video_presentation_configuration(&self) -> bool {
+        engine_command_video_presentation_relevance!(self)
     }
 
     fn requests_low_latency_dmx_tick(&self) -> bool {
@@ -5058,9 +5552,8 @@ impl EngineCommand {
                 | EngineCommand::SetCuePaletteTargets { .. }
                 | EngineCommand::MoveCue { .. }
                 | EngineCommand::DuplicateCue { .. }
-                | EngineCommand::UpsertCueList { .. }
-                | EngineCommand::RemoveCueList(_)
-                | EngineCommand::SetCueList { .. }
+                | EngineCommand::CreateCueListPublished { .. }
+                | EngineCommand::RenameCueListPublished { .. }
                 | EngineCommand::UpsertPlaybackExecutor(_)
                 | EngineCommand::RemovePlaybackExecutor(_)
                 | EngineCommand::SetPlaybackExecutorLevel { .. }
@@ -5121,6 +5614,15 @@ pub struct EngineHandle {
     /// and active-window changes), closing the final same-authority install
     /// race in the native audio worker.
     timeline_audio_publication_generation: Arc<AtomicU64>,
+    /// Engine-issued monotonic video presentation configuration token.
+    /// Advances only for semantic presentation mutations (project/video
+    /// replacement, safety blackout, output route/endpoint/size/mapping/
+    /// opacity/enablement, layer/composition/effect/transition/AutoVJ
+    /// configuration, explicit seek/play mutations), never for ordinary
+    /// playhead or transition progress. Published strictly after the mutated
+    /// snapshot becomes visible so a captured token can never certify an
+    /// older configuration than its paired snapshot read.
+    video_presentation_config_token: Arc<AtomicU64>,
     output_ownership_gate: OutputOwnershipGate,
     /// Serializes public ID allocation with candidate snapshot reservation.
     /// Reservation is a monotonic commit at command enqueue time, so a
@@ -5171,6 +5673,15 @@ pub struct SafetyBlackoutAuthority {
     pub engaged: bool,
     pub epoch: u64,
     pub generation: u64,
+}
+
+/// One atomic-enough presentation capture for native output transports: the
+/// engine-issued configuration token paired with the snapshot read that
+/// strictly follows it. See [`EngineHandle::video_presentation_sample`].
+#[derive(Debug, Clone)]
+pub struct VideoPresentationSample {
+    pub config_token: u64,
+    pub snapshot: EngineSnapshot,
 }
 
 /// Engine-owned inputs for one active Timeline Follow presenter. The backend
@@ -5534,6 +6045,7 @@ impl EngineHandle {
         let timeline_audio_projection_authority =
             Arc::new(RwLock::new(TimelineAudioProjectionAuthority::default()));
         let timeline_audio_publication_generation = Arc::new(AtomicU64::new(1));
+        let video_presentation_config_token = Arc::new(AtomicU64::new(1));
         let next_fixture_id = Arc::new(AtomicU64::new(1));
         let next_effect_id = Arc::new(AtomicU64::new(1));
         let next_cue_id = Arc::new(AtomicU64::new(1));
@@ -5578,6 +6090,7 @@ impl EngineHandle {
             Arc::clone(&timeline_audio_projection_authority);
         let runtime_timeline_audio_publication_generation =
             Arc::clone(&timeline_audio_publication_generation);
+        let runtime_video_presentation_config_token = Arc::clone(&video_presentation_config_token);
         let runtime_lifetime = Arc::downgrade(&lifetime);
         #[cfg(test)]
         let runtime_test_fail_next_pending_publication =
@@ -5596,6 +6109,7 @@ impl EngineHandle {
                     runtime_media_asset_availability,
                     runtime_timeline_audio_projection_authority,
                     runtime_timeline_audio_publication_generation,
+                    runtime_video_presentation_config_token,
                     #[cfg(test)]
                     (
                         runtime_test_fail_next_pending_publication,
@@ -5626,6 +6140,7 @@ impl EngineHandle {
             timeline_follow_video_render_snapshot,
             timeline_audio_projection_authority,
             timeline_audio_publication_generation,
+            video_presentation_config_token,
             output_ownership_gate,
             allocator_gate,
             fixture_allocator_transaction_gate,
@@ -5692,6 +6207,21 @@ impl EngineHandle {
 
     pub fn allocate_cue_list_id(&self) -> CueListId {
         self.allocate_u64_id(&self.next_cue_list_id, AllocatorDomain::CueLists)
+    }
+
+    /// Reclaim a Bank identity only while it is still the allocator tail. A
+    /// concurrent reservation intentionally makes the allocation monotonic.
+    pub fn release_cue_list_id_if_last(&self, cue_list_id: CueListId) -> bool {
+        let Some(next) = cue_list_id.checked_add(1) else {
+            return false;
+        };
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.next_cue_list_id
+            .compare_exchange(next, cue_list_id, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
     }
 
     pub fn allocate_palette_id(&self) -> PaletteId {
@@ -5981,7 +6511,7 @@ impl EngineHandle {
         timeline_id: TimelineId,
         timeout: Duration,
     ) -> Result<(), String> {
-        self.dj_link_start_timeline_with_snapshot_timeout(timeline_id, timeout)
+        self.dj_link_start_timeline_with_snapshot_timeout(timeline_id, 0, timeout)
             .map(|_| ())
     }
 
@@ -5993,12 +6523,33 @@ impl EngineHandle {
         &self,
         timeline_id: TimelineId,
     ) -> Result<Arc<EngineSnapshot>, String> {
-        self.dj_link_start_timeline_with_snapshot_timeout(timeline_id, DJ_LINK_ENGINE_ACK_TIMEOUT)
+        self.dj_link_start_timeline_with_snapshot_timeout(
+            timeline_id,
+            0,
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
+    }
+
+    /// Start an authored Timeline at the absolute playhead reported by the
+    /// authenticated DJ master. The worker publishes that position before
+    /// returning the canonical snapshot.
+    #[doc(hidden)]
+    pub fn dj_link_start_timeline_at_with_canonical_snapshot(
+        &self,
+        timeline_id: TimelineId,
+        position_ms: u64,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_start_timeline_with_snapshot_timeout(
+            timeline_id,
+            position_ms,
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
     }
 
     fn dj_link_start_timeline_with_snapshot_timeout(
         &self,
         timeline_id: TimelineId,
+        position_ms: u64,
         timeout: Duration,
     ) -> Result<Arc<EngineSnapshot>, String> {
         self.submit_dj_link_command(
@@ -6006,6 +6557,28 @@ impl EngineHandle {
             "DJ Link timeline start",
             |expires_at, admission, ack| EngineCommand::DjLinkStartTimeline {
                 timeline_id,
+                position_ms,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
+    }
+
+    /// Converge the already-active DJ-owned Timeline to an absolute playhead.
+    /// This path never performs mapping lookup or starts another Timeline.
+    #[doc(hidden)]
+    pub fn dj_link_sync_timeline_position_with_canonical_snapshot(
+        &self,
+        timeline_id: TimelineId,
+        position_ms: u64,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+            "DJ Link timeline position sync",
+            |expires_at, admission, ack| EngineCommand::DjLinkSyncTimelinePosition {
+                timeline_id,
+                position_ms,
                 expires_at,
                 admission,
                 ack,
@@ -6273,6 +6846,16 @@ impl EngineHandle {
     /// race a concurrent importer below it, while a failed/queued legacy
     /// creator may leave a monotonic allocator gap but never reuse an ID.
     fn prepare_command_for_enqueue(&self, command: EngineCommand) -> Result<EngineCommand, String> {
+        // FC27: a hostile current-schema project load is rejected before any
+        // enqueue-side allocator observation or reservation mutates counters,
+        // and before the command can enter a queue.
+        match &command {
+            EngineCommand::LoadProjectSnapshot(snapshot)
+            | EngineCommand::LoadProjectSnapshotPublished { snapshot, .. } => {
+                validate_current_schema_snapshot_reference_integrity_for_load(snapshot)?;
+            }
+            _ => {}
+        }
         let provided_maxima = self.allocator_maximums_for_command(&command)?;
         let _fixture_transaction_guard = provided_maxima.fixtures.map(|_| {
             self.fixture_allocator_transaction_gate
@@ -6901,6 +7484,113 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Cue List delete acknowledgement failed: {error}"))?
+    }
+
+    /// Definitively create one authored Bank and wait for the engine snapshot
+    /// acknowledgement. An existing ID and every label-policy rejection are
+    /// definitive; a queued cancellation before admission is definitive; only
+    /// an ACK disconnect after engine admission is indeterminate.
+    pub fn create_cue_list_published(
+        &self,
+        cue_list_id: CueListId,
+        label: String,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.create_cue_list_published_with_timeout(
+            cue_list_id,
+            label,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn create_cue_list_published_with_timeout(
+        &self,
+        cue_list_id: CueListId,
+        label: String,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.submit_cue_list_bank_mutation(
+            BANK_CREATE_ACK_DISCONNECTED_MESSAGE,
+            timeout,
+            |expires_at, admission, ack| EngineCommand::CreateCueListPublished {
+                cue_list_id,
+                label,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
+    }
+
+    /// Definitively rename one authored Bank in place and wait for the engine
+    /// snapshot acknowledgement. A missing ID fails definitively and is never
+    /// recreated; classification otherwise matches
+    /// [`Self::create_cue_list_published`].
+    pub fn rename_cue_list_published(
+        &self,
+        cue_list_id: CueListId,
+        label: String,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.rename_cue_list_published_with_timeout(
+            cue_list_id,
+            label,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn rename_cue_list_published_with_timeout(
+        &self,
+        cue_list_id: CueListId,
+        label: String,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.submit_cue_list_bank_mutation(
+            BANK_RENAME_ACK_DISCONNECTED_MESSAGE,
+            timeout,
+            |expires_at, admission, ack| EngineCommand::RenameCueListPublished {
+                cue_list_id,
+                label,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
+    }
+
+    /// Shared submission path for both authoritative Bank mutations. It uses
+    /// the classified snapshot ACK protocol so a queued cancellation before
+    /// engine admission stays definitive while an admitted ACK disconnect is
+    /// reported as indeterminate instead of a fabricated failure.
+    fn submit_cue_list_bank_mutation(
+        &self,
+        disconnected_message: &'static str,
+        timeout: Duration,
+        build: impl FnOnce(
+            Instant,
+            ProjectSnapshotLoadAdmission,
+            mpsc::SyncSender<Result<(), String>>,
+        ) -> EngineCommand,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(build(deadline, admission.clone(), ack))
+            .map_err(|error| SnapshotPublicationFailure::Definitive(error.to_string()))?;
+        receive_classified_snapshot_ack(
+            receiver,
+            &admission,
+            deadline,
+            timeout,
+            disconnected_message.to_string(),
+        )
+        .map_err(|error| {
+            if error.allocator_rewind_safe {
+                SnapshotPublicationFailure::Definitive(error.message)
+            } else {
+                SnapshotPublicationFailure::Indeterminate(error.message)
+            }
+        })
     }
 
     /// Publish one Display output and wait for the definitive engine
@@ -8691,6 +9381,30 @@ impl EngineHandle {
         self.output_ownership_gate.status()
     }
 
+    /// Current engine-issued video presentation configuration token. It
+    /// advances only for semantic presentation mutations published by the
+    /// engine, never for ordinary playhead/transition progress.
+    pub fn video_presentation_config_token(&self) -> u64 {
+        self.video_presentation_config_token.load(Ordering::Acquire)
+    }
+
+    /// Capture one presentation sample: the configuration token strictly
+    /// before a full snapshot read. The order is load-bearing. The engine
+    /// publishes a bumped token only after its mutated snapshot is visible,
+    /// so sampling the token first guarantees that the paired snapshot is at
+    /// least as new as the token: a later pre-dispatch comparison against the
+    /// live token rejects every mutation that happened after this capture.
+    /// Reversing the order could certify an older token against a newer
+    /// snapshot and miss a revocation.
+    pub fn video_presentation_sample(&self) -> VideoPresentationSample {
+        let config_token = self.video_presentation_config_token();
+        let snapshot = self.snapshot();
+        VideoPresentationSample {
+            config_token,
+            snapshot,
+        }
+    }
+
     pub fn try_output_ownership_status(&self) -> Option<OutputOwnershipStatus> {
         self.output_ownership_gate.try_status()
     }
@@ -9275,21 +9989,14 @@ impl EngineHandle {
             }
             EngineCommand::CreateCuePublished {
                 cue_id,
-                cue_list_id,
                 effect_targets,
                 ..
             } => {
                 maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
-                maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
                 observe_effect_target_allocator_sources(&mut maxima, effect_targets);
             }
-            EngineCommand::CreateEmptyCuePublished {
-                cue_id,
-                cue_list_id,
-                ..
-            } => {
+            EngineCommand::CreateEmptyCuePublished { cue_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
-                maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
             }
             EngineCommand::SetCueEffectTargetsPublished { effect_targets, .. } => {
                 observe_effect_target_allocator_sources(&mut maxima, effect_targets);
@@ -9307,16 +10014,18 @@ impl EngineHandle {
             EngineCommand::DuplicateCue { cue_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
             }
-            EngineCommand::UpsertCueList { cue_list_id, .. }
-            | EngineCommand::SetCueList { cue_list_id, .. }
-            | EngineCommand::MoveCueBetweenBanksPublished {
-                target_cue_list_id: cue_list_id,
-                ..
-            }
-            | EngineCommand::DeleteCueListPublished { cue_list_id, .. } => {
+            // A Bank ID is allocated only by Bank creation. Every other Bank
+            // command carries an existing identity as a reference and must
+            // reach its definitive runtime validation before it can change
+            // state. Reserving a referenced ID here would let a missing or
+            // malformed rename/move/delete consume the Bank high-water mark.
+            EngineCommand::CreateCueListPublished { cue_list_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
             }
-            EngineCommand::ReorderCueListsPublished { .. } => {}
+            EngineCommand::RenameCueListPublished { .. }
+            | EngineCommand::MoveCueBetweenBanksPublished { .. }
+            | EngineCommand::DeleteCueListPublished { .. }
+            | EngineCommand::ReorderCueListsPublished { .. } => {}
             EngineCommand::UpsertPalette(palette) => {
                 maxima.observe_u64(AllocatorDomain::Palettes, palette.id);
             }
@@ -9692,7 +10401,6 @@ impl EngineHandle {
             | EngineCommand::ApplyPalette { .. }
             | EngineCommand::SetCuePaletteTargets { .. }
             | EngineCommand::MoveCue { .. }
-            | EngineCommand::RemoveCueList(_)
             | EngineCommand::RemovePlaybackExecutor(_)
             | EngineCommand::SetPlaybackExecutorLevel { .. }
             | EngineCommand::SetPlaybackMaster(_)
@@ -9730,6 +10438,7 @@ impl EngineHandle {
             | EngineCommand::SetTimelinePlaying(_)
             | EngineCommand::StartTimeline { .. }
             | EngineCommand::DjLinkStartTimeline { .. }
+            | EngineCommand::DjLinkSyncTimelinePosition { .. }
             | EngineCommand::SetTimelinePlayingPublished { .. }
             | EngineCommand::SeekTimeline(_)
             | EngineCommand::SetTimelineLoopEnabled(_)
@@ -10246,6 +10955,25 @@ fn observe_video_effect_legacy_adapter_allocator_sources(
     for id in &ids.effect_ids {
         maxima.observe_u64(AllocatorDomain::VideoEffects, id.0);
     }
+}
+
+/// FC27 clean-break gate shared by every project/snapshot load ingress. A
+/// current-schema snapshot (non-empty ordered Timeline bank) must pass raw
+/// reference-integrity validation before any normalization, sanitization,
+/// legacy migration, fabrication, drop, or retarget path runs, and a
+/// rejection is atomic: nothing is published and no runtime, history,
+/// recovery, or allocator state is mutated. An empty Timeline bank is the
+/// explicitly older single-Timeline representation and remains the only
+/// shape that may still traverse the legacy migration path.
+fn validate_current_schema_snapshot_reference_integrity_for_load(
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    if snapshot.timeline_bank.is_empty() {
+        return Ok(());
+    }
+    protocol::validate_current_engine_snapshot_reference_integrity(snapshot)
+        .map(|_: protocol::ProjectReferenceIntegrityReport| ())
+        .map_err(|error| format!("project snapshot reference integrity: {error}"))
 }
 
 /// Prepare the authored video image before either project-load reservation or
@@ -17727,6 +18455,19 @@ struct RuntimeAutoVj {
     manual_hold: bool,
 }
 
+/// One admitted DJ-Link playhead observation. It anchors cadence-aware
+/// forward-tracking classification: the externally-owned playhead is frozen
+/// between SYNC frames, so ordinary forward progression must be judged
+/// against elapsed wall-clock time since the last admission, never against a
+/// raw position delta alone. Cleared on release, stop, manual seeks, source
+/// changes, and every transport-image replacement so a stale baseline can
+/// never launder a genuine locate into tracking.
+#[derive(Debug, Clone, Copy)]
+struct DjLinkTimelineObservation {
+    position_ms: u64,
+    observed_at: Instant,
+}
+
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
@@ -17839,6 +18580,13 @@ struct EngineRuntime {
     timeline_audio_commit_signature: TimelineAudioCommitSignature,
     published_timeline_audio_projection_authority: Arc<RwLock<TimelineAudioProjectionAuthority>>,
     published_timeline_audio_publication_generation: Arc<AtomicU64>,
+    /// Worker-local video presentation configuration token. Bumped only when
+    /// a classified semantic presentation command was applied and its mutated
+    /// snapshot was then successfully published; the published half is shared
+    /// with `EngineHandle` for transport-side pre-SDK validation.
+    video_presentation_config_token: u64,
+    published_video_presentation_config_token: Arc<AtomicU64>,
+    video_presentation_config_dirty: bool,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_features: Option<LiveAudioReactiveFeatures>,
     live_audio_onset_latched: bool,
@@ -17863,6 +18611,7 @@ struct EngineRuntime {
     timeline_evaluated_boundary_position_ms: Option<u64>,
     timeline_jump_landed_event_id: Option<TimelineEventId>,
     timeline_external_sync_source: Option<ClockSource>,
+    timeline_dj_link_observation: Option<DjLinkTimelineObservation>,
     timeline_due_cues: Vec<TimelineCueOccurrence>,
     #[cfg(test)]
     timeline_reconform_count: u64,
@@ -18110,6 +18859,7 @@ impl EngineRuntime {
             Arc::new(RwLock::new(HashMap::new())),
             Arc::new(RwLock::new(TimelineAudioProjectionAuthority::default())),
             Arc::new(AtomicU64::new(1)),
+            Arc::new(AtomicU64::new(1)),
             (
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicBool::new(false)),
@@ -18126,6 +18876,7 @@ impl EngineRuntime {
             RwLock<TimelineAudioProjectionAuthority>,
         >,
         published_timeline_audio_publication_generation: Arc<AtomicU64>,
+        published_video_presentation_config_token: Arc<AtomicU64>,
         #[cfg(test)] test_publication_failure_flags: (Arc<AtomicBool>, Arc<AtomicBool>),
     ) -> Self {
         let output_ownership_role = output_ownership_gate.status().effective_role;
@@ -18218,6 +18969,9 @@ impl EngineRuntime {
             timeline_audio_commit_signature: TimelineAudioCommitSignature::default(),
             published_timeline_audio_projection_authority,
             published_timeline_audio_publication_generation,
+            video_presentation_config_token: 1,
+            published_video_presentation_config_token,
+            video_presentation_config_dirty: false,
             live_audio_spectrum: None,
             live_audio_features: None,
             live_audio_onset_latched: false,
@@ -18239,6 +18993,7 @@ impl EngineRuntime {
             timeline_evaluated_boundary_position_ms: None,
             timeline_jump_landed_event_id: None,
             timeline_external_sync_source: None,
+            timeline_dj_link_observation: None,
             timeline_due_cues: Vec::with_capacity(64),
             #[cfg(test)]
             timeline_reconform_count: 0,
@@ -18819,6 +19574,15 @@ impl EngineRuntime {
         &mut self,
         mut snapshot: EngineSnapshot,
     ) -> Result<(), String> {
+        // FC27: raw current-schema reference integrity runs before any
+        // allocator reservation, migration, or staging so a rejected project
+        // cannot mutate allocator, history, recovery, or runtime state.
+        validate_current_schema_snapshot_reference_integrity_for_load(&snapshot)?;
+        // The legacy/current-schema shape is decided once, from the raw
+        // ingress image. Later normalization (for example
+        // `normalize_timeline_bank` filling an empty legacy bank) must not
+        // reclassify an explicitly older snapshot as current schema.
+        let ingress_current_schema = !snapshot.timeline_bank.is_empty();
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
         // Runtime authority is never imported with project JSON or an
@@ -18848,6 +19612,7 @@ impl EngineRuntime {
         validate_timeline_bank(&snapshot, &snapshot.video.media_assets).inspect_err(|error| {
             self.last_error = Some(error.clone());
         })?;
+        validate_project_child_timeline_graph(&snapshot.cues)?;
         validate_project_child_tempo_meter_maps(&snapshot.cues)?;
         // A legacy layer ISF is an exact renderer projection of its canonical
         // Layer chain, not a second authored shader allocation.  Count every
@@ -18859,7 +19624,7 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
-        if let Err(error) = self.validate_project_snapshot_load(&snapshot) {
+        if let Err(error) = self.validate_project_snapshot_load(&snapshot, ingress_current_schema) {
             self.last_error = Some(error.clone());
             return Err(error);
         }
@@ -19068,6 +19833,7 @@ impl EngineRuntime {
         self.timeline_evaluated_boundary_position_ms = None;
         self.timeline_jump_landed_event_id = None;
         self.timeline_external_sync_source = None;
+        self.timeline_dj_link_observation = None;
         self.timeline_due_cues.clear();
 
         // `load_project_snapshot_checked` has already normalized and
@@ -19334,7 +20100,11 @@ impl EngineRuntime {
     /// the replacement, so an invalid conformed event could leave a partially
     /// loaded runtime behind its old published snapshot. The staged fields
     /// mirror the load path's dependencies and are restored before returning.
-    fn validate_project_snapshot_load(&mut self, snapshot: &EngineSnapshot) -> Result<(), String> {
+    fn validate_project_snapshot_load(
+        &mut self,
+        snapshot: &EngineSnapshot,
+        current_schema: bool,
+    ) -> Result<(), String> {
         let now = Instant::now();
         let (loaded_fixtures, _, _) = runtime_fixtures_from_snapshot(&snapshot.fixtures);
         let loaded_video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
@@ -19404,7 +20174,26 @@ impl EngineRuntime {
         let previous_timeline_due_cues = std::mem::take(&mut self.timeline_due_cues);
         let previous_pending_cues = std::mem::take(&mut self.pending_cues);
 
-        let result = (|| {
+        // FC27: raw validation already accepted this current-schema image, so
+        // the staging sanitizer must not silently drop an authored entity.
+        // Count the authored domains up front and fail closed when staging
+        // shrinks one instead of repairing it behind the caller's back. Value
+        // canonicalization preserves counts and keeps working for valid data;
+        // the legacy single-Timeline representation is exempt by design.
+        let staged_entity_counts = [
+            ("Cue", snapshot.cues.len()),
+            ("Cue List", snapshot.cue_lists.len()),
+            ("Timeline Event", snapshot.timeline.events.len()),
+            ("Timeline Automation", snapshot.timeline.automations.len()),
+            (
+                "Timeline Video Automation",
+                snapshot.timeline.video_automations.len(),
+            ),
+            ("Lighting Effect", snapshot.effects.len()),
+            ("Node Graph", snapshot.node_graphs.len()),
+        ];
+
+        let mut result = (|| {
             self.recompute_timeline_event_layers()?;
             self.sanitize_loaded_show_references(now);
             self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
@@ -19414,6 +20203,33 @@ impl EngineRuntime {
             }
             Ok(())
         })();
+
+        if result.is_ok() && current_schema {
+            let remaining_entity_counts = [
+                ("Cue", self.cues.len()),
+                ("Cue List", self.cue_lists.len()),
+                ("Timeline Event", self.timeline_events.len()),
+                ("Timeline Automation", self.timeline_automations.len()),
+                (
+                    "Timeline Video Automation",
+                    self.timeline_video_automations.len(),
+                ),
+                ("Lighting Effect", self.effects.len()),
+                ("Node Graph", self.node_graphs.len()),
+            ];
+            for ((domain, staged), (_, remaining)) in staged_entity_counts
+                .iter()
+                .zip(remaining_entity_counts.iter())
+            {
+                if remaining < staged {
+                    result = Err(format!(
+                        "project snapshot staging dropped {domain} references; \
+                         current-schema loads must not be silently sanitized"
+                    ));
+                    break;
+                }
+            }
+        }
 
         self.fixtures = previous_fixtures;
         self.palettes = previous_palettes;
@@ -19827,6 +20643,7 @@ impl EngineRuntime {
             let is_dj_link_command = matches!(
                 queued_command.command,
                 EngineCommand::DjLinkStartTimeline { .. }
+                    | EngineCommand::DjLinkSyncTimelinePosition { .. }
                     | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
                     | EngineCommand::DjLinkTimelineBeatJump { .. }
                     | EngineCommand::DjLinkRelease { .. }
@@ -19898,6 +20715,7 @@ impl EngineRuntime {
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::SetTimelinePlayingPublished { .. }
                     | EngineCommand::DjLinkStartTimeline { .. }
+                    | EngineCommand::DjLinkSyncTimelinePosition { .. }
                     | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
                     | EngineCommand::DjLinkTimelineBeatJump { .. }
                     | EngineCommand::DjLinkRelease { .. }
@@ -19961,7 +20779,14 @@ impl EngineRuntime {
     fn apply_command(&mut self, command: EngineCommand) {
         let rebuild_effect_activations = engine_command_rebuilds_effect_activations(&command);
         let pending_ack_count = self.pending_command_acks.len();
+        let presentation_config_mutation = command.mutates_video_presentation_configuration();
         self.apply_command_inner(command);
+        // The token itself is only published after this turn's snapshot
+        // publication succeeds; marking dirty here records that the runtime
+        // image may have moved underneath the last published configuration.
+        if presentation_config_mutation {
+            self.video_presentation_config_dirty = true;
+        }
         if rebuild_effect_activations && self.pending_command_acks.len() == pending_ack_count {
             self.rebuild_effect_activations(Instant::now());
         }
@@ -21295,6 +22120,7 @@ impl EngineRuntime {
                     self.deactivate_all_child_transports();
                 }
                 self.timeline_external_sync_source = Some(source);
+                self.timeline_dj_link_observation = None;
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.clock.mark_timecode_sync(ClockSource::MidiClock, now);
                 self.apply_timeline_automations();
@@ -23392,32 +24218,6 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Cue {source_cue_id} was not found"));
                 }
             }
-            EngineCommand::UpsertCueList { cue_list_id, label } => {
-                let label = label.trim().chars().take(64).collect::<String>();
-                if cue_list_id == 0 {
-                    self.last_error = Some("Cue List ID must be greater than zero".to_string());
-                } else if label.is_empty() {
-                    self.last_error = Some("Cue List label is required".to_string());
-                } else if self.cue_lists.iter().any(|cue_list| {
-                    cue_list.id != cue_list_id && cue_list.label.trim().eq_ignore_ascii_case(&label)
-                }) {
-                    self.last_error = Some(format!("Cue List label '{}' is already in use", label));
-                } else if let Some(cue_list) = self
-                    .cue_lists
-                    .iter_mut()
-                    .find(|cue_list| cue_list.id == cue_list_id)
-                {
-                    cue_list.label = label;
-                    self.last_error = None;
-                } else {
-                    self.cue_lists.push(CueListSummary {
-                        id: cue_list_id,
-                        label,
-                        active_cue_id: None,
-                    });
-                    self.last_error = None;
-                }
-            }
             EngineCommand::ReorderCueListsPublished {
                 cue_list_ids,
                 expires_at,
@@ -23498,55 +24298,65 @@ impl EngineRuntime {
                     publication_error: "Cue List delete could not publish an acknowledged snapshot",
                 });
             }
-            EngineCommand::RemoveCueList(cue_list_id) => {
-                match self.delete_cue_list_state(cue_list_id) {
-                    Ok(()) => self.last_error = None,
-                    Err(error) => self.last_error = Some(error),
-                }
-            }
-            EngineCommand::SetCueList {
-                cue_id,
+            EngineCommand::CreateCueListPublished {
                 cue_list_id,
+                label,
+                expires_at,
+                admission,
+                ack,
             } => {
-                if !self
-                    .cue_lists
-                    .iter()
-                    .any(|cue_list| cue_list.id == cue_list_id)
-                {
-                    self.last_error = Some(format!("Cue List {cue_list_id} was not found"));
-                } else if let Some(cue) = self.cues.iter_mut().find(|cue| cue.id == cue_id) {
-                    let previous_cue_list_id = cue.cue_list_id;
-                    let move_effect_activation = self
-                        .cue_list_effect_activation_cues
-                        .get(&previous_cue_list_id)
-                        .copied()
-                        == Some(cue_id);
-                    for cue_list in &mut self.cue_lists {
-                        if cue_list.active_cue_id == Some(cue_id) {
-                            cue_list.active_cue_id = None;
-                        }
-                    }
-                    cue.cue_list_id = cue_list_id;
-                    if self.active_cue_id == Some(cue_id) {
-                        if let Some(cue_list) = self
-                            .cue_lists
-                            .iter_mut()
-                            .find(|cue_list| cue_list.id == cue_list_id)
-                        {
-                            cue_list.active_cue_id = Some(cue_id);
-                        }
-                    }
-                    if move_effect_activation {
-                        self.cue_list_effect_activation_cues
-                            .remove(&previous_cue_list_id);
-                        self.cue_list_effect_activation_cues
-                            .insert(cue_list_id, cue_id);
-                    }
-                    self.rebuild_cue_value_origins();
-                    self.last_error = None;
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueLists {
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.create_cue_list_state(cue_list_id, &label)
                 } else {
-                    self.last_error = Some(format!("Cue {cue_id} was not found"));
-                }
+                    Err("Bank create expired or was cancelled before engine admission".to_string())
+                };
+                // A validation rejection and a queued cancellation leave the
+                // Bank list and the previous diagnostic untouched.
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error: "Bank create could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::RenameCueListPublished {
+                cue_list_id,
+                label,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueLists {
+                    cue_lists: self.cue_lists.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.rename_cue_list_state(cue_list_id, &label)
+                } else {
+                    Err("Bank rename expired or was cancelled before engine admission".to_string())
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error: "Bank rename could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::UpsertPlaybackExecutor(executor) => {
                 let executor = match validate_and_sanitize_playback_executor(
@@ -24840,6 +25650,7 @@ impl EngineRuntime {
             }
             EngineCommand::DjLinkStartTimeline {
                 timeline_id,
+                position_ms,
                 expires_at,
                 admission,
                 ack,
@@ -24856,7 +25667,7 @@ impl EngineRuntime {
                 }
                 let planning = admitted && admission.begin_dj_link_planning();
                 let result = if planning {
-                    self.start_timeline_runtime(timeline_id)
+                    self.start_dj_link_timeline_runtime_at(timeline_id, position_ms)
                 } else {
                     Err("DJ Link timeline start expired or was cancelled before commit".to_string())
                 };
@@ -24877,6 +25688,51 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; DJ Link timeline start was rolled back",
+                });
+            }
+            EngineCommand::DjLinkSyncTimelinePosition {
+                timeline_id,
+                position_ms,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.dj_link_sync_timeline_position_state(timeline_id, position_ms)
+                } else {
+                    Err(
+                        "DJ Link timeline position sync expired or was cancelled before commit"
+                            .to_string(),
+                    )
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link timeline position sync was rolled back",
                 });
             }
             EngineCommand::SetTimelinePlayingPublished {
@@ -25140,6 +25996,7 @@ impl EngineRuntime {
                 self.deactivate_all_child_transports();
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_external_sync_source = None;
+                self.timeline_dj_link_observation = None;
                 self.timeline_position_ms = position_ms.min(self.timeline_duration_ms());
                 self.timeline_follow_natural_boundary_armed =
                     self.timeline_position_ms < self.timeline_duration_ms();
@@ -25253,6 +26110,7 @@ impl EngineRuntime {
                     self.deactivate_all_child_transports();
                 }
                 self.timeline_external_sync_source = Some(source.clone());
+                self.timeline_dj_link_observation = None;
                 self.sync_timeline_position(position_ms, source_changed, now);
                 self.timeline_last_announced_phase_id = None;
                 // Tracking corrections retain the queued/in-progress Guide
@@ -25277,6 +26135,10 @@ impl EngineRuntime {
                         next_audio_transport_revision.expect("discontinuity reserves revision");
                     self.invalidate_timeline_transport_authority()
                         .expect("timecode preflight must reserve a transport authority successor");
+                    // A timecode discontinuity is an explicit locate, not
+                    // ordinary tracking progress: fence prepared output
+                    // frames so no pre-locate frame is presented afterwards.
+                    self.mark_video_presentation_config_dirty();
                 }
             }
             EngineCommand::SetAutoVjConfig(config) => {
@@ -26819,6 +27681,18 @@ impl EngineRuntime {
         } else {
             true
         };
+        if published {
+            // Fence the presentation token strictly after the mutated
+            // snapshot became visible. Publishing it earlier could certify a
+            // token against the previous published image and admit a frame
+            // rendered from superseded configuration.
+            self.fence_video_presentation_config_after_publication();
+        } else {
+            // The turn rolled back to the last published image, so no new
+            // configuration exists to fence; keep the token stable so frames
+            // prepared against that image remain valid.
+            self.video_presentation_config_dirty = false;
+        }
         if !published {
             #[cfg(test)]
             if force_publication_failure_from_handle
@@ -26898,6 +27772,31 @@ impl EngineRuntime {
                 pending.ack.deliver(result);
             }
         }
+    }
+
+    /// Advance and publish the video presentation configuration token after a
+    /// successful snapshot publication. The store happens strictly after the
+    /// mutated snapshot became visible, so a transport that captured the old
+    /// token always observes a changed token before its physical SDK call,
+    /// and a token can never certify an older configuration than the snapshot
+    /// it was captured with.
+    fn fence_video_presentation_config_after_publication(&mut self) {
+        if !self.video_presentation_config_dirty {
+            return;
+        }
+        self.video_presentation_config_dirty = false;
+        self.video_presentation_config_token =
+            self.video_presentation_config_token.wrapping_add(1).max(1);
+        self.published_video_presentation_config_token
+            .store(self.video_presentation_config_token, Ordering::Release);
+    }
+
+    /// Mark the presentation configuration dirty from inside a command
+    /// handler whose volatility depends on runtime state (external timecode
+    /// discontinuities). The token still publishes only at the turn's
+    /// successful snapshot publication.
+    fn mark_video_presentation_config_dirty(&mut self) {
+        self.video_presentation_config_dirty = true;
     }
 
     /// Commit a DJ Link snapshot and its audio projection without waiting on
@@ -27653,6 +28552,11 @@ impl EngineRuntime {
                 self.timeline_evaluated_boundary_position_ms = evaluated_boundary_position_ms;
                 self.timeline_jump_landed_event_id = jump_landed_event_id;
                 self.timeline_external_sync_source = external_sync_source;
+                // A rolled-back transport image has no coherent DJ
+                // observation baseline; the next SYNC frame falls back to the
+                // raw discontinuity classification instead of trusting a
+                // baseline captured before the rollback.
+                self.timeline_dj_link_observation = None;
                 self.timeline_follow_natural_boundary_armed = follow_natural_boundary_armed;
                 self.timeline_follow_runtime = follow_runtime;
                 self.timeline_follow_abort_ticks_remaining = follow_abort_ticks_remaining;
@@ -28941,6 +29845,11 @@ impl EngineRuntime {
             *guard = self.build_snapshot_with_touch_surface(queue_depth, touch_surface);
             self.commit_timeline_audio_commit_publication(prepared_audio_commit);
             self.commit_timeline_audio_projection_publication(prepared_audio_projection);
+            // Plain (non-acknowledged) presentation commands are published by
+            // this tick image rather than publish_pending_command_acks, so
+            // fence the configuration token here, strictly after the mutated
+            // snapshot became visible.
+            self.fence_video_presentation_config_after_publication();
         }
     }
 
@@ -29742,21 +30651,10 @@ impl EngineRuntime {
             .position(|cue| cue.id == cue_id)
             .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
         let effect_targets = self.resolve_cue_effect_targets(effect_targets)?;
-        let cue = self
-            .cues
-            .get(cue_index)
-            .expect("resolved Cue index must remain valid");
-        let has_non_effect_target = !cue.targets.is_empty()
-            || !cue.palette_targets.is_empty()
-            || !cue.video_targets.is_empty()
-            || !cue.video_output_targets.is_empty()
-            || !cue.node_graph_targets.is_empty()
-            || !cue.steps.is_empty();
-        if effect_targets.is_empty() && !has_non_effect_target {
-            return Err(format!(
-                "Cue {cue_id} must keep at least one fixture, palette, video, output, node graph, step, or effect target"
-            ));
-        }
+        // Exact zero-FX semantics: an empty resolved target list is a valid
+        // authored state. Every FX identity/parameter rule above still fails
+        // closed; only the former last-target rejection was removed, so the
+        // transaction/publication rollback around this mutation is unchanged.
         let reconform_referenced_events = self.timeline_has_conformed_events_for_cue(cue_id);
         let previous_effect_targets =
             reconform_referenced_events.then(|| self.cues[cue_index].effect_targets.clone());
@@ -32728,34 +33626,16 @@ impl EngineRuntime {
         if !self.cues.iter().any(|cue| cue.id == cue_id) {
             return Err(format!("Cue {cue_id} was not found"));
         }
+        let removed_cue_ids = HashSet::from([cue_id]);
+        let removed_timeline_event_ids = self.preflight_cue_removal_timeline_locks(
+            &removed_cue_ids,
+            &format!("removing Cue {cue_id}"),
+        )?;
+        self.preflight_child_timeline_removed_references(
+            &removed_cue_ids,
+            &format!("removing Cue {cue_id}"),
+        )?;
         self.apply_active_fade(Instant::now());
-        let removed_timeline_event_ids = self
-            .timeline_events
-            .iter()
-            .filter(|event| event.cue_id == cue_id)
-            .map(|event| event.id)
-            .collect::<HashSet<_>>();
-        if let Some(event) = self.timeline_events.iter().find(|event| {
-            removed_timeline_event_ids.contains(&event.id)
-                && self.timeline_event_layer_locked(event)
-        }) {
-            return Err(format!(
-                "Timeline layer {} is locked; unlock it before removing Cue {cue_id}, which owns event {}",
-                event.resolved_layer_id, event.id
-            ));
-        }
-        if let Some(event) = self.timeline_events.iter().find(|event| {
-            !removed_timeline_event_ids.contains(&event.id)
-                && event
-                    .jump_to_event_id
-                    .is_some_and(|target_id| removed_timeline_event_ids.contains(&target_id))
-                && self.timeline_event_layer_locked(event)
-        }) {
-            return Err(format!(
-                "Timeline layer {} is locked; unlock it before removing Cue {cue_id}, because event {} jumps to one of its placements",
-                event.resolved_layer_id, event.id
-            ));
-        }
 
         let now = Instant::now();
         self.stop_direct_child_transport_for_cue(cue_id, now);
@@ -32795,6 +33675,87 @@ impl EngineRuntime {
         }
         self.pending_cues.retain(|pending| pending.cue_id != cue_id);
         self.apply_cue_value_release_plan_immediately(release_plan);
+        Ok(())
+    }
+
+    /// Reject every removal that would erase a Scene placement owned by a
+    /// locked Timeline layer, or would require clearing an incoming jump from
+    /// a locked layer. This is deliberately a pure preflight: callers must
+    /// run it before touching authored state, runtime activations, fades, or
+    /// direct-child transports so a rejection stays exactly unchanged.
+    fn preflight_cue_removal_timeline_locks(
+        &self,
+        removed_cue_ids: &HashSet<CueId>,
+        removal_description: &str,
+    ) -> Result<HashSet<TimelineEventId>, String> {
+        let removed_timeline_event_ids = self
+            .timeline_events
+            .iter()
+            .filter(|event| removed_cue_ids.contains(&event.cue_id))
+            .map(|event| event.id)
+            .collect::<HashSet<_>>();
+        if let Some(event) = self.timeline_events.iter().find(|event| {
+            removed_timeline_event_ids.contains(&event.id)
+                && self.timeline_event_layer_locked(event)
+        }) {
+            return Err(format!(
+                "Timeline layer {} is locked; unlock it before {removal_description}, which owns event {}",
+                event.resolved_layer_id, event.id
+            ));
+        }
+        if let Some(event) = self.timeline_events.iter().find(|event| {
+            !removed_timeline_event_ids.contains(&event.id)
+                && event
+                    .jump_to_event_id
+                    .is_some_and(|target_id| removed_timeline_event_ids.contains(&target_id))
+                && self.timeline_event_layer_locked(event)
+        }) {
+            return Err(format!(
+                "Timeline layer {} is locked; unlock it before {removal_description}, because event {} jumps to one of its placements",
+                event.resolved_layer_id, event.id
+            ));
+        }
+        Ok(removed_timeline_event_ids)
+    }
+
+    fn preflight_child_timeline_removed_references(
+        &self,
+        removed_cue_ids: &HashSet<CueId>,
+        removal_description: &str,
+    ) -> Result<(), String> {
+        for owner in &self.cues {
+            if removed_cue_ids.contains(&owner.id) {
+                continue;
+            }
+            let Some(child) = owner.child_timeline.as_ref() else {
+                continue;
+            };
+            let mut pending = child
+                .events
+                .iter()
+                .map(|event| event.cue_id)
+                .collect::<Vec<_>>();
+            let mut visited = HashSet::new();
+            while let Some(referenced) = pending.pop() {
+                if removed_cue_ids.contains(&referenced) {
+                    return Err(format!(
+                        "Cue {} child timeline references Cue {}; resolve the nested reference before {removal_description}",
+                        owner.id, referenced
+                    ));
+                }
+                if !visited.insert(referenced) {
+                    continue;
+                }
+                if let Some(nested) = self
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == referenced)
+                    .and_then(|cue| cue.child_timeline.as_ref())
+                {
+                    pending.extend(nested.events.iter().map(|event| event.cue_id));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -33443,6 +34404,64 @@ impl EngineRuntime {
         })
     }
 
+    /// Authoritative Bank creation. Validation is fail-closed and exact; a
+    /// duplicate ID never upserts.
+    fn create_cue_list_state(&mut self, cue_list_id: CueListId, label: &str) -> Result<(), String> {
+        if cue_list_id == 0 {
+            return Err("Cue List ID must be greater than zero".to_string());
+        }
+        validate_cue_list_label(label)?;
+        if self
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == cue_list_id)
+        {
+            return Err(format!("Cue List {cue_list_id} already exists"));
+        }
+        self.ensure_cue_list_label_available(cue_list_id, label)?;
+        self.cue_lists.push(CueListSummary {
+            id: cue_list_id,
+            label: label.to_string(),
+            active_cue_id: None,
+        });
+        Ok(())
+    }
+
+    /// Authoritative in-place Bank rename. A missing ID fails definitively
+    /// and is never recreated.
+    fn rename_cue_list_state(&mut self, cue_list_id: CueListId, label: &str) -> Result<(), String> {
+        validate_cue_list_label(label)?;
+        if !self
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == cue_list_id)
+        {
+            return Err(format!("Cue List {cue_list_id} was not found"));
+        }
+        self.ensure_cue_list_label_available(cue_list_id, label)?;
+        if let Some(cue_list) = self
+            .cue_lists
+            .iter_mut()
+            .find(|cue_list| cue_list.id == cue_list_id)
+        {
+            cue_list.label = label.to_string();
+        }
+        Ok(())
+    }
+
+    fn ensure_cue_list_label_available(
+        &self,
+        cue_list_id: CueListId,
+        label: &str,
+    ) -> Result<(), String> {
+        if self.cue_lists.iter().any(|cue_list| {
+            cue_list.id != cue_list_id && cue_list_labels_collide(label, &cue_list.label)
+        }) {
+            return Err(format!("Cue List label '{label}' is already in use"));
+        }
+        Ok(())
+    }
+
     fn reorder_cue_lists_state(&mut self, cue_list_ids: Vec<CueListId>) -> Result<(), String> {
         if cue_list_ids.is_empty() {
             return Err("Cue List reorder must contain every Cue List".to_string());
@@ -33498,13 +34517,21 @@ impl EngineRuntime {
             return Err(format!("Cue List {cue_list_id} was not found"));
         }
 
-        self.apply_active_fade(Instant::now());
         let removed_cue_ids = self
             .cues
             .iter()
             .filter(|cue| cue.cue_list_id == cue_list_id)
             .map(|cue| cue.id)
             .collect::<HashSet<_>>();
+        self.preflight_cue_removal_timeline_locks(
+            &removed_cue_ids,
+            &format!("removing Cue List {cue_list_id}"),
+        )?;
+        self.preflight_child_timeline_removed_references(
+            &removed_cue_ids,
+            &format!("removing Cue List {cue_list_id}"),
+        )?;
+        self.apply_active_fade(Instant::now());
         let mut release_plan = CueValueReleasePlan::default();
         for cue_id in &removed_cue_ids {
             let cue_release = self.cue_value_release_plan(*cue_id);
@@ -33909,6 +34936,7 @@ impl EngineRuntime {
         self.timeline_evaluated_boundary_position_ms = None;
         self.timeline_jump_landed_event_id = None;
         self.timeline_external_sync_source = None;
+        self.timeline_dj_link_observation = None;
         self.timeline_due_cues.clear();
         self.timeline_last_announced_phase_id = None;
         self.timeline_guide_cues.clear();
@@ -38651,6 +39679,7 @@ impl EngineRuntime {
             // An explicit Play command hands the playhead back to the internal
             // clock. Pause deliberately preserves MTC/LTC/SPP ownership.
             self.timeline_external_sync_source = None;
+            self.timeline_dj_link_observation = None;
         }
         if playing && !was_playing {
             self.timeline_last_announced_phase_id = None;
@@ -40448,6 +41477,14 @@ impl EngineRuntime {
     }
 
     fn start_timeline_runtime(&mut self, timeline_id: TimelineId) -> Result<(), String> {
+        self.start_timeline_runtime_at(timeline_id, 0)
+    }
+
+    fn start_timeline_runtime_at(
+        &mut self,
+        timeline_id: TimelineId,
+        position_ms: u64,
+    ) -> Result<(), String> {
         let timeline = self
             .timeline_bank
             .iter()
@@ -40459,8 +41496,181 @@ impl EngineRuntime {
         let (timeline, runtime_events) = self.prepare_timeline_bank_entry(timeline)?;
         self.preflight_timeline_transport_authority_invalidation()?;
         self.invalidate_timeline_transport_authority()?;
-        self.install_timeline_bank_entry(timeline, runtime_events, true, 0)?;
+        self.install_timeline_bank_entry(timeline, runtime_events, true, position_ms)?;
         Ok(())
+    }
+
+    fn start_dj_link_timeline_runtime_at(
+        &mut self,
+        timeline_id: TimelineId,
+        position_ms: u64,
+    ) -> Result<(), String> {
+        self.start_timeline_runtime_at(timeline_id, position_ms)?;
+        let now = Instant::now();
+        self.timeline_external_sync_source = Some(ClockSource::DjLink);
+        self.timeline_playhead_boundary_armed = false;
+        self.timeline_follow_natural_boundary_armed = false;
+        self.clock.mark_timecode_sync(ClockSource::DjLink, now);
+        self.establish_child_transports_at_position(now);
+        self.apply_child_timeline_automations();
+        // The start itself is the first admitted DJ observation; it anchors
+        // cadence-aware forward tracking for every later SYNC frame.
+        self.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: self.timeline_position_ms,
+            observed_at: now,
+        });
+        Ok(())
+    }
+
+    fn dj_link_sync_timeline_position_state(
+        &mut self,
+        timeline_id: TimelineId,
+        position_ms: u64,
+    ) -> Result<(), String> {
+        if timeline_id != self.timeline_id {
+            return Err("DJ Link position sync timeline identity is stale".to_string());
+        }
+        if !self.timeline_playing {
+            return Err("DJ Link position sync requires a playing Timeline".to_string());
+        }
+        let target = position_ms.min(self.timeline_duration_ms());
+        let now = Instant::now();
+        let source = ClockSource::DjLink;
+        let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
+        // The baseline is consumed here and only re-recorded once this frame
+        // succeeds. Validation failures above return before this point and
+        // keep the baseline; past it, the clearing is conservative: a later
+        // failure can leave the baseline cleared while the rest of the
+        // runtime image remains unchanged.
+        let observation = if source_changed {
+            None
+        } else {
+            self.timeline_dj_link_observation.take()
+        };
+        let forward_delta = target.saturating_sub(self.timeline_position_ms);
+        let cadence_tracked_forward = observation.is_some_and(|observation| {
+            let elapsed_ms = u64::try_from(
+                now.saturating_duration_since(observation.observed_at)
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX)
+            .saturating_add(TIMELINE_DJ_LINK_FORWARD_TRACKING_TOLERANCE_MS);
+            target >= self.timeline_position_ms
+                // The frozen playhead must still agree with the admitted
+                // baseline; divergence means some non-SYNC path moved it and
+                // the cadence comparison would be meaningless.
+                && self
+                    .timeline_position_ms
+                    .saturating_sub(observation.position_ms)
+                    <= elapsed_ms
+                && forward_delta <= elapsed_ms
+        });
+        let forward_jump = !cadence_tracked_forward
+            && forward_delta > TIMELINE_TIMECODE_FORWARD_DISCONTINUITY_THRESHOLD_MS;
+        let discontinuity = source_changed
+            || target < self.timeline_position_ms
+            || forward_jump
+            || self.timeline_follow_is_abortable();
+        let next_audio_transport_revision = if discontinuity {
+            let successors = 1 + u64::from(self.timeline_follow_is_abortable());
+            Some(self.reserve_timeline_audio_transport_revision_successors(successors)?)
+        } else {
+            None
+        };
+        // Both discontinuity reservations happen here, before the first
+        // mutation, and the reserved authority pair is committed after the
+        // mutations instead of being re-reserved fallibly at that late point.
+        // The worker is single-threaded and no mutation between reservation
+        // and commit consumes a transport-authority successor or click
+        // schedule generation (the only consumer is the commit itself), so
+        // the commit is infallible and its debug assertion proves that no
+        // future change silently breaks that ordering. Every failure path
+        // therefore leaves the runtime image exactly untouched: rollback
+        // ordering is provably safe without any narrower late-failure image.
+        let reserved_transport_authority = if discontinuity {
+            Some(self.reserve_timeline_transport_authority_invalidation()?)
+        } else {
+            None
+        };
+        if self.timeline_follow_is_abortable() {
+            self.abort_timeline_follow(
+                protocol::TimelineFollowAbortReason::ClockDiscontinuity,
+                now,
+            );
+        }
+        self.timeline_paused_at = None;
+        self.timeline_jump_landed_event_id = None;
+        self.timeline_playhead_boundary_armed = false;
+        self.timeline_follow_natural_boundary_armed = false;
+        let reestablish_child =
+            source_changed || target < self.timeline_position_ms || forward_jump;
+        if reestablish_child {
+            self.deactivate_all_timeline_effect_activations();
+            self.deactivate_all_child_transports();
+        }
+        self.timeline_external_sync_source = Some(source.clone());
+        self.sync_timeline_position(target, source_changed, now);
+        self.timeline_last_announced_phase_id = None;
+        if discontinuity {
+            self.timeline_guide_cues.clear();
+        }
+        self.refresh_timeline_loop_runtime_status();
+        self.announce_timeline_phase_at(self.timeline_position_ms);
+        self.clock.mark_timecode_sync(source, now);
+        self.apply_timeline_automations();
+        self.apply_timeline_video_automations();
+        if reestablish_child {
+            self.establish_child_transports_at_position(now);
+            // A genuine locate lands inside authored Scene Block spans that
+            // normal playback would have activated while crossing into them.
+            // Re-establish that scene/effect/step state at the target through
+            // the same Cue recall machinery as an in-playback trigger; the
+            // block starting exactly at the target was already recalled by
+            // the boundary trigger above.
+            self.reconstruct_timeline_scene_blocks_at_playhead(now);
+        } else {
+            self.advance_child_transports(now);
+        }
+        self.apply_child_timeline_automations();
+        if discontinuity {
+            self.timeline_audio_transport_revision =
+                next_audio_transport_revision.expect("discontinuity reserves revision");
+            // Infallible: the exact successor was reserved before the first
+            // mutation above; see the reservation comment for the ordering
+            // proof.
+            self.commit_reserved_timeline_transport_authority(
+                reserved_transport_authority.expect("discontinuity reserves transport authority"),
+            );
+            self.mark_video_presentation_config_dirty();
+        }
+        self.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: target,
+            observed_at: now,
+        });
+        Ok(())
+    }
+
+    /// Re-establish every authored Scene Block whose span strictly covers the
+    /// current externally-owned playhead. This reuses the exact pending-Cue
+    /// establishment machinery of an in-playback trigger (including the
+    /// phase-correct Timeline step clock); child transports are owned by
+    /// [`EngineRuntime::establish_child_transports_at_position`] and are not
+    /// touched here.
+    fn reconstruct_timeline_scene_blocks_at_playhead(&mut self, now: Instant) {
+        let position = self.timeline_position_ms;
+        let spanning_event_indices = (0..self.timeline_events.len())
+            .filter(|&event_index| {
+                self.timeline_events.get(event_index).is_some_and(|event| {
+                    !event.layer_muted_effective
+                        && event.duration_ms > 0
+                        && event.time_ms < position
+                        && position < timeline_event_end_ms(event)
+                })
+            })
+            .collect::<Vec<_>>();
+        for event_index in spanning_event_indices {
+            self.request_timeline_event_at_index(event_index, now);
+        }
     }
 
     fn set_timeline_loop_absolute_state(
@@ -40531,6 +41741,7 @@ impl EngineRuntime {
         self.deactivate_all_child_transports();
         self.timeline_jump_landed_event_id = None;
         self.timeline_external_sync_source = None;
+        self.timeline_dj_link_observation = None;
         self.timeline_position_ms = target;
         self.timeline_follow_natural_boundary_armed = target < duration;
         self.timeline_last_announced_phase_id = None;
@@ -41497,6 +42708,7 @@ impl EngineRuntime {
     fn seek_timeline_adjacent_beat(&mut self, direction: i32) {
         self.timeline_jump_landed_event_id = None;
         self.timeline_external_sync_source = None;
+        self.timeline_dj_link_observation = None;
         self.timeline_evaluated_boundary_position_ms = None;
         self.timeline_playhead_boundary_armed = self.timeline_playing;
         let duration = self.timeline_duration_ms();
@@ -45560,9 +46772,8 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
             | EngineCommand::DuplicateCue { .. }
             | EngineCommand::RemoveCue(_)
             | EngineCommand::RemoveCuePublished { .. }
-            | EngineCommand::RemoveCueList(_)
-            | EngineCommand::SetCueList { .. }
-            | EngineCommand::UpsertCueList { .. }
+            | EngineCommand::CreateCueListPublished { .. }
+            | EngineCommand::RenameCueListPublished { .. }
             | EngineCommand::AddTimelineCueEvent { .. }
             | EngineCommand::SetTimelineCueEvent { .. }
             | EngineCommand::RemoveTimelineEvent(_)
@@ -46463,13 +47674,6 @@ fn sanitize_cue_lists(cue_lists: &[CueListSummary], cues: &[RuntimeCue]) -> Vec<
             continue;
         }
         let label = cue_list.label.trim().chars().take(64).collect::<String>();
-        let label = if cue_list.id == DEFAULT_CUE_LIST_ID
-            && (label.eq_ignore_ascii_case("main") || label.eq_ignore_ascii_case("cue list 1"))
-        {
-            "Bank 1".to_string()
-        } else {
-            label
-        };
         sanitized.push(CueListSummary {
             id: cue_list.id,
             label: if label.is_empty() {
@@ -47749,6 +48953,104 @@ fn validate_project_child_tempo_meter_map_for_cue(
         }
     }
     Ok(())
+}
+
+fn validate_project_child_timeline_graph(cues: &[CueSummary]) -> Result<(), String> {
+    // Duplicate authored identities make every later graph lookup
+    // (`cues.iter().find(...)`) ambiguous first-match behavior, so they are
+    // rejected before any nested Timeline graph traversal is built.
+    let mut seen_cue_ids = HashSet::with_capacity(cues.len());
+    for cue in cues {
+        if !seen_cue_ids.insert(cue.id) {
+            return Err(format!("Cue {} is authored more than once", cue.id));
+        }
+    }
+    for cue in cues {
+        let Some(child) = cue.child_timeline.as_ref() else {
+            continue;
+        };
+        let mut event_ids = HashSet::with_capacity(child.events.len());
+        for event in &child.events {
+            if !event_ids.insert(event.id) {
+                return Err(format!(
+                    "Cue {} child timeline contains duplicate event {}",
+                    cue.id, event.id
+                ));
+            }
+            if event.cue_id == cue.id {
+                return Err(format!(
+                    "Cue {} child timeline contains a self reference",
+                    cue.id
+                ));
+            }
+        }
+        // Authoring/load parity with
+        // `EngineRuntime::normalize_and_validate_child_timeline`: a child
+        // jump target that does not exist inside the same child timeline can
+        // never land, so the project fails to load instead of silently
+        // dropping the authored jump at recall time.
+        for event in &child.events {
+            if let Some(target) = event.jump_to_event_id {
+                if !event_ids.contains(&target) {
+                    return Err(format!(
+                        "Cue {} child event {} jumps to missing child event {target}",
+                        cue.id, event.id
+                    ));
+                }
+            }
+        }
+    }
+    for cue in cues {
+        let Some(child) = cue.child_timeline.as_ref() else {
+            continue;
+        };
+        for event in &child.events {
+            let referenced = cues
+                .iter()
+                .find(|candidate| candidate.id == event.cue_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Cue {} child event {} references missing Cue {}",
+                        cue.id, event.id, event.cue_id
+                    )
+                })?;
+            if referenced.child_timeline.is_some()
+                && project_child_reference_reaches(cues, event.cue_id, cue.id)
+            {
+                return Err(format!(
+                    "Cue {} child timeline contains a cyclic reference through Cue {}",
+                    cue.id, event.cue_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn project_child_reference_reaches(
+    cues: &[CueSummary],
+    start_cue_id: CueId,
+    target_cue_id: CueId,
+) -> bool {
+    let mut pending = vec![start_cue_id];
+    let mut visited = HashSet::new();
+    while let Some(cue_id) = pending.pop() {
+        if cue_id == target_cue_id {
+            return true;
+        }
+        if !visited.insert(cue_id) {
+            continue;
+        }
+        let Some(child) = cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .and_then(|cue| cue.child_timeline.as_ref())
+        else {
+            continue;
+        };
+        pending.extend(child.events.iter().map(|event| event.cue_id));
+    }
+    false
 }
 
 fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<Option<f32>, String> {
@@ -58146,7 +59448,10 @@ impl BpmClock {
         });
         let external_sync_timeout_ms = match self.source {
             ClockSource::MidiClock => 500,
-            ClockSource::MidiTimecode | ClockSource::Ltc | ClockSource::AbletonLink => 1_000,
+            ClockSource::MidiTimecode
+            | ClockSource::Ltc
+            | ClockSource::AbletonLink
+            | ClockSource::DjLink => 1_000,
             ClockSource::Manual | ClockSource::Tap => 0,
         };
         let external_sync_locked = external_sync_timeout_ms > 0
@@ -64326,6 +65631,14 @@ mod tests {
     #[test]
     fn persistence_snapshot_keeps_rendered_video_separate_from_authored_state() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig::default());
+        // FC27: node graph 1 node 3 outputs to fixture 1 ("Dimmer"), so the
+        // seeded current-schema image must carry that referentially valid
+        // fixture instead of relying on silent graph sanitization.
+        runtime.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            sample_profile().dmx_modes[0].controls.clone(),
+        ));
         let base = Instant::now();
         add_runtime_test_video_layer(
             &mut runtime,
@@ -66684,6 +67997,7 @@ mod tests {
                 TimelineAudioProjectionAuthority::default(),
             )),
             timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
+            video_presentation_config_token: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
@@ -67420,26 +68734,6 @@ mod tests {
                 }),
             ),
             deadline_case(
-                "CreateCuePublishedCueList",
-                AllocatorDomain::CueLists,
-                Box::new(|id| EngineCommand::CreateCuePublished {
-                    cue_id: 1,
-                    cue_list_id: id,
-                    label: "Allocator Cue".to_string(),
-                    group_id: None,
-                    recall_mode: RecallMode::Coexist,
-                    fade_ms: 0,
-                    authored_beats: None,
-                    targets: Vec::new(),
-                    video_targets: Vec::new(),
-                    video_output_targets: Vec::new(),
-                    node_graph_targets: Vec::new(),
-                    effect_targets: Vec::new(),
-                    expires_at: allocator_expiry(),
-                    ack: allocator_ack(),
-                }),
-            ),
-            deadline_case(
                 "UpdateCue",
                 AllocatorDomain::Cues,
                 Box::new(|id| EngineCommand::UpdateCue {
@@ -67494,19 +68788,14 @@ mod tests {
                 }),
             ),
             deadline_case(
-                "UpsertCueList",
+                "CreateCueListPublished",
                 AllocatorDomain::CueLists,
-                Box::new(|id| EngineCommand::UpsertCueList {
+                Box::new(|id| EngineCommand::CreateCueListPublished {
                     cue_list_id: id,
                     label: "Allocator Cue List".to_string(),
-                }),
-            ),
-            deadline_case(
-                "SetCueList",
-                AllocatorDomain::CueLists,
-                Box::new(|id| EngineCommand::SetCueList {
-                    cue_id: 1,
-                    cue_list_id: id,
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
                 }),
             ),
             deadline_case(
@@ -68298,7 +69587,7 @@ mod tests {
     #[test]
     fn allocator_command_inventory_covers_all_domains_and_is_exhaustively_routed() {
         let cases = allocator_command_cases();
-        assert_eq!(cases.len(), 92);
+        assert_eq!(cases.len(), 90);
         for domain in allocator_domains() {
             assert!(
                 cases.iter().any(|case| case.domain == domain),
@@ -68318,8 +69607,7 @@ mod tests {
             ..EngineSnapshot::default()
         }));
         let engine = allocator_test_handle(snapshot);
-        let (ack, _receiver) =
-            mpsc::sync_channel::<Result<StageProjectMutationOutcome, String>>(1);
+        let (ack, _receiver) = mpsc::sync_channel::<Result<StageProjectMutationOutcome, String>>(1);
 
         engine
             .send(EngineCommand::StageProjectMutationPublished {
@@ -70930,10 +72218,7 @@ mod tests {
             })
             .unwrap();
         engine
-            .send(EngineCommand::UpsertCueList {
-                cue_list_id,
-                label: "Secondary".to_string(),
-            })
+            .create_cue_list_published(cue_list_id, "Secondary".to_string())
             .unwrap();
 
         let mut ready = false;
@@ -71399,7 +72684,7 @@ mod tests {
     }
 
     #[test]
-    fn published_effect_target_clear_preserves_non_effect_targets_and_rejects_targetless_cue() {
+    fn published_effect_target_clear_preserves_non_effect_targets_and_allows_zero_fx() {
         let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
         runtime.apply_command(EngineCommand::CreateCue {
             authored_beats: None,
@@ -71475,22 +72760,71 @@ mod tests {
         assert!(runtime.cues[0].effect_targets.is_empty());
         assert_eq!(runtime.cues[0].targets[0].values[0].value, 30_000);
 
-        runtime.last_error = Some("preserve me".to_string());
-        let targetless_before = cue_summary(&runtime.cues[1]);
-        let (targetless_ack, targetless_receiver) = mpsc::sync_channel(1);
+        // Exact zero-FX semantics: a Cue with no other target kind may have
+        // zero FX. Clearing its only FX targets is valid authoring; the
+        // published image and the diagnostic state follow the success path.
+        let (zero_fx_ack, zero_fx_receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
             cue_id: 2,
             effect_targets: Vec::new(),
             expires_at: Instant::now() + Duration::from_secs(1),
-            ack: targetless_ack,
+            ack: zero_fx_ack,
         });
         runtime.publish_pending_command_acks(0, &published);
-        assert!(targetless_receiver
+        zero_fx_receiver.recv().unwrap().unwrap();
+        assert!(runtime.cues[1].targets.is_empty());
+        assert!(runtime.cues[1].palette_targets.is_empty());
+        assert!(runtime.cues[1].steps.is_empty());
+        assert!(runtime.cues[1].effect_targets.is_empty());
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            published
+                .read()
+                .unwrap()
+                .cues
+                .iter()
+                .find(|cue| cue.id == 2)
+                .unwrap()
+                .effect_targets,
+            Vec::new()
+        );
+
+        // Removing only the last-target rejection keeps every other FX rule
+        // fail-closed: an unknown Effect ID still rejects the update and the
+        // zero-FX Cue stays exactly unchanged.
+        runtime.last_error = Some("preserve me".to_string());
+        let zero_fx_before = cue_summary(&runtime.cues[1]);
+        let (unknown_ack, unknown_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
+            cue_id: 2,
+            effect_targets: vec![CueEffectTarget {
+                effect_id: 999,
+                enabled: true,
+                params: None,
+                transition_ms: None,
+            }],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: unknown_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(unknown_receiver
             .recv()
             .unwrap()
             .unwrap_err()
-            .contains("must keep at least one"));
-        assert_eq!(cue_summary(&runtime.cues[1]), targetless_before);
+            .contains("Effect 999 was not found"));
+        assert_eq!(cue_summary(&runtime.cues[1]), zero_fx_before);
+        assert_eq!(
+            published
+                .read()
+                .unwrap()
+                .cues
+                .iter()
+                .find(|cue| cue.id == 2)
+                .unwrap()
+                .effect_targets,
+            Vec::new(),
+            "a rejected update must not republish a mutated FX image"
+        );
         assert_eq!(runtime.last_error.as_deref(), Some("preserve me"));
 
         let (palette_ack, palette_receiver) = mpsc::sync_channel(1);
@@ -73560,16 +74894,13 @@ mod tests {
     }
 
     #[test]
-    fn cue_lists_keep_independent_active_positions_and_legacy_remove_deletes_bank_and_scenes() {
+    fn cue_lists_keep_independent_active_positions_and_published_delete_removes_bank_and_scenes() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
         engine
-            .send(EngineCommand::UpsertCueList {
-                cue_list_id: 2,
-                label: "Bank 2".to_string(),
-            })
+            .create_cue_list_published(2, "Bank 2".to_string())
             .unwrap();
         for cue_id in 1..=3 {
             engine
@@ -73588,10 +74919,7 @@ mod tests {
         }
         for cue_id in [2, 3] {
             engine
-                .send(EngineCommand::SetCueList {
-                    cue_id,
-                    cue_list_id: 2,
-                })
+                .move_cue_between_banks_published(cue_id, 2, None, None, true)
                 .unwrap();
         }
         engine
@@ -73644,7 +74972,7 @@ mod tests {
         }
         assert_eq!(snapshot.active_cue_id, Some(3));
 
-        engine.send(EngineCommand::RemoveCueList(2)).unwrap();
+        engine.delete_cue_list_published(2).unwrap();
         for _ in 0..20 {
             snapshot = engine.snapshot();
             if snapshot.cue_lists.len() == 1 && snapshot.cues.iter().all(|cue| cue.cue_list_id == 1)
@@ -73662,7 +74990,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_remove_cue_list_deletes_id_one_without_scene_migration() {
+    fn published_delete_cue_list_deletes_id_one_without_scene_migration() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -73688,8 +75016,16 @@ mod tests {
                 ..CueSummary::default()
             }),
         ]);
+        let published = RwLock::new(runtime.build_snapshot(0));
 
-        runtime.apply_command(EngineCommand::RemoveCueList(1));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
         assert_eq!(runtime.last_error, None);
         assert_eq!(
             runtime
@@ -73718,11 +75054,20 @@ mod tests {
         let before_last_delete_cues = after_id_one_delete.cues.clone();
         let before_last_delete_cue_lists = after_id_one_delete.cue_lists.clone();
 
-        runtime.apply_command(EngineCommand::RemoveCueList(2));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
         assert_eq!(
-            runtime.last_error.as_deref(),
-            Some("At least one Cue List must remain")
+            receiver.recv().unwrap(),
+            Err("At least one Cue List must remain".to_string())
         );
+        // The published path reports rejections through the ACK channel and
+        // preserves the pre-command diagnostic verbatim.
+        assert_eq!(runtime.last_error, None);
         let after_last_delete = runtime.build_persistence_snapshot();
         assert_eq!(after_last_delete.cues, before_last_delete_cues);
         assert_eq!(after_last_delete.cue_lists, before_last_delete_cue_lists);
@@ -73824,6 +75169,667 @@ mod tests {
         drop(snapshot_guard);
         assert!(receiver.recv().unwrap().is_err());
         assert_eq!(runtime.cue_lists, after_valid);
+    }
+
+    #[test]
+    fn cue_list_sanitization_preserves_persisted_default_label_and_only_bootstraps_blank() {
+        for label in ["Main", "main", "Cue List 1", "cue list 1", "Bank 1"] {
+            let sanitized = sanitize_cue_lists(
+                &[CueListSummary {
+                    id: DEFAULT_CUE_LIST_ID,
+                    label: label.to_string(),
+                    active_cue_id: None,
+                }],
+                &[],
+            );
+            assert_eq!(sanitized.len(), 1);
+            assert_eq!(sanitized[0].label, label);
+        }
+
+        let sanitized_blank = sanitize_cue_lists(
+            &[CueListSummary {
+                id: DEFAULT_CUE_LIST_ID,
+                label: "   ".to_string(),
+                active_cue_id: None,
+            }],
+            &[],
+        );
+        assert_eq!(sanitized_blank.len(), 1);
+        assert_eq!(sanitized_blank[0].label, "Bank 1");
+    }
+
+    #[test]
+    fn bank_label_policy_is_a_visible_alphabet_and_preserves_accepted_bytes() {
+        let accepted = "人生オーバー Bank １ Café Γ Б 한글";
+        assert_eq!(validate_cue_list_label(accepted), Ok(()));
+
+        for (character, codepoint) in [
+            ('\u{0301}', "0301"), // combining acute accent
+            ('\u{0483}', "0483"), // Cyrillic combining titlo
+            ('\u{1AB0}', "1AB0"), // combining doubled circumflex accent
+            ('\u{2066}', "2066"), // LEFT-TO-RIGHT ISOLATE
+            ('\u{302A}', "302A"), // CJK combining tone mark
+            ('\u{3099}', "3099"), // combining Katakana-Hiragana voiced sound mark
+            ('\u{FF9E}', "FF9E"), // halfwidth voiced sound mark
+        ] {
+            let label = format!("Bank{character}Name");
+            assert_eq!(
+                validate_cue_list_label(&label),
+                Err(format!(
+                    "Cue List label contains an unsupported, format, invisible, or combining character (U+{codepoint})"
+                )),
+                "U+{codepoint} must be rejected by the Bank label alphabet"
+            );
+        }
+    }
+
+    #[test]
+    fn non_creating_bank_mutations_never_reserve_the_bank_allocator() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let bank_allocator = || allocator_counter_value(&engine, AllocatorDomain::CueLists);
+        assert_eq!(bank_allocator(), 2, "new projects reserve only Bank 1");
+
+        // Missing, invalid, and valid renames are all in-place operations.
+        // None may consume an arbitrary referenced ID before engine validation.
+        assert!(engine
+            .rename_cue_list_published(9_999, "Missing Bank".to_string())
+            .is_err());
+        assert_eq!(bank_allocator(), 2);
+        assert!(engine
+            .rename_cue_list_published(1, "Bank\u{2066} One".to_string())
+            .is_err());
+        assert_eq!(bank_allocator(), 2);
+        engine
+            .rename_cue_list_published(1, "Renamed Bank 1".to_string())
+            .unwrap();
+        assert_eq!(bank_allocator(), 2);
+
+        // Move, reorder, and delete also carry existing Bank references only.
+        assert!(engine
+            .move_cue_between_banks_published(999, 999, None, None, true)
+            .is_err());
+        assert_eq!(bank_allocator(), 2);
+        assert!(engine.reorder_cue_lists_published(vec![1, 1]).is_err());
+        assert_eq!(bank_allocator(), 2);
+        assert!(engine.delete_cue_list_published(999).is_err());
+        assert_eq!(bank_allocator(), 2);
+
+        // Only Create reserves the next monotonic Bank ID. It remains 2 after
+        // all rejected/non-creating mutations, then advances to 3 on Create.
+        engine
+            .create_cue_list_published(2, "Bank 2".to_string())
+            .unwrap();
+        assert_eq!(bank_allocator(), 3);
+        engine.create_empty_cue_published(1, 1).unwrap();
+        assert_eq!(bank_allocator(), 3);
+        engine
+            .move_cue_between_banks_published(1, 2, None, None, true)
+            .unwrap();
+        assert_eq!(bank_allocator(), 3);
+        engine.reorder_cue_lists_published(vec![2, 1]).unwrap();
+        assert_eq!(bank_allocator(), 3);
+        engine.delete_cue_list_published(2).unwrap();
+        assert_eq!(bank_allocator(), 3);
+
+        // Delete never makes an old Bank ID reusable. The next creation stays
+        // monotonic at 3 even after Bank 2 has been removed.
+        engine
+            .create_cue_list_published(3, "Bank 3".to_string())
+            .unwrap();
+        assert_eq!(bank_allocator(), 4);
+        assert_eq!(
+            engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+    }
+
+    #[test]
+    fn published_bank_create_and_rename_are_definitive_and_exact() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        assert_eq!(runtime.cue_lists.len(), 1);
+        let before_cues = runtime.cues.iter().map(cue_summary).collect::<Vec<_>>();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        // Create: a missing ID appends a new Bank with no active Cue.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCueListPublished {
+            cue_list_id: 2,
+            label: "Bank 2".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime
+                .cue_lists
+                .iter()
+                .map(|cue_list| (cue_list.id, cue_list.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "Bank 1"), (2, "Bank 2")]
+        );
+        assert!(runtime.cue_lists[1].active_cue_id.is_none());
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            published.read().unwrap().cue_lists,
+            runtime.cue_lists.clone()
+        );
+
+        // Rename: an existing ID renames in place and preserves order and
+        // active-Cue state. The label is stored exactly as submitted.
+        runtime.cue_lists[1].active_cue_id = Some(7);
+        let before_rename = runtime.cue_lists.clone();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RenameCueListPublished {
+            cue_list_id: 2,
+            label: "Renamed Bank".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.cue_lists.len(), before_rename.len());
+        assert_eq!(runtime.cue_lists[1].id, 2);
+        assert_eq!(runtime.cue_lists[1].label, "Renamed Bank");
+        assert_eq!(runtime.cue_lists[1].active_cue_id, Some(7));
+        assert_eq!(runtime.cue_lists[0], before_rename[0]);
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            published.read().unwrap().cue_lists,
+            runtime.cue_lists.clone()
+        );
+        assert_eq!(
+            runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
+            before_cues
+        );
+    }
+
+    #[test]
+    fn published_bank_create_and_rename_reject_invalid_input_fail_closed() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: Some(22),
+        });
+        let valid = runtime.cue_lists.clone();
+        let previous_last_error = Some("previous engine error".to_string());
+        runtime.last_error = previous_last_error.clone();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        // Creates fail on zero IDs, invalid labels, and existing IDs.
+        for (cue_list_id, label) in [
+            (0, "Bank Zero"),
+            (3, ""),
+            (3, "   "),
+            (3, " Padded "),
+            (3, "ba\u{0301}nk"),
+            (3, "ba\u{200b}nk"),
+            (3, "bank 2"),
+            (2, "Bank 1"),
+            (2, "BANK 1"),
+        ] {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::CreateCueListPublished {
+                cue_list_id,
+                label: label.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            let result = receiver.recv().unwrap();
+            assert!(
+                result.is_err(),
+                "create {cue_list_id} '{label}' must be rejected"
+            );
+            assert_eq!(runtime.cue_lists, valid);
+            assert_eq!(runtime.last_error, previous_last_error);
+            assert_eq!(
+                published.read().unwrap().cue_lists,
+                valid,
+                "rejected create must not republish a mutated image"
+            );
+        }
+
+        // Renames fail on missing IDs and invalid labels, and never recreate
+        // a deleted Bank.
+        runtime.cue_lists.retain(|cue_list| cue_list.id != 2);
+        let valid_after_remove = runtime.cue_lists.clone();
+        for (cue_list_id, label) in [
+            (99, "Missing Bank"),
+            (1, ""),
+            (1, " Padded "),
+            (1, "ba\u{007f}nk"),
+        ] {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::RenameCueListPublished {
+                cue_list_id,
+                label: label.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(1),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            let result = receiver.recv().unwrap();
+            assert!(
+                result.is_err(),
+                "rename {cue_list_id} '{label}' must be rejected"
+            );
+            assert_eq!(runtime.cue_lists, valid_after_remove);
+            assert_eq!(runtime.last_error, previous_last_error);
+        }
+
+        // A stale create expires inside the engine instead of applying.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCueListPublished {
+            cue_list_id: 3,
+            label: "Late Bank".to_string(),
+            expires_at: Instant::now() - Duration::from_millis(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Err("Bank create expired or was cancelled before engine admission".to_string())
+        );
+
+        // A stale rename expires inside the engine instead of applying.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RenameCueListPublished {
+            cue_list_id: 1,
+            label: "Late Rename".to_string(),
+            expires_at: Instant::now() - Duration::from_millis(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Err("Bank rename expired or was cancelled before engine admission".to_string())
+        );
+        assert_eq!(runtime.cue_lists, valid_after_remove);
+        assert_eq!(runtime.last_error, previous_last_error);
+    }
+
+    #[test]
+    fn published_bank_mutations_roll_back_exactly_on_publication_failure() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.cue_lists[0].active_cue_id = Some(11);
+        let before_lists = runtime.cue_lists.clone();
+        let before_persistence = runtime.build_persistence_snapshot();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        // Create failure: the allocated Bank is removed again and the shared
+        // image keeps A.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCueListPublished {
+            cue_list_id: 5,
+            label: "Rollback Bank".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Err("Bank create could not publish an acknowledged snapshot".to_string())
+        );
+        assert_eq!(runtime.cue_lists, before_lists);
+        assert_eq!(runtime.build_persistence_snapshot(), before_persistence);
+        assert_eq!(published.read().unwrap().cue_lists, before_lists);
+
+        // Rename failure: the original label is restored verbatim.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RenameCueListPublished {
+            cue_list_id: 1,
+            label: "Renamed Then Rolled Back".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(
+            receiver.recv().unwrap(),
+            Err("Bank rename could not publish an acknowledged snapshot".to_string())
+        );
+        assert_eq!(runtime.cue_lists, before_lists);
+        assert_eq!(published.read().unwrap().cue_lists, before_lists);
+
+        // The next command publishes normally after a forced publication
+        // failure; the rollback did not poison the pending-ACK lane.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::CreateCueListPublished {
+            cue_list_id: 5,
+            label: "Committed Bank".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(runtime.cue_lists.len(), 2);
+        assert_eq!(runtime.cue_lists[1].label, "Committed Bank");
+        assert_eq!(
+            published.read().unwrap().cue_lists,
+            runtime.cue_lists.clone()
+        );
+    }
+
+    #[test]
+    fn bank_handle_create_and_rename_are_exact_and_fail_closed() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        engine
+            .create_cue_list_published(4, "Handle Bank".to_string())
+            .unwrap();
+        let snapshot = engine.snapshot();
+        assert_eq!(
+            snapshot
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.id == 4)
+                .map(|cue_list| cue_list.label.as_str()),
+            Some("Handle Bank")
+        );
+
+        engine
+            .rename_cue_list_published(4, "Handle Bank Renamed".to_string())
+            .unwrap();
+        assert_eq!(
+            engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.id == 4)
+                .map(|cue_list| cue_list.label.as_str()),
+            Some("Handle Bank Renamed")
+        );
+
+        // Creating an existing ID fails definitively and never upserts.
+        let duplicate = engine
+            .create_cue_list_published(4, "Duplicate Bank".to_string())
+            .unwrap_err();
+        assert!(!duplicate.is_indeterminate());
+        assert_eq!(
+            engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.id == 4)
+                .map(|cue_list| cue_list.label.as_str()),
+            Some("Handle Bank Renamed")
+        );
+
+        // Renaming a missing ID fails definitively and never recreates it.
+        let missing = engine
+            .rename_cue_list_published(9, "Never Created".to_string())
+            .unwrap_err();
+        assert!(!missing.is_indeterminate());
+        assert_eq!(
+            engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .filter(|cue_list| cue_list.id == 9)
+                .count(),
+            0
+        );
+
+        // A queued cancellation before engine admission is definitive. This
+        // is proven through the exact classified receive helper the handle
+        // submission uses, with a still-Queued admission and an already
+        // elapsed deadline, so no worker scheduling can influence it.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (_sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        let error = receive_classified_snapshot_ack(
+            receiver,
+            &admission,
+            Instant::now(),
+            Duration::ZERO,
+            BANK_CREATE_ACK_DISCONNECTED_MESSAGE.to_string(),
+        )
+        .unwrap_err();
+        assert!(
+            error.allocator_rewind_safe,
+            "queued cancel stays definitive"
+        );
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let unpublished = engine
+            .create_cue_list_published(6, "Unpublished Bank".to_string())
+            .unwrap_err();
+        assert!(!unpublished.is_indeterminate());
+        assert_eq!(
+            unpublished.to_string(),
+            "Bank create could not publish an acknowledged snapshot"
+        );
+        assert!(engine
+            .snapshot()
+            .cue_lists
+            .iter()
+            .all(|cue_list| cue_list.id != 6));
+
+        engine.force_next_pending_publication_failure_for_tests();
+        let unpublished_rename = engine
+            .rename_cue_list_published(4, "Unpublished Rename".to_string())
+            .unwrap_err();
+        assert!(!unpublished_rename.is_indeterminate());
+        assert_eq!(
+            unpublished_rename.to_string(),
+            "Bank rename could not publish an acknowledged snapshot"
+        );
+        assert_eq!(
+            engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.id == 4)
+                .map(|cue_list| cue_list.label.as_str()),
+            Some("Handle Bank Renamed")
+        );
+
+        // Allocator semantics: tail-only release keeps allocations monotonic.
+        let first = engine.allocate_cue_list_id();
+        let second = engine.allocate_cue_list_id();
+        assert!(second > first);
+        assert!(!engine.release_cue_list_id_if_last(first));
+        let third = engine.allocate_cue_list_id();
+        assert!(third > second);
+        assert!(engine.release_cue_list_id_if_last(third));
+        assert_eq!(engine.allocate_cue_list_id(), third);
+        assert_ne!(engine.allocate_cue_list_id(), third);
+    }
+
+    #[test]
+    fn bank_publication_classification_definitive_versus_indeterminate() {
+        // Definitive: a validation rejection delivered over the classified
+        // channel stays definitive after classification.
+        let admission = ProjectSnapshotLoadAdmission::new();
+        assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+        let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        sender
+            .send(Err("Cue List 9 already exists".to_string()))
+            .unwrap();
+        drop(sender);
+        let error = receive_classified_snapshot_ack(
+            receiver,
+            &admission,
+            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+            BANK_CREATE_ACK_DISCONNECTED_MESSAGE.to_string(),
+        )
+        .unwrap_err();
+        assert!(error.allocator_rewind_safe);
+
+        // Indeterminate: an ACK disconnect after engine admission can never
+        // be reported as a definitive failure, for either Bank mutation.
+        for message in [
+            BANK_CREATE_ACK_DISCONNECTED_MESSAGE,
+            BANK_RENAME_ACK_DISCONNECTED_MESSAGE,
+        ] {
+            let admission = ProjectSnapshotLoadAdmission::new();
+            assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+            let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+            drop(sender);
+            let error = receive_classified_snapshot_ack(
+                receiver,
+                &admission,
+                Instant::now() + Duration::from_secs(1),
+                Duration::from_secs(1),
+                message.to_string(),
+            )
+            .unwrap_err();
+            assert!(!error.allocator_rewind_safe, "{message}");
+        }
+    }
+
+    #[test]
+    fn bank_apply_to_publish_window_stays_admitted_and_late_acks_never_unapply() {
+        // The injected post-apply/pre-ACK delay: B is applied to the worker
+        // image while the shared publication and the ACK are still pending.
+        // A caller giving up inside this window observes Admitted (never
+        // Queued), so cancel_if_queued cannot report a fabricated definitive
+        // cancellation, and the late ACK publishes B without ever unapplying.
+        for (cue_list_id, label) in [(3, "Window Bank"), (1, "Window Rename")] {
+            let mut runtime = runtime_with_lfo_effects(&[]);
+            let before_lists = runtime.cue_lists.clone();
+            let published = RwLock::new(runtime.build_snapshot(0));
+            let admission = ProjectSnapshotLoadAdmission::new();
+            let (ack, receiver) = mpsc::sync_channel(1);
+            let command = if cue_list_id == 3 {
+                EngineCommand::CreateCueListPublished {
+                    cue_list_id,
+                    label: label.to_string(),
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: admission.clone(),
+                    ack,
+                }
+            } else {
+                EngineCommand::RenameCueListPublished {
+                    cue_list_id,
+                    label: label.to_string(),
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: admission.clone(),
+                    ack,
+                }
+            };
+
+            runtime.apply_command(command);
+            // Post-apply/pre-ACK: the worker image holds B, the shared image
+            // still holds A, and no ACK has been delivered.
+            assert_ne!(runtime.cue_lists, before_lists);
+            assert_eq!(published.read().unwrap().cue_lists, before_lists);
+            assert!(receiver.try_recv().is_err());
+            // The command is already admitted: an observer that times out in
+            // this window must classify indeterminate, never cancel.
+            assert_eq!(
+                admission.current_state(),
+                ProjectSnapshotLoadAdmissionState::Admitted
+            );
+            assert!(!admission.cancel_if_queued());
+
+            // The worker completes publication and delivers the late ACK.
+            runtime.publish_pending_command_acks(0, &published);
+            assert_eq!(receiver.recv().unwrap(), Ok(()));
+            assert_eq!(
+                published.read().unwrap().cue_lists,
+                runtime.cue_lists.clone()
+            );
+        }
+    }
+
+    #[test]
+    fn cue_list_label_policy_is_exact_and_shared_by_both_bank_mutations() {
+        // Accepted: non-empty, unpadded, at most 64 scalars, inside the
+        // bounded visible Bank-label alphabet. Stored verbatim.
+        assert_eq!(validate_cue_list_label("Bank 1"), Ok(()));
+        let exactly_64 = "é".repeat(64);
+        assert_eq!(validate_cue_list_label(&exactly_64), Ok(()));
+        let too_long = "a".repeat(65);
+        assert!(validate_cue_list_label(&too_long).is_err());
+
+        for rejected in [
+            "",
+            " ",
+            " Padded",
+            "Padded ",
+            "\u{0007}bell",
+            "line\nbreak",
+            "del\u{007f}ete",
+            "c2\u{0085}control",
+            "soft\u{00AD}hyphen",
+            "zero\u{200B}width",
+            "mark\u{200E}ltr",
+            "bidi\u{202A}embed",
+            "bidi\u{202E}override",
+            "invis\u{2060}joiner",
+            "bom\u{FEFF}char",
+            "vari\u{FE0F}ation",
+            "combi\u{0301}ning",
+        ] {
+            assert!(
+                validate_cue_list_label(rejected).is_err(),
+                "'{rejected}' must be rejected"
+            );
+        }
+
+        // Duplicate identity: exact equality or full Unicode lowercasing.
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        assert!(cue_list_labels_collide("Bank 1", "Bank 1"));
+        assert!(cue_list_labels_collide("BANK 1", "bank 1"));
+        assert!(cue_list_labels_collide("Café", "CAFÉ"));
+        assert!(!cue_list_labels_collide("Bank 2", "Bank 1"));
+
+        // Both mutations share the exact same verdicts at the state level.
+        assert_eq!(
+            runtime.rename_cue_list_state(1, " Padded "),
+            Err("Cue List label must not have leading or trailing whitespace".to_string())
+        );
+        assert_eq!(
+            runtime.create_cue_list_state(2, "comb\u{0301}ined"),
+            Err(
+                "Cue List label contains an unsupported, format, invisible, or combining character (U+0301)"
+                    .to_string()
+            )
+        );
+        assert!(runtime.create_cue_list_state(2, "café").is_ok());
+        assert_eq!(
+            runtime.create_cue_list_state(3, "CAFÉ"),
+            Err("Cue List label 'CAFÉ' is already in use".to_string())
+        );
+        assert_eq!(
+            runtime.create_cue_list_state(3, "café"),
+            Err("Cue List label 'café' is already in use".to_string())
+        );
+        assert_eq!(
+            runtime.create_cue_list_state(2, "Second"),
+            Err("Cue List 2 already exists".to_string())
+        );
+        assert_eq!(runtime.cue_lists[1].label, "café");
+        assert_eq!(
+            runtime.rename_cue_list_state(99, "Missing"),
+            Err("Cue List 99 was not found".to_string())
+        );
+        // A self rename to another casing stays valid; a sibling casing
+        // collides (already proven by the create rejections above).
+        assert!(runtime.rename_cue_list_state(2, "CAFÉ").is_ok());
     }
 
     fn published_display_output(id: VideoOutputId) -> VideoOutputSummary {
@@ -76757,6 +78763,7 @@ mod tests {
                 TimelineAudioProjectionAuthority::default(),
             )),
             timeline_audio_publication_generation: Arc::new(AtomicU64::new(1)),
+            video_presentation_config_token: Arc::new(AtomicU64::new(1)),
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
@@ -78755,7 +80762,60 @@ mod tests {
     }
 
     #[test]
-    fn video_effect_chain_c1_load_reconciles_legacy_hosts_before_scope_validation() {
+    fn video_effect_chain_c1_load_rejects_legacy_hosts_in_current_schema_atomically() {
+        let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
+        engine
+            .set_video_layer_isf_effect_published(
+                layer_id,
+                Some(video_effect_chain_c1_event_effect()),
+            )
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+        let mut snapshot = before.clone();
+        let authored = snapshot.authored_video.as_mut().unwrap();
+        let mut discarded_host_chain = authored.effect_chains[0].clone();
+        discarded_host_chain.id = VideoEffectChainId(90);
+        discarded_host_chain.scope = VideoEffectScope::Composition { composition_id: 0 };
+        discarded_host_chain.stages[0].id = VideoEffectStageId(90);
+        discarded_host_chain.stages[0].effect.id = VideoEffectId(90);
+        authored.effect_chains.push(discarded_host_chain);
+        authored.compositions.extend([
+            CompositionSummary {
+                id: 0,
+                label: "Legacy zero host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+            CompositionSummary {
+                id: 2,
+                label: "Recovered host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+            CompositionSummary {
+                id: 2,
+                label: "Discarded duplicate host".to_string(),
+                layer_ids: vec![layer_id],
+                output_ids: Vec::new(),
+            },
+        ]);
+
+        // FC27 clean break: a current-schema snapshot (non-empty Timeline
+        // bank) carrying legacy video-graph defects is rejected by the raw
+        // integrity gate instead of being silently reconciled.
+        let error = engine.load_project_snapshot_and_wait(snapshot).unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("contains ID zero"),
+            "unexpected error: {error}"
+        );
+        let after_rejection = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_rejection.video, before.video);
+        assert_eq!(after_rejection.authored_video, before.authored_video);
+    }
+
+    #[test]
+    fn video_effect_chain_c1_load_reconciles_explicitly_legacy_hosts_before_scope_validation() {
         let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
         engine
             .set_video_layer_isf_effect_published(
@@ -78764,6 +80824,10 @@ mod tests {
             )
             .unwrap();
         let mut snapshot = engine.persistence_snapshot().unwrap();
+        // The empty Timeline bank is the explicitly older single-Timeline
+        // representation; it remains the only shape served by the legacy
+        // video-graph reconciliation path under the FC27 clean break.
+        snapshot.timeline_bank.clear();
         let authored = snapshot.authored_video.as_mut().unwrap();
         let mut discarded_host_chain = authored.effect_chains[0].clone();
         discarded_host_chain.id = VideoEffectChainId(90);
@@ -84165,6 +86229,11 @@ mod tests {
         replacement_video.layers[0].default_clip_slot_id = Some(VideoClipSlotId(20));
         replacement_video.layers[0].state.position_ms = 777;
         replacement_video.layers[0].state.playing = false;
+        // FC27: the replacement image must be internally consistent. The raw
+        // gate rejects an authored/rendered clip-bank divergence instead of
+        // silently letting authored overwrite rendered at normalization time,
+        // so mirror the authored topology into the rendered graph explicitly.
+        replacement.video = replacement_video.clone();
         runtime.load_project_snapshot(replacement);
         let truth = runtime.video_clip_runtime_snapshot();
         assert_eq!(truth.layers[0].active_slot_id, Some(VideoClipSlotId(20)));
@@ -98861,6 +100930,10 @@ mod tests {
             test_color_control("ColorRed", 1),
             test_color_control("ColorGreen", 2),
             test_color_control("ColorBlue", 3),
+            // FC27: the effect summary mirror carries the virtual composite
+            // attribute, so the current-schema fixture catalog must expose it
+            // for raw reference validation.
+            test_color_control("Colour Mapping", 4),
         ];
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -99577,6 +101650,9 @@ mod tests {
                 test_color_control("ColorRed", 1),
                 test_color_control("ColorGreen", 2),
                 test_color_control("ColorBlue", 3),
+                // FC27: the summary mirror attribute must resolve against the
+                // fixture catalog during raw reference validation.
+                test_color_control("Color", 4),
             ],
         ));
         let request = test_color_request(vec![1], test_color(1_000, 2_000, 3_000));
@@ -101869,7 +103945,7 @@ mod tests {
         drop(guard);
 
         let roundtrip = runtime.build_snapshot(0);
-        let mut loaded = runtime_with_chaser_fixtures(2);
+        let mut loaded = runtime_with_move_fixtures(2);
         loaded.load_project_snapshot(roundtrip.clone());
         assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
     }
@@ -103258,7 +105334,7 @@ mod tests {
         assert_eq!(published.read().unwrap().effects[0].mapping, Some(updated));
 
         let roundtrip = runtime.build_snapshot(0);
-        let mut loaded = runtime_with_move_fixtures(3);
+        let mut loaded = runtime_with_move_fixtures(2);
         loaded.load_project_snapshot(roundtrip.clone());
         assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
     }
@@ -106421,6 +108497,7 @@ mod tests {
         match operation {
             "start" => EngineCommand::DjLinkStartTimeline {
                 timeline_id: TimelineId(2),
+                position_ms: 0,
                 expires_at,
                 admission,
                 ack,
@@ -106760,6 +108837,398 @@ mod tests {
     }
 
     #[test]
+    fn dj_link_start_and_sync_publish_absolute_position_until_release() {
+        let engine = dj_link_transaction_test_engine();
+        let started = engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
+        assert_eq!(started.timeline.id, TimelineId(2));
+        assert_eq!(started.timeline.position_ms, 3_500);
+        assert_eq!(started.clock.source, ClockSource::DjLink);
+
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            engine.snapshot().timeline.position_ms,
+            3_500,
+            "the local clock advanced while DJ Link owned the playhead"
+        );
+
+        let synced = engine
+            .dj_link_sync_timeline_position_with_canonical_snapshot(TimelineId(2), 4_800)
+            .unwrap();
+        assert_eq!(synced.timeline.position_ms, 4_800);
+        assert_eq!(synced.clock.source, ClockSource::DjLink);
+        assert!(engine
+            .dj_link_sync_timeline_position_with_canonical_snapshot(TimelineId(1), 5_000)
+            .is_err());
+        assert_eq!(engine.snapshot().timeline.position_ms, 4_800);
+
+        engine.dj_link_release().unwrap();
+        let released_at = engine.snapshot().timeline.position_ms;
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            engine.snapshot().timeline.position_ms > released_at,
+            "DJ Link release did not hand the playhead back to the local clock"
+        );
+    }
+
+    fn dj_link_sync_cadence_test_runtime() -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut authored = runtime.authored_timeline_snapshot();
+        authored.id = TimelineId(7_701);
+        authored.label = "DJ Link cadence".to_string();
+        // The computed Timeline duration derives from authored content; a
+        // phase bounds it so DJ positions are not clamped to zero.
+        authored.phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(9_101),
+            label: "DJ Link cadence window".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 60_000,
+        }];
+        authored.duration_ms = 60_000;
+        runtime.timeline_bank = vec![authored];
+        runtime
+    }
+
+    #[test]
+    fn dj_link_sync_normal_cadence_forward_tracking_does_not_locate() {
+        let mut runtime = dj_link_sync_cadence_test_runtime();
+        runtime
+            .start_dj_link_timeline_runtime_at(TimelineId(7_701), 1_000)
+            .unwrap();
+        assert_eq!(
+            runtime.timeline_dj_link_observation.map(|o| o.position_ms),
+            Some(1_000),
+            "the DJ Link start itself anchors the tracking baseline"
+        );
+        // Simulate an ordinary >=250 ms SYNC delivery cadence: the frozen
+        // externally-owned playhead plus 600 ms of wall-clock progress.
+        runtime.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: 1_000,
+            observed_at: Instant::now() - Duration::from_millis(600),
+        });
+        let revision_before = runtime.timeline_audio_transport_revision;
+        let generation_before = runtime.timeline_transport_generation;
+
+        runtime
+            .dj_link_sync_timeline_position_state(TimelineId(7_701), 1_500)
+            .unwrap();
+
+        assert_eq!(runtime.timeline_position_ms, 1_500);
+        assert_eq!(
+            runtime.timeline_audio_transport_revision, revision_before,
+            "ordinary forward tracking must not churn the audio transport fence"
+        );
+        assert_eq!(
+            runtime.timeline_transport_generation, generation_before,
+            "ordinary forward tracking must not rotate the transport authority"
+        );
+        assert_eq!(
+            runtime.timeline_external_sync_source.as_ref(),
+            Some(&ClockSource::DjLink)
+        );
+        assert_eq!(
+            runtime.timeline_dj_link_observation.map(|o| o.position_ms),
+            Some(1_500),
+            "each admitted SYNC re-anchors the tracking baseline"
+        );
+    }
+
+    #[test]
+    fn dj_link_sync_genuine_forward_locate_rebuilds_and_reconstructs_scene_blocks() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 5,
+            label: "Locate scene".to_string(),
+            fade_ms: 0,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 30_000,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        assert_eq!(runtime.last_error, None);
+        runtime.timeline_id = TimelineId(9);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 500;
+        runtime.timeline_events = vec![test_scene_block(10, 5, 1_000, 20_000, 1, 1.0)];
+        runtime.sort_timeline_events();
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime.timeline_external_sync_source = Some(ClockSource::DjLink);
+        runtime.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: 500,
+            observed_at: Instant::now(),
+        });
+        let revision_before = runtime.timeline_audio_transport_revision;
+
+        // +11_500 ms within one admission interval cannot be real-time
+        // tracking: this is a genuine operator locate.
+        runtime
+            .dj_link_sync_timeline_position_state(TimelineId(9), 12_000)
+            .unwrap();
+
+        assert_eq!(runtime.timeline_position_ms, 12_000);
+        assert!(
+            runtime.timeline_audio_transport_revision > revision_before,
+            "a genuine locate must rotate the audio transport fence"
+        );
+        // The Scene Block span (1_000..21_000) covering the target was
+        // reconstructed through the standard recall machinery instead of
+        // staying dark until its next authored boundary.
+        assert_eq!(
+            runtime.values.get(&(1, "Dimmer".to_string())),
+            Some(&30_000),
+            "locate must reconstruct active scene state at the target"
+        );
+        assert_eq!(
+            runtime.timeline_external_sync_source.as_ref(),
+            Some(&ClockSource::DjLink)
+        );
+    }
+
+    #[test]
+    fn dj_link_sync_backward_locate_still_rebuilds_safely() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::CreateCue {
+            authored_beats: None,
+            cue_id: 5,
+            label: "Backward locate scene".to_string(),
+            fade_ms: 0,
+            targets: vec![CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 45_000,
+                }],
+            }],
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        assert_eq!(runtime.last_error, None);
+        runtime.timeline_id = TimelineId(9);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 15_000;
+        runtime.timeline_events = vec![test_scene_block(10, 5, 1_000, 20_000, 1, 1.0)];
+        runtime.sort_timeline_events();
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime.timeline_external_sync_source = Some(ClockSource::DjLink);
+        runtime.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: 15_000,
+            observed_at: Instant::now() - Duration::from_millis(600),
+        });
+        let revision_before = runtime.timeline_audio_transport_revision;
+
+        runtime
+            .dj_link_sync_timeline_position_state(TimelineId(9), 8_000)
+            .unwrap();
+
+        assert_eq!(runtime.timeline_position_ms, 8_000);
+        assert!(
+            runtime.timeline_audio_transport_revision > revision_before,
+            "backward movement is always a safe-rebuild locate"
+        );
+        assert_eq!(
+            runtime.values.get(&(1, "Dimmer".to_string())),
+            Some(&45_000),
+            "backward locate reconstructs the spanning scene block"
+        );
+    }
+
+    #[test]
+    fn dj_link_sync_without_a_baseline_fails_closed_to_raw_discontinuity_classification() {
+        let mut runtime = dj_link_sync_cadence_test_runtime();
+        runtime
+            .start_dj_link_timeline_runtime_at(TimelineId(7_701), 1_000)
+            .unwrap();
+        // Any release/stop/source-change path clears the baseline while the
+        // transport may still carry a DJ-owned image. Without a baseline the
+        // classification must fall back to the raw threshold, never assume
+        // tracking.
+        runtime.timeline_dj_link_observation = None;
+        let revision_before = runtime.timeline_audio_transport_revision;
+
+        runtime
+            .dj_link_sync_timeline_position_state(TimelineId(7_701), 3_000)
+            .unwrap();
+
+        assert_eq!(runtime.timeline_position_ms, 3_000);
+        assert!(
+            runtime.timeline_audio_transport_revision > revision_before,
+            "no-baseline forward movement beyond the raw threshold locates"
+        );
+    }
+
+    #[test]
+    fn dj_link_sync_discontinuity_with_active_follow_retires_the_exact_reserved_pair() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        assert!(runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap());
+        assert!(
+            runtime.timeline_follow_is_abortable(),
+            "the admitted Follow transport must classify as abortable"
+        );
+        // Establish DJ Link playhead ownership the same way as the locate
+        // tests: a frozen externally-owned playhead plus a tracking baseline.
+        runtime.timeline_playing = true;
+        runtime.timeline_external_sync_source = Some(ClockSource::DjLink);
+        runtime.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: 900,
+            observed_at: now,
+        });
+        let revision_before = runtime.timeline_audio_transport_revision;
+        let epoch_before = runtime.timeline_transport_epoch;
+        let generation_before = runtime.timeline_transport_generation;
+        let schedule_before = runtime.timeline_click_scheduler.identity();
+        let follow_generation_before = runtime.timeline_follow_runtime.generation;
+
+        // A backward SYNC is always a discontinuity regardless of wall-clock
+        // cadence, and the active Follow adds the abortable successor term:
+        // the reservation must be exactly 1 + 1 audio transport revisions.
+        runtime
+            .dj_link_sync_timeline_position_state(TimelineId(8_101), 100)
+            .unwrap();
+
+        assert_eq!(
+            runtime.timeline_audio_transport_revision,
+            revision_before + 2,
+            "exactly one retired Follow successor plus one committed discontinuity fence"
+        );
+        assert_eq!(runtime.timeline_transport_epoch, epoch_before);
+        assert_eq!(runtime.timeline_transport_generation, generation_before + 1);
+        let schedule_after = runtime.timeline_click_scheduler.identity();
+        assert_eq!(schedule_after.epoch, schedule_before.epoch);
+        assert_eq!(
+            schedule_after.transport_generation,
+            schedule_before.transport_generation + 1
+        );
+        assert_eq!(
+            schedule_after.schedule_generation,
+            schedule_before.schedule_generation + 1
+        );
+        assert_eq!(
+            runtime.timeline_follow_runtime.generation,
+            follow_generation_before + 1
+        );
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Aborting
+        ));
+        assert_eq!(
+            runtime.timeline_follow_runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Aborted {
+                reason: protocol::TimelineFollowAbortReason::ClockDiscontinuity,
+            })
+        );
+        assert!(runtime.timeline_follow_transition.is_none());
+        assert!(runtime.timeline_follow_transport.is_none());
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert_eq!(
+            runtime.timeline_dj_link_observation.map(|o| o.position_ms),
+            Some(100),
+            "the admitted discontinuity re-anchors the tracking baseline"
+        );
+
+        // Reservation-boundary atomicity: with the revision counter exhausted,
+        // the same discontinuity fails closed before any mutation. Only the
+        // observation baseline is conservatively cleared; the transport
+        // authority, click identity, Follow runtime, playhead, and revision
+        // counter stay exactly unchanged, with no wrapping overflow.
+        runtime.advance_timeline_follow(now);
+        runtime.advance_timeline_follow(now + Duration::from_millis(1));
+        runtime.timeline_follow_natural_boundary_armed = true;
+        assert!(runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap());
+        assert!(runtime.timeline_follow_is_abortable());
+        runtime.timeline_position_ms = 900;
+        runtime.timeline_dj_link_observation = Some(DjLinkTimelineObservation {
+            position_ms: 900,
+            observed_at: now,
+        });
+        runtime.timeline_audio_transport_revision = u64::MAX;
+        let authority_before_failure = (
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+        );
+        let schedule_before_failure = runtime.timeline_click_scheduler.identity();
+        let follow_runtime_before_failure = runtime.timeline_follow_runtime.clone();
+
+        let failure = runtime
+            .dj_link_sync_timeline_position_state(TimelineId(8_101), 100)
+            .unwrap_err();
+        assert_eq!(failure, "Timeline audio transport revision is exhausted");
+        assert_eq!(runtime.timeline_audio_transport_revision, u64::MAX);
+        assert_eq!(
+            (
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation
+            ),
+            authority_before_failure
+        );
+        assert_eq!(
+            runtime.timeline_click_scheduler.identity(),
+            schedule_before_failure
+        );
+        assert_eq!(
+            runtime.timeline_follow_runtime,
+            follow_runtime_before_failure
+        );
+        assert!(
+            runtime.timeline_follow_transition.is_some(),
+            "a failed reservation must not partially retire the Follow transport"
+        );
+        assert_eq!(runtime.timeline_position_ms, 900);
+        assert!(
+            runtime.timeline_dj_link_observation.is_none(),
+            "only the observation baseline is conservatively cleared on failure"
+        );
+    }
+
+    #[test]
+    fn dj_link_release_and_manual_seeks_clear_the_tracking_baseline() {
+        let mut runtime = dj_link_sync_cadence_test_runtime();
+        runtime
+            .start_dj_link_timeline_runtime_at(TimelineId(7_701), 1_000)
+            .unwrap();
+        assert!(runtime.timeline_dj_link_observation.is_some());
+
+        // The DJ Link release core hands the playhead back to the local clock.
+        runtime.apply_timeline_playing_command(true, true).unwrap();
+        assert!(runtime.timeline_external_sync_source.is_none());
+        assert!(runtime.timeline_dj_link_observation.is_none());
+
+        // Re-establish ownership, then take it away through a manual seek.
+        runtime
+            .start_dj_link_timeline_runtime_at(TimelineId(7_701), 2_000)
+            .unwrap();
+        assert!(runtime.timeline_dj_link_observation.is_some());
+        runtime.apply_command(EngineCommand::SeekTimeline(4_000));
+        assert!(runtime.timeline_external_sync_source.is_none());
+        assert!(
+            runtime.timeline_dj_link_observation.is_none(),
+            "manual seeks must clear the stale DJ observation"
+        );
+    }
+
+    #[test]
     fn dj_link_release_is_idempotent_without_generation_drift() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         runtime.timeline_loop_runtime.a_ms = Some(100);
@@ -106899,6 +109368,7 @@ mod tests {
             let command = match operation {
                 "start" => EngineCommand::DjLinkStartTimeline {
                     timeline_id: TimelineId(1),
+                    position_ms: 0,
                     expires_at,
                     admission: admission.clone(),
                     ack,
@@ -107230,6 +109700,7 @@ mod tests {
         let (ack, receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::DjLinkStartTimeline {
             timeline_id: TimelineId(2),
+            position_ms: 0,
             expires_at: Instant::now() + Duration::from_secs(1),
             admission,
             ack,
@@ -113140,6 +115611,20 @@ mod tests {
         add_conformed_loop_fill_test_block(&mut source, 10, 1, 0.0, 4_000, None);
         let mut snapshot = source.build_snapshot(0);
         snapshot.timeline.events[0].rate = Some(99.0);
+        // The stale saved rate is part of the authored image, so it must be
+        // mirrored into the matching bank entry. A current-schema load
+        // rejects an active/bank projection divergence instead of silently
+        // repairing it from the active side.
+        let active_bank_entry = snapshot
+            .timeline_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == snapshot.timeline.id)
+            .expect("built snapshots always carry their active bank entry");
+        assert_eq!(
+            active_bank_entry.events[0].id,
+            snapshot.timeline.events[0].id
+        );
+        active_bank_entry.events[0].rate = Some(99.0);
 
         let mut loaded = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -114269,17 +116754,25 @@ mod tests {
                 ),
             )],
         );
-        runtime.apply_command(EngineCommand::UpsertCueList {
-            cue_list_id: 2,
-            label: "Secondary".to_string(),
-        });
+        runtime
+            .create_cue_list_state(2, "Secondary")
+            .expect("secondary Bank must stage cleanly");
         let recalled_at = Instant::now();
         runtime.request_cue(1, recalled_at);
 
-        runtime.apply_command(EngineCommand::SetCueList {
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MoveCueBetweenBanksPublished {
             cue_id: 1,
-            cue_list_id: 2,
+            target_cue_list_id: 2,
+            target_group_id: None,
+            target_cue_id: None,
+            insert_after: true,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
         });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
         assert!(matches!(
             runtime.effect_activations[runtime.active_effect_activation_indices[0]].key,
             Some(RuntimeEffectActivationKey::CueList {
@@ -114288,7 +116781,14 @@ mod tests {
             })
         ));
 
-        runtime.apply_command(EngineCommand::RemoveCueList(2));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::DeleteCueListPublished {
+            cue_list_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
         assert!(runtime.cues.iter().all(|cue| cue.id != 1));
         assert!(runtime.active_effect_activation_indices.is_empty());
         assert!(runtime
@@ -116730,6 +119230,188 @@ mod tests {
             before_cue_ids
         );
         assert_eq!(timeline_event_test_summaries(&runtime), before_events);
+    }
+
+    fn cue_list_delete_lock_test_runtime(
+        locked_layer_id: u32,
+        unlocked_layer_id: u32,
+    ) -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 2, Vec::new());
+        runtime.cue_lists.push(CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        for (cue_id, label) in [(20, "Bank scene A"), (21, "Bank scene B")] {
+            runtime.cues.push(runtime_cue_from_summary(&CueSummary {
+                id: cue_id,
+                cue_list_id: 2,
+                cue_number: cue_id.to_string(),
+                label: label.to_string(),
+                ..CueSummary::default()
+            }));
+        }
+        runtime.timeline_layers = vec![
+            timeline_test_layer(
+                locked_layer_id,
+                0,
+                false,
+                true,
+                false,
+                TimelineLayerKind::Lighting,
+            ),
+            timeline_test_layer(
+                unlocked_layer_id,
+                1,
+                false,
+                false,
+                false,
+                TimelineLayerKind::Lighting,
+            ),
+        ];
+        let fade_started_at = Instant::now();
+        runtime.active_cue_id = Some(1);
+        runtime.values.insert((1, "Dimmer".to_string()), 255);
+        runtime.active_fade = Some(RuntimeFade {
+            cue_id: 1,
+            source: PendingCueTriggerSource::Manual,
+            timeline_event_id: None,
+            apply_mib_on_complete: false,
+            completion_cue_ids: Vec::new(),
+            started_at: fade_started_at,
+            duration: Duration::from_secs(1_000),
+            video_duration: Duration::ZERO,
+            paused_at: None,
+            paused_duration: Duration::ZERO,
+            lighting_owners: HashMap::new(),
+            start_values: HashMap::new(),
+            target_values: HashMap::from([((1, "Dimmer".to_string()), 0)]),
+            attribute_timings: HashMap::new(),
+            video_layer_owners: HashMap::new(),
+            video_start_states: HashMap::new(),
+            video_target_states: HashMap::new(),
+            video_layer_timings: HashMap::new(),
+            video_output_owners: HashMap::new(),
+            video_output_start_opacities: HashMap::new(),
+            video_output_target_opacities: HashMap::new(),
+            video_output_targets: HashMap::new(),
+            video_output_timings: HashMap::new(),
+        });
+        runtime
+    }
+
+    #[test]
+    fn cue_list_delete_rejects_locked_placement_before_any_mutation() {
+        let mut runtime = cue_list_delete_lock_test_runtime(10, 11);
+        runtime.timeline_events = vec![
+            timeline_test_event(100, 20, 0, 10, 100, 1),
+            timeline_test_event(200, 21, 500, 11, 100, 1),
+        ];
+        runtime.recompute_timeline_event_layers().unwrap();
+        let before = runtime.build_persistence_snapshot();
+        let before_values = runtime.values.clone();
+        let before_events = timeline_event_test_summaries(&runtime);
+        let before_cue_lists = runtime.cue_lists.clone();
+        let before_cue_ids = runtime.cues.iter().map(|cue| cue.id).collect::<Vec<_>>();
+
+        let error = runtime.delete_cue_list_state(2).unwrap_err();
+        assert!(error.contains("locked"), "unexpected error: {error}");
+        assert!(error.contains("Cue List 2"), "unexpected error: {error}");
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        assert_eq!(timeline_event_test_summaries(&runtime), before_events);
+        assert_eq!(runtime.cue_lists, before_cue_lists);
+        assert_eq!(
+            runtime.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+            before_cue_ids
+        );
+        assert_eq!(runtime.values, before_values);
+        assert!(runtime.active_fade.is_some());
+        assert_eq!(runtime.active_cue_id, Some(1));
+    }
+
+    #[test]
+    fn cue_list_delete_rejects_protected_incoming_jump_before_any_mutation() {
+        let mut runtime = cue_list_delete_lock_test_runtime(10, 11);
+        let mut locked_source = timeline_test_event(100, 1, 0, 10, 100, 1);
+        locked_source.jump_to_event_id = Some(200);
+        runtime.timeline_events = vec![
+            locked_source,
+            timeline_test_event(200, 20, 500, 11, 100, 1),
+            timeline_test_event(300, 21, 900, 11, 100, 1),
+        ];
+        runtime.recompute_timeline_event_layers().unwrap();
+        let before = runtime.build_persistence_snapshot();
+        let before_values = runtime.values.clone();
+        let before_events = timeline_event_test_summaries(&runtime);
+        let before_jump_landed = runtime.timeline_jump_landed_event_id;
+
+        let error = runtime.delete_cue_list_state(2).unwrap_err();
+        assert!(error.contains("locked"), "unexpected error: {error}");
+        assert!(error.contains("jumps"), "unexpected error: {error}");
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        assert_eq!(timeline_event_test_summaries(&runtime), before_events);
+        assert_eq!(runtime.values, before_values);
+        assert!(runtime.active_fade.is_some());
+        assert_eq!(runtime.timeline_jump_landed_event_id, before_jump_landed);
+        assert!(runtime.cues.iter().any(|cue| cue.id == 2));
+        assert!(runtime.cues.iter().any(|cue| cue.id == 20));
+        assert!(runtime.cues.iter().any(|cue| cue.id == 21));
+        assert!(runtime.timeline_events.iter().any(|event| event.id == 100));
+        assert!(runtime.timeline_events.iter().any(|event| event.id == 200));
+        assert!(runtime.timeline_events.iter().any(|event| event.id == 300));
+    }
+
+    #[test]
+    fn cue_list_delete_without_locked_references_still_succeeds() {
+        let mut runtime = cue_list_delete_lock_test_runtime(10, 11);
+        let mut unlocked_source = timeline_test_event(110, 2, 300, 11, 100, 1);
+        unlocked_source.jump_to_event_id = Some(200);
+        runtime.timeline_events = vec![
+            unlocked_source,
+            timeline_test_event(200, 20, 500, 11, 100, 1),
+            timeline_test_event(300, 21, 900, 11, 100, 1),
+        ];
+        runtime.recompute_timeline_event_layers().unwrap();
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 600;
+        runtime.timeline_jump_landed_event_id = Some(200);
+        runtime.active_cue_id = Some(20);
+        runtime.active_fade = None;
+        runtime.active_group_cue_ids.insert("main".to_string(), 20);
+        runtime.cue_list_effect_activation_cues.insert(2, 20);
+        runtime.playback_executors.push(PlaybackExecutorSummary {
+            id: 2,
+            label: "Bank 2 executor".to_string(),
+            cue_list_id: 2,
+            page: 1,
+            slot: 2,
+            level: 1.0,
+        });
+
+        assert_eq!(runtime.delete_cue_list_state(2), Ok(()));
+        assert!(runtime.cue_lists.iter().all(|cue_list| cue_list.id != 2));
+        assert!(runtime.cues.iter().all(|cue| cue.cue_list_id != 2));
+        assert!(runtime.cues.iter().any(|cue| cue.id == 2));
+        assert!(runtime
+            .playback_executors
+            .iter()
+            .all(|executor| executor.cue_list_id != 2));
+        assert!(runtime
+            .timeline_events
+            .iter()
+            .all(|event| !matches!(event.id, 200 | 300)));
+        assert_eq!(
+            runtime.timeline_events[0].jump_to_event_id, None,
+            "unlocked incoming jump must be cleared"
+        );
+        assert_eq!(runtime.timeline_jump_landed_event_id, None);
+        assert_eq!(runtime.active_cue_id, None);
+        assert!(!runtime
+            .active_group_cue_ids
+            .values()
+            .any(|cue_id| *cue_id == 20));
+        assert!(!runtime.cue_list_effect_activation_cues.contains_key(&2));
     }
 
     #[test]
@@ -119216,6 +121898,19 @@ mod tests {
             ..DmxOutputConfig::default()
         });
         runtime.cues = cues.iter().map(runtime_cue_from_summary).collect();
+        // The parent event targets the explicit legacy lane identity, so the
+        // seeded current-schema image must carry that layer entry for its
+        // references to stay raw-integrity valid.
+        runtime.timeline_layers = vec![TimelineLayerSummary {
+            id: 0,
+            label: "Legacy Lane".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Lighting,
+        }];
         let mut parent = timeline_test_event(100, 1, 10_000, 0, 5_000, 1);
         parent.rate = Some(rate);
         runtime.timeline_events = vec![parent];
@@ -119671,38 +122366,951 @@ mod tests {
         );
     }
 
-    #[test]
-    fn invalid_child_timeline_loads_for_inspection_but_recall_is_inert() {
-        let mut snapshot = super_scene_test_runtime(1.0).build_persistence_snapshot();
-        snapshot.cues[1].child_timeline = Some(ChildTimelineSummary {
-            events: vec![TimelineCueEventSummary {
-                id: 299,
-                cue_id: 1,
-                track: TimelineTrackKind::Lighting,
-                ..TimelineCueEventSummary::default()
-            }],
+    fn child_graph_plain_cue(id: CueId, cue_list_id: CueListId) -> CueSummary {
+        CueSummary {
+            id,
+            cue_list_id,
+            label: format!("Cue {id}"),
+            ..CueSummary::default()
+        }
+    }
+
+    fn child_graph_child(events: Vec<TimelineCueEventSummary>) -> ChildTimelineSummary {
+        ChildTimelineSummary {
+            events,
             ..ChildTimelineSummary::default()
+        }
+    }
+
+    fn child_graph_event(id: TimelineEventId, cue_id: CueId) -> TimelineCueEventSummary {
+        TimelineCueEventSummary {
+            id,
+            cue_id,
+            track: TimelineTrackKind::Lighting,
+            ..TimelineCueEventSummary::default()
+        }
+    }
+
+    fn child_graph_snapshot(cues: Vec<CueSummary>) -> EngineSnapshot {
+        let mut snapshot = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        })
+        .build_persistence_snapshot();
+        snapshot.cues = cues;
+        snapshot.cue_lists = vec![
+            CueListSummary {
+                id: 1,
+                label: "Bank 1".to_string(),
+                active_cue_id: None,
+            },
+            CueListSummary {
+                id: 2,
+                label: "Bank 2".to_string(),
+                active_cue_id: None,
+            },
+        ];
+        snapshot
+    }
+
+    fn child_graph_test_engine() -> EngineRuntime {
+        EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        })
+    }
+
+    fn assert_child_graph_links(
+        runtime: &EngineRuntime,
+        expected: &[(CueId, Option<&[(TimelineEventId, CueId)]>)],
+    ) {
+        assert_eq!(runtime.cues.len(), expected.len());
+        for (cue, (cue_id, links)) in runtime.cues.iter().zip(expected) {
+            assert_eq!(cue.id, *cue_id);
+            let actual = cue
+                .child_timeline
+                .as_ref()
+                .map(|child| {
+                    child
+                        .events
+                        .iter()
+                        .map(|event| (event.id, event.cue_id))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let expected_links = links.map(|links| links.to_vec()).unwrap_or_default();
+            assert_eq!(actual, expected_links, "cue {} links diverged", cue.id);
+        }
+    }
+
+    #[test]
+    fn project_load_rejects_child_timeline_missing_reference_unchanged() {
+        let baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+
+        let mut corrupt = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        corrupt.cues[0].child_timeline = Some(child_graph_child(vec![child_graph_event(300, 999)]));
+        let error = engine.load_project_snapshot_checked(corrupt).unwrap_err();
+        assert!(
+            error.contains("references missing Cue 999"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+    }
+
+    #[test]
+    fn project_load_rejects_child_timeline_self_reference_unchanged() {
+        let baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+
+        let mut corrupt = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        corrupt.cues[0].child_timeline = Some(child_graph_child(vec![child_graph_event(301, 1)]));
+        // FC27: the raw current-schema integrity gate owns load rejection and
+        // reports the child recursion as a reference cycle before the legacy
+        // child-graph validator can run.
+        let error = engine.load_project_snapshot_checked(corrupt).unwrap_err();
+        assert!(
+            error.contains("reference cycle") && error.contains("[1, 1]"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+    }
+
+    #[test]
+    fn project_load_rejects_child_timeline_duplicate_endpoint_unchanged() {
+        let baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+
+        let mut corrupt = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        corrupt.cues[0].child_timeline = Some(child_graph_child(vec![
+            child_graph_event(302, 2),
+            child_graph_event(302, 2),
+        ]));
+        let error = engine.load_project_snapshot_checked(corrupt).unwrap_err();
+        // FC27: duplicate child endpoints are reported by the raw integrity
+        // gate as a Timeline event identity duplication.
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("Timeline event identity 302 is duplicated"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+    }
+
+    #[test]
+    fn project_load_rejects_duplicate_authored_cue_ids_unchanged() {
+        let baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+
+        // Two authored Cues share one identity. Every nested-graph lookup
+        // would become ambiguous first-match behavior, so the load fails
+        // closed before any graph traversal is built. FC27: rejection is
+        // reported by the raw current-schema integrity gate.
+        let corrupt = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+            child_graph_plain_cue(2, 1),
+        ]);
+        let error = engine.load_project_snapshot_checked(corrupt).unwrap_err();
+        assert_eq!(
+            error,
+            "project snapshot reference integrity: Cue identity 2 is duplicated".to_string()
+        );
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+        assert_eq!(engine.cue_lists.len(), 2);
+    }
+
+    #[test]
+    fn project_load_rejects_dangling_child_jump_target_unchanged() {
+        let baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+
+        let mut dangling = child_graph_event(303, 2);
+        dangling.jump_to_event_id = Some(999);
+        let mut corrupt = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        corrupt.cues[0].child_timeline = Some(child_graph_child(vec![dangling]));
+        // FC27: the raw current-schema integrity gate owns load rejection and
+        // reports the dangling child jump target before the legacy
+        // child-graph validator can run.
+        let error = engine.load_project_snapshot_checked(corrupt).unwrap_err();
+        assert_eq!(
+            error,
+            "project snapshot reference integrity: Cue 1 child Timeline event 303 jump references missing Timeline event 999"
+                .to_string()
+        );
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+    }
+
+    #[test]
+    fn project_load_accepts_child_jump_targets_inside_the_same_child_timeline() {
+        let mut forward = child_graph_event(303, 2);
+        forward.jump_to_event_id = Some(304);
+        let mut backward = child_graph_event(304, 2);
+        backward.jump_to_event_id = Some(303);
+        let snapshot = child_graph_snapshot(vec![
+            CueSummary {
+                id: 1,
+                cue_list_id: 1,
+                label: "Child jumps".to_string(),
+                child_timeline: Some(child_graph_child(vec![forward, backward])),
+                ..CueSummary::default()
+            },
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(snapshot).unwrap();
+        assert_child_graph_links(&engine, &[(1, Some(&[(303, 2), (304, 2)])), (2, None)]);
+    }
+
+    #[test]
+    fn child_jump_target_authoring_and_project_load_boundaries_both_reject_dangling_target() {
+        let snapshot = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(snapshot).unwrap();
+
+        let mut dangling = child_graph_event(303, 2);
+        dangling.jump_to_event_id = Some(999);
+        let mut authored = child_graph_child(vec![dangling]);
+        let authoring_error = engine
+            .normalize_and_validate_child_timeline(1, &mut authored)
+            .unwrap_err();
+        assert_eq!(
+            authoring_error,
+            "Cue 1 child event 303 jumps to missing child event 999".to_string()
+        );
+
+        let mut dangling_load = child_graph_event(303, 2);
+        dangling_load.jump_to_event_id = Some(999);
+        let mut project = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        project.cues[0].child_timeline = Some(child_graph_child(vec![dangling_load]));
+        // FC27 clean break: project-load rejection is owned by the raw
+        // current-schema integrity gate, which runs before the authoring-time
+        // child-graph validator. Both boundaries still reject the same defect
+        // and each documents its own exact message.
+        let load_error = engine.load_project_snapshot_checked(project).unwrap_err();
+        assert_eq!(
+            load_error,
+            "project snapshot reference integrity: Cue 1 child Timeline event 303 jump references missing Timeline event 999"
+                .to_string()
+        );
+        // The rejected authoring attempt left the staged child untouched.
+        assert_child_graph_links(&engine, &[(1, None), (2, None)]);
+    }
+
+    fn fc27_grouped_cue(id: CueId, cue_list_id: CueListId, group_id: &str) -> CueSummary {
+        CueSummary {
+            id,
+            cue_list_id,
+            label: format!("Cue {id}"),
+            group_id: Some(group_id.to_string()),
+            ..CueSummary::default()
+        }
+    }
+
+    /// A referentially valid current-schema image with per-bank active Cues,
+    /// one global active Cue, and one group-active projection.
+    fn fc27_active_reference_baseline() -> EngineSnapshot {
+        let mut snapshot = child_graph_snapshot(vec![
+            fc27_grouped_cue(1, 1, "front"),
+            fc27_grouped_cue(2, 2, "front"),
+        ]);
+        snapshot.cue_lists[0].active_cue_id = Some(1);
+        snapshot.cue_lists[1].active_cue_id = Some(2);
+        snapshot.active_cue_id = Some(1);
+        snapshot.active_group_cue_ids.insert("front".to_string(), 1);
+        snapshot
+    }
+
+    fn fc27_dimmer_fixture() -> PatchedFixtureSummary {
+        PatchedFixtureSummary {
+            id: 1,
+            label: "FC27 Fixture".to_string(),
+            profile_source_path: "memory://fc27-fixture.gdtf".to_string(),
+            profile_name: "FC27 Fixture".to_string(),
+            manufacturer: "Syndocal".to_string(),
+            mode_name: "Standard".to_string(),
+            universe: 0,
+            address: 1,
+            group_ids: vec!["front".to_string()],
+            position: Vec3::default(),
+            rotation: Default::default(),
+            geometries: sample_geometries(),
+            controls: sample_profile().dmx_modes[0].controls.clone(),
+            attribute_values: Vec::new(),
+            limits: FixtureLimits::default(),
+            highlighted: false,
+            soloed: false,
+            parked: false,
+        }
+    }
+
+    fn fc27_lfo_effect_summary(period_ms: Option<u64>) -> EffectSummary {
+        EffectSummary {
+            id: 50,
+            label: "FC27 LFO".to_string(),
+            effect_type: EffectKind::Lfo,
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            period_ms,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: EffectBlendMode::Override,
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            lfo: None,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: None,
+        }
+    }
+
+    fn fc27_video_layer(id: u64, slot_id: u64, asset_id: u64) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id,
+            label: format!("FC27 Layer {id}"),
+            source: VideoSourceSummary {
+                kind: protocol::VideoSourceKind::File,
+                path: Some(format!("memory://fc27-{id}.mp4")),
+                name: None,
+                codec: Some("H264".to_string()),
+                metadata: None,
+            },
+            media_asset_id: Some(asset_id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+            clip_slots: vec![VideoClipSlotSummary {
+                id: VideoClipSlotId(slot_id),
+                media_asset_id: asset_id,
+                in_point_ms: 0,
+                out_point_ms: None,
+                loop_mode: VideoClipLoopMode::Once,
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: VideoClipLaunchQuantization::Immediate,
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(VideoClipSlotId(slot_id)),
+        }
+    }
+
+    /// A referentially valid single-layer video graph with one composition.
+    fn fc27_video_graph() -> VideoSnapshot {
+        VideoSnapshot {
+            layers: vec![fc27_video_layer(10, 20, 5)],
+            media_assets: vec![MediaAssetSummary {
+                id: 5,
+                label: "FC27 asset".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://fc27-10.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+                content_hash: None,
+                byte_size: None,
+            }],
+            compositions: vec![CompositionSummary {
+                id: 40,
+                label: "FC27 Comp".to_string(),
+                layer_ids: vec![10],
+                output_ids: Vec::new(),
+            }],
+            ..VideoSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn current_schema_load_rejects_invalid_bank_global_and_group_active_references() {
+        let baseline = fc27_active_reference_baseline();
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+        let authoritative_lists = engine.cue_lists.clone();
+
+        let mut dangling_bank_active = baseline.clone();
+        dangling_bank_active.cue_lists[0].active_cue_id = Some(999);
+        let error = engine
+            .load_project_snapshot_checked(dangling_bank_active)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("Cue List 1 active Cue")
+                && error.contains("Cue 999"),
+            "unexpected error: {error}"
+        );
+
+        let mut cross_bank_active = baseline.clone();
+        cross_bank_active.cue_lists[0].active_cue_id = Some(2);
+        let error = engine
+            .load_project_snapshot_checked(cross_bank_active)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("belongs to Cue List 2"),
+            "unexpected error: {error}"
+        );
+
+        let mut divergent_global_active = baseline.clone();
+        divergent_global_active.active_cue_id = Some(2);
+        let error = engine
+            .load_project_snapshot_checked(divergent_global_active)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("does not point back"),
+            "unexpected error: {error}"
+        );
+
+        let mut foreign_group_projection = baseline;
+        // The global active projection stays consistent; the extra foreign
+        // group entry is what the validator must reject.
+        foreign_group_projection.active_group_cue_ids =
+            BTreeMap::from([("front".to_string(), 1), ("back".to_string(), 2)]);
+        let error = engine
+            .load_project_snapshot_checked(foreign_group_projection)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("authored for group"),
+            "unexpected error: {error}"
+        );
+
+        // Every rejection was atomic: the accepted baseline is still the
+        // installed project image.
+        assert_eq!(
+            engine
+                .cues
+                .iter()
+                .map(|cue| (cue.id, cue.cue_list_id))
+                .collect::<Vec<_>>(),
+            vec![(1, 1), (2, 2)]
+        );
+        assert_eq!(engine.cue_lists, authoritative_lists);
+        assert_eq!(engine.active_cue_id, Some(1));
+    }
+
+    #[test]
+    fn current_schema_load_rejects_inactive_bank_timeline_dangling_references() {
+        let mut dangling_cue_ref = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut inactive = dangling_cue_ref.timeline.clone();
+        inactive.id = TimelineId(702);
+        inactive.label = "Inactive hostile".to_string();
+        inactive.events.push(TimelineCueEventSummary {
+            id: 300,
+            cue_id: 999,
+            track: TimelineTrackKind::Lighting,
+            ..TimelineCueEventSummary::default()
         });
-        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+        dangling_cue_ref.timeline_bank.push(inactive);
+        let mut engine = child_graph_test_engine();
+        let error = engine
+            .load_project_snapshot_checked(dangling_cue_ref)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "project snapshot reference integrity: Timeline 702 event 300 references missing Cue 999"
+                .to_string()
+        );
+        assert!(engine.timeline_bank.is_empty());
+
+        let mut dangling_jump_target = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut inactive_jump = dangling_jump_target.timeline.clone();
+        inactive_jump.id = TimelineId(703);
+        inactive_jump.label = "Inactive jump hostile".to_string();
+        inactive_jump.events.push(TimelineCueEventSummary {
+            id: 301,
+            cue_id: 1,
+            track: TimelineTrackKind::Lighting,
+            jump_to_event_id: Some(999),
+            ..TimelineCueEventSummary::default()
+        });
+        dangling_jump_target.timeline_bank.push(inactive_jump);
+        let error = engine
+            .load_project_snapshot_checked(dangling_jump_target)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "project snapshot reference integrity: Timeline 703 event 301 jump references missing Timeline event 999"
+                .to_string()
+        );
+        assert!(engine.timeline_bank.is_empty());
+
+        // A referentially valid second bank entry is still accepted.
+        let mut valid_second_bank = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        let mut inactive_valid = valid_second_bank.timeline.clone();
+        inactive_valid.id = TimelineId(704);
+        inactive_valid.label = "Inactive valid".to_string();
+        inactive_valid.events.push(TimelineCueEventSummary {
+            id: 302,
+            cue_id: 2,
+            track: TimelineTrackKind::Lighting,
+            ..TimelineCueEventSummary::default()
+        });
+        valid_second_bank.timeline_bank.push(inactive_valid);
+        engine
+            .load_project_snapshot_checked(valid_second_bank)
+            .unwrap();
+        assert_eq!(engine.timeline_bank.len(), 2);
+        assert_eq!(engine.timeline_bank[1].id, TimelineId(704));
+    }
+
+    #[test]
+    fn current_schema_load_rejects_video_graph_defects_instead_of_drop_retarget_or_fabrication() {
+        let mut duplicate_layer = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        duplicate_layer.video = fc27_video_graph();
+        // The persistence-derived authored image must not shadow the hostile
+        // rendered graph under validation.
+        duplicate_layer.authored_video = None;
+        duplicate_layer
+            .video
+            .layers
+            .push(fc27_video_layer(10, 21, 5));
+        let mut engine = child_graph_test_engine();
+        // Previously the loader silently retained the first serialized layer
+        // and discarded the duplicate; the raw gate now rejects the image.
+        let error = engine
+            .load_project_snapshot_checked(duplicate_layer)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("video layer identity 10 is duplicated"),
+            "unexpected error: {error}"
+        );
+
+        let mut zero_layer = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        zero_layer.video = fc27_video_graph();
+        zero_layer.authored_video = None;
+        zero_layer.video.layers.push(fc27_video_layer(0, 22, 5));
+        // Previously the zero identity was dropped before validation ran.
+        let error = engine
+            .load_project_snapshot_checked(zero_layer)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity") && error.contains("zero"),
+            "unexpected error: {error}"
+        );
+
+        let mut dangling_composition_member = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        dangling_composition_member.video = fc27_video_graph();
+        dangling_composition_member.authored_video = None;
+        dangling_composition_member.video.compositions[0]
+            .layer_ids
+            .push(99);
+        // Previously the sanitized runtime composition dropped the member.
+        let error = engine
+            .load_project_snapshot_checked(dangling_composition_member)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("video composition 40")
+                && error.contains("video layer 99"),
+            "unexpected error: {error}"
+        );
+
+        let mut dangling_chain_scope = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        dangling_chain_scope.video = fc27_video_graph();
+        dangling_chain_scope.authored_video = None;
+        dangling_chain_scope
+            .video
+            .effect_chains
+            .push(VideoEffectChainSummary {
+                id: VideoEffectChainId(7),
+                scope: VideoEffectScope::Output { output_id: 999 },
+                bypassed: false,
+                stages: Vec::new(),
+            });
+        // Previously host reconciliation discarded the chain scope silently.
+        let error = engine
+            .load_project_snapshot_checked(dangling_chain_scope)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("video output 999"),
+            "unexpected error: {error}"
+        );
+        // No rejection mutated runtime video state.
+        assert!(engine.video_layers.is_empty());
+    }
+
+    #[test]
+    fn current_schema_load_rejects_authored_video_replacement_and_topology_conflict() {
+        let mut replaced_rendered = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        replaced_rendered.video = fc27_video_graph();
+        let mut authored_expanded = fc27_video_graph();
+        authored_expanded.layers.push(fc27_video_layer(11, 21, 5));
+        authored_expanded.compositions[0].layer_ids.push(11);
+        replaced_rendered.authored_video = Some(authored_expanded);
+        let mut engine = child_graph_test_engine();
+        // Previously `authored_video.take()` silently replaced the rendered
+        // graph at normalization time; the raw gate now rejects the conflict.
+        let error = engine
+            .load_project_snapshot_checked(replaced_rendered)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("IdentitySetMismatch")
+                && error.contains("rendered layer IDs"),
+            "unexpected error: {error}"
+        );
+        // The rejected replacement left the empty baseline installed.
+        assert!(engine.video_layers.is_empty());
+
+        let mut topology_conflict = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        topology_conflict.video = fc27_video_graph();
+        let mut authored_conflict = fc27_video_graph();
+        authored_conflict.compositions[0].layer_ids.clear();
+        topology_conflict.authored_video = Some(authored_conflict);
+        let error = engine
+            .load_project_snapshot_checked(topology_conflict)
+            .unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("ReferenceTopologyMismatch"),
+            "unexpected error: {error}"
+        );
+        assert!(engine.video_layers.is_empty());
+    }
+
+    #[test]
+    fn current_schema_load_preserves_intentional_runtime_only_video_projections() {
+        let mut projected = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        projected.video = fc27_video_graph();
+        let mut rendered = projected.video.clone();
+        let mut projection_layer = fc27_video_layer(99, 999, 5);
+        projection_layer.clip_slots.clear();
+        projection_layer.default_clip_slot_id = None;
+        projection_layer.media_asset_id = None;
+        rendered.layers.push(projection_layer);
+        rendered.compositions[0].layer_ids.push(99);
+        projected.video = rendered;
+        projected.authored_video = Some(fc27_video_graph());
+        projected
+            .video_clip_runtime
+            .timeline_video_projection_layer_ids = vec![99];
+
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(projected).unwrap();
+        // The declared runtime-only projection is an intentional fence, not a
+        // defect: the load succeeds and installs the authored graph while the
+        // rendered-only projection stays runtime-owned, stripped from the
+        // authored persistence image exactly as before FC27.
+        let persisted = engine.build_persistence_snapshot();
+        let authored = persisted.authored_video.as_ref().unwrap();
+        assert_eq!(
+            authored
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![10]
+        );
+    }
+
+    #[test]
+    fn enqueue_rejects_hostile_current_schema_load_before_queue_and_allocator_state() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
-        loaded.load_project_snapshot(snapshot);
+        let authoritative_stage_map = engine.snapshot().stage_map;
 
-        assert!(loaded.cues[0].child_timeline.is_some());
-        assert!(loaded.cues[1].child_timeline.is_some());
-        assert!(loaded.child_transports.is_empty());
-        let mut retained = loaded.cues[0].child_timeline.clone().unwrap();
-        assert!(loaded
-            .normalize_and_validate_child_timeline(1, &mut retained)
-            .unwrap_err()
-            .contains("cyclic reference"));
+        let mut hostile = fc27_active_reference_baseline();
+        hostile.stage_map.min_x = -777.0;
+        hostile.cue_lists[0].active_cue_id = Some(999);
+        assert!(engine
+            .send(EngineCommand::LoadProjectSnapshot(hostile))
+            .is_err());
+        // The command never entered the queue and nothing was published.
+        assert!(engine.queue.pop().is_none());
+        assert_eq!(engine.snapshot().stage_map, authoritative_stage_map);
 
-        loaded.timeline_playing = true;
-        loaded.timeline_position_ms = 9_999;
-        loaded.last_tick_interval = Duration::from_millis(1);
-        loaded.advance_timeline(Instant::now());
-        assert_eq!(loaded.active_cue_id, Some(1));
+        // The same ingress still accepts a valid current-schema project.
+        let mut valid = fc27_active_reference_baseline();
+        valid.stage_map.min_x = -555.0;
+        engine
+            .send(EngineCommand::LoadProjectSnapshot(valid))
+            .unwrap();
+        for _ in 0..200 {
+            if (engine.snapshot().stage_map.min_x + 555.0).abs() < f32::EPSILON {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!((engine.snapshot().stage_map.min_x + 555.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn current_schema_staging_sanitizer_fails_closed_when_an_entity_is_dropped() {
+        let mut baseline = child_graph_snapshot(vec![
+            child_graph_plain_cue(1, 1),
+            child_graph_plain_cue(2, 2),
+        ]);
+        baseline.fixtures = vec![fc27_dimmer_fixture()];
+        baseline.effects = vec![fc27_lfo_effect_summary(Some(1_000))];
+        let mut engine = child_graph_test_engine();
+        engine
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+        assert_eq!(engine.effects.len(), 1);
+
+        // The value-invalid LFO period passes raw reference validation but is
+        // dropped by the staging sanitizer. For a current-schema image that
+        // silent drop must fail closed instead of installing a lossy project.
+        let mut value_hostile = baseline;
+        value_hostile.effects[0].period_ms = None;
+        let error = engine
+            .load_project_snapshot_checked(value_hostile)
+            .unwrap_err();
+        assert!(
+            error.contains("staging dropped Lighting Effect references"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(engine.effects.len(), 1);
+        assert_eq!(engine.effects[0].id, 50);
+    }
+
+    #[test]
+    fn project_load_rejects_child_timeline_cycle_unchanged() {
+        let baseline = super_scene_test_runtime(1.0).build_persistence_snapshot();
+        let mut loaded = child_graph_test_engine();
+        loaded
+            .load_project_snapshot_checked(baseline.clone())
+            .unwrap();
+        assert_eq!(loaded.cues.len(), 3);
+
+        let mut corrupt = super_scene_test_runtime(1.0).build_persistence_snapshot();
+        corrupt.cues[1].child_timeline = Some(child_graph_child(vec![child_graph_event(299, 1)]));
+        // FC27: the child recursion is reported by the raw current-schema
+        // integrity gate as a reference cycle.
+        let error = loaded.load_project_snapshot_checked(corrupt).unwrap_err();
+        assert!(
+            error.contains("project snapshot reference integrity")
+                && error.contains("reference cycle"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(
+            &loaded,
+            &[(1, Some(&[(201, 2), (202, 3)])), (2, None), (3, None)],
+        );
+    }
+
+    #[test]
+    fn project_load_accepts_deep_acyclic_nested_timelines() {
+        let snapshot = child_graph_snapshot(vec![
+            CueSummary {
+                id: 1,
+                cue_list_id: 1,
+                label: "Root".to_string(),
+                child_timeline: Some(child_graph_child(vec![child_graph_event(310, 2)])),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 2,
+                cue_list_id: 1,
+                label: "Depth two".to_string(),
+                child_timeline: Some(child_graph_child(vec![child_graph_event(311, 3)])),
+                ..CueSummary::default()
+            },
+            CueSummary {
+                id: 3,
+                cue_list_id: 2,
+                label: "Depth three".to_string(),
+                child_timeline: Some(child_graph_child(vec![child_graph_event(312, 4)])),
+                ..CueSummary::default()
+            },
+            child_graph_plain_cue(4, 2),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(snapshot).unwrap();
+        assert_child_graph_links(
+            &engine,
+            &[
+                (1, Some(&[(310, 2)])),
+                (2, Some(&[(311, 3)])),
+                (3, Some(&[(312, 4)])),
+                (4, None),
+            ],
+        );
+
+        let started_at = Instant::now();
+        engine.rebuild_effect_activations(started_at);
+        engine.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        assert_eq!(engine.direct_child_transports.len(), 3);
+        assert_eq!(
+            engine
+                .direct_child_transports
+                .iter()
+                .filter(|transport| transport.active)
+                .count(),
+            1
+        );
+        let active = engine
+            .direct_child_transports
+            .iter()
+            .find(|transport| transport.active)
+            .unwrap();
+        assert_eq!(active.events[0].id, 310);
+    }
+
+    #[test]
+    fn removing_referenced_cue_is_rejected_but_unreferenced_owner_is_allowed() {
+        let snapshot = child_graph_snapshot(vec![
+            CueSummary {
+                id: 1,
+                cue_list_id: 2,
+                label: "Super".to_string(),
+                child_timeline: Some(child_graph_child(vec![child_graph_event(320, 2)])),
+                ..CueSummary::default()
+            },
+            child_graph_plain_cue(2, 1),
+            child_graph_plain_cue(3, 1),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(snapshot).unwrap();
+
+        let error = engine.remove_cue_state(2).unwrap_err();
+        assert!(
+            error.contains("Cue 1 child timeline references Cue 2")
+                && error.contains("before removing Cue 2"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(&engine, &[(1, Some(&[(320, 2)])), (2, None), (3, None)]);
+        assert_eq!(engine.cue_lists.len(), 2);
+
+        engine.remove_cue_state(1).unwrap();
+        engine.remove_cue_state(3).unwrap();
+        assert_child_graph_links(&engine, &[(2, None)]);
+    }
+
+    #[test]
+    fn deleting_bank_with_referenced_cues_is_rejected_but_unreferenced_bank_deletes() {
+        let snapshot = child_graph_snapshot(vec![
+            CueSummary {
+                id: 1,
+                cue_list_id: 2,
+                label: "Super".to_string(),
+                child_timeline: Some(child_graph_child(vec![child_graph_event(330, 2)])),
+                ..CueSummary::default()
+            },
+            child_graph_plain_cue(2, 1),
+            child_graph_plain_cue(3, 1),
+        ]);
+        let mut engine = child_graph_test_engine();
+        engine.load_project_snapshot_checked(snapshot).unwrap();
+
+        let error = engine.delete_cue_list_state(1).unwrap_err();
+        assert!(
+            error.contains("Cue 1 child timeline references Cue 2")
+                && error.contains("before removing Cue List 1"),
+            "unexpected error: {error}"
+        );
+        assert_child_graph_links(&engine, &[(1, Some(&[(330, 2)])), (2, None), (3, None)]);
+        assert_eq!(engine.cue_lists.len(), 2);
+
+        engine.delete_cue_list_state(2).unwrap();
+        assert_eq!(
+            engine
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_child_graph_links(&engine, &[(2, None), (3, None)]);
     }
 
     #[test]

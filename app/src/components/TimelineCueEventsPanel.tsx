@@ -30,7 +30,9 @@ import type { TimelineExternalDragPayload } from "../timelineExternalDrag";
 import { expandTimelineItemGroupSelection, timelineItemKey } from "../timelineAdvancedAuthoring";
 import { applyTimelineDirectTrim } from "../timelineDirectResize";
 import { applyTimelineSplitAtPlayhead } from "../timelineSplitAction";
+import { timelineSceneBlockCueAllowedByAuthority } from "../timelineSceneBlocks";
 import type { TimelineContextDrawer } from "../uiModes";
+import type { FullBankAuthoritySnapshot } from "../bankAuthority";
 import { sortedTimelineLayers, timelineLayerIdForEvent } from "../timelineLayers";
 import {
   TIMELINE_MIN_VISIBLE_WINDOW_MS,
@@ -77,8 +79,11 @@ interface AudioBeatMarker {
 }
 
 interface TimelineCueEventsPanelProps {
+  bankAuthority: FullBankAuthoritySnapshot;
   embeddedControls: boolean;
   contextDrawer: TimelineContextDrawer;
+  /** Exact child owner for source admission; never infer it from the label. */
+  timelineChildCueId: number | null;
   childTimelineLabel: string | null;
   cueIdentities?: Record<number, CueIdentitySource>;
   positionMs: number;
@@ -835,7 +840,39 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       window.removeEventListener("keydown", closeFromEscape, { capture: true });
     });
   });
-  const armedCue = () => props.armedCue;
+  const timelineAuthorityAvailable = () => props.bankAuthority.issue === null;
+  const timelineSceneCueAuthoritative = (cueId: number) => timelineSceneBlockCueAllowedByAuthority(
+    cueId,
+    props.bankAuthority,
+    props.timelineChildCueId,
+  );
+  const selectedCueIsAuthoritative = () => props.selectedCueId !== null
+    && timelineSceneCueAuthoritative(props.selectedCueId);
+  const armedCue = () => {
+    const cue = props.armedCue;
+    return cue !== null && timelineSceneCueAuthoritative(cue.id)
+      ? cue
+      : null;
+  };
+  const armedCueId = () => armedCue()?.id ?? null;
+  const armCue = (cueId: number | null) => {
+    if (cueId === null) {
+      props.onArmCue(null);
+      return;
+    }
+    if (!timelineSceneCueAuthoritative(cueId)) {
+      props.onArmCue(null);
+      props.onTimelineStatus("The selected Scene is unavailable until Bank authority is repaired.");
+      return;
+    }
+    props.onArmCue(cueId);
+  };
+  createEffect(() => {
+    if (props.armedCueId === null) return;
+    if (!timelineSceneCueAuthoritative(props.armedCueId)) {
+      props.onArmCue(null);
+    }
+  });
   const [overlapFilter, setOverlapFilter] = createSignal<{
     eventIds: number[];
     label: string;
@@ -1159,16 +1196,16 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </button>
         <button
           type="button"
-          classList={{ active: props.armedCueId === props.selectedCueId }}
-          aria-pressed={props.selectedCueId !== null && props.armedCueId === props.selectedCueId}
-          aria-label={props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
-          title={props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
-          data-timeline-arm-cue={props.selectedCueId ?? undefined}
+          classList={{ active: armedCueId() === props.selectedCueId }}
+          aria-pressed={props.selectedCueId !== null && armedCueId() === props.selectedCueId}
+          aria-label={armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          title={armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          data-timeline-arm-cue={selectedCueIsAuthoritative() ? props.selectedCueId ?? undefined : undefined}
           data-timeline-tool="arm-cue"
-          disabled={props.selectedCueId === null}
-          onClick={() => props.onArmCue(props.selectedCueId)}
+          disabled={!selectedCueIsAuthoritative()}
+          onClick={() => armCue(props.selectedCueId)}
         >
-          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>{props.armedCueId === props.selectedCueId ? "●" : "○"}</span>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>{armedCueId() === props.selectedCueId ? "●" : "○"}</span>
         </button>
         <button
           type="button"
@@ -1297,6 +1334,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </>
       </Show>
       <TimelineOverview
+        bankAuthority={props.bankAuthority}
+        timelineChildCueId={props.timelineChildCueId}
         events={props.overviewEvents}
         layerItemCounts={timelineLayerItemCounts()}
         cueIdentities={props.cueIdentities}
@@ -1368,9 +1407,13 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         }
         onSetVisibleWindow={props.onSetVisibleWindow}
         onZoomAt={props.onZoomOverviewAt}
-        onPlaceArmedCue={(cueId, timeMs, layerId, durationMs, mode, snapEnabled) =>
-          void props.onPlaceArmedCue(cueId, timeMs, layerId, durationMs, mode, snapEnabled)
-        }
+        onPlaceArmedCue={(cueId, timeMs, layerId, durationMs, mode, snapEnabled) => {
+          if (!timelineSceneCueAuthoritative(cueId)) {
+            props.onTimelineStatus("The selected Scene is unavailable until Bank authority is repaired.");
+            return;
+          }
+          void props.onPlaceArmedCue(cueId, timeMs, layerId, durationMs, mode, snapEnabled);
+        }}
         onMoveAutomationRangeTime={(range, timeMs) => void props.onMoveAutomationRangeTime(range, timeMs)}
         onResizeAutomationRangeTime={(range, edge, timeMs) => void props.onResizeAutomationRangeTime(range, edge, timeMs)}
         onMoveAutomationKeyframeTime={(range, keyframeIndex, timeMs) =>
@@ -2084,6 +2127,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </header>
         <div class="timelineContextDrawerBody">
       <TimelineSceneBlocksEditor
+        bankAuthority={props.bankAuthority}
         inspectorOnly={!blockDrawerBrowserMode()}
         positionMs={props.positionMs}
         bpm={props.bpm}
@@ -2116,8 +2160,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, true)}
         onClearEventFilter={clearOverlapFilter}
         onOpenSourceCue={props.onOpenSourceCue}
-        armedCueId={props.armedCueId}
-        onArmCue={props.onArmCue}
+        armedCueId={armedCueId()}
+        onArmCue={armCue}
       />
         </div>
       </aside>

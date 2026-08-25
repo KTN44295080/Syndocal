@@ -6,6 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// PROOF BOUNDARY: this gate drives the timeline-layered browser fixture. Its
+// split/lane-move fixture callbacks intercept requests before
+// commitTimelineAdvanced and native Tauri IPC. Every assertion below is
+// fixture-request, DOM-projection, and geometry proof only; it never
+// evidences native, backend, transaction-owner, persistence, or
+// physical-output completion.
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const host = "127.0.0.1";
 const vitePort = 5193;
@@ -242,12 +248,12 @@ const assertLaneTimeShiftMounted = async (client, callIndex, call, label) => {
   await waitFor(async () => {
     const mounted = await Promise.all(call.items.map((item) => mountedTimelineItemTimes(client, item)));
     return mounted.every((times, index) => JSON.stringify(times) === JSON.stringify(applied.after[keys[index]]));
-  }, `${label} ACK time state`);
+  }, `${label} fixture-result DOM time state`);
   for (const item of call.items) {
     assert.deepEqual(
       await mountedTimelineItemTimes(client, item),
       applied.after[timelineLaneItemKey(item)],
-      `${label} mounts authoritative ${timelineLaneItemKey(item)} times`,
+      `${label} mounts fixture-result ${timelineLaneItemKey(item)} times (never native ACK evidence)`,
     );
   }
 };
@@ -627,7 +633,7 @@ try {
         isolate: true,
       },
       focusedAudioId: "1700",
-    }, "Alt-isolated Split mounts a fresh right item, sends only the chosen member, and restores fresh focus");
+    }, "Alt-isolated Split fixture proof: fresh right item DOM, the fixture request carries only the chosen member, and fresh focus is restored (no native IPC exercised)");
     const videoSelected = await evaluate(client, `(() => {
       const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
       if (!(clip instanceof Element)) return false;
@@ -721,11 +727,11 @@ try {
       primary: { kind: "video_clip", clip_id: 800 },
       boundary_ms: 1_000,
       isolate: false,
-    }, "real Split menu action dispatches the exact linked selection, primary, playhead, and isolate flag");
+    }, "real Split menu action sends the exact linked selection, primary, playhead, and isolate flag to the fixture callback (fixture request proof only, never authoritative/native completion)");
     assert.deepEqual(
       [splitProof.menuClosed, splitProof.focusedVideoId, splitProof.freshVideoMounted, splitProof.freshAudioMounted, splitProof.selectedVideo, splitProof.selectedAudio],
       [true, "1800", 1, 1, 1, 1],
-      "Split mounts fresh right IDs, closes the menu, restores their linked selection, and focuses the fresh primary item",
+      "Fixture-result DOM proof only: the split fixture response mounts fresh right IDs, closes the menu, restores their linked selection, and focuses the fresh primary item (not a native acknowledgment)",
     );
     const additionalSplitCases = [
       { selector: '.timelineMarker[data-timeline-event-id]', kind: 'lighting_event', field: 'event_id', attribute: 'data-timeline-event-id' },
@@ -957,7 +963,7 @@ try {
       await assertLaneTimeShiftMounted(client, 0, firstLaneCall, "Video linked lane move");
       await waitFor(
         () => evaluate(client, `document.querySelector('.timelineMarker[data-timeline-event-id="' + window.__syndocalTimelineLaneMoveEventId + '"]')?.getAttribute('data-timeline-layer-id') === '13'`),
-        "five-domain lane fixture ACK state",
+        "five-domain lane fixture-result DOM state",
       );
       const eventSelector = await evaluate(client, `'.timelineMarker[data-timeline-event-id="' + window.__syndocalTimelineLaneMoveEventId + '"]'`);
       const laneMoveEventId = await evaluate(client, "Number(window.__syndocalTimelineLaneMoveEventId)");
@@ -986,7 +992,7 @@ try {
             { item: { kind: "audio_clip", clip_id: 700 }, target_layer_id: 10 },
             { item: { kind: "lighting_automation", automation_id: 1 }, target_layer_id: 12 },
             { item: { kind: "video_automation", automation_id: 2 }, target_layer_id: 14 },
-          ], "Scene pointer crosses Lighting to the explicit Video lane and projects the group ordinal");
+          ], "Fixture request payload proof: Scene pointer crosses Lighting to the explicit Video lane and projects the group ordinal");
         }
         await assertLaneTimeShiftMounted(client, beforeCalls, call, `${expectedKind} five-domain lane move`);
       }
@@ -1023,11 +1029,11 @@ try {
       assert.equal(
         await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"),
         beforeSceneAudioPointer,
-        "Scene pointer drop on Audio invokes no authoritative command",
+        "Scene pointer drop on Audio emits no mutation request (fixture or native)",
       );
       const beforeInvalidPointer = await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length");
       await dragTimelineItemToLane(client, '[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]', 10);
-      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeInvalidPointer, "wrong-kind pointer drop invokes no authoritative command");
+      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeInvalidPointer, "wrong-kind pointer drop emits no mutation request (fixture or native)");
       const beforeIsolatedKeyboard = beforeInvalidPointer;
       assert.equal(await evaluate(client, `(() => {
         const item = document.querySelector('[data-timeline-audio-clip-id="700"]');
@@ -1064,7 +1070,7 @@ try {
       assert.deepEqual(
         [crossKindKeyboardCall.primary.kind, crossKindKeyboardCall.lane_targets[0].target_layer_id, crossKindKeyboardCall.items.length, crossKindKeyboardCall.delta_ms],
         ["lighting_event", 13, 5, 0],
-        "Scene keyboard navigation crosses the canonical Video-to-Lighting boundary",
+        "Fixture request payload proof: Scene keyboard navigation crosses the canonical Video-to-Lighting boundary",
       );
       const beforeContextMove = beforeCrossKindKeyboard + 1;
       assert.equal(await evaluate(client, `(() => {
@@ -1100,17 +1106,17 @@ try {
       assert.deepEqual(
         [laneMoveFinal.call.primary.kind, laneMoveFinal.call.items.length, laneMoveFinal.call.delta_ms, laneMoveFinal.call.isolate],
         ["video_automation", 5, 0, false],
-        "keyboard-operable context action dispatches the exact five-domain group request",
+        "keyboard-operable context action sends the exact five-domain group request to the fixture callback (fixture request proof only)",
       );
       assert.deepEqual(
         [laneMoveFinal.audioLane, laneMoveFinal.eventLane, laneMoveFinal.videoLane, laneMoveFinal.lightingAutomationLane, laneMoveFinal.videoAutomationLane],
         [10, 12, 14, 12, 14],
-        "ACK local apply mounts every explicit lane target",
+        "Fixture-result local apply mounts every explicit lane target (DOM projection of the fixture response, not native completion)",
       );
       assert.deepEqual(
         [laneMoveFinal.selectedVideo, laneMoveFinal.selectedAudio, laneMoveFinal.selectedEvent, laneMoveFinal.selectedAutomation],
         [1, 1, 1, 1],
-        "ACK preserves the logical linked selection across every visible domain",
+        "Fixture-result apply preserves the logical linked selection across every visible domain",
       );
       assert.deepEqual([laneMoveFinal.focusedKind, laneMoveFinal.focusedId], ["video", "2"], "ACK restores focus to the logical primary item");
       assert.equal(await evaluate(client, `(() => {
@@ -1123,7 +1129,7 @@ try {
       assert.equal(
         await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"),
         beforeContextMove + 1,
-        "Scene keyboard move with no compatible canonical predecessor invokes no authoritative command",
+        "Scene keyboard move with no compatible canonical predecessor emits no mutation request (fixture or native)",
       );
       assert.equal(await evaluate(client, `(() => {
         const item = document.querySelector('[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]');
@@ -1132,12 +1138,12 @@ try {
         return true;
       })()`), true);
       await sleep(50);
-      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeContextMove + 1, "boundary keyboard move invokes no authoritative command");
+      assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeContextMove + 1, "boundary keyboard move emits no mutation request (fixture or native)");
     }
     assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Cue Audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
-    console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio}`);
+    console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio} (fixture request/DOM/geometry proof only -- not native or authoritative completion)`);
   }
 
   client.close();
@@ -1175,30 +1181,30 @@ try {
       ["lighting_automation", "end", false],
       ["video_automation", "start", true],
     ],
-    "real pointer gestures route every linked Timeline domain to authoritative trim and preserve Alt isolate",
+    "real pointer gestures send every linked Timeline domain to the direct-resize trim fixture and preserve Alt isolate (fixture request/DOM proof, never native completion)",
   );
   assert.deepEqual(
     directResizeCalls.scene.map(({ event_id, edge }) => [event_id, edge]),
     [[102, "end"]],
-    "unlinked Scene resize retains its legacy route",
+    "unlinked Scene resize retains its local fixture route (harness callback, not native IPC)",
   );
-  assert.deepEqual(directResizeCalls.audio.map(({ id }) => id), [202], "unlinked Audio resize retains its legacy route");
+  assert.deepEqual(directResizeCalls.audio.map(({ id }) => id), [202], "unlinked Audio resize retains its local fixture route (harness callback, not native IPC)");
   assert.equal(directResizeCalls.audio[0].start_ms > 4_400, true, "unlinked Audio start edge moves later");
   assert.equal(directResizeCalls.audio[0].offset_ms > 400, true, "unlinked Audio start trim advances source offset");
   assert.equal(directResizeCalls.audio[0].duration_ms < 800, true, "unlinked Audio start trim shortens duration");
-  assert.deepEqual(directResizeCalls.video.map(({ id }) => id), [302], "unlinked Video resize retains its legacy route");
+  assert.deepEqual(directResizeCalls.video.map(({ id }) => id), [302], "unlinked Video resize retains its local fixture route (harness callback, not native IPC)");
   assert.equal(directResizeCalls.video[0].start_ms, 7_000, "unlinked Video end trim preserves start");
   assert.equal(directResizeCalls.video[0].offset_ms, 400, "unlinked Video end trim preserves source offset");
   assert.equal(directResizeCalls.video[0].duration_ms > 800, true, "unlinked Video end edge extends duration");
   assert.deepEqual(
     directResizeCalls.automation.map(({ kind, automation_id, edge }) => [kind, automation_id, edge]),
     [["lighting", 402, "start"], ["video", 502, "end"]],
-    "unlinked Lighting and Video automation resize retain their legacy routes",
+    "unlinked Lighting and Video automation resize retain their local fixture routes (harness callbacks, not native IPC)",
   );
   assert.equal(
     directResizeCalls.trim.every(({ boundary_ms }) => Number.isInteger(boundary_ms) && boundary_ms >= 0),
     true,
-    "linked direct-resize boundaries are finite non-negative integer milliseconds",
+    "linked direct-resize fixture requests carry finite non-negative integer millisecond boundaries",
   );
   const trimByKind = new Map(directResizeCalls.trim.map((call) => [call.item.kind, call]));
   assert.equal(trimByKind.get("lighting_event").boundary_ms > 500, true, "linked Scene start edge moves later");
@@ -1206,7 +1212,7 @@ try {
   assert.equal(trimByKind.get("video_clip").boundary_ms > 5_700, true, "linked Video start edge moves later");
   assert.equal(trimByKind.get("lighting_automation").boundary_ms > 9_100, true, "linked Lighting automation end edge moves later");
   assert.equal(trimByKind.get("video_automation").boundary_ms > 8_300, true, "linked Video automation start edge moves later");
-  console.log("direct resize: linked Scene/Audio/Video/Lighting automation/Video automation + unlinked legacy routes + Alt isolate ok");
+  console.log("direct resize fixture: linked Scene/Audio/Video/Lighting automation/Video automation + unlinked local routes + Alt isolate ok (fixture request/DOM proof only -- not native completion)");
 } finally {
   client?.close();
   await stopChild(browser);

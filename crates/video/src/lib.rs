@@ -291,7 +291,8 @@ pub struct PreparedVideoOutput {
 }
 
 /// Runtime evidence for one output render. This is intentionally separate
-/// from `VideoFrame`: a last-valid frame is safe for presentation but is not
+/// from `VideoFrame`: a last-valid frame is diagnostic rollback/cache evidence
+/// only and is never admissible for physical presentation. It is also not
 /// proof that a newly admitted Follow transition rendered successfully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoOutputRenderFreshness {
@@ -334,7 +335,8 @@ pub struct VideoFollowOutputTransitionResult {
 /// Render evidence for the Follow/output seam after its optional Transition
 /// effect chain has run. `LastValid` is only returned from an explicitly
 /// supplied fallback; a chain fault is always retained in `stage_faults` and
-/// therefore is never safe to acknowledge as a fresh transition settle.
+/// therefore is never safe to acknowledge as a fresh transition settle or to
+/// send to a physical output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoFollowOutputTransitionRenderEvidence {
     pub transition: VideoFollowOutputTransitionEvidence,
@@ -347,6 +349,380 @@ pub struct VideoFollowOutputTransitionRenderEvidence {
 pub struct VideoFollowOutputTransitionRenderResult {
     pub frame: VideoFrame,
     pub evidence: VideoFollowOutputTransitionRenderEvidence,
+}
+
+/// The one canonical post-artistic-chain, pre-output-mapping render for an
+/// output. It is produced by the same C1/C3 evidenced renderer that backs the
+/// legacy frame APIs, so effect results, transition weights, freshness, and
+/// the LastValid rollback contract cannot diverge between paths.
+///
+/// Frame ownership transfers to the caller by design; the renderer keeps its
+/// own last-valid cache independent of this value. A hard blackout is a
+/// payload-less control state, not a synthesized full-frame black allocation.
+/// Native presentation must turn that state into one exact-black surface clear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOutputArtisticRenderResult {
+    /// Post-artistic-chain payload, or an absolute payload-less blackout fence.
+    pub payload: VideoOutputArtisticPayload,
+    /// Exact output mapping snapshot owned by this render. Presentation uses
+    /// this value directly; there is no independent mapping argument that can
+    /// race or mismatch the artistic result.
+    pub output_mapping: VideoOutputMapping,
+    /// Bit-exact identity of `output_mapping`, including signed zero and NaN
+    /// payloads. Admission recomputes this value before any presentation.
+    pub output_mapping_identity: VideoOutputMappingIdentity,
+    /// Shared freshness/epoch/output identity from the evidenced renderer.
+    pub evidence: VideoOutputRenderEvidence,
+}
+
+/// Mutually exclusive artistic payload states. `HardBlackout` deliberately
+/// carries no pixel buffer, so neither the renderer nor the presenter can fill
+/// or scan a full black frame before issuing the exact-black clear.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VideoOutputArtisticPayload {
+    Frame(VideoFrame),
+    HardBlackout,
+}
+
+impl VideoOutputArtisticRenderResult {
+    pub fn frame(&self) -> Option<&VideoFrame> {
+        match &self.payload {
+            VideoOutputArtisticPayload::Frame(frame) => Some(frame),
+            VideoOutputArtisticPayload::HardBlackout => None,
+        }
+    }
+
+    pub fn is_hard_blackout(&self) -> bool {
+        matches!(self.payload, VideoOutputArtisticPayload::HardBlackout)
+    }
+}
+
+/// Caller-owned admission identity for presenting an
+/// [`VideoOutputArtisticRenderResult`]. The presenter rejects any result whose
+/// generation, output identity, or pixel geometry does not match this
+/// contract exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoOutputPresentationContract {
+    pub project_render_epoch: u64,
+    pub output_id: VideoOutputId,
+    pub width: u32,
+    pub height: u32,
+    pub output_mapping_identity: VideoOutputMappingIdentity,
+}
+
+/// Collision-free, bit-exact identity for every field that participates in a
+/// [`VideoOutputMapping`]. Keeping the full bit representation instead of a
+/// lossy hash makes hostile or stale mapping substitution deterministically
+/// rejectable at the presentation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoOutputMappingIdentity {
+    scalar_bits: [u32; 43],
+    bitmap_mask_luma_words: [u32; VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY],
+    aspect_mode: u8,
+    mask_point_count: u8,
+    mask_invert: bool,
+    bitmap_mask_width: u8,
+    bitmap_mask_height: u8,
+}
+
+impl VideoOutputMappingIdentity {
+    pub fn from_mapping(mapping: &VideoOutputMapping) -> Self {
+        let aspect_mode = match mapping.aspect_mode {
+            VideoOutputAspectMode::Stretch => 0,
+            VideoOutputAspectMode::Fit => 1,
+            VideoOutputAspectMode::Fill => 2,
+        };
+        Self {
+            scalar_bits: [
+                mapping.stage_x.to_bits(),
+                mapping.stage_y.to_bits(),
+                mapping.stage_z.to_bits(),
+                mapping.offset_x.to_bits(),
+                mapping.offset_y.to_bits(),
+                mapping.scale_x.to_bits(),
+                mapping.scale_y.to_bits(),
+                mapping.rotation_deg.to_bits(),
+                mapping.aspect_ratio.to_bits(),
+                mapping.lens_distortion.to_bits(),
+                mapping.edge_blend_left.to_bits(),
+                mapping.edge_blend_right.to_bits(),
+                mapping.edge_blend_top.to_bits(),
+                mapping.edge_blend_bottom.to_bits(),
+                mapping.edge_blend_gamma.to_bits(),
+                mapping.black_level.to_bits(),
+                mapping.mask_softness.to_bits(),
+                mapping.mask_points[0].x.to_bits(),
+                mapping.mask_points[0].y.to_bits(),
+                mapping.mask_points[1].x.to_bits(),
+                mapping.mask_points[1].y.to_bits(),
+                mapping.mask_points[2].x.to_bits(),
+                mapping.mask_points[2].y.to_bits(),
+                mapping.mask_points[3].x.to_bits(),
+                mapping.mask_points[3].y.to_bits(),
+                mapping.mask_points[4].x.to_bits(),
+                mapping.mask_points[4].y.to_bits(),
+                mapping.mask_points[5].x.to_bits(),
+                mapping.mask_points[5].y.to_bits(),
+                mapping.mask_points[6].x.to_bits(),
+                mapping.mask_points[6].y.to_bits(),
+                mapping.mask_points[7].x.to_bits(),
+                mapping.mask_points[7].y.to_bits(),
+                mapping.keystone_x.to_bits(),
+                mapping.keystone_y.to_bits(),
+                mapping.corner_top_left_x.to_bits(),
+                mapping.corner_top_left_y.to_bits(),
+                mapping.corner_top_right_x.to_bits(),
+                mapping.corner_top_right_y.to_bits(),
+                mapping.corner_bottom_right_x.to_bits(),
+                mapping.corner_bottom_right_y.to_bits(),
+                mapping.corner_bottom_left_x.to_bits(),
+                mapping.corner_bottom_left_y.to_bits(),
+            ],
+            bitmap_mask_luma_words: mapping.bitmap_mask_luma_words,
+            aspect_mode,
+            mask_point_count: mapping.mask_point_count,
+            mask_invert: mapping.mask_invert,
+            bitmap_mask_width: mapping.bitmap_mask_width,
+            bitmap_mask_height: mapping.bitmap_mask_height,
+        }
+    }
+}
+
+/// The single presentation decision for an artistic result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoOutputArtisticAdmission {
+    /// Apply the output mapping to the artistic frame exactly once and
+    /// present the mapped pixels.
+    MapOnceAndPresent,
+    /// Absolute blackout bypass: present byte-exact black without consulting
+    /// the output mapping at all.
+    PresentHardBlackout,
+}
+
+/// The fully admitted RGBA8 payload for a CPU-backed physical transport such
+/// as NDI or Spout. Construction is intentionally restricted to
+/// [`materialize_output_artistic_rgba8_for_transport`], so a transport cannot
+/// accidentally skip admission, apply output mapping twice, or run hostile
+/// mapping values over an absolute blackout.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VideoOutputRgba8Presentation {
+    /// Fresh artistic pixels with the captured output mapping applied exactly
+    /// once by the canonical video core.
+    MappedFrame(VideoFrame),
+    /// Exact opaque-black pixels materialized only at the physical CPU
+    /// transport boundary. The upstream artistic result remains payload-less.
+    HardBlackout(VideoFrame),
+}
+
+impl VideoOutputRgba8Presentation {
+    pub fn frame(&self) -> &VideoFrame {
+        match self {
+            Self::MappedFrame(frame) | Self::HardBlackout(frame) => frame,
+        }
+    }
+
+    pub fn into_frame(self) -> VideoFrame {
+        match self {
+            Self::MappedFrame(frame) | Self::HardBlackout(frame) => frame,
+        }
+    }
+
+    pub fn is_hard_blackout(&self) -> bool {
+        matches!(self, Self::HardBlackout(_))
+    }
+}
+
+/// Fail-closed rejection reasons for artistic presentation. Every variant is
+/// observable and specific; none of them may fall back to alternate content.
+///
+/// The mapping-identity payloads are boxed so the rejection itself stays a
+/// small, cheaply-propagatable error value while diagnostics remain bit-exact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoOutputArtisticRejection {
+    ZeroAreaContract {
+        width: u32,
+        height: u32,
+    },
+    NotFresh {
+        freshness: VideoOutputRenderFreshness,
+    },
+    ReportedRenderError,
+    ProjectEpochMismatch {
+        expected: u64,
+        actual: u64,
+    },
+    OutputMismatch {
+        expected: VideoOutputId,
+        actual: VideoOutputId,
+    },
+    ResultMappingIdentityMismatch {
+        declared: Box<VideoOutputMappingIdentity>,
+        actual: Box<VideoOutputMappingIdentity>,
+    },
+    ContractMappingIdentityMismatch {
+        expected: Box<VideoOutputMappingIdentity>,
+        actual: Box<VideoOutputMappingIdentity>,
+    },
+    UnsupportedFrameFormat {
+        format: VideoPixelFormat,
+    },
+    FrameDimensionsMismatch {
+        expected_width: u32,
+        expected_height: u32,
+        actual_width: u32,
+        actual_height: u32,
+    },
+    FrameDataLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    FrameByteLengthOverflow {
+        width: u32,
+        height: u32,
+    },
+    AdmissionPayloadMismatch,
+}
+
+impl VideoOutputPresentationContract {
+    pub fn new(
+        project_render_epoch: u64,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        mapping: &VideoOutputMapping,
+    ) -> Self {
+        Self {
+            project_render_epoch,
+            output_id,
+            width,
+            height,
+            output_mapping_identity: VideoOutputMappingIdentity::from_mapping(mapping),
+        }
+    }
+
+    /// Decides whether an artistic result may be presented. Only a fresh,
+    /// error-free result bound to this exact generation, output, and geometry
+    /// is admissible. `LastValid` stays authoritative inside the renderer but
+    /// is deliberately rejected at the presentation boundary so a native
+    /// surface can never show rolled-back content as if it were current. A
+    /// hard blackout is a payload-less terminal state and therefore admits no
+    /// caller-provided pixels that could be scanned, substituted, or lifted by
+    /// output mapping.
+    pub fn admit(
+        &self,
+        result: &VideoOutputArtisticRenderResult,
+    ) -> Result<VideoOutputArtisticAdmission, VideoOutputArtisticRejection> {
+        if self.width == 0 || self.height == 0 {
+            return Err(VideoOutputArtisticRejection::ZeroAreaContract {
+                width: self.width,
+                height: self.height,
+            });
+        }
+        if result.evidence.freshness != VideoOutputRenderFreshness::Fresh {
+            return Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: result.evidence.freshness,
+            });
+        }
+        if result.evidence.error.is_some() {
+            return Err(VideoOutputArtisticRejection::ReportedRenderError);
+        }
+        if result.evidence.project_render_epoch != self.project_render_epoch {
+            return Err(VideoOutputArtisticRejection::ProjectEpochMismatch {
+                expected: self.project_render_epoch,
+                actual: result.evidence.project_render_epoch,
+            });
+        }
+        if result.evidence.output_id != self.output_id {
+            return Err(VideoOutputArtisticRejection::OutputMismatch {
+                expected: self.output_id,
+                actual: result.evidence.output_id,
+            });
+        }
+        let actual_mapping_identity =
+            VideoOutputMappingIdentity::from_mapping(&result.output_mapping);
+        if result.output_mapping_identity != actual_mapping_identity {
+            return Err(
+                VideoOutputArtisticRejection::ResultMappingIdentityMismatch {
+                    declared: Box::new(result.output_mapping_identity),
+                    actual: Box::new(actual_mapping_identity),
+                },
+            );
+        }
+        if self.output_mapping_identity != actual_mapping_identity {
+            return Err(
+                VideoOutputArtisticRejection::ContractMappingIdentityMismatch {
+                    expected: Box::new(self.output_mapping_identity),
+                    actual: Box::new(actual_mapping_identity),
+                },
+            );
+        }
+        let Some(expected_len) = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+        else {
+            return Err(VideoOutputArtisticRejection::FrameByteLengthOverflow {
+                width: self.width,
+                height: self.height,
+            });
+        };
+        match &result.payload {
+            VideoOutputArtisticPayload::HardBlackout => {
+                Ok(VideoOutputArtisticAdmission::PresentHardBlackout)
+            }
+            VideoOutputArtisticPayload::Frame(frame) => {
+                if frame.format != VideoPixelFormat::Rgba8 {
+                    return Err(VideoOutputArtisticRejection::UnsupportedFrameFormat {
+                        format: frame.format,
+                    });
+                }
+                if frame.width != self.width || frame.height != self.height {
+                    return Err(VideoOutputArtisticRejection::FrameDimensionsMismatch {
+                        expected_width: self.width,
+                        expected_height: self.height,
+                        actual_width: frame.width,
+                        actual_height: frame.height,
+                    });
+                }
+                if frame.data.len() != expected_len {
+                    return Err(VideoOutputArtisticRejection::FrameDataLengthMismatch {
+                        expected: expected_len,
+                        actual: frame.data.len(),
+                    });
+                }
+                Ok(VideoOutputArtisticAdmission::MapOnceAndPresent)
+            }
+        }
+    }
+}
+
+/// Admit and materialize one canonical artistic result for a CPU-backed
+/// physical transport. The result is consumed so its pre-mapping frame cannot
+/// be reused or mapped a second time after this boundary.
+///
+/// `HardBlackout` remains payload-less until admission succeeds, then becomes
+/// one exact `[0, 0, 0, 255]` RGBA8 frame without consulting output mapping.
+/// Error, LastValid, zero-area, stale epoch/output/mapping identity, and partial
+/// frame states return their typed rejection without producing sendable bytes.
+pub fn materialize_output_artistic_rgba8_for_transport(
+    result: VideoOutputArtisticRenderResult,
+    contract: &VideoOutputPresentationContract,
+) -> Result<VideoOutputRgba8Presentation, VideoOutputArtisticRejection> {
+    let admission = contract.admit(&result)?;
+    match (admission, result.payload) {
+        (
+            VideoOutputArtisticAdmission::PresentHardBlackout,
+            VideoOutputArtisticPayload::HardBlackout,
+        ) => Ok(VideoOutputRgba8Presentation::HardBlackout(
+            video_output_black_frame(contract.width, contract.height),
+        )),
+        (
+            VideoOutputArtisticAdmission::MapOnceAndPresent,
+            VideoOutputArtisticPayload::Frame(frame),
+        ) => Ok(VideoOutputRgba8Presentation::MappedFrame(
+            apply_video_output_mapping(frame, &result.output_mapping),
+        )),
+        _ => Err(VideoOutputArtisticRejection::AdmissionPayloadMismatch),
+    }
 }
 
 /// The decode dimensions and lookahead policy for a composition or output
@@ -626,6 +1002,11 @@ pub enum VideoPreviewError {
     RenderInput {
         key: protocol::VideoRenderInputKey,
         error: VideoFrameProviderError,
+    },
+    NonFreshArtisticOutput {
+        output_id: VideoOutputId,
+        freshness: VideoOutputRenderFreshness,
+        error: Option<String>,
     },
     Runtime(VideoRuntimeError),
 }
@@ -3305,8 +3686,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.render_output_plan(snapshot, &plan, width, height)
     }
 
-    /// C1 CPU correctness path. Existing callers remain source-compatible;
-    /// production owners can opt into Clip scope by passing runtime slot truth.
+    /// C1 CPU correctness path. This frame-only compatibility surface now
+    /// fails closed when the artistic renderer reports Error or LastValid;
+    /// callers that need evidence must use the evidenced/result API explicitly.
     pub fn render_output_with_effects(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -3325,7 +3707,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
-    /// Additive acknowledged-output seam. Unlike the legacy frame-only API,
+    /// Additive acknowledged-output seam. Unlike the frame-only API,
     /// callers can distinguish a fresh render from a matching last-valid
     /// fallback before settling a Follow/output transition.
     pub fn render_output_with_effects_evidenced(
@@ -3583,16 +3965,40 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
-        Ok(self
-            .render_output_plan_with_effects_evidenced(
-                snapshot,
-                context,
-                transition_runtime,
-                plan,
-                width,
-                height,
-            )?
-            .frame)
+        let result = self.prepare_output_artistic_render_result_impl(
+            snapshot,
+            context,
+            transition_runtime,
+            plan,
+            width,
+            height,
+        )?;
+        Self::consume_fresh_artistic_frame(result, width, height, true)
+    }
+
+    fn consume_fresh_artistic_frame(
+        result: VideoOutputArtisticRenderResult,
+        width: u32,
+        height: u32,
+        apply_mapping: bool,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if result.evidence.freshness != VideoOutputRenderFreshness::Fresh
+            || result.evidence.error.is_some()
+        {
+            return Err(VideoPreviewError::NonFreshArtisticOutput {
+                output_id: result.evidence.output_id,
+                freshness: result.evidence.freshness,
+                error: result.evidence.error,
+            });
+        }
+        let output_mapping = result.output_mapping;
+        Ok(match result.payload {
+            VideoOutputArtisticPayload::HardBlackout => video_output_black_frame(width, height),
+            VideoOutputArtisticPayload::Frame(frame) if apply_mapping => {
+                apply_video_output_mapping(frame, &output_mapping)
+            }
+            VideoOutputArtisticPayload::Frame(frame) => frame,
+        })
     }
 
     fn render_output_plan_with_effects_evidenced(
@@ -3604,13 +4010,54 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        let result = self.prepare_output_artistic_render_result_impl(
+            snapshot,
+            context,
+            transition_runtime,
+            plan,
+            width,
+            height,
+        )?;
+        let output_mapping = result.output_mapping;
+        let frame = match result.payload {
+            // A hard blackout bypasses the output mapping on every path so
+            // the legacy CPU result stays byte-identical to GPU presentation.
+            VideoOutputArtisticPayload::HardBlackout => video_output_black_frame(width, height),
+            VideoOutputArtisticPayload::Frame(frame) => {
+                apply_video_output_mapping(frame, &output_mapping)
+            }
+        };
+        Ok(VideoOutputRenderResult {
+            frame,
+            evidence: result.evidence,
+        })
+    }
+
+    /// Shared C1/C3 artistic core for the legacy evidenced API and the native
+    /// presentation seam. It runs the complete scoped effect/transition chain
+    /// exactly once, maintains the LastValid cache and its blackout fence, and
+    /// returns the pre-mapping frame with evidence. The output mapping is
+    /// deliberately not applied here; mapping belongs to exactly one consumer
+    /// per presentation path.
+    fn prepare_output_artistic_render_result_impl(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
         if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
         {
-            return Ok(VideoOutputRenderResult {
-                frame: self.blackout_output_artistic_frame(snapshot, plan.output_id, width, height),
+            self.fence_output_artistic_blackout(snapshot, plan.output_id);
+            return Ok(VideoOutputArtisticRenderResult {
+                payload: VideoOutputArtisticPayload::HardBlackout,
+                output_mapping: plan.mapping,
+                output_mapping_identity: VideoOutputMappingIdentity::from_mapping(&plan.mapping),
                 evidence: VideoOutputRenderEvidence {
                     project_render_epoch: context.project_render_epoch,
                     output_id: plan.output_id,
@@ -3643,6 +4090,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             height,
         ) {
             Ok(frame) => {
+                if !self.last_effect_stage_faults.is_empty() {
+                    let error = self.last_isf_error.clone().unwrap_or_else(|| {
+                        "artistic effect chain reported a stage fault".to_string()
+                    });
+                    return Ok(self.failed_output_artistic_render_result(
+                        &key,
+                        plan,
+                        width,
+                        height,
+                        Some(frame),
+                        error,
+                    ));
+                }
                 self.last_output_render_error = None;
                 if let Some(entry) = self
                     .output_last_valid_frames
@@ -3657,8 +4117,12 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             frame: frame.clone(),
                         });
                 }
-                Ok(VideoOutputRenderResult {
-                    frame: apply_video_output_mapping(frame, &plan.mapping),
+                Ok(VideoOutputArtisticRenderResult {
+                    payload: VideoOutputArtisticPayload::Frame(frame),
+                    output_mapping: plan.mapping,
+                    output_mapping_identity: VideoOutputMappingIdentity::from_mapping(
+                        &plan.mapping,
+                    ),
                     evidence: VideoOutputRenderEvidence {
                         project_render_epoch: context.project_render_epoch,
                         output_id: plan.output_id,
@@ -3667,37 +4131,61 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     },
                 })
             }
-            Err(error) => {
-                let error = format!("{error:?}");
-                self.last_output_render_error = Some(error.clone());
-                let fallback = self
-                    .output_last_valid_frames
-                    .iter()
-                    .find(|entry| entry.key == key)
-                    .map(|entry| entry.frame.clone());
-                let freshness = if fallback.is_some() {
-                    VideoOutputRenderFreshness::LastValid
-                } else {
-                    VideoOutputRenderFreshness::Error
-                };
-                let frame =
-                    fallback.unwrap_or_else(|| video_output_transparent_black_frame(width, height));
-                Ok(VideoOutputRenderResult {
-                    frame: apply_video_output_mapping(frame, &plan.mapping),
-                    evidence: VideoOutputRenderEvidence {
-                        project_render_epoch: context.project_render_epoch,
-                        output_id: plan.output_id,
-                        freshness,
-                        error: Some(error),
-                    },
-                })
-            }
+            Err(error) => Ok(self.failed_output_artistic_render_result(
+                &key,
+                plan,
+                width,
+                height,
+                None,
+                format!("{error:?}"),
+            )),
         }
     }
 
-    /// Produces the artistic post-chain/pre-mapping frame consumed by the C1
-    /// last-valid cache. Native GPU presentation can adopt this additive seam
-    /// without changing its mapping pass.
+    fn failed_output_artistic_render_result(
+        &mut self,
+        key: &VideoOutputLastValidKey,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+        rejected_frame: Option<VideoFrame>,
+        error: String,
+    ) -> VideoOutputArtisticRenderResult {
+        self.last_output_render_error = Some(error.clone());
+        let (frame, freshness) = if let Some(rejected_frame) = rejected_frame {
+            (rejected_frame, VideoOutputRenderFreshness::Error)
+        } else {
+            let fallback = self
+                .output_last_valid_frames
+                .iter()
+                .find(|entry| entry.key == *key)
+                .map(|entry| entry.frame.clone());
+            let freshness = if fallback.is_some() {
+                VideoOutputRenderFreshness::LastValid
+            } else {
+                VideoOutputRenderFreshness::Error
+            };
+            (
+                fallback.unwrap_or_else(|| video_output_transparent_black_frame(width, height)),
+                freshness,
+            )
+        };
+        VideoOutputArtisticRenderResult {
+            payload: VideoOutputArtisticPayload::Frame(frame),
+            output_mapping: plan.mapping,
+            output_mapping_identity: VideoOutputMappingIdentity::from_mapping(&plan.mapping),
+            evidence: VideoOutputRenderEvidence {
+                project_render_epoch: key.project_render_epoch,
+                output_id: plan.output_id,
+                freshness,
+                error: Some(error),
+            },
+        }
+    }
+
+    /// Frame-only post-chain/pre-mapping compatibility surface. Error and
+    /// LastValid evidence are returned as typed errors; fault pixels and
+    /// rollbacks are never flattened into `Ok(VideoFrame)`.
     pub fn prepare_output_artistic_frame_with_effects(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -3706,9 +4194,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
-        self.prepare_output_artistic_frame_with_effects_impl(
+        let result = self.prepare_output_artistic_render_result_impl(
             snapshot, context, None, plan, width, height,
-        )
+        )?;
+        Self::consume_fresh_artistic_frame(result, width, height, false)
     }
 
     pub fn prepare_output_artistic_frame_with_effects_and_transitions(
@@ -3722,7 +4211,78 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
     ) -> Result<VideoFrame, VideoPreviewError> {
         let mut plan = plan.clone();
         apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
-        self.prepare_output_artistic_frame_with_effects_impl(
+        let result = self.prepare_output_artistic_render_result_impl(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+        )?;
+        Self::consume_fresh_artistic_frame(result, width, height, false)
+    }
+
+    /// Canonical C1/C3 artistic seam for native presentation. It returns the
+    /// post-artistic-chain, pre-output-mapping frame with explicit
+    /// hard-blackout state and freshness evidence instead of applying the
+    /// output mapping, so a GPU presenter can map exactly once (or bypass the
+    /// mapping for a hard blackout) without duplicating composition.
+    pub fn prepare_output_artistic_render_result_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+    ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.prepare_output_artistic_render_result_impl(
+            snapshot,
+            context,
+            None,
+            &plan,
+            plan.width,
+            plan.height,
+        )
+    }
+
+    /// Evidenced artistic seam at an explicit presentation size.
+    pub fn prepare_output_artistic_render_result_preview_with_effects(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        self.prepare_output_artistic_render_result_impl(
+            snapshot, context, None, &plan, width, height,
+        )
+    }
+
+    /// Evidenced artistic seam including C3 transition-bus weights at an
+    /// explicit presentation size. The transition runtime is validated by the
+    /// shared weight pass before any pixels are produced.
+    pub fn prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        self.prepare_output_artistic_render_result_impl(
             snapshot,
             context,
             Some(transition_runtime),
@@ -3746,12 +4306,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         }
         if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
         {
-            return Ok(self.blackout_output_artistic_frame(
-                snapshot,
-                plan.output_id,
-                width,
-                height,
-            ));
+            self.fence_output_artistic_blackout(snapshot, plan.output_id);
+            return Ok(video_output_black_frame(width, height));
         }
         // Every valid invocation replaces diagnostics, including a fatal
         // decode/composite error.
@@ -3803,13 +4359,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok(frame)
     }
 
-    fn blackout_output_artistic_frame(
+    fn fence_output_artistic_blackout(
         &mut self,
         snapshot: &VideoSnapshot,
         output_id: VideoOutputId,
-        width: u32,
-        height: u32,
-    ) -> VideoFrame {
+    ) {
         // A blackout is a hard artistic fence. Discard the previous image so
         // a failed first frame after recovery cannot leak pre-blackout content
         // through the last-valid fallback. Keep both public rendering seams
@@ -3818,7 +4372,6 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .retain(|entry| entry.key.output_id != output_id);
         self.last_output_render_error = None;
         self.clear_full_output_effect_diagnostics(snapshot);
-        video_output_black_frame(width, height)
     }
 
     fn compose_scoped_plan(
@@ -12682,7 +13235,7 @@ mod tests {
         );
         let runtime = VideoClipRuntimeSnapshot::default();
         let first = renderer
-            .render_output_with_effects(
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -12693,7 +13246,7 @@ mod tests {
             .unwrap();
         renderer.frame_provider_mut().fail = true;
         let last_valid = renderer
-            .render_output_with_effects(
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -12703,7 +13256,7 @@ mod tests {
             )
             .unwrap();
         let new_epoch = renderer
-            .render_output_with_effects(
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -12713,9 +13266,18 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(first.data, vec![12, 34, 56, 255]);
-        assert_eq!(last_valid.data, first.data);
-        assert_eq!(new_epoch.data, vec![0, 0, 0, 0]);
+        assert_eq!(first.frame.data, vec![12, 34, 56, 255]);
+        assert_eq!(first.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+        assert_eq!(last_valid.frame.data, first.frame.data);
+        assert_eq!(
+            last_valid.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
+        assert_eq!(new_epoch.frame.data, vec![0, 0, 0, 0]);
+        assert_eq!(
+            new_epoch.evidence.freshness,
+            VideoOutputRenderFreshness::Error
+        );
         assert!(renderer.last_output_render_error().is_some());
     }
 
@@ -12761,7 +13323,7 @@ mod tests {
             renderer.frame_provider_mut().fail = true;
 
             let fallback = renderer
-                .render_output_with_effects(
+                .render_output_with_effects_evidenced(
                     &changed,
                     VideoEffectRenderContext {
                         clip_runtime: &runtime,
@@ -12771,7 +13333,11 @@ mod tests {
                 )
                 .unwrap();
 
-            assert_eq!(fallback.data, transparent_bytes);
+            assert_eq!(fallback.frame.data, transparent_bytes);
+            assert_eq!(
+                fallback.evidence.freshness,
+                VideoOutputRenderFreshness::Error
+            );
         }
     }
 
@@ -12801,7 +13367,7 @@ mod tests {
         renderer.frame_provider_mut().fail = true;
 
         let fallback = renderer
-            .render_output_with_effects(
+            .render_output_with_effects_evidenced(
                 &remapped,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -12812,11 +13378,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(first.data, vec![0, 0, 0, 255]);
-        assert_eq!(fallback.data, vec![51, 51, 51, 255]);
+        assert_eq!(fallback.frame.data, vec![51, 51, 51, 255]);
+        assert_eq!(
+            fallback.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
     }
 
     #[test]
-    fn c1_output_preview_preserves_mapping_fault_blackout_and_size_fenced_last_valid() {
+    fn c1_output_preview_fault_never_seeds_last_valid_and_blackout_fences_state() {
         IsfGpuRuntime::new().expect("C1 output-preview test requires a GPU adapter");
         let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
         snapshot.outputs[0].mapping.black_level = 0.2;
@@ -12839,28 +13409,50 @@ mod tests {
             },
         );
 
-        let seeded = renderer
+        let first_fault = renderer
             .render_output_preview_with_effects(&snapshot, context, 80, 2, 1)
-            .unwrap();
-        assert_eq!((seeded.width, seeded.height), (2, 1));
-        assert_eq!(seeded.data, vec![59, 67, 75, 255, 59, 67, 75, 255]);
+            .unwrap_err();
+        assert!(matches!(
+            first_fault,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert_eq!(renderer.last_effect_stage_faults().len(), 1);
         assert_eq!(
             renderer.last_effect_stage_faults()[0].chain_id,
             Some(VideoEffectChainId(104))
         );
+        assert!(renderer.output_last_valid_frames.is_empty());
+        assert!(renderer.last_output_render_error().is_some());
 
         renderer.frame_provider_mut().fail = true;
-        let same_size_fallback = renderer
+        let same_size_failure = renderer
             .render_output_preview_with_effects(&snapshot, context, 80, 2, 1)
-            .unwrap();
-        assert_eq!(same_size_fallback, seeded);
+            .unwrap_err();
+        assert!(matches!(
+            same_size_failure,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert!(renderer.last_output_render_error().is_some());
 
         let resized_failure = renderer
             .render_output_preview_with_effects(&snapshot, context, 80, 1, 1)
-            .unwrap();
-        assert_eq!(resized_failure.data, vec![51, 51, 51, 0]);
+            .unwrap_err();
+        assert!(matches!(
+            resized_failure,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
 
         snapshot.blackout = true;
         let blackout = renderer
@@ -12907,7 +13499,7 @@ mod tests {
         snapshot.layers[0].state.enabled = true;
         renderer.frame_provider_mut().fail = true;
         let fallback = renderer
-            .render_output_with_effects(
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -12919,7 +13511,11 @@ mod tests {
 
         assert_eq!(visible.data, vec![80, 90, 100, 255]);
         assert_eq!(hidden.data, vec![0, 0, 0, 0]);
-        assert_eq!(fallback.data, hidden.data);
+        assert_eq!(fallback.frame.data, hidden.data);
+        assert_eq!(
+            fallback.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
     }
 
     #[test]
@@ -13013,8 +13609,8 @@ mod tests {
                 C1SolidFrameProvider::default(),
             );
 
-            let frame = renderer
-                .render_output_with_effects(
+            let evidenced = renderer
+                .render_output_with_effects_evidenced(
                     snapshot,
                     VideoEffectRenderContext {
                         clip_runtime: &VideoClipRuntimeSnapshot::default(),
@@ -13024,7 +13620,11 @@ mod tests {
                 )
                 .unwrap();
 
-            assert_eq!(frame.data, vec![0, 0, 0, 0]);
+            assert_eq!(evidenced.frame.data, vec![0, 0, 0, 0]);
+            assert_eq!(
+                evidenced.evidence.freshness,
+                VideoOutputRenderFreshness::Error
+            );
             assert_eq!(renderer.last_effect_stage_faults().len(), 2);
             assert_eq!(
                 renderer.last_effect_stage_faults()[0].scope,
@@ -13089,8 +13689,8 @@ mod tests {
             C1SolidFrameProvider::default(),
         );
 
-        let frame = renderer
-            .render_output_with_effects(
+        let evidenced = renderer
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
@@ -13100,7 +13700,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(frame.data, vec![0, 255, 255, 255]);
+        assert_eq!(evidenced.frame.data, vec![0, 255, 255, 255]);
         assert!(renderer.last_effect_stage_faults().is_empty());
     }
 
@@ -13156,9 +13756,17 @@ mod tests {
                 },
                 80,
             )
-            .unwrap();
-        assert_eq!(before_blackout.data, vec![0, 255, 255, 255]);
+            .unwrap_err();
+        assert!(matches!(
+            before_blackout,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert_eq!(renderer.last_effect_stage_faults().len(), 2);
+        assert!(renderer.output_last_valid_frames.is_empty());
 
         snapshot.blackout = true;
         let blackout = renderer
@@ -13185,8 +13793,15 @@ mod tests {
                 },
                 80,
             )
-            .unwrap();
-        assert_eq!(recovered.data, vec![0, 255, 255, 255]);
+            .unwrap_err();
+        assert!(matches!(
+            recovered,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert_eq!(renderer.last_effect_stage_faults().len(), 2);
 
         snapshot.blackout = true;
@@ -13211,9 +13826,15 @@ mod tests {
                 },
                 80,
             )
-            .unwrap();
-
-        assert_eq!(failed_recovery.data, vec![0, 0, 0, 0]);
+            .unwrap_err();
+        assert!(matches!(
+            failed_recovery,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert!(renderer.last_effect_stage_faults().is_empty());
         assert!(renderer.last_output_render_error().is_some());
     }
@@ -13221,12 +13842,6 @@ mod tests {
     #[test]
     fn c1_direct_artistic_blackout_clears_cache_error_and_diagnostics() {
         let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
-        snapshot.effect_chains.push(c1_chain(
-            97,
-            VideoEffectScope::Output { output_id: 80 },
-            false,
-            vec![c1_invalid_effect("direct seam diagnostic")],
-        ));
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
             clip_runtime: &runtime,
@@ -13245,13 +13860,41 @@ mod tests {
             .unwrap();
         assert_eq!(seeded.data, vec![30, 60, 90, 255]);
         assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        assert!(renderer.last_effect_stage_faults().is_empty());
+
+        snapshot.effect_chains.push(c1_chain(
+            97,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("direct seam diagnostic")],
+        ));
+        let isolated_fault = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap_err();
+        assert!(matches!(
+            isolated_fault,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
         assert_eq!(renderer.last_effect_stage_faults().len(), 1);
+        assert!(renderer.last_output_render_error().is_some());
 
         renderer.frame_provider_mut().fail = true;
         let last_valid = renderer
             .render_output_with_effects(&snapshot, context, 80)
-            .unwrap();
-        assert_eq!(last_valid.data, seeded.data);
+            .unwrap_err();
+        assert!(matches!(
+            last_valid,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::LastValid,
+                error: Some(_),
+            }
+        ));
         assert_eq!(renderer.output_last_valid_frames.len(), 1);
         assert!(renderer.last_output_render_error().is_some());
 
@@ -13275,8 +13918,15 @@ mod tests {
         snapshot.blackout = false;
         let failed_recovery = renderer
             .render_output_with_effects(&snapshot, context, 80)
-            .unwrap();
-        assert_eq!(failed_recovery.data, vec![0, 0, 0, 0]);
+            .unwrap_err();
+        assert!(matches!(
+            failed_recovery,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert!(renderer.last_output_render_error().is_some());
     }
 
@@ -13683,8 +14333,8 @@ mod tests {
             VideoRuntimeConfig::default(),
             ClipTakeFrameProvider,
         );
-        let frame = renderer
-            .render_output_with_effects(
+        let evidenced = renderer
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &runtime,
@@ -13693,12 +14343,39 @@ mod tests {
                 80,
             )
             .unwrap();
-        assert_eq!(frame.data, vec![191, 0, 64, 255]);
+        assert_eq!(evidenced.frame.data, vec![191, 0, 64, 255]);
+        assert_eq!(
+            evidenced.evidence.freshness,
+            VideoOutputRenderFreshness::Error
+        );
+        let frame_only_fault = renderer
+            .render_output_with_effects(
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 77,
+                },
+                80,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            frame_only_fault,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         assert_eq!(renderer.last_effect_stage_faults().len(), 1);
         assert_eq!(
             renderer.last_effect_stage_faults()[0].chain_id,
             Some(VideoEffectChainId(212))
         );
+        assert!(
+            renderer.output_last_valid_frames.is_empty(),
+            "a fault-isolated transition frame must not seed LastValid"
+        );
+        assert!(renderer.last_output_render_error().is_some());
         snapshot.media_assets.retain(|asset| asset.id != 101);
         let fallback = renderer
             .render_output_with_effects(
@@ -13709,11 +14386,15 @@ mod tests {
                 },
                 80,
             )
-            .unwrap();
-        assert_eq!(
-            fallback, frame,
-            "missing incoming media keeps last valid program"
-        );
+            .unwrap_err();
+        assert!(matches!(
+            fallback,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(ref error),
+            } if error.contains("MissingTransitionAsset") && error.contains("asset_id: 101")
+        ));
         assert!(renderer.last_output_render_error().is_some_and(|error| {
             error.contains("MissingTransitionAsset") && error.contains("asset_id: 101")
         }));
@@ -13730,8 +14411,15 @@ mod tests {
                 },
                 80,
             )
-            .unwrap();
-        assert_eq!(cold_fallback.data, vec![0, 0, 0, 0]);
+            .unwrap_err();
+        assert!(matches!(
+            cold_fallback,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
         let red = VideoFrame {
             layer_id: 1,
             width: 1,
@@ -14580,8 +15268,8 @@ mod tests {
             },
         );
 
-        let frame = renderer
-            .render_output_with_effects(
+        let evidenced = renderer
+            .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
@@ -14591,7 +15279,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(frame.data, vec![245, 235, 225, 255]);
+        assert_eq!(evidenced.frame.data, vec![245, 235, 225, 255]);
+        assert_eq!(
+            evidenced.evidence.freshness,
+            VideoOutputRenderFreshness::Error
+        );
         assert_eq!(renderer.last_effect_stage_faults().len(), 1);
         let fault = &renderer.last_effect_stage_faults()[0];
         assert_eq!(fault.chain_id, Some(VideoEffectChainId(13)));
@@ -14711,5 +15403,752 @@ mod tests {
             renderer.apply_resolved_effect_chain_to_frame(&all_valid, frame, None);
         assert!(faults.is_empty());
         assert_eq!(after_mixed_next.data, vec![2, 2, 29, 255]);
+    }
+
+    #[test]
+    fn artistic_seam_carries_c1_effect_result_before_mapping_and_matches_legacy_path() {
+        IsfGpuRuntime::new().expect("C1 artistic seam test requires a GPU adapter");
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.outputs[0].mapping.black_level = 0.2;
+        let invert = builtin_isf_effect("invert").unwrap().unwrap();
+        snapshot.layers[0].isf_effect = Some(invert.clone());
+        snapshot.effect_chains.push(c1_chain(
+            21,
+            VideoEffectScope::Layer { layer_id: 1 },
+            false,
+            vec![invert],
+        ));
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 77,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [10, 20, 30, 255])]),
+                fail: false,
+            },
+        );
+
+        let seam = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(seam.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+        assert_eq!(seam.evidence.error, None);
+        assert_eq!(seam.evidence.project_render_epoch, 77);
+        assert_eq!(seam.evidence.output_id, 80);
+        assert!(!seam.is_hard_blackout());
+        let seam_frame = seam.frame().expect("visible artistic frame");
+        assert_eq!((seam_frame.width, seam_frame.height), (1, 1));
+        assert_eq!(seam_frame.format, VideoPixelFormat::Rgba8);
+        assert_eq!(
+            seam_frame.data,
+            vec![245, 235, 225, 255],
+            "the C1 invert result must reach the seam unmapped"
+        );
+
+        let mapping = snapshot.outputs[0].mapping.clone();
+        let legacy = renderer
+            .render_output_with_effects_evidenced(&snapshot, context, 80)
+            .unwrap();
+        let mapped_once = apply_video_output_mapping(seam_frame.clone(), &mapping);
+        let mapped_twice = apply_video_output_mapping(mapped_once.clone(), &mapping);
+        assert_eq!(legacy.frame, mapped_once);
+        assert_ne!(legacy.frame, *seam_frame);
+        assert_ne!(
+            mapped_once.data, mapped_twice.data,
+            "the test mapping must detect a double application"
+        );
+
+        renderer.frame_provider_mut().fail = true;
+        let rolled_back = renderer
+            .render_output_with_effects_evidenced(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            rolled_back.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
+        assert_eq!(
+            rolled_back.frame, mapped_once,
+            "the LastValid cache stores the artistic frame and maps it once on fallback"
+        );
+    }
+
+    #[test]
+    fn artistic_effect_faults_are_never_fresh_or_admissible() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            901,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("artistic output fault")],
+        ));
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 901,
+        };
+        let contract =
+            VideoOutputPresentationContract::new(901, 80, 1, 1, &snapshot.outputs[0].mapping);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+
+        let first_fault = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            first_fault.evidence.freshness,
+            VideoOutputRenderFreshness::Error,
+            "a first-frame effect fault must fail closed without a fabricated Fresh frame"
+        );
+        assert!(first_fault.evidence.error.is_some());
+        assert_eq!(
+            first_fault.frame().expect("fault diagnostic frame").data,
+            vec![20, 40, 60, 255],
+            "fault diagnostics may retain the stage-isolated pixels, but admission must reject them"
+        );
+        assert_eq!(
+            contract.admit(&first_fault),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::Error,
+            })
+        );
+        assert!(renderer.output_last_valid_frames.is_empty());
+        assert!(renderer.last_output_render_error().is_some());
+
+        let frame_only_fault = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap_err();
+        assert!(matches!(
+            frame_only_fault,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
+        assert!(
+            renderer.output_last_valid_frames.is_empty(),
+            "frame-only compatibility must not promote rejected pixels into LastValid"
+        );
+        assert!(
+            renderer.last_output_render_error().is_some(),
+            "frame-only compatibility must not erase the artistic fault"
+        );
+
+        snapshot.effect_chains.clear();
+        let fresh = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(fresh.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+        assert_eq!(
+            fresh.frame().expect("fresh artistic frame").data,
+            vec![20, 40, 60, 255]
+        );
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        let cached_fresh = renderer.output_last_valid_frames[0].frame.clone();
+
+        snapshot.effect_chains.push(c1_chain(
+            902,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("artistic output fault after fresh")],
+        ));
+        let rolled_back = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            rolled_back.evidence.freshness,
+            VideoOutputRenderFreshness::Error
+        );
+        assert_eq!(rolled_back.frame(), fresh.frame());
+        assert!(rolled_back.evidence.error.is_some());
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        assert_eq!(renderer.output_last_valid_frames[0].frame, cached_fresh);
+        assert_eq!(
+            contract.admit(&rolled_back),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::Error,
+            })
+        );
+
+        let frame_only_fault_after_fresh = renderer
+            .render_output_with_effects(&snapshot, context, 80)
+            .unwrap_err();
+        assert!(matches!(
+            frame_only_fault_after_fresh,
+            VideoPreviewError::NonFreshArtisticOutput {
+                output_id: 80,
+                freshness: VideoOutputRenderFreshness::Error,
+                error: Some(_),
+            }
+        ));
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        assert_eq!(renderer.output_last_valid_frames[0].frame, cached_fresh);
+        assert!(renderer.last_output_render_error().is_some());
+    }
+
+    #[test]
+    fn every_public_frame_only_artistic_wrapper_rejects_error_and_preserves_fault_state() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        snapshot.effect_chains.push(c1_chain(
+            903,
+            VideoEffectScope::Output { output_id: 80 },
+            false,
+            vec![c1_invalid_effect("frame-only rejection proof")],
+        ));
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 903,
+        };
+        let plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+
+        macro_rules! assert_fault_rejected {
+            ($call:expr) => {{
+                let error = $call.unwrap_err();
+                assert!(matches!(
+                    error,
+                    VideoPreviewError::NonFreshArtisticOutput {
+                        output_id: 80,
+                        freshness: VideoOutputRenderFreshness::Error,
+                        error: Some(_),
+                    }
+                ));
+                assert!(renderer.output_last_valid_frames.is_empty());
+                assert!(renderer.last_output_render_error().is_some());
+            }};
+        }
+
+        assert_fault_rejected!(renderer.render_output_with_effects(&snapshot, context, 80));
+        assert_fault_rejected!(renderer.render_output_with_effects_and_transitions(
+            &snapshot,
+            context,
+            &transition_runtime,
+            80,
+        ));
+        assert_fault_rejected!(renderer.render_output_preview_with_effects(
+            &snapshot,
+            context,
+            80,
+            plan.width,
+            plan.height,
+        ));
+        assert_fault_rejected!(renderer.render_output_preview_with_effects_and_transitions(
+            &snapshot,
+            context,
+            &transition_runtime,
+            80,
+            plan.width,
+            plan.height,
+        ));
+        assert_fault_rejected!(renderer.prepare_output_artistic_frame_with_effects(
+            &snapshot,
+            context,
+            &plan,
+            plan.width,
+            plan.height,
+        ));
+        assert_fault_rejected!(renderer
+            .prepare_output_artistic_frame_with_effects_and_transitions(
+                &snapshot,
+                context,
+                &transition_runtime,
+                &plan,
+                plan.width,
+                plan.height,
+            ));
+    }
+
+    #[test]
+    fn every_public_frame_only_artistic_wrapper_rejects_last_valid_without_mutating_cache() {
+        let snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 904,
+        };
+        let plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+        let fresh = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(fresh.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+        assert_eq!(renderer.output_last_valid_frames.len(), 1);
+        let cached = renderer.output_last_valid_frames[0].clone();
+        renderer.frame_provider_mut().fail = true;
+
+        macro_rules! assert_last_valid_rejected {
+            ($call:expr) => {{
+                let error = $call.unwrap_err();
+                assert!(matches!(
+                    error,
+                    VideoPreviewError::NonFreshArtisticOutput {
+                        output_id: 80,
+                        freshness: VideoOutputRenderFreshness::LastValid,
+                        error: Some(_),
+                    }
+                ));
+                assert_eq!(renderer.output_last_valid_frames.len(), 1);
+                assert_eq!(renderer.output_last_valid_frames[0].key, cached.key);
+                assert_eq!(renderer.output_last_valid_frames[0].frame, cached.frame);
+                assert!(renderer.last_output_render_error().is_some());
+            }};
+        }
+
+        assert_last_valid_rejected!(renderer.render_output_with_effects(&snapshot, context, 80));
+        assert_last_valid_rejected!(renderer.render_output_with_effects_and_transitions(
+            &snapshot,
+            context,
+            &transition_runtime,
+            80,
+        ));
+        assert_last_valid_rejected!(renderer.render_output_preview_with_effects(
+            &snapshot,
+            context,
+            80,
+            plan.width,
+            plan.height,
+        ));
+        assert_last_valid_rejected!(renderer.render_output_preview_with_effects_and_transitions(
+            &snapshot,
+            context,
+            &transition_runtime,
+            80,
+            plan.width,
+            plan.height,
+        ));
+        assert_last_valid_rejected!(renderer.prepare_output_artistic_frame_with_effects(
+            &snapshot,
+            context,
+            &plan,
+            plan.width,
+            plan.height,
+        ));
+        assert_last_valid_rejected!(renderer
+            .prepare_output_artistic_frame_with_effects_and_transitions(
+                &snapshot,
+                context,
+                &transition_runtime,
+                &plan,
+                plan.width,
+                plan.height,
+            ));
+    }
+
+    #[test]
+    fn c3_transition_bus_authority_reaches_artistic_seam_and_last_valid_rolls_back_fail_closed() {
+        let bus_id = protocol::VideoTransitionBusId(3);
+        let from = VideoLayerTransitionTarget::Layer { layer_id: 1 };
+        let to = VideoLayerTransitionTarget::Layer { layer_id: 2 };
+        let mut snapshot = c1_test_snapshot(vec![
+            c1_test_layer(1, VideoBlendMode::Normal),
+            c1_test_layer(2, VideoBlendMode::Normal),
+        ]);
+        snapshot
+            .transition_buses
+            .push(protocol::VideoLayerTransitionBusSummary {
+                id: bus_id,
+                label: "Program bus".to_string(),
+                composition_id: 70,
+                enabled: true,
+                members: vec![from.clone(), to.clone()],
+                default_from: from.clone(),
+                default_to: to.clone(),
+                default_kind: protocol::VideoClipTakeKind::Crossfade,
+                default_duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
+                default_curve: VideoLayerTransitionCurve::Linear,
+                matte_source: None,
+            });
+        let runtime = VideoLayerTransitionRuntimeSnapshot {
+            buses: vec![protocol::VideoLayerTransitionBusRuntimeSummary {
+                bus_id,
+                origin_from: from.clone(),
+                from: from.clone(),
+                to: to.clone(),
+                kind: protocol::VideoClipTakeKind::Crossfade,
+                curve: VideoLayerTransitionCurve::Linear,
+                elapsed_ms: 250,
+                duration_ms: 1_000,
+                duration: protocol::VideoClipTakeDuration::milliseconds(1_000),
+                progress_millis: 250,
+            }],
+        };
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 12,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [200, 0, 0, 255]), (2, [0, 0, 200, 255])]),
+                fail: false,
+            },
+        );
+        let contract =
+            VideoOutputPresentationContract::new(12, 80, 1, 1, &snapshot.outputs[0].mapping);
+
+        let plain = renderer
+            .prepare_output_artistic_render_result_preview_with_effects(
+                &snapshot, context, 80, 1, 1,
+            )
+            .unwrap();
+        assert_eq!(
+            plain.frame().expect("plain artistic frame").data,
+            vec![0, 0, 200, 255]
+        );
+        let transitioned = renderer
+            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                &snapshot, context, &runtime, 80, 1, 1,
+            )
+            .unwrap();
+        assert_eq!(
+            transitioned.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+        assert!(!transitioned.is_hard_blackout());
+        assert_ne!(
+            transitioned.frame(),
+            plain.frame(),
+            "C3 bus weights must change the artistic pixels"
+        );
+        assert_eq!(
+            transitioned
+                .frame()
+                .expect("transition artistic frame")
+                .data,
+            vec![92, 0, 41, 207],
+            "crossfade weight 0.75/0.25 over red/blue solids; the bus frame's own \
+             alpha modulates the final paste, matching the existing C3 contract"
+        );
+
+        let legacy = renderer
+            .render_output_preview_with_effects_and_transitions(
+                &snapshot, context, &runtime, 80, 1, 1,
+            )
+            .unwrap();
+        assert_eq!(
+            legacy.data,
+            transitioned
+                .frame()
+                .expect("transition artistic frame")
+                .data,
+            "the legacy evidenced path and the seam must share one renderer"
+        );
+
+        renderer.frame_provider_mut().fail = true;
+        let rolled_back = renderer
+            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                &snapshot, context, &runtime, 80, 1, 1,
+            )
+            .unwrap();
+        assert_eq!(
+            rolled_back.evidence.freshness,
+            VideoOutputRenderFreshness::LastValid
+        );
+        assert!(rolled_back.evidence.error.is_some());
+        assert_eq!(
+            rolled_back.frame(),
+            transitioned.frame(),
+            "the rollback content is the authoritative last-valid artistic frame"
+        );
+        assert_eq!(
+            contract.admit(&rolled_back),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::LastValid
+            }),
+            "rolled-back output is rejected at the presentation boundary"
+        );
+    }
+
+    #[test]
+    fn presentation_contract_fails_closed_on_stale_generations_sizes_and_partial_frames() {
+        let mapping = VideoOutputMapping::default();
+        let contract = VideoOutputPresentationContract::new(7, 9, 2, 1, &mapping);
+        let base_frame = rgba_frame_with_size(9, 2, 1, vec![1, 2, 3, 255, 4, 5, 6, 255]);
+        let base = VideoOutputArtisticRenderResult {
+            payload: VideoOutputArtisticPayload::Frame(base_frame),
+            output_mapping: mapping,
+            output_mapping_identity: VideoOutputMappingIdentity::from_mapping(&mapping),
+            evidence: VideoOutputRenderEvidence {
+                project_render_epoch: 7,
+                output_id: 9,
+                freshness: VideoOutputRenderFreshness::Fresh,
+                error: None,
+            },
+        };
+        assert_eq!(
+            contract.admit(&base),
+            Ok(VideoOutputArtisticAdmission::MapOnceAndPresent)
+        );
+
+        let zero_area = VideoOutputPresentationContract::new(7, 9, 0, 1, &mapping);
+        assert_eq!(
+            zero_area.admit(&base),
+            Err(VideoOutputArtisticRejection::ZeroAreaContract {
+                width: 0,
+                height: 1,
+            })
+        );
+
+        let overflow = VideoOutputPresentationContract::new(7, 9, u32::MAX, u32::MAX, &mapping);
+        assert_eq!(
+            overflow.admit(&base),
+            Err(VideoOutputArtisticRejection::FrameByteLengthOverflow {
+                width: u32::MAX,
+                height: u32::MAX,
+            })
+        );
+
+        let mut substituted_mapping = base.clone();
+        substituted_mapping.output_mapping.black_level = 0.75;
+        assert!(matches!(
+            contract.admit(&substituted_mapping),
+            Err(VideoOutputArtisticRejection::ResultMappingIdentityMismatch { .. })
+        ));
+
+        let mut foreign_mapping = base.clone();
+        foreign_mapping.output_mapping.black_level = 0.75;
+        foreign_mapping.output_mapping_identity =
+            VideoOutputMappingIdentity::from_mapping(&foreign_mapping.output_mapping);
+        assert!(matches!(
+            contract.admit(&foreign_mapping),
+            Err(VideoOutputArtisticRejection::ContractMappingIdentityMismatch { .. })
+        ));
+
+        let hostile_mapping_contract =
+            VideoOutputPresentationContract::new(7, 9, 2, 1, &foreign_mapping.output_mapping);
+        assert_eq!(
+            hostile_mapping_contract.admit(&foreign_mapping),
+            Ok(VideoOutputArtisticAdmission::MapOnceAndPresent),
+            "hostile values are admitted only when result, identity, and contract bind the same mapping"
+        );
+
+        let mut stale = base.clone();
+        stale.evidence.project_render_epoch = 6;
+        assert_eq!(
+            contract.admit(&stale),
+            Err(VideoOutputArtisticRejection::ProjectEpochMismatch {
+                expected: 7,
+                actual: 6
+            })
+        );
+
+        let mut foreign = base.clone();
+        foreign.evidence.output_id = 8;
+        assert_eq!(
+            contract.admit(&foreign),
+            Err(VideoOutputArtisticRejection::OutputMismatch {
+                expected: 9,
+                actual: 8
+            })
+        );
+
+        let mut last_valid = base.clone();
+        last_valid.evidence.freshness = VideoOutputRenderFreshness::LastValid;
+        assert_eq!(
+            contract.admit(&last_valid),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::LastValid
+            })
+        );
+
+        let mut errored = base.clone();
+        errored.evidence.freshness = VideoOutputRenderFreshness::Error;
+        assert_eq!(
+            contract.admit(&errored),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::Error
+            })
+        );
+
+        let mut partial_evidence = base.clone();
+        partial_evidence.evidence.error = Some("partial render".to_string());
+        assert_eq!(
+            contract.admit(&partial_evidence),
+            Err(VideoOutputArtisticRejection::ReportedRenderError)
+        );
+
+        let mut wrong_format = base.clone();
+        let VideoOutputArtisticPayload::Frame(frame) = &mut wrong_format.payload else {
+            panic!("base is a frame")
+        };
+        frame.format = VideoPixelFormat::Bgra8;
+        assert_eq!(
+            contract.admit(&wrong_format),
+            Err(VideoOutputArtisticRejection::UnsupportedFrameFormat {
+                format: VideoPixelFormat::Bgra8
+            })
+        );
+
+        let mut wrong_dimensions = base.clone();
+        let VideoOutputArtisticPayload::Frame(frame) = &mut wrong_dimensions.payload else {
+            panic!("base is a frame")
+        };
+        frame.width = 1;
+        frame.height = 2;
+        assert_eq!(
+            contract.admit(&wrong_dimensions),
+            Err(VideoOutputArtisticRejection::FrameDimensionsMismatch {
+                expected_width: 2,
+                expected_height: 1,
+                actual_width: 1,
+                actual_height: 2
+            })
+        );
+
+        let mut truncated = base.clone();
+        let VideoOutputArtisticPayload::Frame(frame) = &mut truncated.payload else {
+            panic!("base is a frame")
+        };
+        frame.data.truncate(7);
+        assert_eq!(
+            contract.admit(&truncated),
+            Err(VideoOutputArtisticRejection::FrameDataLengthMismatch {
+                expected: 8,
+                actual: 7
+            })
+        );
+
+        let mut black = base.clone();
+        black.payload = VideoOutputArtisticPayload::HardBlackout;
+        assert_eq!(
+            contract.admit(&black),
+            Ok(VideoOutputArtisticAdmission::PresentHardBlackout)
+        );
+    }
+
+    #[test]
+    fn blackout_in_artistic_seam_is_byte_exact_black_and_cannot_leak_stale_output() {
+        let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 21,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [12, 34, 56, 255])]),
+                fail: false,
+            },
+        );
+        let contract =
+            VideoOutputPresentationContract::new(21, 80, 1, 1, &snapshot.outputs[0].mapping);
+
+        let visible = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            visible.frame().expect("visible artistic frame").data,
+            vec![12, 34, 56, 255]
+        );
+        let visible_presentation =
+            materialize_output_artistic_rgba8_for_transport(visible.clone(), &contract).unwrap();
+        assert!(!visible_presentation.is_hard_blackout());
+        assert_eq!(visible_presentation.frame().data, vec![12, 34, 56, 255]);
+
+        snapshot.blackout = true;
+        let blackout = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert!(blackout.is_hard_blackout());
+        assert_eq!(
+            blackout.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+        assert_eq!(blackout.frame(), None, "hard blackout must be payload-less");
+        assert_eq!(
+            contract.admit(&blackout),
+            Ok(VideoOutputArtisticAdmission::PresentHardBlackout)
+        );
+
+        // The mapping lifts even a black frame through black_level, which is
+        // why the blackout admission bypasses mapping entirely.
+        let mut hostile = snapshot.outputs[0].mapping.clone();
+        hostile.black_level = 0.9;
+        let lifted = apply_video_output_mapping(video_output_black_frame(2, 2), &hostile);
+        assert_ne!(lifted.data, video_output_black_frame(2, 2).data);
+        let mut hostile_blackout = blackout.clone();
+        hostile_blackout.output_mapping = hostile;
+        hostile_blackout.output_mapping_identity =
+            VideoOutputMappingIdentity::from_mapping(&hostile);
+        let hostile_contract = VideoOutputPresentationContract::new(21, 80, 1, 1, &hostile);
+        let blackout_presentation =
+            materialize_output_artistic_rgba8_for_transport(hostile_blackout, &hostile_contract)
+                .unwrap();
+        assert!(blackout_presentation.is_hard_blackout());
+        assert_eq!(blackout_presentation.frame().data, vec![0, 0, 0, 255]);
+
+        snapshot.blackout = false;
+        renderer.frame_provider_mut().fail = true;
+        let after_toggle = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            after_toggle.evidence.freshness,
+            VideoOutputRenderFreshness::Error,
+            "the blackout fence discarded the pre-blackout last-valid entry"
+        );
+        assert!(after_toggle.evidence.error.is_some());
+        assert!(!after_toggle.is_hard_blackout());
+        assert_eq!(
+            after_toggle.frame().expect("recovery error frame").data,
+            vec![0, 0, 0, 0]
+        );
+        assert_ne!(after_toggle.frame(), visible.frame());
+        assert_eq!(
+            contract.admit(&after_toggle),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::Error
+            })
+        );
+        assert_eq!(
+            materialize_output_artistic_rgba8_for_transport(after_toggle.clone(), &contract),
+            Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: VideoOutputRenderFreshness::Error
+            })
+        );
+        let zero_area_contract =
+            VideoOutputPresentationContract::new(21, 80, 0, 1, &snapshot.outputs[0].mapping);
+        assert_eq!(
+            materialize_output_artistic_rgba8_for_transport(after_toggle, &zero_area_contract),
+            Err(VideoOutputArtisticRejection::ZeroAreaContract {
+                width: 0,
+                height: 1
+            })
+        );
+
+        renderer.frame_provider_mut().fail = false;
+        let recovered = renderer
+            .prepare_output_artistic_render_result_with_effects(&snapshot, context, 80)
+            .unwrap();
+        assert_eq!(
+            recovered.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
+        assert_eq!(recovered.frame(), visible.frame());
     }
 }

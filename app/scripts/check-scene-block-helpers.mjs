@@ -13,6 +13,17 @@ const gestureTranspiled = ts.transpileModule(gestureSource, {
 const gestureModuleUrl = `data:text/javascript;base64,${Buffer.from(gestureTranspiled.outputText).toString("base64")}`;
 const gestures = await import(gestureModuleUrl);
 
+const sceneCueKindSource = await readFile(new URL("../src/sceneCueKind.ts", import.meta.url), "utf8");
+const sceneCueKindTranspiled = ts.transpileModule(sceneCueKindSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+    importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+  },
+  fileName: "sceneCueKind.ts",
+});
+const sceneCueKindModuleUrl = `data:text/javascript;base64,${Buffer.from(sceneCueKindTranspiled.outputText).toString("base64")}`;
+
 const directResizeSource = await readFile(new URL("../src/timelineDirectResize.ts", import.meta.url), "utf8");
 const directResizeTranspiled = ts.transpileModule(directResizeSource, {
   compilerOptions: {
@@ -25,14 +36,18 @@ const directResizeTranspiled = ts.transpileModule(directResizeSource, {
 const directResize = await import(`data:text/javascript;base64,${Buffer.from(directResizeTranspiled.outputText).toString("base64")}`);
 
 const source = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
-const transpiled = ts.transpileModule(source.replace("./timelineBlockGestures", gestureModuleUrl), {
+const transpiled = ts.transpileModule(
+  source
+    .replace("./timelineBlockGestures", gestureModuleUrl)
+    .replace("./sceneCueKind", sceneCueKindModuleUrl), {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
     target: ts.ScriptTarget.ES2022,
     importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
   },
   fileName: "timelineSceneBlocks.ts",
-});
+  },
+);
 const helpers = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
 
 assert.equal(gestures.timelineBlockGestureZone(50, 4, 100, true), "move");
@@ -291,6 +306,25 @@ assert.deepEqual(
   [901],
   "Cue list and Cue IDs disambiguate otherwise identical source numbers and labels",
 );
+
+// One orphan or invalid Bank relation poisons the complete authority. The
+// retired partial unavailable-group representation must never return.
+const orphanBankBase = [{ id: 902, cue_list_id: 17 }];
+const poisonedAuthority = {
+  cueLists: [],
+  cues: orphanBankBase,
+  executors: [],
+  issue: { kind: "missing_cue_bank", cueId: 902, id: 17, index: 0 },
+  cueListById: new Map(),
+  cueById: new Map([[902, orphanBankBase[0]]]),
+  executorById: new Map(),
+};
+assert.deepEqual(
+  helpers.groupTimelineSourceShelfBanks(orphanBankBase, poisonedAuthority),
+  [],
+  "a missing Bank relation closes the complete Shelf",
+);
+assert.doesNotMatch(source, /bank_unavailable|bank_unavailable_reason|bank-unavailable:/);
 
 const paletteOnlySummary = helpers.timelineSceneBlockSourceSummary({
   ...largeFixture.cues[0],

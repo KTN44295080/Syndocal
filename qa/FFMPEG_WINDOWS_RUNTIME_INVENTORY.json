@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "platform": "windows-x86_64",
+  "runtime_dlls": [
+    {
+      "filename": "avcodec-62.dll",
+      "byte_size": 97454080,
+      "sha256": "34f5b1baac01c4be3edf464309c79db05ffbd4a9c905c94b4a4651cd15370296",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "avdevice-62.dll",
+      "byte_size": 6323200,
+      "sha256": "d213d6cad9f3a526f7664ebb3f93d6882669540db7164daecd03f52e0f5288cc",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "avfilter-11.dll",
+      "byte_size": 124344320,
+      "sha256": "e318cac83d648869180d0b57c45f21aad1e4db34a467000c157da2938ff7f63f",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "avformat-62.dll",
+      "byte_size": 20179968,
+      "sha256": "c04e6ed2f9f36d42325d4f4df5babb5d6ce7c55dbffeb7ef1007e25e97bcb716",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "avutil-60.dll",
+      "byte_size": 3148288,
+      "sha256": "6f172b5d10224fcc3f729c8baa6fd36a97bb58042bb3b1417078d77d2da59b87",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "swresample-6.dll",
+      "byte_size": 486912,
+      "sha256": "72e2721672c11fd37d983b05cc2370f612784e4e3218362a0cb4315d08c917fb",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    },
+    {
+      "filename": "swscale-9.dll",
+      "byte_size": 12748288,
+      "sha256": "3d07972cada6ba38c492e92b0f6c025a6835607fe00cdf83afc604c2fbdfe550",
+      "pe_identity": { "signature": "PE\u0000\u0000", "machine": 34404, "characteristics": 8750, "optional_magic": 523 }
+    }
+  ],
+  "common_resources": [
+    {
+      "source": "../../THIRD_PARTY_NOTICES.md",
+      "destination": "THIRD_PARTY_NOTICES.md",
+      "byte_size": 3318,
+      "sha256": "9c194c6b24445d8e9dbe39898b7aa20ee7b6e2a75972dd458c6011f79b47f175"
+    },
+    {
+      "source": "../../licenses/FFmpeg-LGPL-3.0.txt",
+      "destination": "licenses/FFmpeg-LGPL-3.0.txt",
+      "byte_size": 7652,
+      "sha256": "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b"
+    },
+    {
+      "source": "../../licenses/Spout2-BSD-2-Clause.txt",
+      "destination": "licenses/Spout2-BSD-2-Clause.txt",
+      "byte_size": 2726,
+      "sha256": "04514504b4636462450722a84452b6fe5f671d1f74f22d68867256267f3030f6"
+    },
+    {
+      "source": "../../licenses/bcdec_rs-MIT.txt",
+      "destination": "licenses/bcdec_rs-MIT.txt",
+      "byte_size": 1060,
+      "sha256": "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20"
+    }
+  ],
+  "known_asio_bridge_sha256": [
+    "73ede85d5a5568f5dcad33990158c3bd755590c6d06c797166ac7041f6d786f0",
+    "14057e266192ee5ea2be66d64bf802ba79f6fe686a338002ae85ffcc38a2e853",
+    "2008c70b63272e66d1df1406498a1797114c67e96ea118c2b804adb8d80734d8",
+    "3d0d52721fd52b6769d95ffe07a99114444423f5be3e566ed16d1f2edb71a516"
+  ]
+}

@@ -39,7 +39,6 @@ const chooserFamilyCode = (family: EffectChooserFamily) => {
 interface EffectFamilyChooserProps {
   activeFamily: EffectChooserFamily;
   onSelectFamily: (family: EffectChooserFamily) => void | Promise<void>;
-  descriptions?: Partial<Record<EffectChooserFamily, string>>;
   disabledFamilies?: Partial<Record<EffectChooserFamily, boolean>>;
 }
 
@@ -68,9 +67,6 @@ export function EffectFamilyChooser(props: EffectFamilyChooserProps) {
           >
             <span class="effectFamilyGlyph" aria-hidden="true">{chooserFamilyCode(family)}</span>
             <strong>{family === "SUPER SCENE" ? "TIMELINE" : family}</strong>
-            {props.descriptions?.[family]
-              ? <small>{props.descriptions[family]}</small>
-              : null}
           </button>
         )}
       </For>

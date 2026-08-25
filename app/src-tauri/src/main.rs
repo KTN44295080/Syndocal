@@ -19,13 +19,14 @@ use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
     validate_color_mapping_effect_request as validate_engine_color_mapping_effect_request,
+    validate_cue_list_label as validate_engine_cue_list_label,
     validate_curve_effect_request as validate_engine_curve_effect_request,
     validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, FixturePatchPublicationFailure, MediaAssetImportCandidate,
-    MediaAssetTransaction, OutputOwnershipActivation, StageProjectMutation,
-    StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
+    MediaAssetTransaction, OutputOwnershipActivation, SnapshotPublicationFailure,
+    StageProjectMutation, StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
     VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
@@ -115,6 +116,8 @@ use tauri::Emitter;
 use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_bridge_v2;
 mod authored_control_plane;
 mod capture_transport;
 mod control_plane;
@@ -909,19 +912,31 @@ const DJ_LINK_DEDUPE_TTL: Duration = Duration::from_secs(15 * 60);
 /// deliberately not part of ProjectFile, templates, backups, or standby
 /// checkpoints. A project identity or mapping replacement clears the play
 /// session ledger before the next peer event is admitted.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct DjLinkRuntime {
     project_epoch: u64,
     mappings: Vec<protocol::DjTrackTriggerMapping>,
     seen_play_sessions: BTreeMap<String, Instant>,
+    /// The canonical ACTIVE that currently owns the runtime. Its dedupe
+    /// receipt remains live even if no packet refreshes it for the general
+    /// TTL: expiry must never turn a still-current/released session's replay
+    /// into a second START or clear its release ownership.
+    active_dedupe_key: Option<String>,
     state_generation: u64,
     master: bool,
     track_active: bool,
     playing: bool,
     released: bool,
+    /// A valid ACTIVE with no authored mapping retires all DJ mutation
+    /// controls until a mapped ACTIVE has been started and acknowledged.  It
+    /// is deliberately separate from `released`: only a canonical RELEASE
+    /// ACK may set the release latch.
+    unmapped_active_blocked: bool,
     loop_division: Option<u8>,
     last_event_id: Option<String>,
     master_deck: Option<String>,
+    master_deck_number: Option<u8>,
+    master_deck_revision: Option<u64>,
     track_content_id: Option<String>,
     track_title: Option<String>,
     track_artist: Option<String>,
@@ -930,6 +945,15 @@ struct DjLinkRuntime {
     track_playing: bool,
     track_bpm: Option<f64>,
     position_sec: Option<f64>,
+    /// Canonical wire position (`positionAtSendSec` plus the bounded sample
+    /// age) paired with `position_revision`.  Raw seconds alone are not a
+    /// sufficient equality proof because two packets can carry different
+    /// sample ages for the same reported playhead.
+    source_position_ms: Option<u64>,
+    position_revision: Option<u64>,
+    play_session_id: Option<String>,
+    pedal_owner: Option<String>,
+    release_event_id: Option<String>,
     authoritative_state: protocol::DjLinkTimelineStateValue,
     timeline_id: Option<String>,
     position_bars: u64,
@@ -942,14 +966,18 @@ impl DjLinkRuntime {
             project_epoch: coordinator.epoch,
             mappings: coordinator.mappings.dj_track_triggers.clone(),
             seen_play_sessions: BTreeMap::new(),
+            active_dedupe_key: None,
             state_generation: 0,
             master: false,
             track_active: false,
             playing: false,
             released: false,
+            unmapped_active_blocked: false,
             loop_division: None,
             last_event_id: None,
             master_deck: None,
+            master_deck_number: None,
+            master_deck_revision: None,
             track_content_id: None,
             track_title: None,
             track_artist: None,
@@ -958,6 +986,11 @@ impl DjLinkRuntime {
             track_playing: false,
             track_bpm: None,
             position_sec: None,
+            source_position_ms: None,
+            position_revision: None,
+            play_session_id: None,
+            pedal_owner: None,
+            release_event_id: None,
             authoritative_state: protocol::DjLinkTimelineStateValue::Idle,
             timeline_id: None,
             position_bars: 0,
@@ -971,13 +1004,17 @@ impl DjLinkRuntime {
             self.project_epoch = coordinator.epoch;
             self.mappings = mappings.clone();
             self.seen_play_sessions.clear();
+            self.active_dedupe_key = None;
             self.master = false;
             self.track_active = false;
             self.playing = false;
             self.released = false;
+            self.unmapped_active_blocked = false;
             self.loop_division = None;
             self.last_event_id = None;
             self.master_deck = None;
+            self.master_deck_number = None;
+            self.master_deck_revision = None;
             self.track_content_id = None;
             self.track_title = None;
             self.track_artist = None;
@@ -986,6 +1023,11 @@ impl DjLinkRuntime {
             self.track_playing = false;
             self.track_bpm = None;
             self.position_sec = None;
+            self.source_position_ms = None;
+            self.position_revision = None;
+            self.play_session_id = None;
+            self.pedal_owner = None;
+            self.release_event_id = None;
             self.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
             self.timeline_id = None;
             self.position_bars = 0;
@@ -994,8 +1036,11 @@ impl DjLinkRuntime {
     }
 
     fn purge_dedupe(&mut self, now: Instant) {
-        self.seen_play_sessions
-            .retain(|_, observed| now.duration_since(*observed) <= DJ_LINK_DEDUPE_TTL);
+        let active_dedupe_key = self.active_dedupe_key.as_deref();
+        self.seen_play_sessions.retain(|key, observed| {
+            Some(key.as_str()) == active_dedupe_key
+                || now.duration_since(*observed) <= DJ_LINK_DEDUPE_TTL
+        });
         // Live entries are never evicted to make room for a new event.  A
         // full ledger fails closed in the dispatcher; only the explicit TTL
         // purge can release a once-per-session slot.
@@ -1050,6 +1095,11 @@ fn dj_link_timeline_state_from_snapshot(
         loop_active,
         timeline_id,
         position_bars,
+        play_session_id: runtime.play_session_id.clone(),
+        // DJ Link v2 currently carries no independently verifiable pedal
+        // identity.  Never invent one from a loop report.
+        pedal_owner: runtime.pedal_owner.clone(),
+        release_event_id: runtime.release_event_id.clone(),
     }
 }
 
@@ -1097,12 +1147,10 @@ fn dj_link_find_track_mapping(
             artist: None,
         };
         let key = selector.canonical_key().ok()?;
-        if let Some(mapping) = mappings
+        return mappings
             .iter()
             .find(|mapping| mapping.selector.canonical_key().ok().as_deref() == Some(key.as_str()))
-        {
-            return Some(mapping.clone());
-        }
+            .cloned();
     }
     let title = payload
         .title
@@ -1128,6 +1176,112 @@ fn dj_link_find_track_mapping(
                 && mapping.selector.canonical_key().ok().as_deref() == Some(fallback_key.as_str())
         })
         .cloned()
+}
+
+fn dj_link_measured_loop_division(
+    loop_state: &protocol::DjLinkMeasuredLoop,
+) -> Result<Option<u8>, &'static str> {
+    if !loop_state.active {
+        if loop_state.start_beat.is_some()
+            || loop_state.end_beat.is_some()
+            || loop_state.length_beats.is_some()
+        {
+            return Err("inactive_loop_shape_invalid");
+        }
+        return Ok(None);
+    }
+    let Some(length_beats) = loop_state.length_beats else {
+        return Err("active_loop_length_missing");
+    };
+    // Protocol validation has already checked the measured span; only the
+    // three show-authored loop lengths are representable by the engine's
+    // absolute divisions.  Do not round or promote an approximate value.
+    if (length_beats - 8.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
+        Ok(Some(0))
+    } else if (length_beats - 4.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
+        Ok(Some(1))
+    } else if (length_beats - 2.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
+        Ok(Some(2))
+    } else {
+        Err("unsupported_loop_length_beats")
+    }
+}
+
+fn dj_link_payload_matches_runtime(
+    runtime: &DjLinkRuntime,
+    deck: u8,
+    deck_id: &str,
+    master_deck_revision: u64,
+    play_session_id: &str,
+) -> bool {
+    runtime.master
+        && runtime.track_active
+        && runtime.master_deck_number == Some(deck)
+        && runtime.master_deck.as_deref() == Some(deck_id)
+        && runtime.master_deck_revision == Some(master_deck_revision)
+        && runtime.play_session_id.as_deref() == Some(play_session_id)
+}
+
+fn dj_link_track_payload_is_current(payload: &protocol::DjLinkMasterTrackPayload) -> bool {
+    payload.is_playing
+        && payload.master
+        && !payload.play_session_id.trim().is_empty()
+        && !payload.deck_id.trim().is_empty()
+        && payload.master_deck_revision > 0
+        && payload.position_revision > 0
+}
+
+fn dj_link_estimated_position_ms(
+    payload: &protocol::DjLinkMasterTrackPayload,
+) -> Result<u64, &'static str> {
+    if !payload.position_at_send_sec.is_finite()
+        || !(0.0..=protocol::DJ_LINK_MAX_POSITION_AT_SEND_SEC)
+            .contains(&payload.position_at_send_sec)
+        || payload.sample_age_ms > protocol::DJ_LINK_MAX_SAMPLE_AGE_MS
+    {
+        return Err("invalid_master_track_position");
+    }
+    let base_ms = (payload.position_at_send_sec * 1_000.0).round();
+    if !base_ms.is_finite() || base_ms < 0.0 || base_ms > u64::MAX as f64 {
+        return Err("invalid_master_track_position");
+    }
+    (base_ms as u64)
+        .checked_add(payload.sample_age_ms)
+        .ok_or("invalid_master_track_position")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DjLinkPositionRevisionDisposition {
+    NewerOrNewSession,
+    ExactDuplicate,
+}
+
+/// A position revision is a single canonical wire position, not a last-write
+/// wins label.  Keep this check independent of engine state: engine-side
+/// clipping to a Timeline duration is not a proof that two wire samples were
+/// equal.
+fn dj_link_position_revision_disposition(
+    runtime: &DjLinkRuntime,
+    payload: &protocol::DjLinkMasterTrackPayload,
+    source_position_ms: u64,
+) -> Result<DjLinkPositionRevisionDisposition, &'static str> {
+    if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
+        return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
+    }
+    let Some(current_revision) = runtime.position_revision else {
+        return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
+    };
+    if payload.position_revision < current_revision {
+        return Err("stale_position_revision");
+    }
+    if payload.position_revision > current_revision {
+        return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
+    }
+    if runtime.source_position_ms == Some(source_position_ms) {
+        Ok(DjLinkPositionRevisionDisposition::ExactDuplicate)
+    } else {
+        Err("position_revision_conflict")
+    }
 }
 
 /// Canonical DJ Link authority callback used by the single Web Remote
@@ -1178,46 +1332,10 @@ fn dispatch_dj_link_event(
         Err(TryLockError::Poisoned(_)) => return dj_link_rejected("dj_link_runtime_poisoned", 0),
     };
     runtime.sync_project(&coordinator);
-    runtime.purge_dedupe(Instant::now());
     let current_generation = runtime.state_generation;
     let event_id = envelope.event_id.clone();
     let sequence = envelope.sequence;
     match envelope.message_type {
-        protocol::DjLinkMessageType::MasterChanged => {
-            let payload = match serde_json::from_value::<protocol::DjLinkMasterChangedPayload>(
-                envelope.payload,
-            ) {
-                Ok(payload) => payload,
-                Err(_) => {
-                    return dj_link_rejected("invalid_master_changed_payload", current_generation)
-                }
-            };
-            let next = match dj_link_next_generation(&runtime) {
-                Ok(next) => next,
-                Err(_) => {
-                    return dj_link_rejected("state_generation_exhausted", current_generation)
-                }
-            };
-            runtime.master_deck = payload.master_deck.or(payload.deck);
-            runtime.master = payload.master;
-            runtime.track_active = false;
-            runtime.playing = payload.playing;
-            runtime.track_playing = false;
-            runtime.track_content_id = None;
-            runtime.track_title = None;
-            runtime.track_artist = None;
-            runtime.track_deck_id = None;
-            runtime.track_started_at = None;
-            runtime.track_bpm = None;
-            runtime.position_sec = None;
-            runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
-            runtime.timeline_id = None;
-            runtime.position_bars = 0;
-            runtime.loop_active = false;
-            runtime.last_event_id = Some(envelope.event_id);
-            runtime.state_generation = next;
-            dj_link_accepted(next)
-        }
         protocol::DjLinkMessageType::MasterTrackActive => {
             let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
                 envelope.payload,
@@ -1227,24 +1345,44 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("invalid_master_track_payload", current_generation)
                 }
             };
-            if !payload.master
-                || !payload.playing
-                || !runtime.master
-                || runtime.master_deck.as_deref() != Some(payload.deck.as_str())
-            {
+            if !dj_link_track_payload_is_current(&payload) {
                 return dj_link_rejected("not_current_playing_master", current_generation);
             }
-            runtime.track_content_id = payload.content_id.clone();
-            runtime.track_title = payload.title.clone();
-            runtime.track_artist = payload.artist.clone();
-            runtime.track_deck_id = payload.deck_id.clone();
-            runtime.track_started_at = payload.started_at.clone();
-            runtime.track_playing = payload.playing;
-            runtime.track_bpm = payload.track_bpm;
-            runtime.position_sec = payload.position_sec;
+            if runtime.master_deck_revision.is_some()
+                && payload.master_deck_revision < runtime.master_deck_revision.unwrap_or_default()
+            {
+                return dj_link_rejected("stale_master_deck_revision", current_generation);
+            }
+            let same_master_deck_revision =
+                runtime.master_deck_revision == Some(payload.master_deck_revision);
+            if same_master_deck_revision && runtime.master_deck_number != Some(payload.deck) {
+                return dj_link_rejected("play_session_revision_mismatch", current_generation);
+            }
+            let position_ms = match dj_link_estimated_position_ms(&payload) {
+                Ok(position_ms) => position_ms,
+                Err(code) => return dj_link_rejected(code, current_generation),
+            };
             let Some(mapping) = dj_link_find_track_mapping(&runtime.mappings, &payload) else {
-                runtime.track_active = true;
-                runtime.last_event_id = Some(envelope.event_id);
+                // An unmapped ACTIVE is diagnostic input only.  It never
+                // replaces admitted track/session metadata and never inherits
+                // or releases another session's Timeline authority.
+                if runtime.track_active
+                    && runtime.play_session_id.is_some()
+                    && runtime.timeline_id.is_some()
+                {
+                    // A mapped play session owns this Timeline.  Reject the
+                    // foreign session in place without mutating or blocking
+                    // the owner, so its correlated SYNC and canonical RELEASE
+                    // keep converging.  The foreign session's own controls
+                    // still fail closed on correlation below.
+                    return DjLinkDispatchOutcome::NoMapping {
+                        state_generation: current_generation,
+                    };
+                }
+                // With no admitted session authority, retire all DJ mutation
+                // controls until a mapped ACTIVE receives a canonical START
+                // ACK; this is distinct from the RELEASE latch.
+                runtime.unmapped_active_blocked = true;
                 return DjLinkDispatchOutcome::NoMapping {
                     state_generation: current_generation,
                 };
@@ -1253,41 +1391,200 @@ fn dispatch_dj_link_event(
                 "{}:{}:{}",
                 runtime.project_epoch, mapping.id, payload.play_session_id
             );
-            if runtime.seen_play_sessions.contains_key(&dedupe_key) {
-                runtime.last_event_id = Some(envelope.event_id);
+            let different_play_session_at_same_master_revision = same_master_deck_revision
+                && runtime.play_session_id.is_some()
+                && runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str());
+            if different_play_session_at_same_master_revision
+                && (runtime.seen_play_sessions.contains_key(&dedupe_key) || !runtime.released)
+            {
+                // The DJ peer does not increment masterDeckRevision for every
+                // new play session. A distinct session can therefore replace
+                // a released owner at the same revision, but only once: an
+                // already-admitted old session, or an un-released owner,
+                // remains an explicit fail-closed replay/mismatch.
+                return dj_link_rejected("play_session_revision_mismatch", current_generation);
+            }
+            // An exact duplicate and a position conflict must be complete
+            // runtime no-ops, including the once-per-session ledger.
+            match dj_link_position_revision_disposition(&runtime, &payload, position_ms) {
+                Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
+                    return dj_link_accepted(current_generation)
+                }
+                Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
+                Err(code) => return dj_link_rejected(code, current_generation),
+            }
+            // ACTIVE is self-contained authority in v2.  It is deliberately
+            // not gated by a retired DJ_MASTER_CHANGED preamble.
+            let mut next_runtime = runtime.clone();
+            // Expiry is only a candidate for the next committed runtime. A
+            // capacity or engine failure below must not silently delete a
+            // receipt from the authoritative current runtime.
+            next_runtime.purge_dedupe(Instant::now());
+            next_runtime.master = true;
+            next_runtime.track_active = true;
+            next_runtime.playing = true;
+            next_runtime.master_deck = Some(payload.deck_id.clone());
+            next_runtime.master_deck_number = Some(payload.deck);
+            next_runtime.master_deck_revision = Some(payload.master_deck_revision);
+            next_runtime.track_content_id = payload.content_id.clone();
+            next_runtime.track_title = payload.title.clone();
+            next_runtime.track_artist = payload.artist.clone();
+            next_runtime.track_deck_id = Some(payload.deck_id.clone());
+            next_runtime.track_started_at = Some(payload.started_at.clone());
+            next_runtime.track_playing = payload.is_playing;
+            next_runtime.track_bpm = payload.track_bpm;
+            next_runtime.position_sec = Some(payload.position_at_send_sec);
+            next_runtime.source_position_ms = Some(position_ms);
+            next_runtime.position_revision = Some(payload.position_revision);
+            next_runtime.play_session_id = Some(payload.play_session_id.clone());
+            if next_runtime.seen_play_sessions.contains_key(&dedupe_key) {
+                if !runtime.released
+                    && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str())
+                    && payload.master_deck_revision
+                        > runtime.master_deck_revision.unwrap_or_default()
+                    && runtime.master_deck_number == Some(payload.deck)
+                    && runtime.master_deck.as_deref() == Some(payload.deck_id.as_str())
+                {
+                    // Rekordbox can briefly report this admitted session as
+                    // non-master and then restore it with a newer master
+                    // context revision. This is not a new track START. Keep
+                    // all engine/release/pedal/position authority intact and
+                    // refresh only the context needed by later SYNC/LOOP.
+                    runtime.master_deck_revision = Some(payload.master_deck_revision);
+                    runtime.last_event_id = Some(envelope.event_id);
+                }
+                // A released owner never receives the refresh above. After
+                // the canonical RELEASE ACK the session holds no Timeline
+                // authority, so its ACTIVE packets — including higher master
+                // context revisions — are exact full-state no-ops, exactly
+                // like any other dedupe hit below.
+                // Aside from the narrow master-context refresh above, a
+                // once-per-session dedupe hit is a complete runtime no-op
+                // even when the replay carries a newer wire position.
+                // Advancing `source_position_ms`/`position_revision` here has
+                // no acknowledged engine convergence behind it and would
+                // suppress the identical SYNC that must converge the Timeline
+                // next.  Leaving position identity untouched lets that SYNC
+                // dispatch and commit atomically with its engine ACK.
                 return dj_link_accepted(current_generation);
             }
-            if runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT {
+            if next_runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT {
                 return dj_link_rejected("play_session_capacity", current_generation);
             }
-            let next = match dj_link_next_generation(&runtime) {
+            let next = match dj_link_next_generation(&next_runtime) {
                 Ok(next) => next,
                 Err(_) => {
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            let snapshot =
-                match engine.dj_link_start_timeline_with_canonical_snapshot(mapping.timeline_id) {
-                    Ok(snapshot) => snapshot,
-                    Err(_) => {
-                        return dj_link_rejected("engine_publication_rejected", current_generation)
-                    }
-                };
-            runtime
+            let snapshot = match engine
+                .dj_link_start_timeline_at_with_canonical_snapshot(mapping.timeline_id, position_ms)
+            {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
+                }
+            };
+            next_runtime
                 .seen_play_sessions
-                .insert(dedupe_key, Instant::now());
-            runtime.master = true;
-            runtime.track_active = true;
-            runtime.playing = true;
-            runtime.released = false;
-            runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
-            runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
-            runtime.position_bars = 0;
-            runtime.loop_active = false;
-            runtime.last_event_id = Some(envelope.event_id);
-            runtime.state_generation = next;
+                .insert(dedupe_key.clone(), Instant::now());
+            next_runtime.active_dedupe_key = Some(dedupe_key);
+            next_runtime.master = true;
+            next_runtime.track_active = true;
+            next_runtime.playing = true;
+            // Only a newly mapped ACTIVE whose canonical START has ACKed may
+            // re-arm a timeline released to local/band operation.  Unmapped
+            // packets and same-session dedupe replays keep the latch intact.
+            next_runtime.released = false;
+            next_runtime.unmapped_active_blocked = false;
+            next_runtime.pedal_owner = Some("dj".to_string());
+            next_runtime.release_event_id = None;
+            next_runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+            next_runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
+            next_runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+            next_runtime.loop_active = false;
+            next_runtime.last_event_id = Some(envelope.event_id);
+            next_runtime.state_generation = next;
+            *runtime = next_runtime;
             DjLinkDispatchOutcome::TimelineState {
                 state_generation: next,
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
+            }
+        }
+        protocol::DjLinkMessageType::MasterTrackSync => {
+            let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected(
+                        "invalid_master_track_sync_payload",
+                        current_generation,
+                    )
+                }
+            };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if !payload.is_playing || !payload.master {
+                return dj_link_rejected("not_current_playing_master", current_generation);
+            }
+            if runtime.released {
+                return dj_link_rejected("dj_link_released", current_generation);
+            }
+            if !dj_link_payload_matches_runtime(
+                &runtime,
+                payload.deck,
+                &payload.deck_id,
+                payload.master_deck_revision,
+                &payload.play_session_id,
+            ) {
+                return dj_link_rejected("track_sync_context_mismatch", current_generation);
+            }
+            let position_ms = match dj_link_estimated_position_ms(&payload) {
+                Ok(position_ms) => position_ms,
+                Err(code) => return dj_link_rejected(code, current_generation),
+            };
+            match dj_link_position_revision_disposition(&runtime, &payload, position_ms) {
+                Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
+                Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
+                    return dj_link_accepted(current_generation)
+                }
+                Err(code) => return dj_link_rejected(code, current_generation),
+            }
+            let Some(timeline_id) = runtime
+                .timeline_id
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(TimelineId)
+            else {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            };
+            let snapshot = match engine
+                .dj_link_sync_timeline_position_with_canonical_snapshot(timeline_id, position_ms)
+            {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
+                }
+            };
+            // SYNC converges only the already-admitted v2 Timeline identity.
+            // It never performs another mapping lookup or retriggers START.
+            runtime.track_content_id = payload.content_id.clone();
+            runtime.track_title = payload.title.clone();
+            runtime.track_artist = payload.artist.clone();
+            runtime.track_bpm = payload.track_bpm;
+            runtime.track_playing = payload.is_playing;
+            runtime.position_sec = Some(payload.position_at_send_sec);
+            runtime.source_position_ms = Some(position_ms);
+            runtime.position_revision = Some(payload.position_revision);
+            runtime.track_started_at = Some(payload.started_at.clone());
+            runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+            runtime.last_event_id = Some(event_id.clone());
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: current_generation,
                 state: dj_link_timeline_state_from_snapshot(
                     &runtime, &snapshot, &event_id, sequence,
                 ),
@@ -1302,6 +1599,37 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("invalid_loop_state_payload", current_generation)
                 }
             };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if runtime.released {
+                return dj_link_rejected("dj_link_released", current_generation);
+            }
+            if payload.loop_state.validate().is_err() {
+                return dj_link_rejected("invalid_measured_loop", current_generation);
+            }
+            if !dj_link_payload_matches_runtime(
+                &runtime,
+                payload.deck,
+                &payload.deck_id,
+                payload.master_deck_revision,
+                &payload.play_session_id,
+            ) {
+                return dj_link_rejected("loop_context_mismatch", current_generation);
+            }
+            let division = match dj_link_measured_loop_division(&payload.loop_state) {
+                Ok(Some(division)) => division,
+                Ok(None) => match runtime.loop_division {
+                    Some(division) => division,
+                    None => {
+                        return dj_link_rejected(
+                            "inactive_loop_without_active_context",
+                            current_generation,
+                        )
+                    }
+                },
+                Err(code) => return dj_link_rejected(code, current_generation),
+            };
             let next = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
                 Err(_) => {
@@ -1309,21 +1637,52 @@ fn dispatch_dj_link_event(
                 }
             };
             if engine
-                .dj_link_set_timeline_loop_absolute(payload.division, payload.enabled)
+                .dj_link_set_timeline_loop_absolute(division, payload.loop_state.active)
                 .is_err()
             {
                 return dj_link_rejected("engine_publication_rejected", current_generation);
             }
-            runtime.loop_division = Some(payload.division);
-            runtime.released = !payload.enabled;
-            runtime.loop_active = payload.enabled;
+            runtime.loop_division = Some(division);
+            runtime.loop_active = payload.loop_state.active;
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
             dj_link_accepted(next)
         }
         protocol::DjLinkMessageType::Release => {
-            if serde_json::from_value::<protocol::DjLinkReleasePayload>(envelope.payload).is_err() {
-                return dj_link_rejected("invalid_release_payload", current_generation);
+            let payload =
+                match serde_json::from_value::<protocol::DjLinkReleasePayload>(envelope.payload) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return dj_link_rejected("invalid_release_payload", current_generation)
+                    }
+                };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if payload.state != "released"
+                || runtime.timeline_id.as_deref() != Some(payload.timeline_id.as_str())
+                || runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str())
+            {
+                return dj_link_rejected("release_context_mismatch", current_generation);
+            }
+            if runtime.released {
+                // Release fencing: the first canonical correlated RELEASE owns
+                // the immutable receipt identity.  An exact replay and a
+                // distinct later RELEASE both observe truthful
+                // already-released ownership without rerunning the engine
+                // release side effect or replacing `release_event_id`.
+                let Some(snapshot) = engine.try_snapshot() else {
+                    return DjLinkDispatchOutcome::Busy {
+                        code: "engine_snapshot_busy".to_string(),
+                        state_generation: current_generation,
+                    };
+                };
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: current_generation,
+                    state: dj_link_timeline_state_from_snapshot(
+                        &runtime, &snapshot, &event_id, sequence,
+                    ),
+                };
             }
             let next = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
@@ -1337,9 +1696,11 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("engine_publication_rejected", current_generation)
                 }
             };
-            runtime.released = false;
+            runtime.released = true;
             runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
             runtime.loop_active = false;
+            runtime.pedal_owner = Some("timeline".to_string());
+            runtime.release_event_id = Some(event_id.clone());
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
             DjLinkDispatchOutcome::TimelineState {
@@ -1358,55 +1719,30 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("invalid_state_sync_payload", current_generation)
                 }
             };
-            // Stage the diagnostic image first. A StateSync is allowed to
-            // converge an explicit loop division only while the peer reports
-            // an active loop; released=true is observational and must never
-            // synthesize a RELEASE engine command. Nothing is committed to
-            // runtime diagnostics until the optional canonical engine ACK is
-            // definitive.
-            let mut next_runtime = runtime.clone();
-            next_runtime.master_deck = payload.master_deck.clone();
-            next_runtime.master = next_runtime.master_deck.is_some();
-            next_runtime.released = payload.released;
-            if let Some(track) = payload.master_track.as_ref() {
-                next_runtime.track_active = true;
-                next_runtime.playing = track.playing;
-                next_runtime.track_playing = track.playing;
-                next_runtime.track_content_id = track.content_id.clone();
-                next_runtime.track_title = track.title.clone();
-                next_runtime.track_artist = track.artist.clone();
-                next_runtime.track_bpm = track.track_bpm;
-                next_runtime.position_sec = track.position_sec;
-                next_runtime.track_started_at = track.started_at.clone();
-                next_runtime.track_deck_id = track.deck_id.clone();
-            } else {
-                next_runtime.track_active = false;
-                next_runtime.playing = false;
-                next_runtime.track_playing = false;
-                next_runtime.track_content_id = None;
-                next_runtime.track_title = None;
-                next_runtime.track_artist = None;
-                next_runtime.track_deck_id = None;
-                next_runtime.track_started_at = None;
-                next_runtime.track_bpm = None;
-                next_runtime.position_sec = None;
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
             }
-            if let Some(division) = payload.loop_division {
-                next_runtime.loop_division = Some(division);
-                if !payload.released
-                    && engine
-                        .dj_link_set_timeline_loop_absolute(division, true)
-                        .is_err()
-                {
-                    return dj_link_rejected("engine_publication_rejected", current_generation);
+            // StateSync is intentionally diagnostic-only.  It may prove that
+            // the peer's view differs, but it never starts, releases, or
+            // modifies an engine loop and cannot replace an ACTIVE authority.
+            if let Some(master_deck) = payload.master_deck {
+                if runtime.master_deck_number != Some(master_deck) {
+                    return dj_link_rejected(
+                        "state_sync_master_context_mismatch",
+                        current_generation,
+                    );
                 }
-                next_runtime.loop_active = !payload.released;
-            } else if payload.released {
-                next_runtime.loop_active = false;
             }
-            next_runtime.last_event_id = Some(envelope.event_id);
-            *runtime = next_runtime;
-            dj_link_accepted(runtime.state_generation)
+            if let Some(play_session_id) = payload.active_play_session_id.as_deref() {
+                if runtime.play_session_id.as_deref() != Some(play_session_id) {
+                    return dj_link_rejected(
+                        "state_sync_play_session_mismatch",
+                        current_generation,
+                    );
+                }
+            }
+            runtime.last_event_id = Some(envelope.event_id);
+            dj_link_accepted(current_generation)
         }
         protocol::DjLinkMessageType::TimelineStateRequest => {
             let Some(snapshot) = engine.try_snapshot() else {
@@ -1434,11 +1770,20 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if runtime.released {
+                return dj_link_rejected("dj_link_released", current_generation);
+            }
             let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
                 return dj_link_rejected("timeline_not_active", current_generation);
             };
             if current_timeline_id != payload.timeline_id {
                 return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            }
+            if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
+                return dj_link_rejected("timeline_play_session_mismatch", current_generation);
             }
             let Ok(timeline_id) = payload.timeline_id.parse::<u64>() else {
                 return dj_link_rejected("invalid_timeline_id", current_generation);
@@ -1480,11 +1825,20 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if runtime.released {
+                return dj_link_rejected("dj_link_released", current_generation);
+            }
             let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
                 return dj_link_rejected("timeline_not_active", current_generation);
             };
             if current_timeline_id != payload.timeline_id {
                 return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            }
+            if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
+                return dj_link_rejected("timeline_play_session_mismatch", current_generation);
             }
             let division = runtime.loop_division.unwrap_or(0);
             let snapshot = match engine.dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
@@ -1620,6 +1974,12 @@ struct AppState {
     live_audio_input_lifecycle: Mutex<()>,
     live_audio_input_devices: Mutex<LiveAudioInputDeviceCatalog>,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
+    /// Durable machine storage for the explicit ABI v2 ASIO selection. The
+    /// path is installed once during setup; the selection and its stale-lock
+    /// status are restored at startup and rewritten after every successful
+    /// native ASIO open.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_input_selection: Mutex<AsioInputSelectionState>,
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
     video_recording: Mutex<VideoRecordingRuntime>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
@@ -2653,11 +3013,71 @@ struct VideoClipSlotReorderRequest {
     slot_ids: Vec<VideoClipSlotId>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CueListReorderRequest {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthoritativeCueListCreateRequest {
+    label: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthoritativeCueListReorderRequest {
     /// The complete desired order. Every visible Bank is included exactly
     /// once; ID 1 has no special position or deletion privilege here.
     cue_list_ids: Vec<protocol::CueListId>,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthoritativeCueListRenameRequest {
+    cue_list_id: protocol::CueListId,
+    label: String,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthoritativeCueListDeleteRequest {
+    cue_list_id: protocol::CueListId,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetFixtureTransformRequest {
+    fixture_id: FixtureId,
+    position: Vec3,
+    rotation: Rotation3,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MoveCueBetweenSceneBanksBatchRequest {
+    cue_id: CueId,
+    target_cue_list_id: protocol::CueListId,
+    target_group_id: Option<String>,
+    target_cue_id: Option<CueId>,
+    position: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15131,6 +15551,10 @@ struct LiveAudioInputStatus {
     queue_capacity: usize,
     queue_depth_high_water: usize,
     last_error: Option<String>,
+    /// Machine-persisted ASIO selection restored at startup and its stale-lock
+    /// verdict; `None` on non-ASIO builds and before startup restoration.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_selection: Option<AsioPersistedSelectionStatus>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Default, PartialEq)]
@@ -15231,11 +15655,22 @@ const _: [(); audio::live_features::MAX_LIVE_AUDIO_BANDS] =
 static NEXT_LIVE_AUDIO_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 fn allocate_live_audio_generation() -> Result<u64, String> {
-    let generation = NEXT_LIVE_AUDIO_GENERATION.fetch_add(1, Ordering::Relaxed);
-    if generation == 0 {
-        Err("Live audio input generation counter was exhausted".to_string())
-    } else {
-        Ok(generation)
+    allocate_live_audio_generation_from(&NEXT_LIVE_AUDIO_GENERATION)
+}
+
+/// Checked generation allocation: overflow must reject without ever
+/// publishing identity 0 or reusing an identity a retired stream still
+/// references, so this CAS loop refuses to wrap.
+fn allocate_live_audio_generation_from(cell: &AtomicU64) -> Result<u64, String> {
+    let mut observed = cell.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = observed.checked_add(1) else {
+            return Err("Live audio input generation counter was exhausted".to_string());
+        };
+        match cell.compare_exchange_weak(observed, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(next),
+            Err(seen) => observed = seen,
+        }
     }
 }
 
@@ -15307,8 +15742,8 @@ impl LiveAudioChannelMix {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct LiveAudioInputStartRequest {
     backend: LiveAudioInputBackend,
     device_id: Option<String>,
@@ -15319,10 +15754,9 @@ struct LiveAudioInputStartRequest {
     channel_mix: LiveAudioChannelMix,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum LiveAudioInputBackend {
-    #[default]
     WasapiShared,
     Asio,
 }
@@ -15347,7 +15781,7 @@ struct LiveAudioInputDeviceSummary {
 #[derive(Clone)]
 enum LiveAudioInputDevice {
     Wasapi(rodio::cpal::Device),
-    #[cfg(all(target_os = "windows", feature = "asio"))]
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     Asio(AsioBridgeDevice),
 }
 
@@ -15355,336 +15789,16 @@ impl LiveAudioInputDevice {
     fn backend(&self) -> LiveAudioInputBackend {
         match self {
             Self::Wasapi(_) => LiveAudioInputBackend::WasapiShared,
-            #[cfg(all(target_os = "windows", feature = "asio"))]
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             Self::Asio(_) => LiveAudioInputBackend::Asio,
         }
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
-const SYNDOCAL_ASIO_ABI_VERSION: u32 = 1;
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 #[derive(Debug, Clone)]
 struct AsioBridgeDevice {
     driver_id: String,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Clone, Deserialize)]
-struct AsioBridgeDriver {
-    #[serde(alias = "driver_id")]
-    id: String,
-    name: String,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AsioBridgeBufferRange {
-    min: u32,
-    max: u32,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AsioBridgeDriverDetails {
-    id: String,
-    name: String,
-    input_channels: u16,
-    sample_formats: Vec<String>,
-    sample_rates_hz: Vec<u32>,
-    buffer_frames: AsioBridgeBufferRange,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AsioBridgeInputConfig {
-    channels: u16,
-    sample_format: String,
-    sample_rate_hz: u32,
-    buffer_frames: AsioBridgeBufferRange,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AsioBridgeCapabilities {
-    abi_version: u32,
-    backend: String,
-    built: bool,
-    driver: AsioBridgeDriverDetails,
-    input_configs: Vec<AsioBridgeInputConfig>,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AsioBridgeDriverCatalog {
-    Drivers(Vec<AsioBridgeDriver>),
-    Wrapped { drivers: Vec<AsioBridgeDriver> },
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AsioBridgeString {
-    ptr: *mut u8,
-    len: usize,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-impl Default for AsioBridgeString {
-    fn default() -> Self {
-        Self {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-        }
-    }
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioAbiVersionFn = unsafe extern "C" fn() -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioBuildFlagsFn = unsafe extern "C" fn() -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioDriversJsonFn = unsafe extern "C" fn(*mut AsioBridgeString, *mut AsioBridgeString) -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioCapabilitiesJsonFn =
-    unsafe extern "C" fn(*const u8, usize, *mut AsioBridgeString, *mut AsioBridgeString) -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioStringFreeFn = unsafe extern "C" fn(AsioBridgeString);
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AsioBridgeChannelMix {
-    channel_index: u32,
-    gain: f32,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[repr(C)]
-struct AsioBridgeStartConfig {
-    struct_size: u32,
-    abi_version: u32,
-    driver_id: *const u8,
-    driver_id_len: usize,
-    sample_rate_hz: u32,
-    input_channels: u32,
-    sample_format: u32,
-    fixed_buffer_frames: u32,
-    channel_mix: *const AsioBridgeChannelMix,
-    channel_mix_len: usize,
-    flags: u32,
-    reserved: u32,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioSampleCallback = unsafe extern "C" fn(*mut std::ffi::c_void, *const f32, usize, u64, u32);
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioEventCallback = unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32, *const u8, usize);
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioStartFn = unsafe extern "C" fn(
-    *const AsioBridgeStartConfig,
-    AsioSampleCallback,
-    AsioEventCallback,
-    *mut std::ffi::c_void,
-    *mut *mut std::ffi::c_void,
-    *mut AsioBridgeString,
-) -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioActualBufferFramesFn = unsafe extern "C" fn(*const std::ffi::c_void, *mut u32) -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioStopFn = unsafe extern "C" fn(*mut std::ffi::c_void, *mut AsioBridgeString) -> u32;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioXrunCountFn = unsafe extern "C" fn(*const std::ffi::c_void) -> u64;
-#[cfg(all(target_os = "windows", feature = "asio"))]
-type AsioFreeFn = unsafe extern "C" fn(*mut std::ffi::c_void);
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-#[derive(Clone, Copy)]
-struct AsioBridgeApi {
-    build_flags: AsioBuildFlagsFn,
-    drivers_json: AsioDriversJsonFn,
-    capabilities_json: AsioCapabilitiesJsonFn,
-    string_free: AsioStringFreeFn,
-    start: AsioStartFn,
-    actual_buffer_frames: AsioActualBufferFramesFn,
-    stop: AsioStopFn,
-    xrun_count: AsioXrunCountFn,
-    free: AsioFreeFn,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-struct AsioBridgeLibrary {
-    _library: libloading::Library,
-    api: AsioBridgeApi,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-impl AsioBridgeLibrary {
-    fn candidate_path() -> Result<PathBuf, String> {
-        if let Some(path) = std::env::var_os("SYNDOCAL_ASIO_BRIDGE_PATH") {
-            let path = PathBuf::from(path);
-            if !path.is_file() {
-                return Err(format!(
-                    "SYNDOCAL_ASIO_BRIDGE_PATH does not name a bridge DLL: {}",
-                    path.display()
-                ));
-            }
-            return Ok(path);
-        }
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("Failed to locate the Syndocal executable: {error}"))?;
-        let directory = executable
-            .parent()
-            .ok_or_else(|| "Syndocal executable has no parent directory".to_string())?;
-        [
-            directory.join("syndocal_asio_bridge.dll"),
-            directory.join("syndocal-asio-bridge.dll"),
-        ]
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!(
-                "ASIO bridge DLL is not installed beside Syndocal ({})",
-                directory.display()
-            )
-        })
-    }
-
-    fn load() -> Result<Self, String> {
-        let path = Self::candidate_path()?;
-        let library = unsafe { libloading::Library::new(&path) }
-            .map_err(|error| format!("Failed to load ASIO bridge {}: {error}", path.display()))?;
-        unsafe fn load_symbol<T: Copy>(
-            library: &libloading::Library,
-            symbol: &'static [u8],
-        ) -> Result<T, String> {
-            let loaded = unsafe { library.get::<T>(symbol) }.map_err(|error| {
-                format!(
-                    "ASIO bridge is missing {}: {error}",
-                    String::from_utf8_lossy(symbol).trim_end_matches('\0')
-                )
-            })?;
-            Ok(*loaded)
-        }
-        let abi_version =
-            unsafe { load_symbol::<AsioAbiVersionFn>(&library, b"syndocal_asio_abi_version\0")? };
-        let actual_abi = unsafe { abi_version() };
-        if actual_abi != SYNDOCAL_ASIO_ABI_VERSION {
-            return Err(format!(
-                "ASIO bridge ABI mismatch: Syndocal requires {}, bridge reports {actual_abi}",
-                SYNDOCAL_ASIO_ABI_VERSION
-            ));
-        }
-        let api = AsioBridgeApi {
-            build_flags: unsafe { load_symbol(&library, b"syndocal_asio_build_flags\0")? },
-            drivers_json: unsafe { load_symbol(&library, b"syndocal_asio_drivers_json\0")? },
-            capabilities_json: unsafe {
-                load_symbol(&library, b"syndocal_asio_capabilities_json\0")?
-            },
-            string_free: unsafe { load_symbol(&library, b"syndocal_asio_string_free\0")? },
-            start: unsafe { load_symbol(&library, b"syndocal_asio_start\0")? },
-            actual_buffer_frames: unsafe {
-                load_symbol(&library, b"syndocal_asio_actual_buffer_frames\0")?
-            },
-            stop: unsafe { load_symbol(&library, b"syndocal_asio_stop\0")? },
-            xrun_count: unsafe { load_symbol(&library, b"syndocal_asio_xrun_count\0")? },
-            free: unsafe { load_symbol(&library, b"syndocal_asio_free\0")? },
-        };
-        Ok(Self {
-            _library: library,
-            api,
-        })
-    }
-
-    fn take_string(&self, value: AsioBridgeString) -> String {
-        if value.ptr.is_null() || value.len == 0 {
-            if !value.ptr.is_null() {
-                unsafe { (self.api.string_free)(value) };
-            }
-            return String::new();
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(value.ptr.cast_const(), value.len) };
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        unsafe { (self.api.string_free)(value) };
-        text
-    }
-
-    fn asio_compiled(&self) -> bool {
-        unsafe { (self.api.build_flags)() & 0x1 != 0 }
-    }
-
-    fn result_json(
-        &self,
-        operation: &str,
-        status: u32,
-        output: AsioBridgeString,
-        error: AsioBridgeString,
-    ) -> Result<String, String> {
-        let output = self.take_string(output);
-        let error = self.take_string(error);
-        if status != 0 {
-            let detail = if error.trim().is_empty() {
-                format!("bridge status {status}")
-            } else {
-                error
-            };
-            return Err(format!("ASIO {operation} failed: {detail}"));
-        }
-        if output.trim().is_empty() {
-            return Err(format!("ASIO {operation} returned an empty response"));
-        }
-        Ok(output)
-    }
-
-    fn drivers(&self) -> Result<Vec<AsioBridgeDriver>, String> {
-        if !self.asio_compiled() {
-            return Err("ASIO bridge DLL was built without ASIO support".to_string());
-        }
-        let mut output = AsioBridgeString::default();
-        let mut error = AsioBridgeString::default();
-        let status = unsafe { (self.api.drivers_json)(&mut output, &mut error) };
-        let payload = self.result_json("driver enumeration", status, output, error)?;
-        let catalog: AsioBridgeDriverCatalog = serde_json::from_str(&payload)
-            .map_err(|error| format!("ASIO driver catalog was invalid: {error}"))?;
-        let drivers = match catalog {
-            AsioBridgeDriverCatalog::Drivers(drivers)
-            | AsioBridgeDriverCatalog::Wrapped { drivers } => drivers,
-        };
-        if drivers
-            .iter()
-            .any(|driver| !driver.id.starts_with("asio:") || driver.name.trim().is_empty())
-        {
-            return Err("ASIO bridge returned a malformed or non-ASIO driver identity".to_string());
-        }
-        let mut identities = HashSet::new();
-        if !drivers
-            .iter()
-            .all(|driver| identities.insert(driver.id.clone()))
-        {
-            return Err("ASIO bridge returned duplicate driver identities".to_string());
-        }
-        Ok(drivers)
-    }
-
-    fn capabilities_json(&self, driver_id: &str) -> Result<String, String> {
-        let mut output = AsioBridgeString::default();
-        let mut error = AsioBridgeString::default();
-        let status = unsafe {
-            (self.api.capabilities_json)(
-                driver_id.as_ptr(),
-                driver_id.len(),
-                &mut output,
-                &mut error,
-            )
-        };
-        self.result_json("capability query", status, output, error)
-    }
 }
 
 #[derive(Clone)]
@@ -15969,9 +16083,9 @@ enum LiveAudioCaptureStream {
     Wasapi {
         _stream: rodio::cpal::Stream,
     },
-    #[cfg(all(target_os = "windows", feature = "asio"))]
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     Asio {
-        _stream: AsioBridgeCapture,
+        _session: asio_bridge_v2::AsioStreamSession<asio_bridge_v2::VtableTransport>,
     },
 }
 
@@ -15988,10 +16102,28 @@ struct LiveAudioInput {
     engine: EngineHandle,
 }
 
+/// Drops the capture stream, explicitly stopping and closing an ABI v2 ASIO
+/// session so its raw bridge handle is released exactly once. Returns the
+/// visible close failure, if any; the handle is consumed regardless.
+fn close_live_audio_capture_stream(stream: Option<LiveAudioCaptureStream>) -> Option<String> {
+    match stream {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        Some(LiveAudioCaptureStream::Asio { _session }) => {
+            // Close owns the raw bridge handle even on failure; the operator
+            // must explicitly start again either way.
+            teardown_asio_v2_stream(_session).err()
+        }
+        other => {
+            drop(other);
+            None
+        }
+    }
+}
+
 impl Drop for LiveAudioInput {
     fn drop(&mut self) {
         self.safety.mark_terminal_fault();
-        self.stream.take();
+        let stream_close_failure = close_live_audio_capture_stream(self.stream.take());
         self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.as_ref() {
             worker.thread().unpark();
@@ -16029,8 +16161,10 @@ impl Drop for LiveAudioInput {
             status.bpm_confidence = 0.0;
             status.beat_phase = 0.0;
             status.feature_sequence = 0;
-            status.last_error = clear_pending.then(|| {
-                "Live audio stopped, but the engine safety clear is still pending".to_string()
+            status.last_error = stream_close_failure.or_else(|| {
+                clear_pending.then(|| {
+                    "Live audio stopped, but the engine safety clear is still pending".to_string()
+                })
             });
         }
     }
@@ -19636,11 +19770,10 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetCuePaletteTargets { .. }
         | EngineCommand::MoveCue { .. }
         | EngineCommand::DuplicateCue { .. }
-        | EngineCommand::UpsertCueList { .. }
+        | EngineCommand::CreateCueListPublished { .. }
+        | EngineCommand::RenameCueListPublished { .. }
         | EngineCommand::ReorderCueListsPublished { .. }
         | EngineCommand::DeleteCueListPublished { .. }
-        | EngineCommand::RemoveCueList(..)
-        | EngineCommand::SetCueList { .. }
         | EngineCommand::UpsertPlaybackExecutor(..)
         | EngineCommand::RemovePlaybackExecutor(..)
         | EngineCommand::SetPlaybackExecutorLevel { .. }
@@ -19699,6 +19832,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetTimelinePlaying(..)
         | EngineCommand::StartTimeline { .. }
         | EngineCommand::DjLinkStartTimeline { .. }
+        | EngineCommand::DjLinkSyncTimelinePosition { .. }
         | EngineCommand::SetTimelinePlayingPublished { .. }
         | EngineCommand::SeekTimeline(..)
         | EngineCommand::SetTimelineLoopEnabled(..)
@@ -23012,13 +23146,16 @@ fn set_group_park(
 fn set_fixture_transform(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    fixture_id: FixtureId,
-    position: Vec3,
-    rotation: Rotation3,
-    project_transaction_id: u64,
-    expected_epoch: u64,
-    owner_id: String,
+    request: SetFixtureTransformRequest,
 ) -> Result<(), String> {
+    let SetFixtureTransformRequest {
+        fixture_id,
+        position,
+        rotation,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    } = request;
     validate_fixture_transform(&position, &rotation)?;
     stage_project_transaction_unit_result(
         apply_stage_project_mutation_in_project_transaction(
@@ -23778,7 +23915,7 @@ fn connect_midi_control(
                     .map(|cue| cue.cue_list_id)
                 else {
                     eprintln!(
-                        "Ignoring MIDI Cue List Next: anchor Cue {anchor_cue_id} was not found"
+                        "Ignoring MIDI Bank Next: anchor Scene {anchor_cue_id} was not found"
                     );
                     return;
                 };
@@ -26668,11 +26805,11 @@ fn reorder_cue_lists_in_candidate(
     cue_list_ids: &[protocol::CueListId],
 ) -> Result<EngineSnapshot, String> {
     if cue_list_ids.is_empty() {
-        return Err("Cue List reorder must contain every Cue List".to_string());
+        return Err("Bank reorder must contain every Bank".to_string());
     }
     if cue_list_ids.len() != snapshot.cue_lists.len() {
         return Err(format!(
-            "Cue List reorder must contain all {} Cue Lists exactly once",
+            "Bank reorder must contain all {} Banks exactly once",
             snapshot.cue_lists.len()
         ));
     }
@@ -26685,18 +26822,16 @@ fn reorder_cue_lists_in_candidate(
     let mut reordered = Vec::with_capacity(cue_list_ids.len());
     for cue_list_id in cue_list_ids {
         if !seen.insert(*cue_list_id) {
-            return Err(format!(
-                "Cue List reorder contains duplicate ID {cue_list_id}"
-            ));
+            return Err(format!("Bank reorder contains duplicate ID {cue_list_id}"));
         }
         reordered.push(
             by_id
                 .remove(cue_list_id)
-                .ok_or_else(|| format!("Cue List {cue_list_id} was not found"))?,
+                .ok_or_else(|| format!("Bank {cue_list_id} was not found"))?,
         );
     }
     if !by_id.is_empty() {
-        return Err("Cue List reorder omitted an existing Cue List".to_string());
+        return Err("Bank reorder omitted an existing Bank".to_string());
     }
     snapshot.cue_lists = reordered;
     Ok(snapshot)
@@ -26707,14 +26842,14 @@ fn delete_cue_list_in_candidate(
     cue_list_id: protocol::CueListId,
 ) -> Result<EngineSnapshot, String> {
     if snapshot.cue_lists.len() <= 1 {
-        return Err("At least one Cue List must remain".to_string());
+        return Err("At least one Bank must remain".to_string());
     }
     if !snapshot
         .cue_lists
         .iter()
         .any(|cue_list| cue_list.id == cue_list_id)
     {
-        return Err(format!("Cue List {cue_list_id} was not found"));
+        return Err(format!("Bank {cue_list_id} was not found"));
     }
     let removed_cue_ids = snapshot
         .cues
@@ -26779,7 +26914,7 @@ fn add_empty_cue_in_candidate(
         .iter()
         .any(|cue_list| cue_list.id == cue_list_id)
     {
-        return Err(format!("Cue List {cue_list_id} was not found"));
+        return Err(format!("Bank {cue_list_id} was not found"));
     }
     if snapshot.cues.iter().any(|cue| cue.id == cue_id) {
         return Err(format!("Cue {cue_id} already exists"));
@@ -26794,12 +26929,93 @@ fn add_empty_cue_in_candidate(
     Ok(snapshot)
 }
 
+/// Thin adapter over the engine's single authoritative Bank label policy.
+/// The exact submitted string is validated and later stored verbatim: no
+/// trim, truncation, case folding, or normalization is applied here or in the
+/// engine. See `engine::validate_cue_list_label` for the accepted alphabet,
+/// the 64-scalar bound, and the Unicode equivalence/case policy.
+fn validate_cue_list_label(label: &str) -> Result<String, String> {
+    validate_engine_cue_list_label(label)?;
+    Ok(label.to_string())
+}
+
+fn ensure_cue_list_label_available(
+    snapshot: &EngineSnapshot,
+    cue_list_id: Option<protocol::CueListId>,
+    label: &str,
+) -> Result<(), String> {
+    if snapshot.cue_lists.iter().any(|cue_list| {
+        Some(cue_list.id) != cue_list_id && engine::cue_list_labels_collide(label, &cue_list.label)
+    }) {
+        return Err(format!("Bank name '{label}' is already in use"));
+    }
+    Ok(())
+}
+
+/// Candidates stage the exact image the engine will publish, so they accept
+/// only the already-validated exact string produced by
+/// `engine::validate_cue_list_label`. Unvalidated input fails closed here
+/// instead of being silently rewritten; this re-check keeps candidate and
+/// engine verdicts identical by construction.
+fn ensure_normalized_cue_list_label(label: &str) -> Result<(), String> {
+    engine::validate_cue_list_label(label)
+}
+
+fn create_cue_list_in_candidate(
+    mut snapshot: EngineSnapshot,
+    cue_list_id: protocol::CueListId,
+    label: &str,
+) -> Result<EngineSnapshot, String> {
+    if cue_list_id == 0 {
+        return Err("Bank ID must be greater than zero".to_string());
+    }
+    ensure_normalized_cue_list_label(label)?;
+    if snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Bank {cue_list_id} already exists"));
+    }
+    ensure_cue_list_label_available(&snapshot, None, label)?;
+    snapshot.cue_lists.push(protocol::CueListSummary {
+        id: cue_list_id,
+        label: label.to_string(),
+        active_cue_id: None,
+    });
+    Ok(snapshot)
+}
+
+fn rename_cue_list_in_candidate(
+    mut snapshot: EngineSnapshot,
+    cue_list_id: protocol::CueListId,
+    label: &str,
+) -> Result<EngineSnapshot, String> {
+    ensure_normalized_cue_list_label(label)?;
+    if !snapshot
+        .cue_lists
+        .iter()
+        .any(|cue_list| cue_list.id == cue_list_id)
+    {
+        return Err(format!("Bank {cue_list_id} was not found"));
+    }
+    ensure_cue_list_label_available(&snapshot, Some(cue_list_id), label)?;
+    if let Some(cue_list) = snapshot
+        .cue_lists
+        .iter_mut()
+        .find(|cue_list| cue_list.id == cue_list_id)
+    {
+        cue_list.label = label.to_string();
+    }
+    Ok(snapshot)
+}
+
 fn commit_authoritative_cue_list_reorder(
     state: &AppState,
     expected_epoch: u64,
     owner_id: &str,
     expected_authority: &MediaAssetPrepareAuthority,
-    request: &CueListReorderRequest,
+    cue_list_ids: &[protocol::CueListId],
 ) -> Result<ProjectHistoryMutationResult, String> {
     let (_external_admission, mut coordinator) = (
         lock_project_external_command_admission(state)?,
@@ -26813,7 +27029,7 @@ fn commit_authoritative_cue_list_reorder(
         expected_authority,
     )?;
     if state.project_transaction_active.load(Ordering::Acquire) {
-        return Err("Project transaction is active; retry the Cue List reorder".to_string());
+        return Err("Project transaction is active; retry the Bank reorder".to_string());
     }
 
     let before_snapshot = state.engine.persistence_snapshot()?;
@@ -26826,8 +27042,7 @@ fn commit_authoritative_cue_list_reorder(
         epoch: coordinator.epoch,
         revision: coordinator.revision,
     };
-    let candidate_snapshot =
-        reorder_cue_lists_in_candidate(before_snapshot, &request.cue_list_ids)?;
+    let candidate_snapshot = reorder_cue_lists_in_candidate(before_snapshot, cue_list_ids)?;
     let after_project =
         project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
     let after = ProjectCheckpoint {
@@ -26839,7 +27054,7 @@ fn commit_authoritative_cue_list_reorder(
     };
     let plan = prepare_internal_media_asset_commit(
         &coordinator,
-        "Reorder Cue Lists",
+        "Reorder Banks",
         "cue-lists-order",
         before,
         after,
@@ -26852,7 +27067,7 @@ fn commit_authoritative_cue_list_reorder(
         || {
             state
                 .engine
-                .reorder_cue_lists_published(request.cue_list_ids.clone())
+                .reorder_cue_lists_published(cue_list_ids.to_vec())
         },
     )?;
     Ok(ProjectHistoryMutationResult {
@@ -26880,7 +27095,7 @@ fn commit_authoritative_cue_list_delete(
         expected_authority,
     )?;
     if state.project_transaction_active.load(Ordering::Acquire) {
-        return Err("Project transaction is active; retry the Cue List delete".to_string());
+        return Err("Project transaction is active; retry the Bank delete".to_string());
     }
 
     let before_snapshot = state.engine.persistence_snapshot()?;
@@ -26905,7 +27120,7 @@ fn commit_authoritative_cue_list_delete(
     };
     let plan = prepare_internal_media_asset_commit(
         &coordinator,
-        "Delete Cue List",
+        "Delete Bank",
         "cue-lists-delete",
         before,
         after,
@@ -27002,6 +27217,205 @@ fn commit_authoritative_empty_cue(
     })
 }
 
+const CUE_LIST_CREATE_HISTORY_LABEL: &str = "Create Bank";
+const CUE_LIST_RENAME_HISTORY_LABEL: &str = "Rename Bank";
+const CUE_LIST_RENAME_COALESCE_KEY_PREFIX: &str = "cue-lists-rename";
+
+/// The exact per-Bank rename undo identity. Two renames of DIFFERENT Banks
+/// never coalesce; rapid renames of the SAME Bank within the history window
+/// collapse into one Undo step.
+fn cue_list_rename_coalesce_key(cue_list_id: protocol::CueListId) -> String {
+    format!("{CUE_LIST_RENAME_COALESCE_KEY_PREFIX}:{cue_list_id}")
+}
+
+/// Authoritative Bank create result: the same complete mutation receipt the
+/// reorder/delete commands return, plus the allocated Bank ID. The ID is the
+/// allocation that the acknowledged engine publication committed; no second
+/// unsynchronized snapshot read is required.
+#[derive(Debug, Clone, Serialize)]
+struct CueListMutationReceipt {
+    #[serde(flatten)]
+    mutation: ProjectHistoryMutationResult,
+    cue_list_id: protocol::CueListId,
+}
+
+fn commit_authoritative_cue_list_create(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    label: &str,
+) -> Result<CueListMutationReceipt, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the Bank create".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    // Allocate only inside the fenced window and reclaim the tail on every
+    // pre-publication failure so a rejected create cannot leak an identity
+    // while concurrent reservations stay monotonic.
+    let cue_list_id = state.engine.allocate_cue_list_id();
+    let candidate_snapshot = match create_cue_list_in_candidate(before_snapshot, cue_list_id, label)
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let _ = state.engine.release_cue_list_id_if_last(cue_list_id);
+            return Err(error);
+        }
+    };
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    // Bank creates NEVER coalesce: each create is its own Undo step, so a
+    // rapid burst of creates is fully reversible one step at a time.
+    let plan = match prepare_internal_media_asset_commit(
+        &coordinator,
+        CUE_LIST_CREATE_HISTORY_LABEL,
+        "",
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = state.engine.release_cue_list_id_if_last(cue_list_id);
+            return Err(error);
+        }
+    };
+    if let Err(publication_error) =
+        run_admitted_internal_media_asset_transaction_with_publication_outcome(
+            &state.project_external_command_admission,
+            &state.project_transaction_active,
+            &mut coordinator,
+            plan,
+            || {
+                state
+                    .engine
+                    .create_cue_list_published(cue_list_id, label.to_string())
+            },
+        )
+    {
+        match publication_error {
+            AdmittedPublicationError::Definitive(error) => {
+                // Nothing was published; the tail reservation is reclaimable.
+                let _ = state.engine.release_cue_list_id_if_last(cue_list_id);
+                return Err(error);
+            }
+            AdmittedPublicationError::Indeterminate(error) => {
+                // The engine may have applied and published B. The ID stays
+                // reserved (no ABA reuse) and the global mutation fence is
+                // already armed by the runner.
+                return Err(error);
+            }
+        }
+    }
+    Ok(CueListMutationReceipt {
+        mutation: ProjectHistoryMutationResult {
+            history_status: project_history_status_for_coordinator(&coordinator),
+            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+        },
+        cue_list_id,
+    })
+}
+
+fn commit_authoritative_cue_list_rename(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    cue_list_id: protocol::CueListId,
+    label: &str,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err("Project transaction is active; retry the Bank rename".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let candidate_snapshot = rename_cue_list_in_candidate(before_snapshot, cue_list_id, label)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        CUE_LIST_RENAME_HISTORY_LABEL,
+        &cue_list_rename_coalesce_key(cue_list_id),
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    if let Err(publication_error) =
+        run_admitted_internal_media_asset_transaction_with_publication_outcome(
+            &state.project_external_command_admission,
+            &state.project_transaction_active,
+            &mut coordinator,
+            plan,
+            || {
+                state
+                    .engine
+                    .rename_cue_list_published(cue_list_id, label.to_string())
+            },
+        )
+    {
+        return Err(publication_error.into_message());
+    }
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    })
+}
+
 #[tauri::command]
 fn create_empty_cue(
     state: State<'_, AppState>,
@@ -27052,7 +27466,7 @@ fn create_cue_from_current(
         .iter()
         .any(|cue_list| cue_list.id == cue_list_id)
     {
-        return Err(format!("Cue List {cue_list_id} was not found"));
+        return Err(format!("Bank {cue_list_id} was not found"));
     }
     let scope = capture_scope.unwrap_or_default();
     let (targets, video_targets, video_output_targets, node_graph_targets, captured_effect_targets) =
@@ -27096,39 +27510,46 @@ fn create_cue_from_current(
 #[tauri::command]
 fn create_cue_list(
     state: State<'_, AppState>,
-    label: String,
-) -> Result<protocol::CueListId, String> {
-    let label = label.trim().to_string();
-    if label.is_empty() {
-        return Err("Cue List label is required".to_string());
-    }
-    if state
-        .engine
-        .snapshot()
-        .cue_lists
-        .iter()
-        .any(|cue_list| cue_list.label.trim().eq_ignore_ascii_case(&label))
-    {
-        return Err(format!("Cue List label '{label}' is already in use"));
-    }
-    let cue_list_id = state.engine.allocate_cue_list_id();
-    state
-        .engine
-        .send(EngineCommand::UpsertCueList { cue_list_id, label })
-        .map_err(|error| error.to_string())?;
-    Ok(cue_list_id)
+    window: WebviewWindow,
+    request: AuthoritativeCueListCreateRequest,
+) -> Result<CueListMutationReceipt, String> {
+    let AuthoritativeCueListCreateRequest {
+        label,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
+    let label = validate_cue_list_label(&label)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash,
+    };
+    commit_authoritative_cue_list_create(
+        &state,
+        expected_epoch,
+        &owner_id,
+        &expected_authority,
+        &label,
+    )
 }
 
 #[tauri::command]
 fn reorder_cue_lists(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    request: CueListReorderRequest,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: AuthoritativeCueListReorderRequest,
 ) -> Result<ProjectHistoryMutationResult, String> {
+    let AuthoritativeCueListReorderRequest {
+        cue_list_ids,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     let expected_authority = MediaAssetPrepareAuthority {
@@ -27141,7 +27562,7 @@ fn reorder_cue_lists(
         expected_epoch,
         &owner_id,
         &expected_authority,
-        &request,
+        &cue_list_ids,
     )
 }
 
@@ -27149,12 +27570,15 @@ fn reorder_cue_lists(
 fn delete_cue_list(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    cue_list_id: protocol::CueListId,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
+    request: AuthoritativeCueListDeleteRequest,
 ) -> Result<ProjectHistoryMutationResult, String> {
+    let AuthoritativeCueListDeleteRequest {
+        cue_list_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     let expected_authority = MediaAssetPrepareAuthority {
@@ -27406,7 +27830,7 @@ fn validate_playback_executor_request(
         .iter()
         .any(|cue_list| cue_list.id == cue_list_id)
     {
-        return Err(format!("Cue List {cue_list_id} was not found"));
+        return Err(format!("Bank {cue_list_id} was not found"));
     }
     if page == 0 || page > 99 || slot == 0 || slot > 16 {
         return Err("Playback Executor page must be 1-99 and slot must be 1-16".to_string());
@@ -27550,48 +27974,33 @@ fn trigger_playback_executor(
 #[tauri::command]
 fn rename_cue_list(
     state: State<'_, AppState>,
-    cue_list_id: protocol::CueListId,
-    label: String,
-) -> Result<(), String> {
-    let label = label.trim().to_string();
-    if label.is_empty() {
-        return Err("Cue List label is required".to_string());
-    }
-    if state.engine.snapshot().cue_lists.iter().any(|cue_list| {
-        cue_list.id != cue_list_id && cue_list.label.trim().eq_ignore_ascii_case(&label)
-    }) {
-        return Err(format!("Cue List label '{label}' is already in use"));
-    }
-    state
-        .engine
-        .send(EngineCommand::UpsertCueList { cue_list_id, label })
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn remove_cue_list(
-    state: State<'_, AppState>,
-    cue_list_id: protocol::CueListId,
-) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::RemoveCueList(cue_list_id))
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn set_cue_list(
-    state: State<'_, AppState>,
-    cue_id: CueId,
-    cue_list_id: protocol::CueListId,
-) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::SetCueList {
-            cue_id,
-            cue_list_id,
-        })
-        .map_err(|error| error.to_string())
+    window: WebviewWindow,
+    request: AuthoritativeCueListRenameRequest,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let AuthoritativeCueListRenameRequest {
+        cue_list_id,
+        label,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+    } = request;
+    let label = validate_cue_list_label(&label)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let expected_authority = MediaAssetPrepareAuthority {
+        epoch: expected_epoch,
+        revision: expected_revision,
+        checkpoint_hash: expected_checkpoint_hash,
+    };
+    commit_authoritative_cue_list_rename(
+        &state,
+        expected_epoch,
+        &owner_id,
+        &expected_authority,
+        cue_list_id,
+        &label,
+    )
 }
 
 #[tauri::command]
@@ -27773,18 +28182,18 @@ fn update_cue_from_current_batch(
 fn move_cue_between_scene_banks_batch(
     window: WebviewWindow,
     state: State<'_, AppState>,
-    args: FlatInvokeArgs<Value>,
+    request: MoveCueBetweenSceneBanksBatchRequest,
 ) -> Result<(), String> {
-    read_flat_invoke_args!(args;
-        cue_id: CueId => "cueId",
-        target_cue_list_id: protocol::CueListId => "targetCueListId",
-        target_group_id: Option<String> => "targetGroupId",
-        target_cue_id: Option<CueId> => "targetCueId",
-        position: String => "position",
-        project_transaction_id: u64 => "projectTransactionId",
-        expected_epoch: u64 => "expectedEpoch",
-        owner_id: String => "ownerId",
-    );
+    let MoveCueBetweenSceneBanksBatchRequest {
+        cue_id,
+        target_cue_list_id,
+        target_group_id,
+        target_cue_id,
+        position,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    } = request;
     let insert_after = match position.as_str() {
         "before" => false,
         "after" => true,
@@ -30963,6 +31372,69 @@ fn run_admitted_internal_media_asset_transaction_classified<T>(
     };
     commit_internal_media_asset_transaction_after_preflight(transaction_active, coordinator, plan);
     Ok(published)
+}
+
+/// Terminal classification of one admitted Bank publication. A definitive
+/// failure published nothing and the caller may reclaim a tail reservation;
+/// an indeterminate outcome leaves the applied/published truth unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AdmittedPublicationError {
+    Definitive(String),
+    Indeterminate(String),
+}
+
+impl AdmittedPublicationError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Definitive(message) | Self::Indeterminate(message) => message,
+        }
+    }
+}
+
+/// Outcome-aware counterpart to
+/// `run_admitted_internal_media_asset_transaction` for the authoritative Bank
+/// create/rename publications. On a definitive engine ACK the preflighted plan
+/// is committed exactly once. On a definitive failure the coordinator is left
+/// untouched and the bounded flag is disarmed. On an INDETERMINATE outcome the
+/// worker may already have applied and published B before its ACK was
+/// observed: the plan is dropped without any compensating rollback that would
+/// assume A, the reserved Bank ID is never reclaimed, and the global
+/// `project_transaction_publication_faulted` fence is armed so every further
+/// project mutation fails closed until process restart reconciles the exact
+/// engine/coordinator/history state. This is the existing authoritative
+/// fail-closed barrier; it deliberately does not lengthen timeouts or invent a
+/// second authority.
+fn run_admitted_internal_media_asset_transaction_with_publication_outcome(
+    external_command_admission: &ProjectExternalCommandAdmission,
+    transaction_active: &AtomicBool,
+    coordinator: &mut ProjectCoordinator,
+    plan: PreparedInternalMediaAssetCommit,
+    publish: impl FnOnce() -> Result<(), SnapshotPublicationFailure>,
+) -> Result<(), AdmittedPublicationError> {
+    transaction_active.store(true, Ordering::Release);
+    match publish() {
+        Ok(()) => {
+            commit_internal_media_asset_transaction_after_preflight(
+                transaction_active,
+                coordinator,
+                plan,
+            );
+            Ok(())
+        }
+        Err(SnapshotPublicationFailure::Definitive(message)) => {
+            transaction_active.store(false, Ordering::Release);
+            Err(AdmittedPublicationError::Definitive(message))
+        }
+        Err(SnapshotPublicationFailure::Indeterminate(message)) => {
+            transaction_active.store(false, Ordering::Release);
+            external_command_admission
+                .project_transaction_publication_faulted
+                .store(true, Ordering::Release);
+            Err(AdmittedPublicationError::Indeterminate(format!(
+                "{message}; further project mutations are fenced until Syndocal restarts to preserve a single authoritative state"
+            )))
+        }
+    }
 }
 
 /// B3's authored counterpart to the Media T1 terminal transaction. Its caller
@@ -36334,31 +36806,186 @@ async fn list_audio_output_devices(state: State<'_, AppState>) -> Result<Vec<Str
 struct LiveAudioInputBackendSummary {
     id: String,
     label: String,
+    /// Runtime readiness is intentionally separate from `built`: a packaged
+    /// ASIO artifact can still be unavailable or faulty at this exact path.
+    availability: String,
+    availability_detail: Option<String>,
     built: bool,
     requires_explicit_device: bool,
     distribution: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveAudioInputAvailability {
+    Ready,
+    #[cfg(any(
+        test,
+        all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+    ))]
+    NotPackaged,
+    #[cfg(any(
+        test,
+        all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+    ))]
+    Fault,
+    Unsupported,
+}
+
+impl LiveAudioInputAvailability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            #[cfg(any(
+                test,
+                all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+            ))]
+            Self::NotPackaged => "not_packaged",
+            #[cfg(any(
+                test,
+                all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+            ))]
+            Self::Fault => "fault",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveAudioInputBackendProbe {
+    availability: LiveAudioInputAvailability,
+    detail: Option<String>,
+    built: bool,
+}
+
+fn live_audio_input_wasapi_probe() -> LiveAudioInputBackendProbe {
+    if cfg!(target_os = "windows") {
+        LiveAudioInputBackendProbe {
+            availability: LiveAudioInputAvailability::Ready,
+            detail: None,
+            built: true,
+        }
+    } else {
+        LiveAudioInputBackendProbe {
+            availability: LiveAudioInputAvailability::Unsupported,
+            detail: Some("WASAPI Shared input is supported only on Windows".to_string()),
+            built: false,
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn require_ready_asio_bridge() -> Result<asio_bridge_v2::AsioBridgeModule, String> {
+    // Every catalog, capability, and Start operation must use this one
+    // canonical probe. `into_module` rejects both NotPackaged and Fault with
+    // their typed, actionable detail; no alternate DLL or WASAPI fallback is
+    // allowed.
+    asio_bridge_v2::probe_canonical_bridge().into_module()
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn live_audio_input_asio_probe() -> LiveAudioInputBackendProbe {
+    // `built` records only that this artifact was compiled with the ASIO
+    // bridge feature enabled; this function exists solely in that
+    // configuration.  The exhaustive disjunction below is therefore a
+    // compile-time tautology over every probed outcome, not evidence about
+    // whether a loadable bridge DLL exists on this machine; packaged and
+    // loadable readiness remains the separately probed `availability` field.
+    let availability = asio_bridge_v2::probe_canonical_bridge();
+    let built = availability.is_ready()
+        || matches!(
+            &availability,
+            asio_bridge_v2::AsioBridgeAvailability::NotPackaged { .. }
+                | asio_bridge_v2::AsioBridgeAvailability::Fault(_)
+        );
+    match availability {
+        asio_bridge_v2::AsioBridgeAvailability::Ready(module) => {
+            drop(module);
+            LiveAudioInputBackendProbe {
+                availability: LiveAudioInputAvailability::Ready,
+                detail: None,
+                built,
+            }
+        }
+        availability @ asio_bridge_v2::AsioBridgeAvailability::NotPackaged { .. } => {
+            let detail = availability
+                .into_module()
+                .expect_err("not packaged must reject");
+            LiveAudioInputBackendProbe {
+                availability: LiveAudioInputAvailability::NotPackaged,
+                detail: Some(detail),
+                built,
+            }
+        }
+        availability @ asio_bridge_v2::AsioBridgeAvailability::Fault(_) => {
+            let detail = availability.into_module().expect_err("fault must reject");
+            LiveAudioInputBackendProbe {
+                availability: LiveAudioInputAvailability::Fault,
+                detail: Some(detail),
+                built,
+            }
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+fn live_audio_input_asio_probe() -> LiveAudioInputBackendProbe {
+    LiveAudioInputBackendProbe {
+        availability: LiveAudioInputAvailability::Unsupported,
+        detail: Some(
+            "ASIO input is supported only by the Windows x86_64 ASIO artifact".to_string(),
+        ),
+        built: false,
+    }
+}
+
+fn require_ready_live_audio_input_backend(backend: LiveAudioInputBackend) -> Result<(), String> {
+    match backend {
+        LiveAudioInputBackend::WasapiShared => {
+            let probe = live_audio_input_wasapi_probe();
+            if probe.availability == LiveAudioInputAvailability::Ready {
+                Ok(())
+            } else {
+                Err(probe.detail.unwrap_or_else(|| {
+                    "WASAPI Shared input backend is not ready on this target".to_string()
+                }))
+            }
+        }
+        LiveAudioInputBackend::Asio => {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            {
+                require_ready_asio_bridge().map(|_| ())
+            }
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+            {
+                let probe = live_audio_input_asio_probe();
+                Err(probe.detail.unwrap_or_else(|| {
+                    "ASIO input backend is not supported by this artifact".to_string()
+                }))
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn live_audio_input_backends() -> Vec<LiveAudioInputBackendSummary> {
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    let asio_built = AsioBridgeLibrary::load()
-        .map(|bridge| bridge.asio_compiled())
-        .unwrap_or(false);
-    #[cfg(not(all(target_os = "windows", feature = "asio")))]
-    let asio_built = false;
+    let wasapi = live_audio_input_wasapi_probe();
+    let asio = live_audio_input_asio_probe();
     vec![
         LiveAudioInputBackendSummary {
             id: "wasapi_shared".to_string(),
             label: "WASAPI Shared".to_string(),
-            built: cfg!(target_os = "windows"),
+            availability: wasapi.availability.as_str().to_string(),
+            availability_detail: wasapi.detail,
+            built: wasapi.built,
             requires_explicit_device: false,
             distribution: "default".to_string(),
         },
         LiveAudioInputBackendSummary {
             id: "asio".to_string(),
             label: "ASIO".to_string(),
-            built: asio_built,
+            availability: asio.availability.as_str().to_string(),
+            availability_detail: asio.detail,
+            built: asio.built,
             requires_explicit_device: true,
             distribution: "separate_artifact".to_string(),
         },
@@ -36368,10 +36995,11 @@ fn live_audio_input_backends() -> Vec<LiveAudioInputBackendSummary> {
 #[tauri::command]
 fn list_audio_input_devices(
     state: State<'_, AppState>,
-    backend: Option<LiveAudioInputBackend>,
+    backend: LiveAudioInputBackend,
 ) -> Result<Vec<LiveAudioInputDeviceSummary>, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
+    require_ready_live_audio_input_backend(backend)?;
     if state
         .live_audio_input
         .lock()
@@ -36380,7 +37008,6 @@ fn list_audio_input_devices(
     {
         return Err("Stop live audio input before refreshing its device catalog".to_string());
     }
-    let backend = backend.unwrap_or_default();
     let mut devices: Vec<(usize, String, String, LiveAudioInputDevice)> = match backend {
         LiveAudioInputBackend::WasapiShared => {
             let host = rodio::cpal::default_host();
@@ -36402,10 +37029,22 @@ fn list_audio_input_devices(
                 .collect()
         }
         LiveAudioInputBackend::Asio => {
-            #[cfg(all(target_os = "windows", feature = "asio"))]
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             {
-                AsioBridgeLibrary::load()?
-                    .drivers()?
+                let module = require_ready_asio_bridge()?;
+                let catalog_text = module
+                    .driver_catalog_text()
+                    .map_err(|error| error.to_string())?;
+                let catalog = asio_bridge_v2::parse_driver_catalog(&catalog_text)
+                    .map_err(|reject| format!("ASIO driver catalog was rejected: {reject}"))?;
+                if catalog.drivers.is_empty() {
+                    return Err(
+                        "The ASIO bridge enumerated no drivers; connect an ASIO device and refresh"
+                            .to_string(),
+                    );
+                }
+                catalog
+                    .drivers
                     .into_iter()
                     .enumerate()
                     .map(|(ordinal, driver)| {
@@ -36425,7 +37064,7 @@ fn list_audio_input_devices(
                     })
                     .collect()
             }
-            #[cfg(not(all(target_os = "windows", feature = "asio")))]
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
             {
                 return Err(
                     "ASIO input is not built into this artifact; use the separate ASIO build"
@@ -36449,8 +37088,11 @@ fn list_audio_input_devices(
         .live_audio_input_devices
         .lock()
         .map_err(|_| "Live audio input device catalog lock was poisoned".to_string())?;
-    catalog.generation = catalog.generation.wrapping_add(1).max(1);
-    let generation = catalog.generation;
+    // Device IDs embed the generation, so a wrapped generation would silently
+    // revalidate stale selections against the wrong device set; overflow must
+    // reject before any entry is replaced.
+    let generation = checked_next_device_catalog_generation(catalog.generation)?;
+    catalog.generation = generation;
     catalog.entries.clear();
     let summaries = devices
         .into_iter()
@@ -36479,6 +37121,15 @@ fn list_audio_input_devices(
 
 fn live_audio_input_device_id(backend: &str, generation: u64, index: usize) -> String {
     format!("{}:{generation}:{index}", backend.to_ascii_lowercase())
+}
+
+/// Checked device-catalog generation bump. The generation is embedded in every
+/// opaque device id, so saturation must fail closed instead of wrapping back
+/// onto identities a stale selection may still name.
+fn checked_next_device_catalog_generation(current: u64) -> Result<u64, String> {
+    current.checked_add(1).ok_or_else(|| {
+        "Live audio input device catalog generation was exhausted; restart Syndocal before refreshing devices".to_string()
+    })
 }
 
 fn disambiguate_live_audio_input_labels(names: &[String]) -> Vec<String> {
@@ -36588,32 +37239,22 @@ fn live_audio_input_config_range(
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 fn live_audio_input_capabilities_asio(
     resolved: &ResolvedLiveAudioInputDevice,
     device: &AsioBridgeDevice,
     sample_rate: Option<u32>,
 ) -> Result<LiveAudioInputCapabilities, String> {
-    let payload = AsioBridgeLibrary::load()?.capabilities_json(&device.driver_id)?;
-    let capabilities: AsioBridgeCapabilities = serde_json::from_str(&payload)
-        .map_err(|error| format!("ASIO capability response was invalid: {error}"))?;
-    if capabilities.abi_version != SYNDOCAL_ASIO_ABI_VERSION
-        || !capabilities.backend.eq_ignore_ascii_case("asio")
-        || !capabilities.built
-        || capabilities.driver.id != device.driver_id
-        || capabilities.driver.name.trim().is_empty()
-    {
+    let module = require_ready_asio_bridge()?;
+    let capability_text = module
+        .capability_text(&device.driver_id)
+        .map_err(|error| error.to_string())?;
+    let capabilities = asio_bridge_v2::parse_capabilities(&capability_text)
+        .map_err(|reject| format!("ASIO capability response was rejected: {reject}"))?;
+    if capabilities.driver.id != device.driver_id || capabilities.driver.name.trim().is_empty() {
         return Err(
             "ASIO capability response did not match the selected driver and ABI".to_string(),
         );
-    }
-    if capabilities.driver.input_channels == 0
-        || capabilities.driver.sample_formats.is_empty()
-        || capabilities.driver.sample_rates_hz.is_empty()
-        || capabilities.driver.buffer_frames.min == 0
-        || capabilities.driver.buffer_frames.min > capabilities.driver.buffer_frames.max
-    {
-        return Err("Selected ASIO driver reported incomplete input capabilities".to_string());
     }
     let requested_rate = match sample_rate {
         Some(0) => return Err("ASIO sample rate must be greater than zero".to_string()),
@@ -36632,17 +37273,12 @@ fn live_audio_input_capabilities_asio(
         "f64" => 4,
         _ => u8::MAX,
     };
+    let driver_channels = u16::try_from(capabilities.driver.input_channels)
+        .map_err(|_| "Selected ASIO driver reported more than 65535 input channels".to_string())?;
     let selected = capabilities
         .input_configs
         .iter()
-        .filter(|config| {
-            config.sample_rate_hz == requested_rate
-                && config.channels > 0
-                && config.channels <= capabilities.driver.input_channels
-                && config.buffer_frames.min > 0
-                && config.buffer_frames.min <= config.buffer_frames.max
-                && format_rank(&config.sample_format) != u8::MAX
-        })
+        .filter(|config| config.sample_rate_hz == requested_rate)
         .min_by_key(|config| {
             (
                 std::cmp::Reverse(config.channels),
@@ -36655,28 +37291,26 @@ fn live_audio_input_capabilities_asio(
                 "Selected ASIO driver does not expose an input configuration at {requested_rate} Hz"
             )
         })?;
-    let to_buffer = |range: AsioBridgeBufferRange| LiveAudioBufferCapability::Range {
-        min_frames: range.min,
-        max_frames: range.max,
-    };
+    let to_buffer =
+        |range: &asio_bridge_v2::BufferFramesRangeJson| LiveAudioBufferCapability::Range {
+            min_frames: range.min,
+            max_frames: range.max,
+        };
     let mut supported_configs = capabilities
         .input_configs
         .iter()
-        .filter(|config| {
-            config.channels > 0
-                && config.sample_rate_hz > 0
-                && config.buffer_frames.min > 0
-                && config.buffer_frames.min <= config.buffer_frames.max
-                && format_rank(&config.sample_format) != u8::MAX
+        .map(|config| -> Result<LiveAudioInputConfigRange, String> {
+            Ok(LiveAudioInputConfigRange {
+                channels: u16::try_from(config.channels).map_err(|_| {
+                    "ASIO capability reported a channel count above the supported range".to_string()
+                })?,
+                min_sample_rate: config.sample_rate_hz,
+                max_sample_rate: config.sample_rate_hz,
+                sample_format: config.sample_format.clone(),
+                buffer_size: to_buffer(&config.buffer_frames),
+            })
         })
-        .map(|config| LiveAudioInputConfigRange {
-            channels: config.channels,
-            min_sample_rate: config.sample_rate_hz,
-            max_sample_rate: config.sample_rate_hz,
-            sample_format: config.sample_format.clone(),
-            buffer_size: to_buffer(config.buffer_frames),
-        })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     supported_configs.sort();
     supported_configs.dedup();
     let default_rate = [48_000, 44_100]
@@ -36696,22 +37330,24 @@ fn live_audio_input_capabilities_asio(
         device_name: resolved.device_name.clone(),
         backend: "ASIO".to_string(),
         default_config: LiveAudioInputConfig {
-            channels: capabilities.driver.input_channels,
+            channels: driver_channels,
             sample_rate: default_rate,
             sample_format: default_format,
         },
         supported_configs,
         resolved_config: LiveAudioInputResolvedConfig {
-            channels: selected.channels,
+            channels: u16::try_from(selected.channels).map_err(|_| {
+                "ASIO capability reported a channel count above the supported range".to_string()
+            })?,
             sample_rate: selected.sample_rate_hz,
             sample_format: selected.sample_format.clone(),
-            buffer_size: to_buffer(selected.buffer_frames),
+            buffer_size: to_buffer(&selected.buffer_frames),
         },
         max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
     })
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 fn asio_sample_format(format: &str) -> Option<rodio::cpal::SampleFormat> {
     match format {
         "f32" => Some(rodio::cpal::SampleFormat::F32),
@@ -36723,7 +37359,7 @@ fn asio_sample_format(format: &str) -> Option<rodio::cpal::SampleFormat> {
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 fn resolve_asio_live_audio_start_config(
     resolved: &ResolvedLiveAudioInputDevice,
     device: &AsioBridgeDevice,
@@ -36787,13 +37423,13 @@ fn resolve_asio_live_audio_start_config(
 #[tauri::command]
 fn get_live_audio_input_capabilities(
     state: State<'_, AppState>,
-    backend: Option<LiveAudioInputBackend>,
+    backend: LiveAudioInputBackend,
     device_id: Option<String>,
     sample_rate: Option<u32>,
 ) -> Result<LiveAudioInputCapabilities, String> {
     use rodio::cpal::traits::DeviceTrait;
 
-    let backend = backend.unwrap_or_default();
+    require_ready_live_audio_input_backend(backend)?;
     let resolved = resolve_live_audio_input_device(&state, backend, device_id.as_deref())?;
     match &resolved.device {
         LiveAudioInputDevice::Wasapi(device) => {
@@ -36811,8 +37447,12 @@ fn get_live_audio_input_capabilities(
                 &supported_config_ranges,
                 &LiveAudioInputStartRequest {
                     backend,
+                    device_id: None,
                     sample_rate,
-                    ..LiveAudioInputStartRequest::default()
+                    stream_channels: None,
+                    sample_format: None,
+                    buffer_frames: None,
+                    channel_mix: LiveAudioChannelMix::AverageAll,
                 },
             )?;
             let mut supported_configs = supported_config_ranges
@@ -36836,7 +37476,7 @@ fn get_live_audio_input_capabilities(
                 max_capture_frames: LIVE_AUDIO_CAPTURE_SLOT_COUNT * LIVE_AUDIO_CAPTURE_SLOT_FRAMES,
             })
         }
-        #[cfg(all(target_os = "windows", feature = "asio"))]
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         LiveAudioInputDevice::Asio(device) => {
             live_audio_input_capabilities_asio(&resolved, device, sample_rate)
         }
@@ -37070,204 +37710,543 @@ impl LiveAudioStreamErrorContext {
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
-struct AsioBridgeCallbackContext {
+/// Application-side realtime hooks for one ABI v2 ASIO stream. The bridge
+/// trampolines invoke these only while the stream generation is current and no
+/// terminal fault is latched, so the normal path here is the same lock-free,
+/// allocation-free bounded-queue handoff used by the WASAPI capture path.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+struct AsioV2StreamHooks {
     sample_rate: u32,
-    capture: LiveAudioCaptureCallbackContext,
-    errors: LiveAudioStreamErrorContext,
+    free_capture_slots: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    ready_capture_chunks: Arc<crossbeam_queue::ArrayQueue<LiveAudioSampleChunk>>,
+    capture_telemetry: Arc<LiveAudioInputCaptureTelemetry>,
+    safety: Arc<LiveAudioInputSafety>,
+    deferred_terminal_fault: Arc<DeferredLiveAudioTerminalFaultLatch>,
+    worker_wake: std::thread::Thread,
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
-unsafe extern "C" fn asio_bridge_sample_callback(
-    context: *mut std::ffi::c_void,
-    samples: *const f32,
-    len: usize,
-    capture_delay_ns: u64,
-    _callback_frames: u32,
-) {
-    if context.is_null() || samples.is_null() || len == 0 {
-        return;
-    }
-    let context = unsafe { &*(context.cast::<AsioBridgeCallbackContext>()) };
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let samples = unsafe { std::slice::from_raw_parts(samples, len) };
-        queue_live_audio_samples_with_delay(
-            samples,
-            1,
-            context.sample_rate,
-            LiveAudioChannelMix::AverageAll,
-            Duration::from_nanos(capture_delay_ns),
-            (
-                &context.capture.free_capture_slots,
-                &context.capture.ready_capture_chunks,
-                &context.capture.capture_telemetry,
-                &context.capture.safety,
-                &context.capture.worker_wake,
-            ),
-            |value| value,
-        );
-    }));
-    if result.is_err() {
-        context.errors.defer_terminal_fault(
-            LIVE_AUDIO_TERMINAL_SOURCE_ASIO_ADAPTER,
-            LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC,
-        );
-    }
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-unsafe extern "C" fn asio_bridge_event_callback(
-    context: *mut std::ffi::c_void,
-    severity: u32,
-    kind: u32,
-    _message: *const u8,
-    _message_len: usize,
-) {
-    if context.is_null() || severity != 2 {
-        return;
-    }
-    let context = unsafe { &*(context.cast::<AsioBridgeCallbackContext>()) };
-    context
-        .errors
-        .defer_terminal_fault(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, kind);
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-struct AsioBridgeCapture {
-    bridge: AsioBridgeLibrary,
-    handle: usize,
-    _callback_context: Box<AsioBridgeCallbackContext>,
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-impl AsioBridgeCapture {
-    fn xrun_count(&self) -> u64 {
-        unsafe { (self.bridge.api.xrun_count)(self.handle as *const std::ffi::c_void) }
-    }
-}
-
-#[cfg(all(target_os = "windows", feature = "asio"))]
-impl Drop for AsioBridgeCapture {
-    fn drop(&mut self) {
-        if self.handle == 0 {
-            return;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+impl AsioV2StreamHooks {
+    fn new(
+        sample_rate: u32,
+        capture: LiveAudioCaptureCallbackContext,
+        errors: LiveAudioStreamErrorContext,
+    ) -> Self {
+        Self {
+            sample_rate,
+            free_capture_slots: capture.free_capture_slots,
+            ready_capture_chunks: capture.ready_capture_chunks,
+            capture_telemetry: capture.capture_telemetry,
+            safety: capture.safety,
+            deferred_terminal_fault: errors.deferred_terminal_fault,
+            worker_wake: errors.worker_wake,
         }
-        let handle = self.handle as *mut std::ffi::c_void;
-        let mut error = AsioBridgeString::default();
-        let _ = unsafe { (self.bridge.api.stop)(handle, &mut error) };
-        if !error.ptr.is_null() {
-            let _ = self.bridge.take_string(error);
-        }
-        unsafe { (self.bridge.api.free)(handle) };
-        self.handle = 0;
+    }
+
+    fn defer_terminal(&self, source: u32, kind: u32) {
+        self.safety.mark_terminal_fault();
+        self.deferred_terminal_fault.latch(source, kind);
+        self.worker_wake.unpark();
     }
 }
 
-#[cfg(all(target_os = "windows", feature = "asio"))]
-fn build_asio_bridge_capture(
-    device: &AsioBridgeDevice,
-    selected: &SelectedLiveAudioInputConfig,
-    capture: LiveAudioCaptureCallbackContext,
-    errors: LiveAudioStreamErrorContext,
-) -> Result<(AsioBridgeCapture, u32), String> {
-    let configured_buffer_frames = selected
-        .configured_buffer_frames
-        .ok_or_else(|| "ASIO requires an explicit fixed buffer size".to_string())?;
-    let sample_format = match selected.sample_format {
-        rodio::cpal::SampleFormat::F32 => 1,
-        rodio::cpal::SampleFormat::I16 => 2,
-        rodio::cpal::SampleFormat::I24 => 3,
-        rodio::cpal::SampleFormat::I32 => 4,
-        rodio::cpal::SampleFormat::F64 => 5,
-        format => return Err(format!("Unsupported ASIO sample format {format}")),
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+impl asio_bridge_v2::StreamCallbackHooks for AsioV2StreamHooks {
+    fn on_samples(&self, mono_samples: &[f32], capture_delay_ns: u64) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            queue_live_audio_samples_with_delay(
+                mono_samples,
+                1,
+                self.sample_rate,
+                LiveAudioChannelMix::AverageAll,
+                Duration::from_nanos(capture_delay_ns),
+                (
+                    &self.free_capture_slots,
+                    &self.ready_capture_chunks,
+                    &self.capture_telemetry,
+                    &self.safety,
+                    &self.worker_wake,
+                ),
+                |value| value,
+            );
+        }));
+        if result.is_err() {
+            self.defer_terminal(
+                LIVE_AUDIO_TERMINAL_SOURCE_ASIO_ADAPTER,
+                LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC,
+            );
+        }
+    }
+
+    fn on_terminal_latch(&self, kind: u32) {
+        self.defer_terminal(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, kind);
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn asio_channel_mix_gains(
+    channel_mix: LiveAudioChannelMix,
+    channels: u16,
+) -> Vec<asio_bridge_v2::ChannelMixGainJson> {
+    let entry = |channel_index: u16, gain: f32| asio_bridge_v2::ChannelMixGainJson {
+        channel_index: u32::from(channel_index),
+        gain: f64::from(gain),
     };
-    let channels = selected.stream_config.channels;
-    let channel_mix = match selected.channel_mix {
+    match channel_mix {
         LiveAudioChannelMix::AverageAll => (0..channels)
-            .map(|channel_index| AsioBridgeChannelMix {
-                channel_index: u32::from(channel_index),
-                gain: 1.0 / f32::from(channels.max(1)),
-            })
+            .map(|channel_index| entry(channel_index, 1.0 / f32::from(channels.max(1))))
             .collect::<Vec<_>>(),
-        LiveAudioChannelMix::Single { channel_index } => vec![AsioBridgeChannelMix {
-            channel_index: u32::from(channel_index),
-            gain: 1.0,
-        }],
+        LiveAudioChannelMix::Single { channel_index } => vec![entry(channel_index, 1.0)],
         LiveAudioChannelMix::StereoPair {
             left_channel_index,
             right_channel_index,
         } => vec![
-            AsioBridgeChannelMix {
-                channel_index: u32::from(left_channel_index),
-                gain: 0.5,
-            },
-            AsioBridgeChannelMix {
-                channel_index: u32::from(right_channel_index),
-                gain: 0.5,
-            },
+            entry(left_channel_index, 0.5),
+            entry(right_channel_index, 0.5),
         ],
+    }
+}
+
+/// Explicitly stops and closes an ABI v2 stream session. Close owns the raw
+/// handle in every case — including failure — so a fresh explicit Start is the
+/// only way back to an active stream afterwards.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn teardown_asio_v2_stream<T: asio_bridge_v2::BridgeTransport>(
+    mut session: asio_bridge_v2::AsioStreamSession<T>,
+) -> Result<(), String> {
+    let stop_result = if session.is_stopped() {
+        Ok(())
+    } else {
+        session
+            .stop()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     };
-    let bridge = AsioBridgeLibrary::load()?;
-    let mut callback_context = Box::new(AsioBridgeCallbackContext {
-        sample_rate: selected.stream_config.sample_rate.0,
+    let close_result = session
+        .close()
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+    match (stop_result, close_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (stop_error, close_error) => {
+            let mut failures = Vec::new();
+            if let Err(stop_error) = stop_error {
+                failures.push(format!("Stop failed: {stop_error}"));
+            }
+            if let Err(close_error) = close_error {
+                failures.push(format!("Close failed: {close_error}"));
+            }
+            Err(failures.join("; "))
+        }
+    }
+}
+
+/// Process-lifetime fence for ABI v2 ASIO streams. Every production Start
+/// publishes its stream generation into this one shared cell, so callbacks
+/// captured by any earlier stream stay stale across Stop/Start cycles and for
+/// the whole process lifetime. Allocating a fresh counter per Start would let
+/// a retired stream's callbacks look current again after an identity wrap.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn asio_v2_live_generation() -> Arc<AtomicU64> {
+    static SHARED: std::sync::OnceLock<Arc<AtomicU64>> = std::sync::OnceLock::new();
+    Arc::clone(SHARED.get_or_init(|| Arc::new(AtomicU64::new(0))))
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+const ASIO_INPUT_SELECTION_FILE: &str = "asio-input-selection.v2.json";
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+const MAX_ASIO_INPUT_SELECTION_BYTES: u64 = 65_536;
+
+/// Operator-facing verdict for the persisted ASIO selection that startup
+/// restored from machine storage. `restored` means structurally valid but not
+/// yet revalidated against fresh hardware; Start always revalidates explicitly.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct AsioPersistedSelectionStatus {
+    state: &'static str,
+    driver_id: Option<String>,
+    driver_name: Option<String>,
+    sample_rate_hz: Option<u32>,
+    input_channels: Option<u32>,
+    sample_format: Option<String>,
+    fixed_buffer_frames: Option<u32>,
+    reason: Option<String>,
+    message: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Debug, Default)]
+struct AsioInputSelectionState {
+    path: Option<PathBuf>,
+    selection: Option<asio_bridge_v2::PersistedAsioSelection>,
+    status: Option<AsioPersistedSelectionStatus>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+enum AsioSelectionRestoreOutcome {
+    Absent,
+    Restored(asio_bridge_v2::PersistedAsioSelection),
+    Invalid { reason: String, message: String },
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+impl AsioInputSelectionState {
+    fn install_restore(&mut self, outcome: AsioSelectionRestoreOutcome) {
+        match outcome {
+            AsioSelectionRestoreOutcome::Absent => {}
+            AsioSelectionRestoreOutcome::Restored(selection) => {
+                self.status = Some(restored_selection_status(&selection));
+                self.selection = Some(selection);
+            }
+            AsioSelectionRestoreOutcome::Invalid { reason, message } => {
+                // Fail closed and preserve: invalid bytes are never deleted or
+                // normalized behind the operator's back, and they are never
+                // applied; the next explicit successful Start replaces them.
+                self.selection = None;
+                self.status = Some(AsioPersistedSelectionStatus {
+                    state: "invalid",
+                    driver_id: None,
+                    driver_name: None,
+                    sample_rate_hz: None,
+                    input_channels: None,
+                    sample_format: None,
+                    fixed_buffer_frames: None,
+                    reason: Some(reason),
+                    message: Some(message),
+                });
+            }
+        }
+    }
+
+    fn status_snapshot(&self) -> Option<AsioPersistedSelectionStatus> {
+        self.status.clone()
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn restored_selection_status(
+    selection: &asio_bridge_v2::PersistedAsioSelection,
+) -> AsioPersistedSelectionStatus {
+    AsioPersistedSelectionStatus {
+        state: "restored",
+        driver_id: Some(selection.driver_id().to_owned()),
+        driver_name: Some(selection.driver_name().to_owned()),
+        sample_rate_hz: Some(selection.sample_rate_hz()),
+        input_channels: Some(selection.input_channels()),
+        sample_format: Some(selection.sample_format().to_owned()),
+        fixed_buffer_frames: Some(selection.fixed_buffer_frames()),
+        reason: None,
+        message: Some(
+            "Persisted ASIO selection was restored from machine storage and stays locked until Start revalidates it against the current catalog and capabilities".to_owned(),
+        ),
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn revalidated_selection_status(
+    selection: &asio_bridge_v2::PersistedAsioSelection,
+) -> AsioPersistedSelectionStatus {
+    let mut status = restored_selection_status(selection);
+    status.state = "revalidated";
+    status.message =
+        Some("The explicit ASIO selection was revalidated against the current driver catalog and capabilities".to_owned());
+    status
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn asio_selection_storage_path(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join(ASIO_INPUT_SELECTION_FILE)
+}
+
+/// Loads and strictly validates the persisted ASIO selection. A missing file
+/// is a clean absent state; every other read/parse/validation fault is
+/// reported so the caller can fail closed without deleting the payload.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn load_asio_input_selection_from_path(path: &Path) -> Result<AsioSelectionRestoreOutcome, String> {
+    use std::io::Read as _;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AsioSelectionRestoreOutcome::Absent)
+        }
+        Err(error) => {
+            return Ok(AsioSelectionRestoreOutcome::Invalid {
+                reason: format!("read failed: {error}"),
+                message: format!(
+                    "Unable to read the persisted ASIO selection {}: {error}",
+                    path.display()
+                ),
+            })
+        }
+    };
+    let declared_len = file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "Unable to inspect the persisted ASIO selection {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if declared_len > MAX_ASIO_INPUT_SELECTION_BYTES {
+        return Ok(AsioSelectionRestoreOutcome::Invalid {
+            reason: "payload too large".to_owned(),
+            message: format!(
+                "The persisted ASIO selection {} exceeds the {MAX_ASIO_INPUT_SELECTION_BYTES}-byte limit",
+                path.display()
+            ),
+        });
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(declared_len).unwrap_or(0));
+    file.take(MAX_ASIO_INPUT_SELECTION_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!(
+                "Unable to read the persisted ASIO selection {}: {error}",
+                path.display()
+            )
+        })?;
+    if bytes.len() as u64 > MAX_ASIO_INPUT_SELECTION_BYTES {
+        return Ok(AsioSelectionRestoreOutcome::Invalid {
+            reason: "payload too large".to_owned(),
+            message: format!(
+                "The persisted ASIO selection {} grew beyond the {MAX_ASIO_INPUT_SELECTION_BYTES}-byte limit",
+                path.display()
+            ),
+        });
+    }
+    let text = String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "The persisted ASIO selection {} is not valid UTF-8: {error}",
+            path.display()
+        )
+    })?;
+    match asio_bridge_v2::PersistedAsioSelection::parse_storage_text(&text) {
+        Ok(selection) => Ok(AsioSelectionRestoreOutcome::Restored(selection)),
+        Err(reject) => Ok(AsioSelectionRestoreOutcome::Invalid {
+            reason: reject.to_string(),
+            message: format!(
+                "The persisted ASIO selection {} was rejected and stays locked: {reject}",
+                path.display()
+            ),
+        }),
+    }
+}
+
+/// Persists the exact validated selection atomically. The write happens only
+/// after a successful native open so durable storage always names a
+/// configuration the bridge actually accepted.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn persist_asio_input_selection_to_path(
+    path: &Path,
+    selection: &asio_bridge_v2::PersistedAsioSelection,
+) -> Result<(), String> {
+    let text = selection
+        .storage_text()
+        .map_err(|reject| format!("Unable to encode the explicit ASIO selection: {reject}"))?;
+    if text.len() as u64 > MAX_ASIO_INPUT_SELECTION_BYTES {
+        return Err(format!(
+            "The encoded ASIO selection exceeds the {MAX_ASIO_INPUT_SELECTION_BYTES}-byte storage limit"
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "ASIO selection storage path has no parent directory: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Unable to create the ASIO selection storage directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(ASIO_INPUT_SELECTION_FILE);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
+    fs::write(&temporary, text.as_bytes()).map_err(|error| {
+        format!(
+            "Unable to write the temporary ASIO selection {}: {error}",
+            temporary.display()
+        )
+    })?;
+    if let Err(error) = replace_file_atomically(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Attaches the persisted-selection snapshot to a live-audio status response.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn attach_asio_selection_status_to(
+    state: &AppState,
+    mut status: LiveAudioInputStatus,
+) -> Result<LiveAudioInputStatus, String> {
+    if let Ok(guard) = state.asio_input_selection.lock() {
+        status.asio_selection = guard.status_snapshot();
+    }
+    Ok(status)
+}
+
+/// Non-ASIO builds carry no persisted selection snapshot.
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+fn attach_asio_selection_status_to(
+    _state: &AppState,
+    status: LiveAudioInputStatus,
+) -> Result<LiveAudioInputStatus, String> {
+    Ok(status)
+}
+
+/// Opens the exact persisted-contract ASIO configuration against a freshly
+/// enumerated catalog and freshly queried capabilities. Driver substitution,
+/// first-driver selection, and WASAPI fallback are unreachable: any drift or
+/// absence fails closed with the stale-lock reason.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn start_asio_v2_stream(
+    state: &AppState,
+    device: &AsioBridgeDevice,
+    driver_name: &str,
+    selected: &SelectedLiveAudioInputConfig,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<
+    (
+        asio_bridge_v2::AsioStreamSession<asio_bridge_v2::VtableTransport>,
+        u32,
+    ),
+    String,
+> {
+    let configured_buffer_frames = selected
+        .configured_buffer_frames
+        .ok_or_else(|| "ASIO requires an explicit fixed buffer size".to_string())?;
+    let sample_rate_hz = selected.stream_config.sample_rate.0;
+    let input_channels = selected.stream_config.channels;
+    let sample_format = match selected.sample_format {
+        rodio::cpal::SampleFormat::F32 => "f32",
+        rodio::cpal::SampleFormat::I16 => "i16",
+        rodio::cpal::SampleFormat::I24 => "i24",
+        rodio::cpal::SampleFormat::I32 => "i32",
+        rodio::cpal::SampleFormat::F64 => "f64",
+        format => return Err(format!("Unsupported ASIO sample format {format}")),
+    };
+    let channel_mix = asio_channel_mix_gains(selected.channel_mix, input_channels);
+    let selection = asio_bridge_v2::PersistedAsioSelection::new(
+        device.driver_id.clone(),
+        driver_name.to_owned(),
+        sample_rate_hz,
+        u32::from(input_channels),
+        sample_format.to_owned(),
+        configured_buffer_frames,
+        channel_mix,
+    )
+    .map_err(|reject| format!("The explicit ASIO selection was rejected: {reject}"))?;
+
+    let module = require_ready_asio_bridge()?;
+    let catalog_text = module
+        .driver_catalog_text()
+        .map_err(|error| error.to_string())?;
+    match asio_bridge_v2::revalidate_selection_with_catalog(&selection, &catalog_text) {
+        asio_bridge_v2::SelectionRevalidationOutcome::Revalidated {
+            current_driver_id, ..
+        } => {
+            if current_driver_id != device.driver_id {
+                return Err(format!(
+                    "ASIO Start revalidation resolved driver {current_driver_id:?} instead of the selected {:?}; refusing substitution",
+                    device.driver_id
+                ));
+            }
+        }
+        asio_bridge_v2::SelectionRevalidationOutcome::StillLocked { reason, message } => {
+            return Err(format!(
+                "ASIO selection stays locked [{reason}] until it is explicitly reselected: {message}"
+            ));
+        }
+    }
+    let capability_text = module
+        .capability_text(&device.driver_id)
+        .map_err(|error| error.to_string())?;
+    let start_request = match asio_bridge_v2::revalidate_selection_with_capabilities(
+        &selection,
+        &capability_text,
+    ) {
+        asio_bridge_v2::SelectionRevalidationOutcome::Revalidated { start_request, .. } => {
+            start_request
+        }
+        asio_bridge_v2::SelectionRevalidationOutcome::StillLocked { reason, message } => {
+            return Err(format!(
+                "ASIO selection stays locked [{reason}] until it is explicitly reselected: {message}"
+            ));
+        }
+    };
+
+    let hooks = Arc::new(AsioV2StreamHooks::new(
+        selected.stream_config.sample_rate.0,
         capture,
         errors,
-    });
-    let config = AsioBridgeStartConfig {
-        struct_size: std::mem::size_of::<AsioBridgeStartConfig>() as u32,
-        abi_version: SYNDOCAL_ASIO_ABI_VERSION,
-        driver_id: device.driver_id.as_ptr(),
-        driver_id_len: device.driver_id.len(),
-        sample_rate_hz: selected.stream_config.sample_rate.0,
-        input_channels: u32::from(channels),
-        sample_format,
-        fixed_buffer_frames: configured_buffer_frames,
-        channel_mix: channel_mix.as_ptr(),
-        channel_mix_len: channel_mix.len(),
-        flags: 0,
-        reserved: 0,
-    };
-    let mut handle = std::ptr::null_mut();
-    let mut error = AsioBridgeString::default();
-    let status = unsafe {
-        (bridge.api.start)(
-            &config,
-            asio_bridge_sample_callback,
-            asio_bridge_event_callback,
-            callback_context.as_mut() as *mut AsioBridgeCallbackContext as *mut std::ffi::c_void,
-            &mut handle,
-            &mut error,
-        )
-    };
-    let error = bridge.take_string(error);
-    if status != 0 || handle.is_null() {
-        let detail = if error.trim().is_empty() {
-            format!("bridge status {status}")
-        } else {
-            error
-        };
-        return Err(format!("Failed to open explicit ASIO driver: {detail}"));
-    }
-    let capture = AsioBridgeCapture {
-        bridge,
-        handle: handle as usize,
-        _callback_context: callback_context,
-    };
-    let mut actual_buffer_frames = 0_u32;
-    let status = unsafe {
-        (capture.bridge.api.actual_buffer_frames)(handle.cast_const(), &mut actual_buffer_frames)
-    };
-    if status != 0 || actual_buffer_frames == 0 {
-        return Err(format!(
-            "ASIO bridge could not report the opened buffer size (status {status})"
-        ));
-    }
+    ));
+    // The process-lifetime shared fence keeps callbacks from any earlier
+    // stream stale across restart; a fresh counter here would risk identity
+    // reuse after a wrap.
+    let session = asio_bridge_v2::publish_generation_and_start(
+        module.into_transport(),
+        &start_request,
+        asio_v2_live_generation(),
+        Some(hooks),
+    )
+    .map_err(|error| format!("Failed to open the explicit ASIO driver: {error}"))?;
+    let actual_buffer_frames = session.actual_buffer_frames();
     if actual_buffer_frames != configured_buffer_frames {
+        let teardown = teardown_asio_v2_stream(session);
         return Err(format!(
-            "ASIO opened {actual_buffer_frames} frames instead of the requested {configured_buffer_frames}; stream was closed"
+            "ASIO opened {actual_buffer_frames} frames instead of the requested {configured_buffer_frames}; stream was closed{}",
+            teardown
+                .map(|()| String::new())
+                .unwrap_or_else(|error| format!(" and the teardown also failed: {error}"))
         ));
     }
-    Ok((capture, actual_buffer_frames))
+    // The stream is open and matches the request: persist the exact selection
+    // durably before reporting success, and fail the Start closed when the
+    // durable write cannot be guaranteed.
+    {
+        let storage_path = state
+            .asio_input_selection
+            .lock()
+            .map_err(|_| "ASIO selection storage lock was poisoned".to_string())?
+            .path
+            .clone();
+        let Some(storage_path) = storage_path else {
+            let teardown = teardown_asio_v2_stream(session);
+            return Err(format!(
+                "ASIO selection storage is not initialized; stream was closed{}",
+                teardown
+                    .map(|()| String::new())
+                    .unwrap_or_else(|error| format!(" and the teardown also failed: {error}"))
+            ));
+        };
+        if let Err(error) = persist_asio_input_selection_to_path(&storage_path, &selection) {
+            let teardown = teardown_asio_v2_stream(session);
+            return Err(format!(
+                "The explicit ASIO selection could not be persisted: {error}; stream was closed{}",
+                teardown
+                    .map(|()| String::new())
+                    .unwrap_or_else(|teardown_error| {
+                        format!(" and the teardown also failed: {teardown_error}")
+                    })
+            ));
+        }
+        if let Ok(mut guard) = state.asio_input_selection.lock() {
+            guard.status = Some(revalidated_selection_status(&selection));
+            guard.selection = Some(selection);
+        }
+    }
+    Ok((session, actual_buffer_frames))
 }
 
 fn build_live_audio_input_stream<T>(
@@ -37387,6 +38366,7 @@ fn start_live_audio_input(
 ) -> Result<LiveAudioInputStatus, String> {
     use rodio::cpal::traits::DeviceTrait;
 
+    require_ready_live_audio_input_backend(request.backend)?;
     let _lifecycle = state
         .live_audio_input_lifecycle
         .lock()
@@ -37421,7 +38401,7 @@ fn start_live_audio_input(
             };
             resolve_live_audio_stream_config(&default_config, &supported_configs, &request)?
         }
-        #[cfg(all(target_os = "windows", feature = "asio"))]
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         LiveAudioInputDevice::Asio(device) => {
             resolve_asio_live_audio_start_config(&resolved, device, &request)?
         }
@@ -37534,17 +38514,21 @@ fn start_live_audio_input(
             error_context,
         )
         .map(|stream| (stream, None)),
-        #[cfg(all(target_os = "windows", feature = "asio"))]
-        LiveAudioInputDevice::Asio(device) => {
-            build_asio_bridge_capture(device, &selected, capture_context, error_context).map(
-                |(stream, applied_buffer_frames)| {
-                    (
-                        LiveAudioCaptureStream::Asio { _stream: stream },
-                        Some(applied_buffer_frames),
-                    )
-                },
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        LiveAudioInputDevice::Asio(device) => start_asio_v2_stream(
+            &state,
+            device,
+            &resolved.device_name,
+            &selected,
+            capture_context,
+            error_context,
+        )
+        .map(|(session, applied_buffer_frames)| {
+            (
+                LiveAudioCaptureStream::Asio { _session: session },
+                Some(applied_buffer_frames),
             )
-        }
+        }),
     };
     let (stream, applied_buffer_frames) = match stream_result {
         Ok(stream) => stream,
@@ -37573,10 +38557,11 @@ fn start_live_audio_input(
         engine,
     });
     drop(active);
-    status
+    let returned = status
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())
-        .map(|status| status.clone())
+        .map(|status| status.clone())?;
+    attach_asio_selection_status_to(&state, returned)
 }
 
 fn live_audio_frame_duration(frames: usize, sample_rate: u32) -> Duration {
@@ -37915,6 +38900,22 @@ fn deferred_live_audio_terminal_fault_message(fault: DeferredLiveAudioTerminalFa
                 8 => "terminal ASIO backend error",
                 9 => "ASIO callback payload was malformed",
                 10 => "ASIO callback frame count changed after Start",
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_bridge_v2::INTERNAL_FAULT_DROP_WITHOUT_CLOSE => {
+                    "ASIO stream was torn down without an explicit Close"
+                }
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_bridge_v2::INTERNAL_FAULT_MALFORMED_EVENT => {
+                    "ASIO bridge event payload was malformed"
+                }
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_bridge_v2::INTERNAL_FAULT_FRAME_MISMATCH => {
+                    "ASIO callback frame count changed after Start"
+                }
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_bridge_v2::INTERNAL_FAULT_NONFINITE_SAMPLE => {
+                    "non-finite sample reached the ASIO callback"
+                }
                 _ => "ASIO bridge reported a terminal fault",
             };
             format!("ASIO terminal fault kind {}: {detail}", fault.kind)
@@ -38668,7 +39669,7 @@ fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputSta
         .map_err(|_| "Live audio input status lock was poisoned".to_string())?
         .clone();
     if pending_status.safety_clear_pending {
-        return Ok(pending_status);
+        return attach_asio_selection_status_to(&state, pending_status);
     }
     let input = state
         .live_audio_input
@@ -38676,10 +39677,11 @@ fn stop_live_audio_input(state: State<'_, AppState>) -> Result<LiveAudioInputSta
         .map_err(|_| "Live audio input state lock was poisoned".to_string())?
         .take();
     drop(input);
-    status
+    let returned = status
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())
-        .map(|status| status.clone())
+        .map(|status| status.clone())?;
+    attach_asio_selection_status_to(&state, returned)
 }
 
 #[tauri::command]
@@ -38693,7 +39695,7 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
         .lock()
         .map_err(|_| "Live audio input state lock was poisoned".to_string())?;
     let Some(input) = active.as_ref() else {
-        return Ok(LiveAudioInputStatus::default());
+        return attach_asio_selection_status_to(&state, LiveAudioInputStatus::default());
     };
     let worker_finished = input
         .worker
@@ -38738,10 +39740,10 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
         &input.ready_capture_chunks,
         &input.capture_telemetry,
     );
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    if let Some(LiveAudioCaptureStream::Asio { _stream }) = input.stream.as_ref() {
-        if let Ok(mut status) = input.status.lock() {
-            status.backend_xruns = _stream.xrun_count();
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    if let Some(LiveAudioCaptureStream::Asio { _session }) = input.stream.as_ref() {
+        if let (Ok(telemetry), Ok(mut status)) = (_session.telemetry_json(), input.status.lock()) {
+            status.backend_xruns = telemetry.xruns;
         }
     }
     let status = Arc::clone(&input.status);
@@ -38752,18 +39754,20 @@ fn live_audio_input_status(state: State<'_, AppState>) -> Result<LiveAudioInputS
             .map_err(|_| "Live audio input status lock was poisoned".to_string())?
             .safety_clear_pending;
     if !shutdown_ready {
-        return status
+        let current = status
             .lock()
             .map_err(|_| "Live audio input status lock was poisoned".to_string())
-            .map(|status| status.clone());
+            .map(|status| status.clone())?;
+        return attach_asio_selection_status_to(&state, current);
     }
     let input = active.take();
     drop(active);
     drop(input);
-    status
+    let returned = status
         .lock()
         .map_err(|_| "Live audio input status lock was poisoned".to_string())
-        .map(|status| status.clone())
+        .map(|status| status.clone())?;
+    attach_asio_selection_status_to(&state, returned)
 }
 
 #[tauri::command]
@@ -55998,7 +57002,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             .any(|cue_list| cue_list.id == executor.cue_list_id)
         {
             return Err(format!(
-                "Project Playback Executor {} references missing Cue List {}",
+                "Project Playback Executor {} references missing Bank {}",
                 executor.id, executor.cue_list_id
             ));
         }
@@ -56010,12 +57014,12 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
         }
     }
     if project.snapshot.cue_lists.is_empty() {
-        return Err("Project must contain at least one Cue List".to_string());
+        return Err("Project must contain at least one Bank".to_string());
     }
     for cue_list in &project.snapshot.cue_lists {
         if cue_list.id == 0 || cue_list.label.trim().is_empty() {
             return Err(format!(
-                "Project Cue List {} has an invalid ID or label",
+                "Project Bank {} has an invalid ID or name",
                 cue_list.id
             ));
         }
@@ -56027,7 +57031,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
                 .any(|cue| cue.id == active_cue_id && cue.cue_list_id == cue_list.id)
             {
                 return Err(format!(
-                    "Project Cue List {} references missing active cue {}",
+                    "Project Bank {} references missing active Scene {}",
                     cue_list.id, active_cue_id
                 ));
             }
@@ -56041,7 +57045,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
             .any(|cue_list| cue_list.id == cue.cue_list_id)
         {
             return Err(format!(
-                "Project cue {} references missing Cue List {}",
+                "Project Scene {} references missing Bank {}",
                 cue.id, cue.cue_list_id
             ));
         }
@@ -66223,6 +67227,146 @@ struct VideoOutputWindowStatus {
     performance: Option<NativeVideoOutputPerformance>,
 }
 
+/// Strict v1 proof that only a currently registered Tauri window represents a
+/// configured Display output. This deliberately does not consult worker,
+/// recovery, project-file, or browser state: those paths can be stale while a
+/// native window is already gone.
+const VIDEO_OUTPUT_WINDOW_OBSERVATION_V1_SCHEMA_VERSION: u16 = 1;
+const VIDEO_OUTPUT_WINDOW_OBSERVATION_V1_SOURCE: &str = "app-owned-read-only";
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct VideoOutputWindowObservationV1 {
+    schema_version: u16,
+    source: &'static str,
+    outputs: Vec<VideoOutputWindowObservationEntryV1>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct VideoOutputWindowObservationEntryV1 {
+    /// A canonical positive decimal string. JSON numbers would silently lose
+    /// precision above JavaScript's safe-integer range.
+    output_id: String,
+    label: String,
+    live_open: bool,
+    live_window_label: String,
+    /// `null` means the exact live window is not currently registered. A live
+    /// Windows window must instead expose a canonical nonzero HWND decimal.
+    native_window_handle_decimal: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppOwnedVideoOutputWindowSnapshot {
+    label: String,
+    native_window_handle: u64,
+}
+
+fn parse_canonical_positive_decimal(value: &str, subject: &str) -> Result<u64, String> {
+    if value.is_empty()
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "{subject} must be a canonical nonzero positive decimal string"
+        ));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{subject} exceeds the supported unsigned 64-bit decimal range"))
+}
+
+fn canonical_positive_decimal(value: u64, subject: &str) -> Result<String, String> {
+    if value == 0 {
+        return Err(format!("{subject} must be nonzero"));
+    }
+    let decimal = value.to_string();
+    let parsed = parse_canonical_positive_decimal(&decimal, subject)?;
+    if parsed != value {
+        return Err(format!(
+            "{subject} changed during canonical decimal encoding"
+        ));
+    }
+    Ok(decimal)
+}
+
+fn require_video_output_observation_label(label: &str, subject: &str) -> Result<(), String> {
+    if label.is_empty() || label.contains(['\r', '\n']) {
+        return Err(format!("{subject} must be a non-empty single-line label"));
+    }
+    Ok(())
+}
+
+fn video_output_window_observation_from_configured_displays<I, Lookup>(
+    configured_displays: I,
+    mut lookup_live_window: Lookup,
+) -> Result<VideoOutputWindowObservationV1, String>
+where
+    I: IntoIterator<Item = (VideoOutputId, String)>,
+    Lookup: FnMut(&str) -> Result<Option<AppOwnedVideoOutputWindowSnapshot>, String>,
+{
+    let mut seen_output_ids = HashSet::new();
+    let mut configured = Vec::new();
+    for (output_id, label) in configured_displays {
+        if !seen_output_ids.insert(output_id) {
+            return Err(format!(
+                "Configured Display output {output_id} appears more than once"
+            ));
+        }
+        let output_id_decimal = canonical_positive_decimal(output_id, "Display output ID")?;
+        require_video_output_observation_label(&label, "Display output label")?;
+        configured.push((output_id, output_id_decimal, label));
+    }
+    configured.sort_unstable_by_key(|(output_id, _, _)| *output_id);
+
+    let mut outputs = Vec::with_capacity(configured.len());
+    for (output_id, output_id_decimal, label) in configured {
+        let live_window_label = video_output_window_label(output_id, false);
+        let live_window = lookup_live_window(&live_window_label)?;
+        let (live_open, native_window_handle_decimal) = match live_window {
+            None => (false, None),
+            Some(window) => {
+                if window.label != live_window_label {
+                    return Err(format!(
+                        "App-owned window label mismatch for Display output {output_id}: expected {live_window_label}, got {}",
+                        window.label
+                    ));
+                }
+                let native_window_handle_decimal =
+                    canonical_positive_decimal(window.native_window_handle, "Native window HWND")?;
+                (true, Some(native_window_handle_decimal))
+            }
+        };
+        outputs.push(VideoOutputWindowObservationEntryV1 {
+            output_id: output_id_decimal,
+            label,
+            live_open,
+            live_window_label,
+            native_window_handle_decimal,
+        });
+    }
+
+    Ok(VideoOutputWindowObservationV1 {
+        schema_version: VIDEO_OUTPUT_WINDOW_OBSERVATION_V1_SCHEMA_VERSION,
+        source: VIDEO_OUTPUT_WINDOW_OBSERVATION_V1_SOURCE,
+        outputs,
+    })
+}
+
+fn app_owned_native_window_handle(window: &tauri::Window) -> Result<u64, String> {
+    #[cfg(windows)]
+    {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("App-owned window HWND query failed: {error}"))?;
+        u64::try_from(hwnd.0 as usize)
+            .map_err(|_| "App-owned window HWND is not a positive integer".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Err("Native video output window observation requires Windows HWND support".to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct LiveVideoWindowTruth {
     incarnation: u64,
@@ -67387,13 +68531,407 @@ struct NativeTimelineFollowLastValidFrame {
     frame: video::VideoFrame,
 }
 
+/// One native Display output frame decision. `Presentable` carries an
+/// admitted artistic render bound to a captured presentation authority; the
+/// caller must still pass [`present_native_display_frame_if_authorized`]
+/// immediately before touching the GPU surface. `SettlementOnly` is a
+/// definitive Follow settlement with NO physical payload: exactly zero
+/// presents may follow it.
 #[derive(Debug, Clone)]
 enum NativeVideoOutputFrame {
-    Prepared(Box<video::PreparedVideoOutput>),
-    Follow {
-        frame: video::VideoFrame,
-        acknowledgement: TimelineFollowSettlementAck,
-    },
+    Presentable(Box<NativePresentableVideoOutputFrame>),
+    SettlementOnly(TimelineFollowSettlementAck),
+}
+
+#[derive(Debug, Clone)]
+struct NativePresentableVideoOutputFrame {
+    result: video::VideoOutputArtisticRenderResult,
+    contract: video::VideoOutputPresentationContract,
+    authority: NativeDisplayPresentationAuthority,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    settlement: Option<TimelineFollowSettlementAck>,
+}
+
+/// Runtime-only identity of the active Timeline Follow presentation at
+/// preparation time. Progress changes are fine; retirement or a new
+/// generation is not the same physical present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeTimelineFollowActiveIdentity {
+    epoch: u64,
+    generation: u64,
+    source_timeline_id: TimelineId,
+    target_timeline_id: TimelineId,
+}
+
+fn native_timeline_follow_active_identity(
+    follow: &engine::TimelineFollowVideoRenderSnapshot,
+) -> NativeTimelineFollowActiveIdentity {
+    NativeTimelineFollowActiveIdentity {
+        epoch: follow.epoch,
+        generation: follow.generation,
+        source_timeline_id: follow.source_timeline_id,
+        target_timeline_id: follow.target_timeline_id,
+    }
+}
+
+fn validate_native_timeline_follow_active_identity(
+    expected: NativeTimelineFollowActiveIdentity,
+    current: Option<&engine::TimelineFollowVideoRenderSnapshot>,
+) -> Result<(), String> {
+    let current = current.ok_or_else(|| {
+        format!(
+            "Native Display Timeline Follow {}:{} was retired before physical present",
+            expected.epoch, expected.generation
+        )
+    })?;
+    let actual = native_timeline_follow_active_identity(current);
+    if actual != expected {
+        return Err(format!(
+            "Native Display Timeline Follow identity changed before physical present: expected {}:{} {}->{}, actual {}:{} {}->{}",
+            expected.epoch,
+            expected.generation,
+            expected.source_timeline_id.0,
+            expected.target_timeline_id.0,
+            actual.epoch,
+            actual.generation,
+            actual.source_timeline_id.0,
+            actual.target_timeline_id.0,
+        ));
+    }
+    Ok(())
+}
+
+/// Which snapshot owns the captured output authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeDisplayAuthoritySource {
+    /// The output is visible in the published engine snapshot. Every frame
+    /// revalidates the complete captured authority against a fresh engine
+    /// presentation sample.
+    Published,
+    /// First frame of a pre-publication Display candidate. The unpublished
+    /// snapshot is the only authority that can describe this output; the
+    /// live engine must still show the exact captured pre-publication
+    /// ownership pair, blackout authorities, and presentation token when the
+    /// fenced first present happens.
+    UnpublishedCandidate,
+}
+
+/// Comparable local observations that admit one native Display physical
+/// present. This is the Display counterpart of the FC-28 transport fence:
+/// the engine-issued presentation configuration token is bound to the paired
+/// snapshot through [`EngineHandle::video_presentation_sample`], and every
+/// revalidation ends with one bare token load after which exactly zero or
+/// one physical presents happen.
+#[derive(Debug, Clone)]
+struct NativeDisplayPresentationAuthority {
+    source: NativeDisplayAuthoritySource,
+    ownership: OutputOwnershipStatus,
+    video: protocol::VideoSnapshot,
+    project_blackout: bool,
+    blackout_authority: engine::SafetyBlackoutAuthority,
+    output: VideoOutputSummary,
+    presentation_config_token: u64,
+}
+
+fn validate_native_display_output_route(output: &VideoOutputSummary) -> Result<(), String> {
+    if !output.enabled {
+        return Err(format!("Native Display output {} is disabled", output.id));
+    }
+    if output.kind != VideoOutputKind::Display {
+        return Err(format!(
+            "Native Display output {} route resource kind is not Display",
+            output.id
+        ));
+    }
+    if output.endpoint_name.is_some() {
+        return Err(format!(
+            "Native Display output {} carries a foreign endpoint route resource",
+            output.id
+        ));
+    }
+    match (output.monitor_id, output.monitor_identity.as_deref()) {
+        (Some(_), Some(identity)) if !identity.trim().is_empty() => {}
+        _ => {
+            return Err(format!(
+                "Native Display output {} has no bound monitor route identity",
+                output.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_native_display_window_label(
+    output_id: VideoOutputId,
+    window_label: &str,
+) -> Result<(), String> {
+    let expected = video_output_window_label(output_id, false);
+    if window_label != expected {
+        return Err(format!(
+            "Native Display output {output_id} window label mismatch: expected {expected}, got {window_label}"
+        ));
+    }
+    Ok(())
+}
+
+fn capture_native_display_presentation_authority(
+    sample: &engine::VideoPresentationSample,
+    ownership: OutputOwnershipStatus,
+    blackout_authority: engine::SafetyBlackoutAuthority,
+    output_id: VideoOutputId,
+    window_label: &str,
+) -> Result<NativeDisplayPresentationAuthority, String> {
+    if ownership.state != protocol::OutputOwnershipState::Ready || !ownership.video_allowed {
+        return Err(format!(
+            "Native Display output {output_id} is not currently owned for video presentation"
+        ));
+    }
+    let snapshot = &sample.snapshot;
+    let output = snapshot
+        .video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .cloned()
+        .ok_or_else(|| format!("Native Display output {output_id} was removed before render"))?;
+    validate_native_display_output_route(&output)?;
+    validate_native_display_window_label(output_id, window_label)?;
+    Ok(NativeDisplayPresentationAuthority {
+        source: NativeDisplayAuthoritySource::Published,
+        ownership,
+        video: snapshot.video.clone(),
+        project_blackout: snapshot.blackout,
+        blackout_authority,
+        output,
+        presentation_config_token: sample.config_token,
+    })
+}
+
+fn capture_unpublished_native_display_presentation_authority(
+    unpublished: &EngineSnapshot,
+    ownership: &OutputOwnershipStatus,
+    blackout_authority: engine::SafetyBlackoutAuthority,
+    presentation_config_token: u64,
+    output_id: VideoOutputId,
+    window_label: &str,
+) -> Result<NativeDisplayPresentationAuthority, String> {
+    let output = unpublished
+        .video
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .cloned()
+        .ok_or_else(|| format!("Unpublished Native Display candidate {output_id} is missing"))?;
+    validate_native_display_output_route(&output)?;
+    validate_native_display_window_label(output_id, window_label)?;
+    Ok(NativeDisplayPresentationAuthority {
+        source: NativeDisplayAuthoritySource::UnpublishedCandidate,
+        ownership: ownership.clone(),
+        video: unpublished.video.clone(),
+        project_blackout: unpublished.blackout,
+        blackout_authority,
+        output,
+        presentation_config_token,
+    })
+}
+
+fn revalidate_native_display_presentation_authority(
+    engine: &EngineHandle,
+    authority: &NativeDisplayPresentationAuthority,
+) -> Result<(), String> {
+    let output_id = authority.output.id;
+    // Exact epoch/generation/role/state comparison: any ownership movement
+    // revokes the prepared frame.
+    let ownership = engine.output_ownership_status();
+    if ownership != authority.ownership {
+        return Err(format!(
+            "Native Display output {output_id} ownership authority changed before present"
+        ));
+    }
+    if ownership.state != protocol::OutputOwnershipState::Ready || !ownership.video_allowed {
+        return Err(format!(
+            "Native Display output {output_id} is no longer owned for video presentation"
+        ));
+    }
+    if engine.safety_blackout_authority() != authority.blackout_authority {
+        return Err(format!(
+            "Native Display output {output_id} safety blackout authority changed before present"
+        ));
+    }
+    let sample = engine.video_presentation_sample();
+    let current = &sample.snapshot;
+    if current.blackout != authority.project_blackout {
+        return Err(format!(
+            "Native Display output {output_id} project safety blackout changed before present"
+        ));
+    }
+    match authority.source {
+        NativeDisplayAuthoritySource::Published => {
+            let output = current
+                .video
+                .outputs
+                .iter()
+                .find(|output| output.id == output_id)
+                .ok_or_else(|| {
+                    format!("Native Display output {output_id} was removed before present")
+                })?;
+            if output.kind != VideoOutputKind::Display || output.endpoint_name.is_some() {
+                return Err(format!(
+                    "Native Display output {output_id} bound route resource identity changed before present"
+                ));
+            }
+            if output != &authority.output || !output.enabled {
+                return Err(format!(
+                    "Native Display output {output_id} route, mapping, or enablement changed before present"
+                ));
+            }
+            if current.video != authority.video {
+                return Err(format!(
+                    "Native Display output {output_id} project/video authority changed before present"
+                ));
+            }
+        }
+        NativeDisplayAuthoritySource::UnpublishedCandidate => {
+            // The candidate output must still be invisible in the published
+            // project. Its exact mapping/output identity is enforced
+            // structurally by the presentation contract admission against
+            // the unpublished snapshot, while the ownership pair above plus
+            // the caller's first-frame fence keeps publication itself out of
+            // the residual window.
+            if current
+                .video
+                .outputs
+                .iter()
+                .any(|output| output.id == output_id)
+            {
+                return Err(format!(
+                    "Native Display output {output_id} became published before its fenced first present"
+                ));
+            }
+        }
+    }
+    if sample.config_token != authority.presentation_config_token {
+        return Err(format!(
+            "Native Display output {output_id} presentation authority token advanced before present (captured {}, current {})",
+            authority.presentation_config_token, sample.config_token
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum NativeDisplayPresentError {
+    /// Authority moved between preparation and the physical boundary. This
+    /// is a discard/re-render condition, never a presenter fault.
+    Revoked(String),
+    /// The physical present itself was attempted and failed.
+    Physical(String),
+}
+
+impl std::fmt::Display for NativeDisplayPresentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Revoked(error) | Self::Physical(error) => formatter.write_str(error),
+        }
+    }
+}
+
+/// Fail-close fence executed immediately before EVERY native Display
+/// physical present, including the first frame. The full revalidation
+/// compares the captured ownership epoch/generation/role, safety-blackout
+/// authority, and complete output/mapping/route identity against a fresh
+/// engine presentation sample, ending with one more bare token load: every
+/// published presentation mutation revokes the frame with zero presents, and
+/// only an unchanged token admits exactly one physical present.
+fn present_native_display_frame_if_authorized(
+    engine: &EngineHandle,
+    authority: &NativeDisplayPresentationAuthority,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    present: impl FnOnce() -> Result<(), String>,
+) -> Result<(), NativeDisplayPresentError> {
+    revalidate_native_display_presentation_authority(engine, authority)
+        .map_err(NativeDisplayPresentError::Revoked)?;
+    if let Some(follow_identity) = follow_identity {
+        validate_native_timeline_follow_active_identity(
+            follow_identity,
+            engine.timeline_follow_video_render_snapshot().as_ref(),
+        )
+        .map_err(NativeDisplayPresentError::Revoked)?;
+    }
+    if engine.video_presentation_config_token() != authority.presentation_config_token {
+        return Err(NativeDisplayPresentError::Revoked(format!(
+            "Native Display output {} presentation authority token advanced between revalidation and the physical present (captured {}, current {})",
+            authority.output.id,
+            authority.presentation_config_token,
+            engine.video_presentation_config_token()
+        )));
+    }
+    present().map_err(NativeDisplayPresentError::Physical)
+}
+
+fn native_display_presentation_contract(
+    project_render_epoch: u64,
+    output: &VideoOutputSummary,
+    width: u32,
+    height: u32,
+) -> video::VideoOutputPresentationContract {
+    video::VideoOutputPresentationContract::new(
+        project_render_epoch,
+        output.id,
+        width.max(1),
+        height.max(1),
+        &output.mapping,
+    )
+}
+
+/// Renders one canonical post-artistic-chain output from the paired
+/// presentation sample and admits it against the captured authority. There
+/// is deliberately no legacy prepared-frame seam and no last-good fallback
+/// left in this path: the only way pixels reach the surface is through an
+/// admitted [`video::VideoOutputArtisticRenderResult`] presented via
+/// [`video::GpuSurfacePresenter::present_output_artistic_result`].
+fn prepare_native_display_artistic_output(
+    renderer: &mut AppVideoPreviewRenderer,
+    snapshot: &EngineSnapshot,
+    authority: &NativeDisplayPresentationAuthority,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+) -> Result<NativeVideoOutputFrame, String> {
+    let (width, height) = (width.max(1), height.max(1));
+    let result = renderer
+        .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+            &snapshot.video,
+            video::VideoEffectRenderContext {
+                clip_runtime: &snapshot.video_clip_runtime,
+                project_render_epoch: authority.ownership.epoch,
+            },
+            &snapshot.video_transition_runtime,
+            output_id,
+            width,
+            height,
+        )
+        .map_err(|error| {
+            format!("Native Display output {output_id} artistic render failed: {error:?}")
+        })?;
+    let contract = native_display_presentation_contract(
+        authority.ownership.epoch,
+        &authority.output,
+        width,
+        height,
+    );
+    contract.admit(&result).map_err(|error| {
+        format!("Native Display output {output_id} presentation rejected: {error:?}")
+    })?;
+    Ok(NativeVideoOutputFrame::Presentable(Box::new(
+        NativePresentableVideoOutputFrame {
+            result,
+            contract,
+            authority: authority.clone(),
+            follow_identity: None,
+            settlement: None,
+        },
+    )))
 }
 
 fn acknowledge_native_timeline_follow_video_settlement(
@@ -67451,15 +68989,59 @@ fn capture_native_timeline_follow_video_render_snapshot(
     (follow.epoch == context.project_render_epoch).then_some((context, follow))
 }
 
+/// Exact opaque-black combiner input for a hard-blackout Follow side. This is
+/// the only place a synthesized frame exists, and it never reaches a physical
+/// present by itself: the combined artistic result decides the payload.
+fn opaque_follow_side_frame(width: u32, height: u32) -> video::VideoFrame {
+    video::VideoFrame {
+        layer_id: 0,
+        width,
+        height,
+        pts_ms: 0,
+        duration_ms: 0,
+        format: video::VideoPixelFormat::Rgba8,
+        data: vec![0_u8; width as usize * height as usize * 4],
+    }
+}
+
 fn prepare_native_timeline_follow_video_output(
     renderer: &mut AppVideoPreviewRenderer,
     context: &VideoOutputPreviewEffectSnapshot,
+    authority: &NativeDisplayPresentationAuthority,
     follow: &engine::TimelineFollowVideoRenderSnapshot,
     output_id: VideoOutputId,
     width: u32,
     height: u32,
     last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
 ) -> Result<NativeVideoOutputFrame, String> {
+    let (width, height) = (width.max(1), height.max(1));
+    if follow.epoch != authority.ownership.epoch {
+        return Err(format!(
+            "Timeline Follow {}:{} ownership epoch {} does not match current output authority {}",
+            follow.epoch, follow.generation, follow.epoch, authority.ownership.epoch
+        ));
+    }
+    if follow.epoch != context.project_render_epoch {
+        return Err(format!(
+            "Timeline Follow {}:{} render epoch {} does not match captured context epoch {}",
+            follow.epoch, follow.generation, follow.epoch, context.project_render_epoch
+        ));
+    }
+    for (label, video) in [
+        ("outgoing", &follow.outgoing_video),
+        ("incoming", &follow.incoming_video),
+    ] {
+        let output = video
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .ok_or_else(|| format!("Timeline Follow {label} output {output_id} is missing"))?;
+        if output != &authority.output {
+            return Err(format!(
+                "Timeline Follow {label} output {output_id} does not match the current project authority"
+            ));
+        }
+    }
     let outgoing_output = follow
         .outgoing_video
         .outputs
@@ -67484,26 +69066,15 @@ fn prepare_native_timeline_follow_video_output(
         ));
     }
     if !outgoing_output.enabled || !incoming_output.enabled {
-        let byte_len = (width as usize)
-            .checked_mul(height as usize)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or_else(|| "Timeline Follow output dimensions exceed frame capacity".to_string())?;
-        return Ok(NativeVideoOutputFrame::Follow {
-            frame: video::VideoFrame {
-                layer_id: output_id,
-                width,
-                height,
-                pts_ms: 0,
-                duration_ms: 33,
-                format: video::VideoPixelFormat::Rgba8,
-                data: vec![0; byte_len],
-            },
-            acknowledgement: native_timeline_follow_video_ack(
+        // A disabled consumer settles as NotApplicable with ZERO physical
+        // presents; synthesized black is never invented for it.
+        return Ok(NativeVideoOutputFrame::SettlementOnly(
+            native_timeline_follow_video_ack(
                 follow,
                 output_id,
                 TimelineFollowSettlementAckResult::NotApplicable,
             ),
-        });
+        ));
     }
     let output_key = NativeTimelineFollowLastValidKey {
         epoch: follow.epoch,
@@ -67521,29 +69092,79 @@ fn prepare_native_timeline_follow_video_output(
 
     // The evidenced production output renderer retains the established
     // Clip/Composition/Group/Output chain, blackout and mapping semantics for
-    // each unweighted transport before the canonical Follow combiner runs.
-    // Its evidence remains authoritative: a cached side is never mistaken for
-    // fresh physical settlement evidence.
-    let outgoing = renderer
-        .render_output_preview_with_effects_and_transitions_evidenced(
-            &follow.outgoing_video,
-            context.render_context(),
-            &context.snapshot.video_transition_runtime,
-            output_id,
-            width,
-            height,
-        )
-        .map_err(|error| format!("Timeline Follow outgoing output render failed: {error:?}"))?;
-    let incoming = renderer
-        .render_output_preview_with_effects_and_transitions_evidenced(
-            &follow.incoming_video,
-            context.render_context(),
-            &context.snapshot.video_transition_runtime,
-            output_id,
-            width,
-            height,
-        )
-        .map_err(|error| format!("Timeline Follow incoming output render failed: {error:?}"))?;
+    // each unweighted side before the canonical Follow combiner runs.
+    let render_context = video::VideoEffectRenderContext {
+        clip_runtime: &context.snapshot.video_clip_runtime,
+        project_render_epoch: follow.epoch,
+    };
+    let mut faults = Vec::new();
+    let mut sides = Vec::with_capacity(2);
+    for (label, video) in [
+        ("outgoing", &follow.outgoing_video),
+        ("incoming", &follow.incoming_video),
+    ] {
+        let side = renderer
+            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                video,
+                render_context,
+                &context.snapshot.video_transition_runtime,
+                output_id,
+                width,
+                height,
+            )
+            .map_err(|error| format!("Timeline Follow {label} output render failed: {error:?}"))?;
+        if side.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {
+            faults.push(format!(
+                "{label}: {}",
+                side.evidence
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?} render evidence", side.evidence.freshness))
+            ));
+        }
+        sides.push(side);
+    }
+    if !faults.is_empty() {
+        return Ok(NativeVideoOutputFrame::SettlementOnly(
+            native_timeline_follow_video_ack(
+                follow,
+                output_id,
+                TimelineFollowSettlementAckResult::Fault {
+                    fault: faults.join("; "),
+                },
+            ),
+        ));
+    }
+    let [outgoing, incoming] = sides.as_mut_slice() else {
+        unreachable!("exactly two Follow sides are rendered");
+    };
+    let contract =
+        native_display_presentation_contract(follow.epoch, &authority.output, width, height);
+    contract.admit(outgoing).map_err(|error| {
+        format!("Timeline Follow outgoing output is not presentable: {error:?}")
+    })?;
+    contract.admit(incoming).map_err(|error| {
+        format!("Timeline Follow incoming output is not presentable: {error:?}")
+    })?;
+    // A hard-blackout side feeds the canonical Follow combiner as exact
+    // opaque-black pixels, mirroring the transport seam.
+    let outgoing_black_storage;
+    let outgoing_frame: &video::VideoFrame = match &outgoing.payload {
+        video::VideoOutputArtisticPayload::Frame(frame) => frame,
+        video::VideoOutputArtisticPayload::HardBlackout => {
+            outgoing_black_storage = opaque_follow_side_frame(width, height);
+            &outgoing_black_storage
+        }
+    };
+    let incoming_black_storage;
+    let incoming_frame: &video::VideoFrame = match &incoming.payload {
+        video::VideoOutputArtisticPayload::Frame(frame) => frame,
+        video::VideoOutputArtisticPayload::HardBlackout => {
+            incoming_black_storage = opaque_follow_side_frame(width, height);
+            &incoming_black_storage
+        }
+    };
+
     let transition_chain = follow
         .transition_effect_chain
         .as_ref()
@@ -67571,8 +69192,8 @@ fn prepare_native_timeline_follow_video_output(
         .transpose()?;
     let rendered = renderer
         .render_follow_output_transition_rgba8(video::VideoFollowOutputTransitionRequest {
-            outgoing: &outgoing.frame,
-            incoming: &incoming.frame,
+            outgoing: outgoing_frame,
+            incoming: incoming_frame,
             kind: follow.kind,
             curve: follow.curve,
             progress_millis: follow.progress_millis,
@@ -67581,46 +69202,60 @@ fn prepare_native_timeline_follow_video_output(
             last_valid: last_valid.as_ref().map(|cached| &cached.frame),
         })
         .map_err(|error| format!("Timeline Follow output transition failed: {error:?}"))?;
-    let side_error = outgoing.evidence.freshness != video::VideoOutputRenderFreshness::Fresh
-        || incoming.evidence.freshness != video::VideoOutputRenderFreshness::Fresh;
-    let acknowledgement =
-        if !side_error && rendered.evidence.freshness == video::VideoOutputRenderFreshness::Fresh {
-            last_valid.replace(NativeTimelineFollowLastValidFrame {
-                key: output_key,
-                frame: rendered.frame.clone(),
-            });
+    if rendered.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {
+        // A non-fresh combined artistic result (LastValid rollback or Error)
+        // yields a typed Fault settlement with ZERO physical presents. The
+        // renderer's LastValid cache stays authoritative internally, but its
+        // output is deliberately rejected at this presentation boundary.
+        let fault = rendered.evidence.error.clone().unwrap_or_else(|| {
+            "Timeline Follow output used non-fresh last-valid evidence".to_string()
+        });
+        return Ok(NativeVideoOutputFrame::SettlementOnly(
             native_timeline_follow_video_ack(
+                follow,
+                output_id,
+                TimelineFollowSettlementAckResult::Fault { fault },
+            ),
+        ));
+    }
+    let both_sides_blackout = outgoing.is_hard_blackout() && incoming.is_hard_blackout();
+    let artistic = video::VideoOutputArtisticRenderResult {
+        payload: if both_sides_blackout {
+            video::VideoOutputArtisticPayload::HardBlackout
+        } else {
+            video::VideoOutputArtisticPayload::Frame(rendered.frame.clone())
+        },
+        output_mapping: authority.output.mapping.clone(),
+        output_mapping_identity: video::VideoOutputMappingIdentity::from_mapping(
+            &authority.output.mapping,
+        ),
+        evidence: video::VideoOutputRenderEvidence {
+            project_render_epoch: follow.epoch,
+            output_id,
+            freshness: video::VideoOutputRenderFreshness::Fresh,
+            error: None,
+        },
+    };
+    contract.admit(&artistic).map_err(|error| {
+        format!("Timeline Follow output {output_id} presentation rejected: {error:?}")
+    })?;
+    last_valid.replace(NativeTimelineFollowLastValidFrame {
+        key: output_key,
+        frame: rendered.frame.clone(),
+    });
+    Ok(NativeVideoOutputFrame::Presentable(Box::new(
+        NativePresentableVideoOutputFrame {
+            result: artistic,
+            contract,
+            authority: authority.clone(),
+            follow_identity: Some(native_timeline_follow_active_identity(follow)),
+            settlement: Some(native_timeline_follow_video_ack(
                 follow,
                 output_id,
                 TimelineFollowSettlementAckResult::Applied,
-            )
-        } else {
-            let mut faults = Vec::new();
-            if let Some(error) = outgoing.evidence.error {
-                faults.push(format!("outgoing: {error}"));
-            }
-            if let Some(error) = incoming.evidence.error {
-                faults.push(format!("incoming: {error}"));
-            }
-            if let Some(error) = rendered.evidence.error {
-                faults.push(format!("transition: {error}"));
-            }
-            native_timeline_follow_video_ack(
-                follow,
-                output_id,
-                TimelineFollowSettlementAckResult::Fault {
-                    fault: if faults.is_empty() {
-                        "Timeline Follow output used non-fresh last-valid evidence".to_string()
-                    } else {
-                        faults.join("; ")
-                    },
-                },
-            )
-        };
-    Ok(NativeVideoOutputFrame::Follow {
-        frame: rendered.frame,
-        acknowledgement,
-    })
+            )),
+        },
+    )))
 }
 
 fn prepare_native_video_output(
@@ -67630,6 +69265,7 @@ fn prepare_native_video_output(
     width: u32,
     height: u32,
     follow_last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
+    window_label: &str,
     unpublished_snapshot: Option<&EngineSnapshot>,
 ) -> Result<NativeVideoOutputFrame, String> {
     if let Some(snapshot) = unpublished_snapshot {
@@ -67637,18 +69273,39 @@ fn prepare_native_video_output(
         renderer
             .frame_provider_mut()
             .set_bpm(Some(snapshot.clock.bpm));
-        return renderer
-            .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
-            .map(|prepared| NativeVideoOutputFrame::Prepared(Box::new(prepared)))
-            .map_err(|error| format!("{error:?}"));
+        let authority = capture_unpublished_native_display_presentation_authority(
+            snapshot,
+            &engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            engine.video_presentation_config_token(),
+            output_id,
+            window_label,
+        )?;
+        return prepare_native_display_artistic_output(
+            renderer,
+            snapshot,
+            &authority,
+            output_id,
+            width.max(1),
+            height.max(1),
+        );
     }
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
         renderer
             .frame_provider_mut()
             .set_bpm(Some(context.snapshot.clock.bpm));
+        let sample = engine.video_presentation_sample();
+        let authority = capture_native_display_presentation_authority(
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            window_label,
+        )?;
         return prepare_native_timeline_follow_video_output(
             renderer,
             &context,
+            &authority,
             &follow,
             output_id,
             width.max(1),
@@ -67657,14 +69314,25 @@ fn prepare_native_video_output(
         );
     }
     follow_last_valid.take();
-    let snapshot = engine.snapshot();
+    let sample = engine.video_presentation_sample();
     renderer
         .frame_provider_mut()
-        .set_bpm(Some(snapshot.clock.bpm));
-    renderer
-        .prepare_output_frames(&snapshot.video, output_id, width.max(1), height.max(1))
-        .map(|prepared| NativeVideoOutputFrame::Prepared(Box::new(prepared)))
-        .map_err(|error| format!("{error:?}"))
+        .set_bpm(Some(sample.snapshot.clock.bpm));
+    let authority = capture_native_display_presentation_authority(
+        &sample,
+        engine.output_ownership_status(),
+        engine.safety_blackout_authority(),
+        output_id,
+        window_label,
+    )?;
+    prepare_native_display_artistic_output(
+        renderer,
+        &sample.snapshot,
+        &authority,
+        output_id,
+        width.max(1),
+        height.max(1),
+    )
 }
 
 fn record_native_video_output_metrics(
@@ -67791,6 +69459,7 @@ fn start_native_video_live_output(
         initial_size.0,
         initial_size.1,
         &mut initial_follow_last_valid,
+        &label,
         unpublished_snapshot.as_ref(),
     )
     .and_then(|first_output| {
@@ -67834,18 +69503,42 @@ fn start_native_video_live_output(
             .as_mut()
             .ok_or_else(|| "Native video output presenter was not initialized".to_string())?;
         match first_output {
-            NativeVideoOutputFrame::Prepared(prepared) => presenter
-                .present_prepared_output(&prepared, initial_size.0, initial_size.1)
-                .map_err(|error| format!("Native video output first frame failed: {error:?}")),
-            NativeVideoOutputFrame::Follow {
-                frame,
-                acknowledgement,
-            } => presenter
-                .present_rgba8(&frame)
-                .map_err(|error| format!("Native Timeline Follow first frame failed: {error:?}"))
-                .map(|()| {
-                    acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement);
-                }),
+            NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
+                // A definitive non-presenting settlement (NotApplicable or a
+                // typed Fault) publishes exactly zero presents.
+                acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement);
+                Ok(())
+            }
+            NativeVideoOutputFrame::Presentable(first_frame) => {
+                present_native_display_frame_if_authorized(
+                    &engine,
+                    &first_frame.authority,
+                    first_frame.follow_identity,
+                    || {
+                        presenter
+                            .present_output_artistic_result(
+                                &first_frame.result,
+                                &first_frame.contract,
+                            )
+                            .map_err(|error| {
+                                format!("Native Display output first frame failed: {error:?}")
+                            })
+                    },
+                )
+                .map_err(|error| match error {
+                    NativeDisplayPresentError::Revoked(error)
+                    | NativeDisplayPresentError::Physical(error) => error,
+                })
+                .and_then(|()| {
+                    if let Some(acknowledgement) = first_frame.settlement {
+                        acknowledge_native_timeline_follow_video_settlement(
+                            &engine,
+                            acknowledgement,
+                        );
+                    }
+                    Ok(())
+                })
+            }
         }
     });
     record_native_video_output_metrics(
@@ -67941,31 +69634,61 @@ fn start_native_video_live_output(
                                 width,
                                 height,
                                 &mut follow_last_valid,
+                                &label,
                                 None,
                             )
                         },
                         |presenter, output| match output {
-                            NativeVideoOutputFrame::Prepared(prepared) => presenter
-                                .present_prepared_output(&prepared, width, height)
-                                .map_err(|error| {
-                                    format!("Native video output present failed: {error:?}")
-                                }),
-                            NativeVideoOutputFrame::Follow {
-                                frame,
-                                acknowledgement,
-                            } => presenter
-                                .present_rgba8(&frame)
-                                .map_err(|error| {
-                                    format!(
-                                        "Native Timeline Follow output present failed: {error:?}"
-                                    )
-                                })
-                                .map(|()| {
-                                    acknowledge_native_timeline_follow_video_settlement(
-                                        &engine,
-                                        acknowledgement,
-                                    );
-                                }),
+                            NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
+                                // A definitive non-presenting settlement
+                                // (NotApplicable or a typed Fault) publishes
+                                // exactly zero presents.
+                                acknowledge_native_timeline_follow_video_settlement(
+                                    &engine,
+                                    acknowledgement,
+                                );
+                                Ok(())
+                            }
+                            NativeVideoOutputFrame::Presentable(frame) => {
+                                match present_native_display_frame_if_authorized(
+                                    &engine,
+                                    &frame.authority,
+                                    frame.follow_identity,
+                                    || {
+                                        presenter
+                                            .present_output_artistic_result(
+                                                &frame.result,
+                                                &frame.contract,
+                                            )
+                                            .map_err(|error| {
+                                                format!(
+                                                    "Native Display output present failed: {error:?}"
+                                                )
+                                            })
+                                    },
+                                ) {
+                                    Ok(()) => {
+                                        if let Some(acknowledgement) = frame.settlement {
+                                            acknowledge_native_timeline_follow_video_settlement(
+                                                &engine,
+                                                acknowledgement,
+                                            );
+                                        }
+                                        Ok(())
+                                    }
+                                    // Authority moved between preparation and
+                                    // the physical boundary: discard the
+                                    // prepared frame with ZERO presents and no
+                                    // fault fence; the next iteration captures
+                                    // a fresh authoritative sample.
+                                    Err(NativeDisplayPresentError::Revoked(_)) => Ok(()),
+                                    Err(NativeDisplayPresentError::Physical(error)) => {
+                                        Err(format!(
+                                            "Native Display output present failed: {error}"
+                                        ))
+                                    }
+                                }
+                            }
                         },
                         |error| {
                             report_native_timeline_follow_video_result(
@@ -68069,6 +69792,48 @@ fn native_video_output_performance(
         .cloned()?;
     let snapshot = metrics.lock().ok()?.snapshot();
     Some(snapshot)
+}
+
+/// Returns a strict, read-only observation of only the configured Display
+/// output labels that are registered by this Tauri application right now.
+/// Missing labels are reported as closed; a live label must yield this app's
+/// exact label and a nonzero native HWND. No stale recovery/worker state is
+/// reconciled or mutated by this query.
+#[tauri::command]
+fn get_video_output_window_observation_v1(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VideoOutputWindowObservationV1, String> {
+    let snapshot = state.engine.snapshot();
+    let configured_displays = snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+        .map(|output| (output.id, output.label.clone()))
+        .collect::<Vec<_>>();
+    // `AppHandle::windows` is Tauri's process-local registry. It cannot
+    // enumerate another process, browser shell, file, environment, or a
+    // synthetic label; lookup below accepts only the deterministic exact key.
+    let app_owned_windows = app.windows();
+    video_output_window_observation_from_configured_displays(
+        configured_displays,
+        |expected_label| {
+            let Some(window) = app_owned_windows.get(expected_label) else {
+                return Ok(None);
+            };
+            let actual_label = window.label();
+            if actual_label != expected_label {
+                return Err(format!(
+                    "App-owned window registry label mismatch: expected {expected_label}, got {actual_label}"
+                ));
+            }
+            Ok(Some(AppOwnedVideoOutputWindowSnapshot {
+                label: actual_label.to_string(),
+                native_window_handle: app_owned_native_window_handle(window)?,
+            }))
+        },
+    )
 }
 
 #[tauri::command]
@@ -73134,6 +74899,800 @@ pub(crate) mod tests {
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
+    fn bank_mutation_test_snapshot() -> EngineSnapshot {
+        EngineSnapshot {
+            cue_lists: vec![
+                protocol::CueListSummary {
+                    id: 1,
+                    label: "Bank 1".to_string(),
+                    active_cue_id: Some(11),
+                },
+                protocol::CueListSummary {
+                    id: 2,
+                    label: "Bank 2".to_string(),
+                    active_cue_id: None,
+                },
+            ],
+            ..EngineSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn cue_list_create_candidate_is_exact_and_fail_closed() {
+        let created = create_cue_list_in_candidate(bank_mutation_test_snapshot(), 3, "Bank 3")
+            .expect("unique new Bank must be accepted");
+        assert_eq!(
+            created
+                .cue_lists
+                .iter()
+                .map(|cue_list| (cue_list.id, cue_list.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "Bank 1"), (2, "Bank 2"), (3, "Bank 3")]
+        );
+        // A created Bank starts with no active Cue and never touches Scenes.
+        assert!(created.cue_lists[2].active_cue_id.is_none());
+        assert_eq!(
+            created.cue_lists[..2],
+            bank_mutation_test_snapshot().cue_lists[..]
+        );
+        assert_eq!(created.cues, bank_mutation_test_snapshot().cues);
+
+        let before = bank_mutation_test_snapshot();
+        for (cue_list_id, label) in [
+            (0, "Bank Zero"),
+            (1, "Bank Duplicate"),
+            (3, ""),
+            (3, "   "),
+            (3, " Padded "),
+            (3, "bank 2"),
+            (3, "BANK 1"),
+        ] {
+            let error = create_cue_list_in_candidate(before.clone(), cue_list_id, label)
+                .expect_err("invalid Bank create must be rejected");
+            assert!(!error.is_empty(), "{cue_list_id} '{label}'");
+        }
+    }
+
+    #[test]
+    fn cue_list_rename_candidate_is_exact_and_fail_closed() {
+        let renamed = rename_cue_list_in_candidate(bank_mutation_test_snapshot(), 2, "Renamed")
+            .expect("existing Bank rename must be accepted");
+        assert_eq!(renamed.cue_lists.len(), 2);
+        assert_eq!(
+            renamed.cue_lists[0],
+            bank_mutation_test_snapshot().cue_lists[0]
+        );
+        assert_eq!(renamed.cue_lists[1].id, 2);
+        assert_eq!(renamed.cue_lists[1].label, "Renamed");
+        assert_eq!(renamed.cue_lists[1].active_cue_id, None);
+        assert_eq!(renamed.cues, bank_mutation_test_snapshot().cues);
+
+        // Renaming with the same image stays a valid authoritative no-op.
+        let same = rename_cue_list_in_candidate(bank_mutation_test_snapshot(), 1, "Bank 1")
+            .expect("identical rename must be accepted");
+        assert_eq!(same.cue_lists, bank_mutation_test_snapshot().cue_lists);
+
+        let before = bank_mutation_test_snapshot();
+        for (cue_list_id, label) in [
+            (99, "Missing"),
+            (1, "bank 2"),
+            (2, "BANK 1"),
+            (1, " Padded "),
+            (2, "   "),
+        ] {
+            let error = rename_cue_list_in_candidate(before.clone(), cue_list_id, label)
+                .expect_err("invalid Bank rename must be rejected");
+            assert!(!error.is_empty(), "{cue_list_id} '{label}'");
+        }
+        assert_eq!(
+            rename_cue_list_in_candidate(before.clone(), 1, "").err(),
+            Some("Cue List label is required".to_string())
+        );
+    }
+
+    #[test]
+    fn bank_routes_are_backend_authoritative_and_strict_requests_reach_handlers() {
+        // P0: the exact production inventory classifies the Bank
+        // create/rename routes as backend-authoritative project mutations,
+        // so raw dispatch with the current E/R/H/owner args reaches the
+        // handlers without any renderer transaction ticket.
+        for route in [
+            "create_cue_list",
+            "rename_cue_list",
+            "reorder_cue_lists",
+            "delete_cue_list",
+        ] {
+            assert_eq!(
+                control_plane::tauri_route_admission_class(route),
+                Some(control_plane::TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation)
+            );
+        }
+        let registered =
+            control_plane::registered_tauri_command_names_from_source(include_str!("main.rs"))
+                .unwrap();
+        assert!(registered.contains(&"create_cue_list".to_string()));
+        assert!(registered.contains(&"rename_cue_list".to_string()));
+        assert!(registered.contains(&"reorder_cue_lists".to_string()));
+        assert!(registered.contains(&"delete_cue_list".to_string()));
+
+        // Every registered Bank handler takes one deny-unknown strict request
+        // object and delegates to its authoritative commit core.
+        let source = include_str!("main.rs");
+        for (route, request_type, commit_core) in [
+            (
+                "create_cue_list",
+                "AuthoritativeCueListCreateRequest",
+                "commit_authoritative_cue_list_create",
+            ),
+            (
+                "rename_cue_list",
+                "AuthoritativeCueListRenameRequest",
+                "commit_authoritative_cue_list_rename",
+            ),
+            (
+                "reorder_cue_lists",
+                "AuthoritativeCueListReorderRequest",
+                "commit_authoritative_cue_list_reorder",
+            ),
+            (
+                "delete_cue_list",
+                "AuthoritativeCueListDeleteRequest",
+                "commit_authoritative_cue_list_delete",
+            ),
+        ] {
+            let signature = format!("fn {route}(");
+            let start = source
+                .find(&signature)
+                .unwrap_or_else(|| panic!("missing {route} handler"));
+            let body_end = source[start..]
+                .find("\n}\n")
+                .map(|offset| start + offset)
+                .expect("terminated handler body");
+            let body = &source[start..body_end];
+            assert!(
+                body.contains(&format!("request: {request_type}")),
+                "{route} must accept only {request_type}"
+            );
+            assert!(
+                source.contains(&format!(
+                    "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]\nstruct {request_type}"
+                )),
+                "{request_type} must reject legacy or unknown request fields"
+            );
+            assert!(
+                !source[start - 7..start].contains("async "),
+                "{route} must stay synchronous"
+            );
+            assert!(
+                body.contains(commit_core),
+                "{route} must reach its authoritative commit core"
+            );
+            assert_eq!(
+                control_plane::tauri_route_admission_class(route),
+                Some(control_plane::TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation)
+            );
+        }
+    }
+
+    fn assert_strict_camel_case_request<T: serde::de::DeserializeOwned>(valid: serde_json::Value) {
+        serde_json::from_value::<T>(valid.clone()).expect("canonical camelCase request");
+
+        let mut extra = valid.clone();
+        extra
+            .as_object_mut()
+            .expect("request object")
+            .insert("legacyFallback".to_string(), serde_json::Value::Bool(true));
+        assert!(serde_json::from_value::<T>(extra).is_err());
+
+        let mut missing = valid.clone();
+        missing
+            .as_object_mut()
+            .expect("request object")
+            .remove("ownerId");
+        assert!(serde_json::from_value::<T>(missing).is_err());
+
+        let mut snake_case = valid;
+        let owner = snake_case
+            .as_object_mut()
+            .expect("request object")
+            .remove("ownerId")
+            .expect("ownerId");
+        snake_case
+            .as_object_mut()
+            .expect("request object")
+            .insert("owner_id".to_string(), owner);
+        assert!(serde_json::from_value::<T>(snake_case).is_err());
+    }
+
+    #[test]
+    fn bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields() {
+        let authority = serde_json::json!({
+            "expectedEpoch": 7,
+            "expectedRevision": 11,
+            "expectedCheckpointHash": "a".repeat(64),
+            "ownerId": "main:bank-test"
+        });
+
+        let mut create = authority.clone();
+        create["label"] = serde_json::json!("Bank 3");
+        assert_strict_camel_case_request::<AuthoritativeCueListCreateRequest>(create);
+
+        let mut rename = authority.clone();
+        rename["cueListId"] = serde_json::json!(2);
+        rename["label"] = serde_json::json!("Band Scenes");
+        assert_strict_camel_case_request::<AuthoritativeCueListRenameRequest>(rename);
+
+        let mut reorder = authority.clone();
+        reorder["cueListIds"] = serde_json::json!([2, 1]);
+        assert_strict_camel_case_request::<AuthoritativeCueListReorderRequest>(reorder);
+
+        let mut delete = authority;
+        delete["cueListId"] = serde_json::json!(2);
+        assert_strict_camel_case_request::<AuthoritativeCueListDeleteRequest>(delete);
+
+        assert_strict_camel_case_request::<MoveCueBetweenSceneBanksBatchRequest>(
+            serde_json::json!({
+                "cueId": 11,
+                "targetCueListId": 2,
+                "targetGroupId": null,
+                "targetCueId": null,
+                "position": "after",
+                "projectTransactionId": 19,
+                "expectedEpoch": 7,
+                "ownerId": "main:bank-test"
+            }),
+        );
+    }
+
+    #[test]
+    fn retired_direct_bank_routes_are_removed_everywhere_callable() {
+        let source = include_str!("main.rs");
+        // Needles are assembled from fragments so this removal proof cannot
+        // match its own source text.
+        for verb in ["set", "remove"] {
+            assert!(
+                !source.contains(&format!("fn {verb}_cue_list(")),
+                "fn {verb}_cue_list must be deleted"
+            );
+        }
+        for variant in ["SetCueList", "RemoveCueList", "UpsertCueList"] {
+            assert!(
+                !source.contains(&format!("EngineCommand::{variant}")),
+                "EngineCommand::{variant} must be deleted"
+            );
+        }
+        assert!(!source.contains(&format!("upsert_{}_published", "cue_list")));
+        let registered = control_plane::registered_tauri_command_names_from_source(source).unwrap();
+        for route in ["set_cue_list", "remove_cue_list"] {
+            assert!(
+                !registered.contains(&route.to_string()),
+                "{route} must not be registered"
+            );
+            assert_eq!(control_plane::tauri_route_admission_class(route), None);
+        }
+    }
+
+    #[test]
+    fn authoritative_bank_create_and_rename_commit_through_exact_receipts() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let authority = harness.authority();
+
+        // Exact current E/R/H/owner args reach the authoritative commit core
+        // and produce one receipt whose Bank ID matches the engine image.
+        let created = commit_authoritative_cue_list_create(
+            &harness.state,
+            authority.epoch,
+            MEDIA_ASSET_A6_OWNER,
+            &authority,
+            "Receipt Bank",
+        )
+        .expect("exact authority receipt must reach the create handler core");
+        assert!(created.cue_list_id > protocol::DEFAULT_CUE_LIST_ID);
+        assert_eq!(
+            created.cue_list_id,
+            harness
+                .state
+                .engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.label == "Receipt Bank")
+                .expect("created Bank must be published to the engine")
+                .id
+        );
+
+        // A stale epoch fails closed BEFORE any publication or history step.
+        let revision_after_create = harness.state.project_coordinator.lock().unwrap().revision;
+        let undo_after_create = harness
+            .state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .history
+            .undo
+            .len();
+        let fresh_authority = harness.authority();
+        let stale_epoch = commit_authoritative_cue_list_create(
+            &harness.state,
+            fresh_authority.epoch.wrapping_add(1),
+            MEDIA_ASSET_A6_OWNER,
+            &fresh_authority,
+            "Never Created",
+        )
+        .expect_err("stale epoch must be rejected");
+        assert!(!stale_epoch.is_empty());
+        assert_eq!(
+            harness.state.project_coordinator.lock().unwrap().revision,
+            revision_after_create,
+            "a stale-epoch rejection must not advance the project"
+        );
+        let renamed = commit_authoritative_cue_list_rename(
+            &harness.state,
+            fresh_authority.epoch,
+            MEDIA_ASSET_A6_OWNER,
+            &fresh_authority,
+            created.cue_list_id,
+            "Renamed Receipt Bank",
+        )
+        .expect("exact authority receipt must reach the rename handler core");
+        drop(renamed);
+        assert_eq!(
+            harness
+                .state
+                .engine
+                .snapshot()
+                .cue_lists
+                .iter()
+                .find(|cue_list| cue_list.id == created.cue_list_id)
+                .map(|cue_list| cue_list.label.as_str()),
+            Some("Renamed Receipt Bank")
+        );
+        {
+            let coordinator = harness.state.project_coordinator.lock().unwrap();
+            assert_eq!(
+                coordinator.revision,
+                revision_after_create + 1,
+                "the rename commits exactly one revision on top of the create"
+            );
+            assert_eq!(
+                coordinator.history.undo.len(),
+                undo_after_create + 1,
+                "the rename records exactly one history entry"
+            );
+        }
+
+        // An unregistered owner fails closed without publishing anything.
+        let post_rename_authority = harness.authority();
+        let unknown_owner = commit_authoritative_cue_list_create(
+            &harness.state,
+            post_rename_authority.epoch,
+            "renderer:not-registered",
+            &post_rename_authority,
+            "Ownerless Bank",
+        )
+        .expect_err("unregistered owner must fail closed");
+        assert!(!unknown_owner.is_empty());
+        assert!(harness
+            .state
+            .engine
+            .snapshot()
+            .cue_lists
+            .iter()
+            .all(|cue_list| cue_list.label != "Ownerless Bank"));
+    }
+
+    #[test]
+    fn bank_indeterminate_publication_fences_mutations_and_never_reuses_ids() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let engine = &harness.state.engine;
+        let reserved = engine.allocate_cue_list_id();
+
+        // Deterministic injected indeterminate outcome: an admitted ACK
+        // disconnect after the worker may have applied/published B.
+        let mut coordinator = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        let plan = bank_history_plan(
+            &coordinator,
+            &mut current,
+            "",
+            1,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            |snapshot| bank_history_create(snapshot, 2, "Fenced Bank"),
+        );
+        let error = run_admitted_internal_media_asset_transaction_with_publication_outcome(
+            &harness.state.project_external_command_admission,
+            &harness.state.project_transaction_active,
+            &mut coordinator,
+            plan,
+            || {
+                Err(SnapshotPublicationFailure::Indeterminate(
+                    "injected ACK disconnect after admission".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+        let AdmittedPublicationError::Indeterminate(message) = error else {
+            panic!("injected disconnect must classify as indeterminate");
+        };
+        assert!(message.contains("injected ACK disconnect"));
+        assert!(message.contains("fenced"));
+
+        // The global project-mutation fence is armed: every further external
+        // project command fails closed until restart reconciliation.
+        assert!(harness
+            .state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+        assert!(try_lock_project_external_command_admission(
+            &harness.state.project_external_command_admission
+        )
+        .is_none());
+        let fenced = lock_project_external_command_admission(&harness.state)
+            .expect_err("armed publication fence must reject further mutations");
+        assert!(fenced.contains("indeterminate"));
+
+        // No compensating rollback happened: the coordinator bookkeeping was
+        // never advanced, and the reserved ID is NOT reclaimed.
+        assert_eq!(coordinator.revision, 0);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(!harness
+            .state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        let next = engine.allocate_cue_list_id();
+        assert!(next > reserved, "allocator must stay monotonic");
+        assert!(!engine.release_cue_list_id_if_last(reserved));
+        assert_ne!(engine.allocate_cue_list_id(), reserved);
+    }
+
+    #[test]
+    fn bank_definitive_publication_failure_leaves_coordinator_untouched() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let mut coordinator = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        let plan = bank_history_plan(
+            &coordinator,
+            &mut current,
+            "",
+            1,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            |snapshot| bank_history_create(snapshot, 2, "Rejected Bank"),
+        );
+        let error = run_admitted_internal_media_asset_transaction_with_publication_outcome(
+            &harness.state.project_external_command_admission,
+            &harness.state.project_transaction_active,
+            &mut coordinator,
+            plan,
+            || {
+                Err(SnapshotPublicationFailure::Definitive(
+                    "Bank create could not publish an acknowledged snapshot".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            AdmittedPublicationError::Definitive(
+                "Bank create could not publish an acknowledged snapshot".to_string()
+            )
+        );
+        assert_eq!(coordinator.revision, 0);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(!harness
+            .state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        assert!(!harness
+            .state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+
+        // A definitive success commits the preflighted plan exactly once.
+        let transaction_active = AtomicBool::new(false);
+        let mut coordinator = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        let plan = bank_history_plan(
+            &coordinator,
+            &mut current,
+            "",
+            1,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            |snapshot| bank_history_create(snapshot, 2, "Committed Bank"),
+        );
+        run_admitted_internal_media_asset_transaction_with_publication_outcome(
+            &harness.state.project_external_command_admission,
+            &transaction_active,
+            &mut coordinator,
+            plan,
+            || Ok(()),
+        )
+        .expect("definitive success commits once");
+        assert_eq!(coordinator.revision, 1);
+        assert_eq!(coordinator.history.undo.len(), 1);
+        assert!(!transaction_active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn bank_rename_undo_identity_is_per_bank_and_creates_have_none() {
+        // Rename identity embeds the exact Bank ID: renames of different
+        // Banks can never coalesce into one Undo step.
+        assert_eq!(cue_list_rename_coalesce_key(7), "cue-lists-rename:7");
+        assert_ne!(
+            cue_list_rename_coalesce_key(7),
+            cue_list_rename_coalesce_key(8)
+        );
+        // Bank creates intentionally carry no coalesce identity at all.
+        assert!(
+            canonical_project_transaction_shape("", CUE_LIST_CREATE_HISTORY_LABEL, "",)
+                .ends_with("|coalesce=")
+        );
+        assert!(canonical_project_transaction_shape(
+            "",
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(7),
+        )
+        .contains("|coalesce=cue-lists-rename:7"));
+
+        // Label normalization matches the engine's exact single-source
+        // policy: validated verbatim, never trimmed or rewritten.
+        assert!(validate_cue_list_label("  Padded Name  ").is_err());
+        assert!(validate_cue_list_label("").is_err());
+        assert!(validate_cue_list_label("   ").is_err());
+        assert_eq!(validate_cue_list_label("Exact Name").unwrap(), "Exact Name");
+    }
+
+    fn bank_history_plan(
+        coordinator: &ProjectCoordinator,
+        current: &mut EngineSnapshot,
+        coalesce_key: &str,
+        committed_at_unix_ms: u64,
+        label: &str,
+        mutate: impl FnOnce(&mut EngineSnapshot),
+    ) -> PreparedInternalMediaAssetCommit {
+        let before_snapshot = current.clone();
+        let before_project =
+            project_file_for_save_from_parts(before_snapshot, &coordinator.ancillary);
+        let before = ProjectCheckpoint {
+            hash: project_checkpoint_hash(&before_project, &coordinator.mappings)
+                .expect("baseline Bank history checkpoint hash"),
+            project: before_project,
+            mappings: coordinator.mappings.clone(),
+            epoch: coordinator.epoch,
+            revision: coordinator.revision,
+        };
+        // The mutation lands in the caller's evolving image so the next
+        // staged step chains onto exactly this B.
+        mutate(current);
+        let after_project =
+            project_file_for_save_from_parts(current.clone(), &coordinator.ancillary);
+        let after = ProjectCheckpoint {
+            project: after_project,
+            mappings: coordinator.mappings.clone(),
+            epoch: coordinator.epoch,
+            revision: coordinator.revision,
+            hash: String::new(),
+        };
+        prepare_internal_media_asset_commit(
+            coordinator,
+            label,
+            coalesce_key,
+            before,
+            after,
+            committed_at_unix_ms,
+        )
+        .expect("Bank history step must preflight")
+    }
+
+    fn bank_history_coordinator_step(
+        transaction_active: &AtomicBool,
+        coordinator: &mut ProjectCoordinator,
+        current: &mut EngineSnapshot,
+        label: &str,
+        coalesce_key: &str,
+        committed_at_unix_ms: u64,
+        mutate: impl FnOnce(&mut EngineSnapshot),
+    ) {
+        let plan = bank_history_plan(
+            coordinator,
+            current,
+            coalesce_key,
+            committed_at_unix_ms,
+            label,
+            mutate,
+        );
+        commit_internal_media_asset_transaction_after_preflight(
+            transaction_active,
+            coordinator,
+            plan,
+        );
+    }
+
+    fn bank_history_create(coordinator: &mut EngineSnapshot, id: protocol::CueListId, label: &str) {
+        coordinator.cue_lists.push(protocol::CueListSummary {
+            id,
+            label: label.to_string(),
+            active_cue_id: None,
+        });
+    }
+
+    fn bank_history_rename(coordinator: &mut EngineSnapshot, id: protocol::CueListId, label: &str) {
+        if let Some(cue_list) = coordinator
+            .cue_lists
+            .iter_mut()
+            .find(|cue_list| cue_list.id == id)
+        {
+            cue_list.label = label.to_string();
+        }
+    }
+
+    #[test]
+    fn rapid_bank_creates_never_coalesce_into_one_undo_step() {
+        let transaction_active = AtomicBool::new(false);
+        let mut coordinator = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut coordinator,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_000,
+            |snapshot| bank_history_create(snapshot, 2, "Rapid One"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut coordinator,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_050,
+            |snapshot| bank_history_create(snapshot, 3, "Rapid Two"),
+        );
+        assert_eq!(coordinator.history.undo.len(), 2);
+        assert_eq!(
+            coordinator.history.undo[0].label,
+            CUE_LIST_CREATE_HISTORY_LABEL
+        );
+        assert_eq!(
+            coordinator.history.undo[1].label,
+            CUE_LIST_CREATE_HISTORY_LABEL
+        );
+    }
+
+    #[test]
+    fn rapid_same_bank_renames_coalesce_while_different_banks_never_do() {
+        let transaction_active = AtomicBool::new(false);
+
+        // Same Bank inside the window: one Undo step whose image is the
+        // latest rename.
+        let mut same_bank = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut same_bank,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_000,
+            |snapshot| bank_history_create(snapshot, 2, "Seed"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut same_bank,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(2),
+            1_100,
+            |snapshot| bank_history_rename(snapshot, 2, "Renamed A"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut same_bank,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(2),
+            1_200,
+            |snapshot| bank_history_rename(snapshot, 2, "Renamed B"),
+        );
+        assert_eq!(same_bank.history.undo.len(), 2); // create + ONE rename step
+        assert_eq!(
+            same_bank.history.undo.last().expect("rename entry").label,
+            CUE_LIST_RENAME_HISTORY_LABEL
+        );
+        assert_eq!(
+            same_bank
+                .history
+                .undo
+                .last()
+                .expect("rename entry")
+                .after
+                .project,
+            project_file_for_save_from_parts(current.clone(), &same_bank.ancillary)
+        );
+
+        // Different Banks inside the window: two distinct Undo steps.
+        let mut different_banks = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut different_banks,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_000,
+            |snapshot| bank_history_create(snapshot, 2, "Seed"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut different_banks,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(2),
+            1_100,
+            |snapshot| bank_history_rename(snapshot, 2, "Renamed A"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut different_banks,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_150,
+            |snapshot| bank_history_create(snapshot, 3, "Second Seed"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut different_banks,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(3),
+            1_200,
+            |snapshot| bank_history_rename(snapshot, 3, "Other Bank Rename"),
+        );
+        assert_eq!(different_banks.history.undo.len(), 4);
+        let rename_labels = different_banks
+            .history
+            .undo
+            .iter()
+            .filter(|entry| entry.label == CUE_LIST_RENAME_HISTORY_LABEL)
+            .count();
+        assert_eq!(rename_labels, 2);
+
+        // Same Bank beyond the coalesce window: two distinct Undo steps.
+        let mut beyond_window = ProjectCoordinator::default();
+        let mut current = EngineSnapshot::default();
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut beyond_window,
+            &mut current,
+            CUE_LIST_CREATE_HISTORY_LABEL,
+            "",
+            1_000,
+            |snapshot| bank_history_create(snapshot, 2, "Seed"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut beyond_window,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(2),
+            2_000,
+            |snapshot| bank_history_rename(snapshot, 2, "Renamed Early"),
+        );
+        bank_history_coordinator_step(
+            &transaction_active,
+            &mut beyond_window,
+            &mut current,
+            CUE_LIST_RENAME_HISTORY_LABEL,
+            &cue_list_rename_coalesce_key(2),
+            2_000 + PROJECT_HISTORY_COALESCE_MS + 1,
+            |snapshot| bank_history_rename(snapshot, 2, "Renamed Late"),
+        );
+        assert_eq!(beyond_window.history.undo.len(), 3); // create + 2 renames
+    }
+
     #[test]
     fn production_destroyed_callback_fences_aba_and_preserves_quarantined_metrics_until_reap() {
         let truth = Mutex::new(HashMap::from([(
@@ -73757,6 +76316,8 @@ pub(crate) mod tests {
                 live_audio_input_lifecycle: Mutex::new(()),
                 live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
                 live_audio_input: Mutex::new(None),
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
                 video_preview: Arc::new(Mutex::new(
                     video::VideoPreviewRenderer::with_frame_provider(
                         video::VideoRuntimeConfig::default(),
@@ -78421,6 +80982,877 @@ pub(crate) mod tests {
         let error = result.expect_err("stuck logical extent must fail closed");
         assert!(error.contains("expected 3840x2160"));
         assert!(error.contains("observed 2560x1440"));
+    }
+
+    // ---- Native Display fail-close presentation fence ----
+
+    fn native_display_test_engine() -> EngineHandle {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let transition = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .expect("test ownership transition must begin");
+        transition
+            .complete()
+            .expect("test ownership transition must complete");
+        engine
+    }
+
+    fn install_injected_display_output_extent(
+        engine: &EngineHandle,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) {
+        engine
+            .send(EngineCommand::AddVideoOutput(VideoOutputSummary {
+                id: output_id,
+                label: format!("Injected Display {output_id}"),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: Some(0),
+                monitor_identity: Some(format!("monitor-{output_id}")),
+                width,
+                height,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }))
+            .expect("injected Display output command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .any(|output| output.id == output_id)
+            },
+            "injected Display output did not publish",
+        );
+    }
+
+    fn wait_until_native_display_test_condition(
+        mut condition: impl FnMut() -> bool,
+        message: &'static str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "native Display test condition timed out: {message}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn injected_display_authority(
+        engine: &EngineHandle,
+        output_id: VideoOutputId,
+    ) -> NativeDisplayPresentationAuthority {
+        let sample = engine.video_presentation_sample();
+        capture_native_display_presentation_authority(
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &video_output_window_label(output_id, false),
+        )
+        .expect("injected Display authority must be present and owned")
+    }
+
+    fn counted_present_slot() -> (Arc<AtomicU64>, impl FnOnce() -> Result<(), String>) {
+        let presents = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&presents);
+        (presents, move || {
+            counter.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        })
+    }
+
+    /// Same concrete renderer type the production Display worker owns, so
+    /// prepare-level tests exercise the exact production render seam.
+    fn test_app_video_renderer() -> AppVideoPreviewRenderer {
+        video::VideoPreviewRenderer::with_frame_provider(
+            video::VideoRuntimeConfig::default(),
+            video::DecoderBackedFrameProvider::new(
+                ndi_transport::NdiAwareVideoFrameDecoder::from_env(),
+            )
+            .with_prefetch(0, 33),
+        )
+    }
+
+    fn assert_present_revoked(
+        result: Result<(), NativeDisplayPresentError>,
+        message: &str,
+        expected_fragment: &str,
+    ) -> String {
+        match result.expect_err(message) {
+            NativeDisplayPresentError::Revoked(error) => {
+                assert!(
+                    error.contains(expected_fragment),
+                    "revocation '{error}' must mention '{expected_fragment}'"
+                );
+                error
+            }
+            NativeDisplayPresentError::Physical(error) => {
+                panic!("an authority rejection is never a physical fault: {error}")
+            }
+        }
+    }
+
+    fn follow_side_video_snapshot(
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        enabled: bool,
+    ) -> protocol::VideoSnapshot {
+        protocol::VideoSnapshot {
+            compositions: vec![CompositionSummary {
+                id: 1,
+                label: "Follow".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: vec![output_id],
+            }],
+            outputs: vec![VideoOutputSummary {
+                id: output_id,
+                label: format!("Injected Display {output_id}"),
+                kind: VideoOutputKind::Display,
+                enabled,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: Some(0),
+                monitor_identity: Some(format!("monitor-{output_id}")),
+                width,
+                height,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }],
+            ..protocol::VideoSnapshot::default()
+        }
+    }
+
+    fn follow_render_snapshot_for_display(
+        epoch: u64,
+        generation: u64,
+    ) -> engine::TimelineFollowVideoRenderSnapshot {
+        engine::TimelineFollowVideoRenderSnapshot {
+            epoch,
+            generation,
+            source_timeline_id: TimelineId(55),
+            target_timeline_id: TimelineId(56),
+            kind: VideoClipTakeKind::Crossfade,
+            curve: VideoLayerTransitionCurve::Linear,
+            progress_millis: 500,
+            outgoing_video: follow_side_video_snapshot(17, 4, 2, true),
+            incoming_video: follow_side_video_snapshot(17, 4, 2, true),
+            transition_effect_chain: None,
+        }
+    }
+
+    fn invalid_follow_transition_chain(source_timeline_id: TimelineId) -> VideoEffectChainSummary {
+        VideoEffectChainSummary {
+            id: protocol::VideoEffectChainId(70),
+            scope: protocol::VideoEffectScope::Transition {
+                owner: protocol::VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+            },
+            bypassed: false,
+            stages: vec![protocol::VideoEffectStageSummary {
+                id: protocol::VideoEffectStageId(71),
+                enabled: true,
+                label: "Broken".to_string(),
+                effect: protocol::VideoEffectSummary {
+                    id: protocol::VideoEffectId(72),
+                    kind: protocol::VideoEffectKind::Isf {
+                        effect: protocol::VideoIsfEffectSummary {
+                            enabled: true,
+                            label: "Broken".to_string(),
+                            source: Arc::from("this is not valid ISF source"),
+                            source_path: None,
+                            description: None,
+                            categories: Vec::new(),
+                            controls: Vec::new(),
+                            stack: Vec::new(),
+                        },
+                    },
+                },
+            }],
+        }
+    }
+
+    fn synthetic_follow_authority(
+        sample_config_token: u64,
+        ownership_epoch: u64,
+        ownership_generation: u64,
+        output: &VideoOutputSummary,
+    ) -> NativeDisplayPresentationAuthority {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.outputs.push(output.clone());
+        let sample = engine::VideoPresentationSample {
+            config_token: sample_config_token,
+            snapshot,
+        };
+        capture_native_display_presentation_authority(
+            &sample,
+            OutputOwnershipStatus::ready(
+                MachineOutputRole::Both,
+                Some(MachineOutputRole::Both),
+                ownership_generation,
+                ownership_epoch,
+            ),
+            engine::SafetyBlackoutAuthority {
+                engaged: false,
+                epoch: 0,
+                generation: 0,
+            },
+            output.id,
+            &video_output_window_label(output.id, false),
+        )
+        .expect("synthetic Follow authority must capture")
+    }
+
+    #[test]
+    fn native_display_presentation_token_mutate_and_revert_stays_rejected() {
+        let output_id = 87_401;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 4, 2);
+        let authority = injected_display_authority(&engine, output_id);
+        assert!(
+            revalidate_native_display_presentation_authority(&engine, &authority).is_ok(),
+            "a freshly captured stable authority must revalidate"
+        );
+
+        let mutated_mapping = VideoOutputMapping {
+            black_level: 0.5,
+            ..authority.output.mapping.clone()
+        };
+        engine
+            .send(EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: mutated_mapping.clone(),
+            })
+            .expect("mapping mutation command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == output_id)
+                    .is_some_and(|output| output.mapping == mutated_mapping)
+            },
+            "mapping mutation did not publish",
+        );
+        let (presents, present) = counted_present_slot();
+        // The mapping mutation itself fires first as an exact-output change;
+        // the token-only rejection is asserted after the revert below.
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &authority, None, present),
+            "token advance after mutation must revoke",
+            "changed before present",
+        );
+        assert_eq!(presents.load(Ordering::Acquire), 0, "zero presents");
+
+        // Reverting the mapping restores the exact snapshot bytes but can
+        // never restore the advanced token: the stale authority stays
+        // revoked with zero presents.
+        engine
+            .send(EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: authority.output.mapping.clone(),
+            })
+            .expect("mapping revert command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == output_id)
+                    .is_some_and(|output| output.mapping == authority.output.mapping)
+            },
+            "mapping revert did not publish",
+        );
+        let (revert_presents, revert_present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &authority, None, revert_present),
+            "token advance after mutate+revert must still revoke",
+            "presentation authority token advanced before present",
+        );
+        assert_eq!(
+            revert_presents.load(Ordering::Acquire),
+            0,
+            "mutate+revert must not silently re-admit"
+        );
+
+        // A fresh capture against the current token admits exactly once.
+        let refreshed = injected_display_authority(&engine, output_id);
+        let (fresh_presents, fresh_present) = counted_present_slot();
+        present_native_display_frame_if_authorized(&engine, &refreshed, None, fresh_present)
+            .expect("freshly captured authority must admit exactly one present");
+        assert_eq!(fresh_presents.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn native_display_safety_blackout_engage_release_cycle_rejects_stale_authority() {
+        let output_id = 87_402;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 4, 2);
+        let authority = injected_display_authority(&engine, output_id);
+        assert!(
+            revalidate_native_display_presentation_authority(&engine, &authority).is_ok(),
+            "stable pre-blackout authority must revalidate"
+        );
+
+        engine
+            .safety_blackout_engage_published(Instant::now() + Duration::from_secs(10))
+            .expect("safety blackout engage must succeed");
+        wait_until_native_display_test_condition(
+            || engine.safety_blackout_authority().engaged,
+            "safety blackout engage did not publish",
+        );
+        let (engaged_presents, engaged_present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &authority, None, engaged_present),
+            "blackout engagement must revoke the prepared frame",
+            "safety blackout authority changed before present",
+        );
+        assert_eq!(engaged_presents.load(Ordering::Acquire), 0);
+
+        let engaged = engine.safety_blackout_authority();
+        engine
+            .safety_blackout_release_published(
+                engaged.epoch,
+                engaged.generation,
+                Instant::now() + Duration::from_secs(10),
+            )
+            .expect("safety blackout release must succeed");
+        wait_until_native_display_test_condition(
+            || !engine.safety_blackout_authority().engaged,
+            "safety blackout release did not publish",
+        );
+        // The release itself moved the blackout authority generation, so the
+        // original capture stays revoked even though blackout is now off.
+        let (released_presents, released_present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &authority, None, released_present),
+            "blackout release must keep the stale capture revoked",
+            "safety blackout authority changed before present",
+        );
+        assert_eq!(released_presents.load(Ordering::Acquire), 0);
+
+        let refreshed = injected_display_authority(&engine, output_id);
+        let (fresh_presents, fresh_present) = counted_present_slot();
+        present_native_display_frame_if_authorized(&engine, &refreshed, None, fresh_present)
+            .expect("post-release recapture must admit exactly one present");
+        assert_eq!(fresh_presents.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn native_display_mapping_and_output_identity_substitution_is_rejected_without_present() {
+        let output_id = 87_403;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 4, 2);
+        let authority = injected_display_authority(&engine, output_id);
+
+        // A tampered authority copy (hostile mapping substitution) can never
+        // pass the live comparison.
+        let mut tampered = authority.clone();
+        tampered.output.mapping.stage_x += 1.25;
+        let (tampered_presents, tampered_present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &tampered, None, tampered_present),
+            "tampered authority mapping must be rejected",
+            "changed before present",
+        );
+        assert_eq!(tampered_presents.load(Ordering::Acquire), 0);
+
+        // A hostile artistic result whose declared mapping identity does not
+        // match its actual mapping is rejected by admission alone.
+        let contract = native_display_presentation_contract(
+            authority.ownership.epoch,
+            &authority.output,
+            4,
+            2,
+        );
+        let lying_identity = video::VideoOutputMappingIdentity::from_mapping(&VideoOutputMapping {
+            stage_x: 9.0,
+            ..authority.output.mapping.clone()
+        });
+        let substituted = video::VideoOutputArtisticRenderResult {
+            payload: video::VideoOutputArtisticPayload::Frame(video::VideoFrame {
+                layer_id: 0,
+                width: 4,
+                height: 2,
+                pts_ms: 0,
+                duration_ms: 33,
+                format: video::VideoPixelFormat::Rgba8,
+                data: vec![128; 32],
+            }),
+            output_mapping: authority.output.mapping.clone(),
+            output_mapping_identity: lying_identity,
+            evidence: video::VideoOutputRenderEvidence {
+                project_render_epoch: authority.ownership.epoch,
+                output_id,
+                freshness: video::VideoOutputRenderFreshness::Fresh,
+                error: None,
+            },
+        };
+        let error = contract
+            .admit(&substituted)
+            .expect_err("lying mapping identity must be rejected at admission");
+        assert!(
+            matches!(
+                error,
+                video::VideoOutputArtisticRejection::ResultMappingIdentityMismatch { .. }
+            ),
+            "unexpected rejection: {error:?}"
+        );
+
+        // A result bound to a different output identity is equally rejected.
+        let foreign_output = video::VideoOutputArtisticRenderResult {
+            output_mapping_identity: video::VideoOutputMappingIdentity::from_mapping(
+                &authority.output.mapping,
+            ),
+            evidence: video::VideoOutputRenderEvidence {
+                output_id: 98_999,
+                ..substituted.evidence.clone()
+            },
+            ..substituted.clone()
+        };
+        let error = contract
+            .admit(&foreign_output)
+            .expect_err("foreign output binding must be rejected at admission");
+        assert!(matches!(
+            error,
+            video::VideoOutputArtisticRejection::OutputMismatch { .. }
+        ));
+
+        // Non-fresh evidence cannot slip through admission either.
+        for freshness in [
+            video::VideoOutputRenderFreshness::LastValid,
+            video::VideoOutputRenderFreshness::Error,
+        ] {
+            let stale = video::VideoOutputArtisticRenderResult {
+                output_mapping_identity: video::VideoOutputMappingIdentity::from_mapping(
+                    &authority.output.mapping,
+                ),
+                evidence: video::VideoOutputRenderEvidence {
+                    freshness,
+                    ..substituted.evidence.clone()
+                },
+                ..substituted.clone()
+            };
+            let error = contract
+                .admit(&stale)
+                .expect_err("non-fresh evidence must be rejected at admission");
+            assert!(matches!(
+                error,
+                video::VideoOutputArtisticRejection::NotFresh { .. }
+            ));
+        }
+
+        assert_eq!(
+            injected_display_authority(&engine, output_id).output,
+            authority.output,
+            "the real authority was never mutated by these attempts"
+        );
+    }
+
+    #[test]
+    fn native_display_follow_nonfresh_results_yield_exactly_zero_physical_payloads() {
+        let context_snapshot = EngineSnapshot::default();
+        let context = VideoOutputPreviewEffectSnapshot {
+            project_render_epoch: 21,
+            snapshot: context_snapshot,
+        };
+        let follow = follow_render_snapshot_for_display(21, 34);
+        let side_output = follow
+            .outgoing_video
+            .outputs
+            .iter()
+            .find(|output| output.id == 17)
+            .cloned()
+            .expect("follow side output exists");
+        let authority = synthetic_follow_authority(7, 21, 34, &side_output);
+        let mut renderer = test_app_video_renderer();
+        let mut last_valid = None;
+
+        // Stable Fresh renders a presentable frame with an Applied settlement.
+        let first = prepare_native_timeline_follow_video_output(
+            &mut renderer,
+            &context,
+            &authority,
+            &follow,
+            17,
+            4,
+            2,
+            &mut last_valid,
+        )
+        .expect("fresh Follow render must prepare");
+        let NativeVideoOutputFrame::Presentable(first) = first else {
+            panic!("stable Fresh Follow render must be presentable");
+        };
+        assert_eq!(
+            first.settlement.as_ref().map(|ack| ack.result.clone()),
+            Some(TimelineFollowSettlementAckResult::Applied)
+        );
+        assert!(last_valid.is_some(), "Fresh render seeds the caller cache");
+        let cached_frame_before = last_valid
+            .as_ref()
+            .expect("cache seeded")
+            .frame
+            .data
+            .clone();
+
+        // A chain fault with an available fallback produces LastValid
+        // evidence inside the renderer; the presentation boundary must yield
+        // a typed Fault settlement carrying NO physical payload.
+        let mut faulty = follow.clone();
+        let broken_chain = invalid_follow_transition_chain(TimelineId(55));
+        faulty.transition_effect_chain = Some(broken_chain.clone());
+        faulty
+            .outgoing_video
+            .effect_chains
+            .push(broken_chain.clone());
+        faulty.incoming_video.effect_chains.push(broken_chain);
+        let second = prepare_native_timeline_follow_video_output(
+            &mut renderer,
+            &context,
+            &authority,
+            &faulty,
+            17,
+            4,
+            2,
+            &mut last_valid,
+        )
+        .expect("LastValid handling is a typed settlement, not an error");
+        let NativeVideoOutputFrame::SettlementOnly(acknowledgement) = second else {
+            panic!("LastValid evidence must never carry a physical payload");
+        };
+        let TimelineFollowSettlementAckResult::Fault { fault } = acknowledgement.result else {
+            panic!(
+                "LastValid evidence must settle as Fault, got {:?}",
+                acknowledgement.result
+            );
+        };
+        assert!(
+            fault.to_lowercase().contains("valid") || fault.to_lowercase().contains("isf"),
+            "the typed fault must identify the non-fresh rollback: {fault}"
+        );
+        assert_eq!(
+            last_valid.as_ref().expect("cache untouched").frame.data,
+            cached_frame_before,
+            "a rejected non-fresh result must not touch the caller cache"
+        );
+
+        // Without any cache the same fault surfaces as Error evidence and is
+        // still exactly zero physical payloads.
+        last_valid.take();
+        let third = prepare_native_timeline_follow_video_output(
+            &mut renderer,
+            &context,
+            &authority,
+            &faulty,
+            17,
+            4,
+            2,
+            &mut last_valid,
+        )
+        .expect("Error handling is a typed settlement, not an error");
+        assert!(matches!(
+            third,
+            NativeVideoOutputFrame::SettlementOnly(ref ack)
+                if matches!(ack.result, TimelineFollowSettlementAckResult::Fault { .. })
+        ));
+
+        // A disabled consumer settles NotApplicable without any payload.
+        let mut disabled = follow.clone();
+        for video in [&mut disabled.outgoing_video, &mut disabled.incoming_video] {
+            video.outputs[0].enabled = false;
+        }
+        let mut disabled_authority = authority.clone();
+        disabled_authority.output.enabled = false;
+        let fourth = prepare_native_timeline_follow_video_output(
+            &mut renderer,
+            &context,
+            &disabled_authority,
+            &disabled,
+            17,
+            4,
+            2,
+            &mut last_valid,
+        )
+        .expect("disabled consumer settles explicitly");
+        assert!(matches!(
+            fourth,
+            NativeVideoOutputFrame::SettlementOnly(ref ack)
+                if ack.result == TimelineFollowSettlementAckResult::NotApplicable
+        ));
+    }
+
+    #[test]
+    fn native_display_stable_fresh_admission_presents_exactly_once_per_capture() {
+        let output_id = 87_404;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 8, 4);
+        let mut renderer = test_app_video_renderer();
+        let presents = Arc::new(AtomicU64::new(0));
+
+        for _ in 0..3 {
+            let sample = engine.video_presentation_sample();
+            let authority = capture_native_display_presentation_authority(
+                &sample,
+                engine.output_ownership_status(),
+                engine.safety_blackout_authority(),
+                output_id,
+                &video_output_window_label(output_id, false),
+            )
+            .expect("stable engine must capture authority");
+            let frame = prepare_native_display_artistic_output(
+                &mut renderer,
+                &sample.snapshot,
+                &authority,
+                output_id,
+                8,
+                4,
+            )
+            .expect("stable Fresh render must prepare");
+            let NativeVideoOutputFrame::Presentable(frame) = frame else {
+                panic!("stable Fresh plain render must be presentable");
+            };
+            assert!(frame.settlement.is_none());
+            let counter = Arc::clone(&presents);
+            present_native_display_frame_if_authorized(
+                &engine,
+                &frame.authority,
+                None,
+                move || {
+                    counter.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                },
+            )
+            .expect("unchanged authority must admit exactly one present");
+        }
+        assert_eq!(
+            presents.load(Ordering::Acquire),
+            3,
+            "each admitted capture owns exactly one physical present"
+        );
+    }
+
+    #[test]
+    fn native_display_steady_state_authority_mutations_after_preparation_reject() {
+        let output_id = 87_405;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 4, 2);
+        let mut renderer = test_app_video_renderer();
+
+        let sample = engine.video_presentation_sample();
+        let authority = capture_native_display_presentation_authority(
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &video_output_window_label(output_id, false),
+        )
+        .expect("stable engine must capture authority");
+        let prepared = prepare_native_display_artistic_output(
+            &mut renderer,
+            &sample.snapshot,
+            &authority,
+            output_id,
+            4,
+            2,
+        )
+        .expect("preparation succeeds on a stable engine");
+        let NativeVideoOutputFrame::Presentable(prepared) = prepared else {
+            panic!("plain steady-state preparation must be presentable");
+        };
+
+        // Mutation AFTER preparation: disabling the output changes the exact
+        // route/enablement identity.
+        engine
+            .send(EngineCommand::SetVideoOutputEnabled {
+                output_id,
+                enabled: false,
+            })
+            .expect("disable command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == output_id)
+                    .is_some_and(|output| !output.enabled)
+            },
+            "disable did not publish",
+        );
+        let (disable_presents, disable_present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(
+                &engine,
+                &prepared.authority,
+                None,
+                disable_present,
+            ),
+            "post-preparation disable must reject",
+            "route, mapping, or enablement changed before present",
+        );
+        assert_eq!(disable_presents.load(Ordering::Acquire), 0);
+
+        // Re-enabling restores visibility but advances the token again; the
+        // stale prepared frame stays revoked either way.
+        engine
+            .send(EngineCommand::SetVideoOutputEnabled {
+                output_id,
+                enabled: true,
+            })
+            .expect("enable command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == output_id)
+                    .is_some_and(|output| output.enabled)
+            },
+            "enable did not publish",
+        );
+        let (stale_presents, stale_present) = counted_present_slot();
+        let revoked = present_native_display_frame_if_authorized(
+            &engine,
+            &prepared.authority,
+            None,
+            stale_present,
+        );
+        let error = match revoked.expect_err("stale prepared frame must stay revoked") {
+            NativeDisplayPresentError::Revoked(error) => error,
+            NativeDisplayPresentError::Physical(error) => {
+                panic!("an authority rejection is never a physical fault: {error}")
+            }
+        };
+        assert!(
+            error.contains("presentation authority token advanced")
+                || error.contains("changed before present"),
+            "unexpected revocation reason: {error}"
+        );
+        assert_eq!(
+            stale_presents.load(Ordering::Acquire),
+            0,
+            "zero presents across both mutations"
+        );
+
+        // Only a full recapture + reprepare admits a new present.
+        let sample = engine.video_presentation_sample();
+        let refreshed = capture_native_display_presentation_authority(
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &video_output_window_label(output_id, false),
+        )
+        .expect("post-mutation recapture must succeed");
+        let fresh = prepare_native_display_artistic_output(
+            &mut renderer,
+            &sample.snapshot,
+            &refreshed,
+            output_id,
+            4,
+            2,
+        )
+        .expect("post-mutation reprepare must succeed");
+        let NativeVideoOutputFrame::Presentable(fresh) = fresh else {
+            panic!("recaptured Fresh render must be presentable");
+        };
+        let (fresh_presents, fresh_present) = counted_present_slot();
+        present_native_display_frame_if_authorized(&engine, &fresh.authority, None, fresh_present)
+            .expect("fresh capture+prepare must admit exactly one present");
+        assert_eq!(fresh_presents.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn native_display_unpublished_candidate_first_present_fences_prepublication_authority() {
+        let output_id = 87_406;
+        let engine = native_display_test_engine();
+        assert!(
+            !engine
+                .snapshot()
+                .video
+                .outputs
+                .iter()
+                .any(|output| output.id == output_id),
+            "the candidate output must not be published yet"
+        );
+        let candidate_output = VideoOutputSummary {
+            id: output_id,
+            label: format!("Candidate Display {output_id}"),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: Some(0),
+            monitor_identity: Some(format!("monitor-{output_id}")),
+            width: 4,
+            height: 2,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        };
+        let mut unpublished = engine.snapshot();
+        unpublished.video.outputs.push(candidate_output.clone());
+        let ownership = engine.output_ownership_status();
+        let authority = capture_unpublished_native_display_presentation_authority(
+            &unpublished,
+            &ownership,
+            engine.safety_blackout_authority(),
+            engine.video_presentation_config_token(),
+            output_id,
+            &video_output_window_label(output_id, false),
+        )
+        .expect("the unpublished candidate must capture its authority");
+        assert!(
+            revalidate_native_display_presentation_authority(&engine, &authority).is_ok(),
+            "an unchanged pre-publication world must revalidate the candidate first present"
+        );
+
+        // Early publication between preparation and the fenced first present
+        // revokes it with zero presents.
+        engine
+            .send(EngineCommand::AddVideoOutput(candidate_output))
+            .expect("candidate publication command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .any(|output| output.id == output_id)
+            },
+            "candidate publication did not publish",
+        );
+        let (presents, present) = counted_present_slot();
+        assert_present_revoked(
+            present_native_display_frame_if_authorized(&engine, &authority, None, present),
+            "early publication must revoke the candidate first present",
+            "became published before its fenced first present",
+        );
+        assert_eq!(presents.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -95992,6 +99424,123 @@ f 1 2 3
     }
 
     #[test]
+    fn video_output_window_observation_v1_reports_sorted_live_and_missing_app_windows() {
+        let observation = video_output_window_observation_from_configured_displays(
+            [
+                (9, "Projector Program".to_string()),
+                (2, "LED Program".to_string()),
+            ],
+            |label| match label {
+                "video-output-2" => Ok(Some(AppOwnedVideoOutputWindowSnapshot {
+                    label: "video-output-2".to_string(),
+                    native_window_handle: 4_096,
+                })),
+                "video-output-9" => Ok(None),
+                unexpected => Err(format!("unexpected app-owned label lookup: {unexpected}")),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            observation,
+            VideoOutputWindowObservationV1 {
+                schema_version: 1,
+                source: "app-owned-read-only",
+                outputs: vec![
+                    VideoOutputWindowObservationEntryV1 {
+                        output_id: "2".to_string(),
+                        label: "LED Program".to_string(),
+                        live_open: true,
+                        live_window_label: "video-output-2".to_string(),
+                        native_window_handle_decimal: Some("4096".to_string()),
+                    },
+                    VideoOutputWindowObservationEntryV1 {
+                        output_id: "9".to_string(),
+                        label: "Projector Program".to_string(),
+                        live_open: false,
+                        live_window_label: "video-output-9".to_string(),
+                        native_window_handle_decimal: None,
+                    },
+                ],
+            }
+        );
+        let encoded = serde_json::to_value(observation).unwrap();
+        assert_eq!(encoded["schema_version"], 1);
+        assert_eq!(encoded["source"], "app-owned-read-only");
+        assert_eq!(encoded["outputs"][0]["output_id"], "2");
+        assert_eq!(
+            encoded["outputs"][0]["native_window_handle_decimal"],
+            "4096"
+        );
+        assert!(encoded["outputs"][1]["native_window_handle_decimal"].is_null());
+    }
+
+    #[test]
+    fn video_output_window_observation_v1_rejects_invalid_snapshot_and_window_states() {
+        let duplicate = video_output_window_observation_from_configured_displays(
+            [(2, "LED".to_string()), (2, "Projector".to_string())],
+            |_| Ok(None),
+        );
+        assert!(matches!(duplicate, Err(error) if error.contains("appears more than once")));
+
+        let zero_output = video_output_window_observation_from_configured_displays(
+            [(0, "LED".to_string())],
+            |_| Ok(None),
+        );
+        assert!(
+            matches!(zero_output, Err(error) if error.contains("Display output ID must be nonzero"))
+        );
+
+        let mismatched_label = video_output_window_observation_from_configured_displays(
+            [(2, "LED".to_string())],
+            |_| {
+                Ok(Some(AppOwnedVideoOutputWindowSnapshot {
+                    label: "video-output-2-test-pattern".to_string(),
+                    native_window_handle: 4_096,
+                }))
+            },
+        );
+        assert!(matches!(mismatched_label, Err(error) if error.contains("label mismatch")));
+
+        let zero_hwnd = video_output_window_observation_from_configured_displays(
+            [(2, "LED".to_string())],
+            |_| {
+                Ok(Some(AppOwnedVideoOutputWindowSnapshot {
+                    label: "video-output-2".to_string(),
+                    native_window_handle: 0,
+                }))
+            },
+        );
+        assert!(
+            matches!(zero_hwnd, Err(error) if error.contains("Native window HWND must be nonzero"))
+        );
+
+        let failed_live_query = video_output_window_observation_from_configured_displays(
+            [(2, "LED".to_string())],
+            |_| Err("Tauri HWND dispatcher failed".to_string()),
+        );
+        assert!(matches!(failed_live_query, Err(error) if error == "Tauri HWND dispatcher failed"));
+    }
+
+    #[test]
+    fn video_output_window_observation_v1_decimal_boundary_is_strict() {
+        assert_eq!(
+            parse_canonical_positive_decimal("18446744073709551615", "test"),
+            Ok(u64::MAX)
+        );
+        for malformed in ["", "0", "00", "01", "+1", " 1", "1 ", "-1", "1.0"] {
+            assert!(
+                parse_canonical_positive_decimal(malformed, "test").is_err(),
+                "{malformed:?} must fail closed"
+            );
+        }
+        assert!(
+            parse_canonical_positive_decimal("18446744073709551616", "test").is_err(),
+            "overflow must fail closed"
+        );
+    }
+
+    #[test]
     fn native_video_output_metrics_report_frame_budget_and_buffer_reuse() {
         let buffer_stats = video::GpuSurfaceBufferStats {
             output_capacity_bytes: 8_294_400,
@@ -95999,6 +99548,7 @@ f 1 2 3
             output_reallocations: 1,
             layer_reallocations: 3,
             frames_presented: 2,
+            hard_blackout_frames_presented: 0,
             compressed_layer_uploads: 4,
         };
         let decoder_diagnostics = video::VideoDecoderDiagnostics {
@@ -109067,14 +112617,14 @@ f 1 2 3
     }
 
     #[test]
-    fn dj_link_selector_content_id_priority_and_nfc_title_artist_fallback() {
+    fn dj_link_selector_content_id_is_authoritative_when_present() {
         let mappings = vec![
             dj_link_test_mapping(
                 "content",
                 protocol::DjTrackSelector {
                     content_id: Some("content-1".to_string()),
-                    title: Some("Fallback title".to_string()),
-                    artist: Some("Fallback artist".to_string()),
+                    title: None,
+                    artist: None,
                 },
             ),
             dj_link_test_mapping(
@@ -109087,17 +112637,22 @@ f 1 2 3
             ),
         ];
         let content_payload = protocol::DjLinkMasterTrackPayload {
+            deck: 1,
+            deck_id: "rekordbox-deck-1".to_string(),
+            master_deck_revision: 1,
             content_id: Some("content-1".to_string()),
-            title: Some("Cafe\u{301}".to_string()),
-            artist: Some("Artist".to_string()),
-            deck: "A".to_string(),
-            deck_id: None,
+            title: None,
+            artist: None,
             track_bpm: None,
-            position_sec: None,
-            started_at: None,
+            position_at_send_sec: 0.0,
+            effective_bpm: 120.0,
+            position_revision: 1,
+            sample_age_ms: 0,
+            is_playing: true,
+            started_at: "2026-08-25T00:00:00Z".to_string(),
             play_session_id: "play-1".to_string(),
-            playing: true,
             master: true,
+            loop_state: None,
         };
         assert_eq!(
             dj_link_find_track_mapping(&mappings, &content_payload)
@@ -109106,7 +112661,9 @@ f 1 2 3
             "content"
         );
         let title_payload = protocol::DjLinkMasterTrackPayload {
-            content_id: Some("unknown".to_string()),
+            content_id: None,
+            title: Some("Cafe\u{301}".to_string()),
+            artist: Some("Artist".to_string()),
             ..content_payload.clone()
         };
         assert_eq!(
@@ -109115,6 +112672,13 @@ f 1 2 3
                 .id,
             "title-artist"
         );
+        let unmatched_content = protocol::DjLinkMasterTrackPayload {
+            content_id: Some("unknown".to_string()),
+            title: None,
+            artist: None,
+            ..content_payload.clone()
+        };
+        assert!(dj_link_find_track_mapping(&mappings, &unmatched_content).is_none());
         assert!(validate_dj_track_triggers(vec![dj_link_test_mapping(
             "title-only",
             protocol::DjTrackSelector {
@@ -109169,34 +112733,25 @@ f 1 2 3
         let coordinator = Mutex::new(coordinator);
         let admission = ProjectExternalCommandAdmission::default();
         let transaction_active = AtomicBool::new(false);
-        let master_changed = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterChanged,
-            1,
-            "master-1",
-            json!({"masterDeck":"A","master":true,"isPlaying":true}),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                master_changed,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
         let active = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
-            2,
+            1,
             "active-1",
             json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
                 "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 2.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 25,
                 "playSessionId": "play-1",
                 "isPlaying": true,
                 "master": true,
-                "deck": "A",
-                "trackBpm": 60.0
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
             }),
         );
         let active_outcome = dispatch_dj_link_event(
@@ -109215,12 +112770,15 @@ f 1 2 3
                     "mapped active track publishes authoritative running state"
                 );
                 assert_eq!(state.timeline_id, mapping_timeline_id.to_string());
+                assert_eq!(state.pedal_owner.as_deref(), Some("dj"));
+                assert_eq!(state.release_event_id, None);
+                assert_eq!(engine.snapshot().timeline.position_ms, 2_025);
             }
             other => panic!("mapped active track must publish timeline state: {other:?}"),
         }
         let replay_with_new_event = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
-            3,
+            2,
             "active-2",
             active.payload.clone(),
         );
@@ -109243,17 +112801,398 @@ f 1 2 3
             "play-session dedupe must not re-dispatch the engine"
         );
         assert_eq!(runtime.lock().unwrap().state_generation, first_generation);
+        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
+        assert_eq!(runtime.lock().unwrap().release_event_id, None);
+
+        // Even after the once-per-session ledger has aged past its TTL, an
+        // equal position revision with the equal canonical source millisecond
+        // is an identity-level no-op, not a fresh START.
+        {
+            let mut runtime = runtime.lock().unwrap();
+            for observed in runtime.seen_play_sessions.values_mut() {
+                *observed = Instant::now() - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1);
+            }
+        }
+        let runtime_before_ttl_retry = runtime.lock().unwrap().clone();
+        let engine_before_ttl_retry = engine.snapshot();
+        let ttl_retry = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            21,
+            "active-after-dedupe-ttl",
+            active.payload.clone(),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                ttl_retry,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(engine.snapshot(), engine_before_ttl_retry);
+        assert_eq!(*runtime.lock().unwrap(), runtime_before_ttl_retry);
+
+        let position_sync = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            3,
+            "track-sync",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 4.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 2,
+                "sampleAgeMs": 50,
+                "playSessionId": "play-1",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                position_sync.clone(),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert_eq!(
+            engine.snapshot().timeline.position_ms,
+            4_050,
+            "MASTER_TRACK_SYNC must converge the existing Timeline without another START"
+        );
+
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let engine_before_position_revision_retries = engine.snapshot();
+        let runtime_before_position_revision_retries = {
+            let runtime = runtime.lock().unwrap();
+            (
+                runtime.state_generation,
+                runtime.position_revision,
+                runtime.source_position_ms,
+                runtime.position_sec,
+                runtime.track_content_id.clone(),
+                runtime.loop_active,
+                runtime.loop_division,
+                runtime.released,
+            )
+        };
+        let exact_position_retry = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            31,
+            "track-sync-exact-retry",
+            position_sync.payload.clone(),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                exact_position_retry,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_position_revision_retries,
+            "an exact position-revision replay must not re-dispatch the engine"
+        );
+        let conflicting_position_sync = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            32,
+            "track-sync-position-conflict",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 4.1,
+                "effectiveBpm": 60.0,
+                "positionRevision": 2,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-1",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                conflicting_position_sync,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "position_revision_conflict"
+        ));
+        let conflicting_active = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            33,
+            "active-position-conflict",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 4.1,
+                "effectiveBpm": 60.0,
+                "positionRevision": 2,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-1",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                conflicting_active,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "position_revision_conflict"
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_position_revision_retries,
+            "a conflicting position revision must not reach the engine"
+        );
+        let runtime_after_position_revision_conflicts = {
+            let runtime = runtime.lock().unwrap();
+            (
+                runtime.state_generation,
+                runtime.position_revision,
+                runtime.source_position_ms,
+                runtime.position_sec,
+                runtime.track_content_id.clone(),
+                runtime.loop_active,
+                runtime.loop_division,
+                runtime.released,
+            )
+        };
+        assert_eq!(
+            runtime_after_position_revision_conflicts, runtime_before_position_revision_retries,
+            "a conflicting position revision must leave all DJ runtime authority unchanged"
+        );
+
+        // A same-session dedupe hit carrying a NEWER wire position must stay
+        // a complete runtime no-op: advancing position identity without an
+        // acknowledged engine convergence would suppress the identical SYNC
+        // that is supposed to converge the Timeline next.
+        {
+            // The TTL probe above deliberately aged the once-per-session
+            // ledger without refreshing it; restore a live observation so
+            // this replay is a true dedupe hit.
+            let mut runtime = runtime.lock().unwrap();
+            for observed in runtime.seen_play_sessions.values_mut() {
+                *observed = Instant::now();
+            }
+        }
+        let runtime_before_advanced_replay = {
+            let runtime = runtime.lock().unwrap();
+            (
+                runtime.state_generation,
+                runtime.position_revision,
+                runtime.source_position_ms,
+                runtime.position_sec,
+                runtime.last_event_id.clone(),
+            )
+        };
+        let engine_before_advanced_replay = engine.snapshot();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    41,
+                    "active-dedupe-advanced-position",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "contentId": "content-1",
+                        "trackBpm": 60.0,
+                        "positionAtSendSec": 4.0,
+                        "effectiveBpm": 60.0,
+                        "positionRevision": 3,
+                        "sampleAgeMs": 100,
+                        "playSessionId": "play-1",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-25T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_advanced_replay,
+            "a same-session dedupe hit must not touch the engine"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(
+                (
+                    runtime.state_generation,
+                    runtime.position_revision,
+                    runtime.source_position_ms,
+                    runtime.position_sec,
+                    runtime.last_event_id.clone(),
+                ),
+                runtime_before_advanced_replay,
+                "a same-session dedupe hit must not advance wire position identity"
+            );
+        }
+
+        // The identical SYNC at that advanced revision must therefore still
+        // dispatch and commit atomically with its engine ACK.  A canonical
+        // SYNC requires a playing Timeline, so resume exactly as a live
+        // session would run.
+        engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        match dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackSync,
+                42,
+                "sync-advanced-position-converge",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 1,
+                    "contentId": "content-1",
+                    "trackBpm": 60.0,
+                    "positionAtSendSec": 4.0,
+                    "effectiveBpm": 60.0,
+                    "positionRevision": 3,
+                    "sampleAgeMs": 100,
+                    "playSessionId": "play-1",
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-25T00:00:00Z",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { .. } => {}
+            other => panic!(
+                "the identical SYNC after a no-op dedupe hit must not be suppressed: {other:?}"
+            ),
+        }
+        // Freeze the clock before reading the playhead so the assertion has a
+        // deterministic bound instead of racing the running ticker.
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let converged_position = engine.snapshot().timeline.position_ms;
+        assert!(
+            (4_100..4_300).contains(&converged_position),
+            "the converging SYNC must drive the engine to the advanced canonical position, got {converged_position}"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(runtime.position_revision, Some(3));
+            assert_eq!(runtime.source_position_ms, Some(4_100));
+            assert_eq!(runtime.position_sec, Some(4.0));
+        }
+
+        // Suppression resumes only after convergence: the now-exact replay is
+        // provably an identity-level no-op against the frozen clock.
+        let engine_after_convergence = engine.snapshot();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackSync,
+                    43,
+                    "sync-advanced-position-repeat",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "contentId": "content-1",
+                        "trackBpm": 60.0,
+                        "positionAtSendSec": 4.0,
+                        "effectiveBpm": 60.0,
+                        "positionRevision": 3,
+                        "sampleAgeMs": 100,
+                        "playSessionId": "play-1",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-25T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_after_convergence,
+            "a post-convergence exact replay must stay suppressed without engine effects"
+        );
 
         let nonmaster = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
-            4,
+            3,
             "nonmaster",
             json!({
+                "deck": 2,
+                "deckId": "rekordbox-deck-2",
+                "masterDeckRevision": 2,
                 "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
                 "playSessionId": "play-2",
                 "isPlaying": true,
                 "master": false,
-                "deck": "B"
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
             }),
         );
         let engine_before_nonmaster = engine.snapshot();
@@ -109276,13 +113215,12 @@ f 1 2 3
 
         let sync_loop = dj_link_test_envelope(
             protocol::DjLinkMessageType::StateSync,
-            5,
+            4,
             "sync-loop",
             json!({
-                "loopDivision": 2,
                 "released": false,
-                "masterDeck": "A",
-                "masterTrack": {"contentId":"content-1","isPlaying":true}
+                "masterDeck": 1,
+                "activePlaySessionId": "play-1"
             }),
         );
         let engine_before_sync_loop = engine.snapshot();
@@ -109297,17 +113235,32 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::Accepted { .. }
         ));
-        assert_ne!(
+        assert_eq!(
             engine.snapshot().timeline.loop_runtime,
-            engine_before_sync_loop.timeline.loop_runtime
+            engine_before_sync_loop.timeline.loop_runtime,
+            "StateSync is diagnostic-only and must not alter the engine loop"
         );
         let generation_after_sync_loop = runtime.lock().unwrap().state_generation;
         let loop_generation_before_retry = engine.snapshot().timeline.loop_runtime.generation;
         let loop_retry = dj_link_test_envelope(
             protocol::DjLinkMessageType::LoopState,
-            6,
+            5,
             "loop-retry",
-            json!({"division":2,"enabled":true}),
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "playSessionId": "play-1",
+                "loop": {
+                    "active": true,
+                    "startBeat": 0.0,
+                    "endBeat": 8.0,
+                    "lengthBeats": 8.0,
+                    "revision": 1,
+                    "sampleAgeMs": 0,
+                    "source": "rekordbox-hook-measured"
+                }
+            }),
         );
         assert!(matches!(
             dispatch_dj_link_event(
@@ -109320,27 +113273,27 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::Accepted { .. }
         ));
-        assert_eq!(
-            engine.snapshot().timeline.loop_runtime.generation,
-            loop_generation_before_retry,
-            "canonical engine loop convergence is idempotent"
+        assert!(
+            engine.snapshot().timeline.loop_runtime.generation > loop_generation_before_retry,
+            "measured 8-beat loop must reach the canonical engine API"
         );
         assert_eq!(
             runtime.lock().unwrap().state_generation,
             generation_after_sync_loop + 1,
-            "same LoopState still traverses the canonical engine API"
+            "measured LoopState increments only after a canonical engine ACK"
         );
+        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
+        assert_eq!(runtime.lock().unwrap().release_event_id, None);
 
         let engine_before_released_sync = engine.snapshot();
         let sync_released = dj_link_test_envelope(
             protocol::DjLinkMessageType::StateSync,
-            7,
+            6,
             "sync-released",
             json!({
-                "loopDivision": 2,
                 "released": true,
-                "masterDeck": "A",
-                "masterTrack": {"contentId":"content-1","isPlaying":true}
+                "masterDeck": 1,
+                "activePlaySessionId": "play-1"
             }),
         );
         assert!(matches!(
@@ -109355,7 +113308,7 @@ f 1 2 3
             DjLinkDispatchOutcome::Accepted { .. }
         ));
         assert_eq!(engine.snapshot(), engine_before_released_sync);
-        assert!(runtime.lock().unwrap().released);
+        assert!(!runtime.lock().unwrap().released);
 
         engine
             .send(EngineCommand::SetTimelinePlaying(false))
@@ -109364,13 +113317,270 @@ f 1 2 3
         let transport_before_release = engine.snapshot().timeline.transport_generation;
         let release = dj_link_test_envelope(
             protocol::DjLinkMessageType::Release,
-            8,
+            7,
             "release-after-sync",
-            json!({}),
+            json!({
+                "state": "released",
+                "timelineId": mapping_timeline_id.to_string(),
+                "playSessionId": "play-1"
+            }),
+        );
+        match dispatch_dj_link_event(
+            release,
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => {
+                assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+                assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
+                assert_eq!(
+                    state.release_event_id.as_deref(),
+                    Some("release-after-sync")
+                );
+            }
+            other => panic!("canonical release must publish timeline ownership: {other:?}"),
+        }
+        assert!(
+            engine.snapshot().timeline.transport_generation > transport_before_release,
+            "StateSync(released=true) must not consume the later canonical RELEASE"
+        );
+        assert!(
+            runtime.lock().unwrap().released,
+            "the release latch changes only after the canonical engine RELEASE ACK"
+        );
+        let engine_after_release = engine.snapshot();
+        let runtime_after_release = {
+            let runtime = runtime.lock().unwrap();
+            (
+                runtime.state_generation,
+                runtime.released,
+                runtime.position_revision,
+                runtime.source_position_ms,
+                runtime.loop_active,
+                runtime.loop_division,
+                runtime.pedal_owner.clone(),
+                runtime.release_event_id.clone(),
+                runtime.last_event_id.clone(),
+            )
+        };
+        // Release fencing: the first canonical correlated RELEASE owns the
+        // immutable receipt.  An exact replay and a distinct later RELEASE
+        // both observe truthful already-released ownership without rerunning
+        // the engine release side effect or replacing the receipt identity.
+        for (sequence, event_id) in [
+            (51u64, "release-after-sync"),
+            (52, "release-second-distinct-id"),
+        ] {
+            match dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::Release,
+                    sequence,
+                    event_id,
+                    json!({
+                        "state": "released",
+                        "timelineId": mapping_timeline_id.to_string(),
+                        "playSessionId": "play-1"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ) {
+                DjLinkDispatchOutcome::TimelineState { state, .. } => {
+                    assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+                    assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
+                    assert_eq!(
+                        state.release_event_id.as_deref(),
+                        Some("release-after-sync"),
+                        "{event_id} must observe the first immutable release receipt"
+                    );
+                }
+                other => panic!(
+                    "a fenced RELEASE must return truthful already-released state: {other:?}"
+                ),
+            }
+        }
+        assert_eq!(
+            engine.snapshot(),
+            engine_after_release,
+            "fenced RELEASE replays must not rerun the engine release side effect"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(
+                (
+                    runtime.state_generation,
+                    runtime.released,
+                    runtime.position_revision,
+                    runtime.source_position_ms,
+                    runtime.loop_active,
+                    runtime.loop_division,
+                    runtime.pedal_owner.clone(),
+                    runtime.release_event_id.clone(),
+                    runtime.last_event_id.clone(),
+                ),
+                runtime_after_release,
+                "a fenced RELEASE must not replace any runtime authority field"
+            );
+        }
+        let released_sync = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            34,
+            "sync-after-release",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 5.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 3,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-1",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
+            }),
         );
         assert!(matches!(
             dispatch_dj_link_event(
-                release,
+                released_sync,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
+        ));
+        let released_loop = dj_link_test_envelope(
+            protocol::DjLinkMessageType::LoopState,
+            35,
+            "loop-after-release",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "playSessionId": "play-1",
+                "loop": {
+                    "active": false,
+                    "startBeat": 0.0,
+                    "endBeat": 8.0,
+                    "lengthBeats": 8.0,
+                    "revision": 2,
+                    "sampleAgeMs": 0,
+                    "source": "rekordbox-hook-measured"
+                }
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                released_loop,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
+        ));
+        let released_beat = dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            36,
+            "beat-after-release",
+            json!({
+                "timelineId": mapping_timeline_id.to_string(),
+                "playSessionId": "play-1",
+                "bars": 4
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                released_beat,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
+        ));
+        let released_timeline_loop = dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            37,
+            "timeline-loop-after-release",
+            json!({
+                "timelineId": mapping_timeline_id.to_string(),
+                "playSessionId": "play-1",
+                "active": false
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                released_timeline_loop,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_after_release,
+            "a released DJ session must not mutate the engine through sync, loop, or beat controls"
+        );
+        let runtime_after_rejected_controls = {
+            let runtime = runtime.lock().unwrap();
+            (
+                runtime.state_generation,
+                runtime.released,
+                runtime.position_revision,
+                runtime.source_position_ms,
+                runtime.loop_active,
+                runtime.loop_division,
+                runtime.pedal_owner.clone(),
+                runtime.release_event_id.clone(),
+                runtime.last_event_id.clone(),
+            )
+        };
+        assert_eq!(
+            runtime_after_rejected_controls, runtime_after_release,
+            "a released DJ session must reject controls before mutating runtime authority"
+        );
+
+        let rearmed_active = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            38,
+            "active-rearm-after-release",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 2,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-2",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:01:00Z",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                rearmed_active,
                 &engine,
                 &coordinator,
                 &runtime,
@@ -109380,10 +113590,11 @@ f 1 2 3
             DjLinkDispatchOutcome::TimelineState { .. }
         ));
         assert!(
-            engine.snapshot().timeline.transport_generation > transport_before_release,
-            "StateSync(released=true) must not consume the later canonical RELEASE"
+            !runtime.lock().unwrap().released,
+            "only a newly mapped ACTIVE after its canonical START ACK may clear the release latch"
         );
-        assert!(!runtime.lock().unwrap().released);
+        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
+        assert_eq!(runtime.lock().unwrap().release_event_id, None);
         engine
             .send(EngineCommand::SetTimelinePlaying(false))
             .unwrap();
@@ -109392,9 +113603,13 @@ f 1 2 3
 
         let beat_forward = dj_link_test_envelope(
             protocol::DjLinkMessageType::TimelineBeatJump,
-            9,
+            8,
             "beat-forward",
-            json!({"timelineId": mapping_timeline_id.to_string(), "bars": 4}),
+            json!({
+                "timelineId": mapping_timeline_id.to_string(),
+                "playSessionId": "play-2",
+                "bars": 4
+            }),
         );
         let forward = match dispatch_dj_link_event(
             beat_forward,
@@ -109411,9 +113626,13 @@ f 1 2 3
         assert_eq!(forward.timeline_id, mapping_timeline_id.to_string());
         let beat_backward = dj_link_test_envelope(
             protocol::DjLinkMessageType::TimelineBeatJump,
-            10,
+            9,
             "beat-backward",
-            json!({"timelineId": mapping_timeline_id.to_string(), "bars": -4}),
+            json!({
+                "timelineId": mapping_timeline_id.to_string(),
+                "playSessionId": "play-2",
+                "bars": -4
+            }),
         );
         let backward = match dispatch_dj_link_event(
             beat_backward,
@@ -109432,19 +113651,39 @@ f 1 2 3
             0,
             "the reverse jump returns to the engine-authored grid origin"
         );
+        engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
 
         let missing = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
-            11,
+            10,
             "missing",
             json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 3,
                 "contentId": "unknown",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
                 "playSessionId": "play-3",
                 "isPlaying": true,
                 "master": true,
-                "deck": "A"
+                "startedAt": "2026-08-25T00:00:00Z",
+                "loop": null
             }),
         );
+        // Freeze the clock so the zero-mutation proofs below compare stable
+        // engine images instead of racing the running ticker.
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let runtime_before_missing = runtime.lock().unwrap().clone();
         let engine_before_missing = engine.snapshot();
         assert!(matches!(
             dispatch_dj_link_event(
@@ -109462,6 +113701,1611 @@ f 1 2 3
             engine_before_missing,
             "unmapped track input must not reach the engine"
         );
+        // A foreign unmapped ACTIVE beside the owning mapped session must
+        // neither mutate nor block it: rejection happens in place so the
+        // owner's correlated controls and canonical RELEASE keep converging,
+        // while the foreign session still fails closed on every correlation.
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before_missing,
+            "NoMapping beside an owning mapped session must leave every runtime field unchanged"
+        );
+
+        let assert_rejected_without_mutation =
+            |event: protocol::DjLinkEnvelope, expected_code: &str| {
+                let engine_before = engine.snapshot();
+                let runtime_before = runtime.lock().unwrap().clone();
+                assert!(matches!(
+                    dispatch_dj_link_event(
+                        event,
+                        &engine,
+                        &coordinator,
+                        &runtime,
+                        &admission,
+                        &transaction_active,
+                    ),
+                    DjLinkDispatchOutcome::Rejected { code, .. } if code == expected_code
+                ));
+                assert_eq!(
+                    engine.snapshot(),
+                    engine_before,
+                    "a rejected control must not reach the engine"
+                );
+                assert_eq!(
+                    *runtime.lock().unwrap(),
+                    runtime_before,
+                    "a rejected control must not mutate runtime"
+                );
+            };
+        assert_rejected_without_mutation(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackSync,
+                11,
+                "sync-after-unmapped",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 3,
+                    "contentId": "unknown",
+                    "trackBpm": 60.0,
+                    "positionAtSendSec": 1.0,
+                    "effectiveBpm": 60.0,
+                    "positionRevision": 2,
+                    "sampleAgeMs": 0,
+                    "playSessionId": "play-3",
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-25T00:02:00Z",
+                    "loop": null
+                }),
+            ),
+            "track_sync_context_mismatch",
+        );
+        assert_rejected_without_mutation(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::Release,
+                12,
+                "release-after-unmapped",
+                json!({
+                    "state": "released",
+                    "timelineId": mapping_timeline_id.to_string(),
+                    "playSessionId": "play-3"
+                }),
+            ),
+            "release_context_mismatch",
+        );
+        assert_rejected_without_mutation(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::LoopState,
+                13,
+                "loop-after-unmapped",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 3,
+                    "playSessionId": "play-3",
+                    "loop": {
+                        "active": true,
+                        "startBeat": 0.0,
+                        "endBeat": 8.0,
+                        "lengthBeats": 8.0,
+                        "revision": 1,
+                        "sampleAgeMs": 0,
+                        "source": "rekordbox-hook-measured"
+                    }
+                }),
+            ),
+            "loop_context_mismatch",
+        );
+        assert_rejected_without_mutation(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::StateSync,
+                16,
+                "state-sync-after-unmapped",
+                json!({
+                    "released": false,
+                    "masterDeck": 1,
+                    "activePlaySessionId": "play-3"
+                }),
+            ),
+            "state_sync_play_session_mismatch",
+        );
+
+        // The owning mapped session keeps full authority across the foreign
+        // rejections: its canonical correlated RELEASE must succeed even
+        // while an unmapped peer is present, proving no residual control
+        // block latches onto the Timeline.
+        let owner_transport_before_release = engine.snapshot().timeline.transport_generation;
+        match dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::Release,
+                18,
+                "release-owner-after-foreign-active",
+                json!({
+                    "state": "released",
+                    "timelineId": mapping_timeline_id.to_string(),
+                    "playSessionId": "play-2"
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => {
+                assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+                assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
+                assert_eq!(
+                    state.release_event_id.as_deref(),
+                    Some("release-owner-after-foreign-active")
+                );
+            }
+            other => panic!(
+                "the owning mapped session's RELEASE must succeed beside a foreign unmapped ACTIVE: {other:?}"
+            ),
+        }
+        assert!(
+            engine.snapshot().timeline.transport_generation > owner_transport_before_release,
+            "the owner's canonical RELEASE must still reach the engine after a foreign NoMapping"
+        );
+        assert!(
+            runtime.lock().unwrap().released,
+            "the owner's release latch changes only after its canonical engine RELEASE ACK"
+        );
+        // The foreign session can neither release before nor after the owner:
+        // its attempts keep failing closed on correlation without touching
+        // the immutable receipt.
+        assert_rejected_without_mutation(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::Release,
+                19,
+                "release-after-unmapped-post-owner-release",
+                json!({
+                    "state": "released",
+                    "timelineId": mapping_timeline_id.to_string(),
+                    "playSessionId": "play-3"
+                }),
+            ),
+            "release_context_mismatch",
+        );
+
+        let mapped_after_unmapped = dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackActive,
+            17,
+            "active-after-unmapped",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 4,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-4",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:03:00Z",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                mapped_after_unmapped,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert!(
+            !runtime.lock().unwrap().unmapped_active_blocked,
+            "only an acknowledged mapped ACTIVE may clear the NoMapping block"
+        );
+    }
+
+    #[test]
+    fn dj_link_dispatch_current_session_active_dedupe_survives_ttl_after_release() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link TTL test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "ttl-current-session",
+            protocol::DjTrackSelector {
+                content_id: Some("ttl-content".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        let timeline_id = mapping.timeline_id.0.to_string();
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        let active_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 2,
+            "contentId": "ttl-content",
+            "trackBpm": 120.0,
+            "positionAtSendSec": 2.0,
+            "effectiveBpm": 120.0,
+            "positionRevision": 1,
+            "sampleAgeMs": 0,
+            "playSessionId": "ttl-current-session",
+            "isPlaying": true,
+            "master": true,
+            "startedAt": "2026-08-26T00:00:00Z",
+            "loop": null
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "ttl-active",
+                    active_payload.clone(),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::Release,
+                    2,
+                    "ttl-first-release",
+                    json!({
+                        "state": "released",
+                        "timelineId": timeline_id,
+                        "playSessionId": "ttl-current-session"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        {
+            let mut runtime = runtime.lock().unwrap();
+            for observed in runtime.seen_play_sessions.values_mut() {
+                *observed = Instant::now() - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1);
+            }
+        }
+        let engine_before_ttl_replay = engine.snapshot();
+        let runtime_before_ttl_replay = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    3,
+                    "ttl-active-higher-position-revision",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 2,
+                        "contentId": "ttl-content",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 4.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 2,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "ttl-current-session",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_ttl_replay,
+            "a TTL-expired replay of the current session must not issue START again"
+        );
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before_ttl_replay,
+            "a TTL-expired higher-revision ACTIVE must preserve release, pedal, receipt, and every runtime field"
+        );
+
+        let transport_before_same_revision_new_session =
+            engine.snapshot().timeline.transport_generation;
+        match dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                4,
+                "ttl-new-session-same-master-revision",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 2,
+                    "contentId": "ttl-content",
+                    "trackBpm": 120.0,
+                    "positionAtSendSec": 0.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 1,
+                    "sampleAgeMs": 0,
+                    "playSessionId": "ttl-new-session",
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-26T00:02:00Z",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::TimelineState { state, .. } => {
+                assert_eq!(state.play_session_id.as_deref(), Some("ttl-new-session"));
+                assert_eq!(state.pedal_owner.as_deref(), Some("dj"));
+                assert_eq!(state.release_event_id, None);
+            }
+            other => panic!(
+                "a released owner must accept a new play session at the same master revision: {other:?}"
+            ),
+        }
+        assert!(
+            engine.snapshot().timeline.transport_generation
+                > transport_before_same_revision_new_session,
+            "the same-revision new session must issue one canonical START"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert!(!runtime.released);
+            assert_eq!(runtime.pedal_owner.as_deref(), Some("dj"));
+            assert_eq!(runtime.release_event_id, None);
+            assert_eq!(runtime.play_session_id.as_deref(), Some("ttl-new-session"));
+        }
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+
+        // Once the new same-timeline session is acknowledged, only that
+        // canonical session may issue transport controls.  Exercise both
+        // protocol commands before proving that the preceding session cannot
+        // mutate the engine or runtime through either boundary.
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::TimelineBeatJump,
+                    5,
+                    "ttl-current-session-beat-jump",
+                    json!({
+                        "timelineId": timeline_id.clone(),
+                        "playSessionId": "ttl-new-session",
+                        "bars": 4
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { state, .. }
+                if state.play_session_id.as_deref() == Some("ttl-new-session")
+        ));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::TimelineLoopSet,
+                    6,
+                    "ttl-current-session-loop-set",
+                    json!({
+                        "timelineId": timeline_id.clone(),
+                        "playSessionId": "ttl-new-session",
+                        "active": true
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { state, .. }
+                if state.play_session_id.as_deref() == Some("ttl-new-session")
+        ));
+
+        let assert_old_session_transport_rejected =
+            |message_type: protocol::DjLinkMessageType,
+             sequence: u64,
+             event_id: &str,
+             payload: Value| {
+                let engine_before = engine.snapshot();
+                let runtime_before = runtime.lock().unwrap().clone();
+                assert!(matches!(
+                    dispatch_dj_link_event(
+                        dj_link_test_envelope(message_type, sequence, event_id, payload),
+                        &engine,
+                        &coordinator,
+                        &runtime,
+                        &admission,
+                        &transaction_active,
+                    ),
+                    DjLinkDispatchOutcome::Rejected { code, .. }
+                        if code == "timeline_play_session_mismatch"
+                ));
+                assert_eq!(engine.snapshot(), engine_before);
+                assert_eq!(*runtime.lock().unwrap(), runtime_before);
+            };
+        assert_old_session_transport_rejected(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            7,
+            "ttl-old-session-beat-jump",
+            json!({
+                "timelineId": timeline_id.clone(),
+                "playSessionId": "ttl-current-session",
+                "bars": -4
+            }),
+        );
+        assert_old_session_transport_rejected(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            8,
+            "ttl-old-session-loop-set",
+            json!({
+                "timelineId": timeline_id.clone(),
+                "playSessionId": "ttl-current-session",
+                "active": false
+            }),
+        );
+
+        let engine_before_old_session_replay = engine.snapshot();
+        let runtime_before_old_session_replay = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    9,
+                    "ttl-old-session-replay",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 2,
+                        "contentId": "ttl-content",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 5.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 3,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "ttl-current-session",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "play_session_revision_mismatch"
+        ));
+        assert_eq!(engine.snapshot(), engine_before_old_session_replay);
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before_old_session_replay,
+            "an old session replay after a same-revision re-arm must not mutate runtime authority"
+        );
+    }
+
+    #[test]
+    fn dj_link_dispatch_released_owner_higher_revision_active_refresh_is_exact_noop() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link released refresh test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "released-refresh",
+            protocol::DjTrackSelector {
+                content_id: Some("released-refresh-content".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        let timeline_id = mapping.timeline_id.0.to_string();
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "released-refresh-initial-active",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "contentId": "released-refresh-content",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 1.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 1,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "released-refresh-session",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::Release,
+                    2,
+                    "released-refresh-release",
+                    json!({
+                        "state": "released",
+                        "timelineId": timeline_id,
+                        "playSessionId": "released-refresh-session"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert!(runtime.lock().unwrap().released);
+        let engine_before_refresh = engine.snapshot();
+        let generation_before_refresh = runtime.lock().unwrap().state_generation;
+        let runtime_before_refresh = runtime.lock().unwrap().clone();
+        match dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                3,
+                "released-refresh-higher-revision",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 3,
+                    "contentId": "released-refresh-content",
+                    "trackBpm": 120.0,
+                    "positionAtSendSec": 5.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 2,
+                    "sampleAgeMs": 0,
+                    "playSessionId": "released-refresh-session",
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-26T00:00:00Z",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::Accepted { state_generation } => {
+                assert_eq!(
+                    state_generation, generation_before_refresh,
+                    "the released owner's ACTIVE refresh must not commit a new generation"
+                );
+            }
+            other => panic!(
+                "a released owner's dedupe-hit ACTIVE must stay an accepted no-op, not a new error surface: {other:?}"
+            ),
+        }
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_refresh,
+            "the released owner's higher-revision refresh must not reach the engine"
+        );
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before_refresh,
+            "a released owner's higher-revision ACTIVE refresh must be an exact full-state no-op"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert!(runtime.released);
+            assert_eq!(runtime.master_deck_revision, Some(1));
+            assert_eq!(
+                runtime.last_event_id.as_deref(),
+                Some("released-refresh-release")
+            );
+        }
+    }
+
+    #[test]
+    fn dj_link_dispatch_play_session_capacity_rejects_new_admission_without_state_mutation() {
+        const FRESH_FILLERS: usize = DJ_LINK_DEDUPE_LIMIT - 1;
+        const EXPIRED_FILLERS: usize = 64;
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link ledger capacity test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "capacity-ledger",
+            protocol::DjTrackSelector {
+                content_id: Some("capacity-ledger-content".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        let timeline_id = mapping.timeline_id.0.to_string();
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "capacity-ledger-initial-active",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 2,
+                        "contentId": "capacity-ledger-content",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 2.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 1,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "capacity-owner",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::Release,
+                    2,
+                    "capacity-ledger-release",
+                    json!({
+                        "state": "released",
+                        "timelineId": timeline_id,
+                        "playSessionId": "capacity-owner"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        // Fill the authoritative ledger to exactly the capacity boundary:
+        // DJ_LINK_DEDUPE_LIMIT live receipts (owner + fresh fillers) plus a
+        // bounded set of expired TTL purge candidates. The candidate purge
+        // runs only on the cloned next runtime, so the post-purge working set
+        // reaches exactly DJ_LINK_DEDUPE_LIMIT while the authoritative ledger
+        // additionally retains its expired candidates.
+        {
+            let mut runtime = runtime.lock().unwrap();
+            let now = Instant::now();
+            for index in 0..(FRESH_FILLERS + EXPIRED_FILLERS) {
+                let key = format!(
+                    "{}:capacity-ledger:capacity-filler-{index:04}",
+                    runtime.project_epoch
+                );
+                let observed = if index < EXPIRED_FILLERS {
+                    now - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1)
+                } else {
+                    now
+                };
+                assert!(runtime.seen_play_sessions.insert(key, observed).is_none());
+            }
+            assert_eq!(
+                runtime.seen_play_sessions.len(),
+                DJ_LINK_DEDUPE_LIMIT + EXPIRED_FILLERS
+            );
+        }
+        let engine_before_capacity = engine.snapshot();
+        let generation_before_capacity = runtime.lock().unwrap().state_generation;
+        let runtime_before_capacity = runtime.lock().unwrap().clone();
+        match dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                3,
+                "capacity-ledger-newcomer",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 2,
+                    "contentId": "capacity-ledger-content",
+                    "trackBpm": 120.0,
+                    "positionAtSendSec": 0.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 1,
+                    "sampleAgeMs": 0,
+                    "playSessionId": "capacity-newcomer",
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-26T00:04:00Z",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ) {
+            DjLinkDispatchOutcome::Rejected {
+                code,
+                state_generation,
+            } => {
+                assert_eq!(code, "play_session_capacity");
+                assert_eq!(
+                    state_generation, generation_before_capacity,
+                    "the capacity rejection must not commit a new generation"
+                );
+            }
+            other => panic!(
+                "an otherwise valid admission at exact ledger capacity must fail closed with play_session_capacity: {other:?}"
+            ),
+        }
+        assert_eq!(
+            engine.snapshot(),
+            engine_before_capacity,
+            "the capacity rejection must not reach the engine"
+        );
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before_capacity,
+            "the capacity rejection must be a whole-runtime no-op"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(
+                runtime.seen_play_sessions.len(),
+                DJ_LINK_DEDUPE_LIMIT + EXPIRED_FILLERS,
+                "no receipt may be evicted or purged by a capacity-rejected admission"
+            );
+            for index in 0..EXPIRED_FILLERS {
+                let key = format!(
+                    "{}:capacity-ledger:capacity-filler-{index:04}",
+                    runtime.project_epoch
+                );
+                assert!(
+                    runtime.seen_play_sessions.contains_key(&key),
+                    "TTL purge candidate {key} must survive a capacity-rejected admission"
+                );
+            }
+            assert!(
+                runtime
+                    .active_dedupe_key
+                    .as_deref()
+                    .is_some_and(|key| key.ends_with(":capacity-owner")),
+                "the released owner's live receipt identity must be intact"
+            );
+            assert!(runtime.released);
+        }
+    }
+
+    #[test]
+    fn dj_link_dispatch_ownerless_unmapped_latch_and_revision_rejections_preserve_state() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link latch test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "mapped-after-latch",
+            protocol::DjTrackSelector {
+                content_id: Some("mapped-after-latch".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        let timeline_id = mapping.timeline_id.0.to_string();
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "ownerless-unmapped-active",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "contentId": "not-authored",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 0.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 1,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "unmapped-ownerless",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::NoMapping { .. }
+        ));
+        assert!(runtime.lock().unwrap().unmapped_active_blocked);
+
+        let assert_latched_rejection = |message_type: protocol::DjLinkMessageType,
+                                        sequence: u64,
+                                        event_id: &str,
+                                        payload: Value| {
+            let engine_before = engine.snapshot();
+            let runtime_before = runtime.lock().unwrap().clone();
+            assert!(matches!(
+                dispatch_dj_link_event(
+                    dj_link_test_envelope(message_type, sequence, event_id, payload),
+                    &engine,
+                    &coordinator,
+                    &runtime,
+                    &admission,
+                    &transaction_active,
+                ),
+                DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_unmapped_active"
+            ));
+            assert_eq!(engine.snapshot(), engine_before);
+            assert_eq!(*runtime.lock().unwrap(), runtime_before);
+        };
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            2,
+            "latched-sync",
+            json!({
+                "deck": 1, "deckId": "rekordbox-deck-1", "masterDeckRevision": 1,
+                "contentId": "not-authored", "trackBpm": 120.0, "positionAtSendSec": 0.0,
+                "effectiveBpm": 120.0, "positionRevision": 1, "sampleAgeMs": 0,
+                "playSessionId": "unmapped-ownerless", "isPlaying": true, "master": true,
+                "startedAt": "2026-08-26T00:00:00Z", "loop": null
+            }),
+        );
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::LoopState,
+            3,
+            "latched-loop",
+            json!({
+                "deck": 1, "deckId": "rekordbox-deck-1", "masterDeckRevision": 1,
+                "playSessionId": "unmapped-ownerless",
+                "loop": { "active": true, "startBeat": 0.0, "endBeat": 8.0,
+                    "lengthBeats": 8.0, "revision": 1, "sampleAgeMs": 0,
+                    "source": "rekordbox-hook-measured" }
+            }),
+        );
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::Release,
+            4,
+            "latched-release",
+            json!({ "state": "released", "timelineId": timeline_id, "playSessionId": "unmapped-ownerless" }),
+        );
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::StateSync,
+            5,
+            "latched-state-sync",
+            json!({ "released": false, "masterDeck": 1, "activePlaySessionId": "unmapped-ownerless" }),
+        );
+        // Correlated transport commands retain the ownerless ACTIVE latch
+        // before their current-session fence is considered.
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            6,
+            "latched-beat-jump",
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": "unmapped-ownerless",
+                "bars": 4
+            }),
+        );
+        assert_latched_rejection(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            61,
+            "latched-timeline-loop-set",
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": "unmapped-ownerless",
+                "active": true
+            }),
+        );
+
+        let mapped_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 2,
+            "contentId": "mapped-after-latch",
+            "trackBpm": 120.0,
+            "positionAtSendSec": 2.0,
+            "effectiveBpm": 120.0,
+            "positionRevision": 2,
+            "sampleAgeMs": 0,
+            "playSessionId": "mapped-session",
+            "isPlaying": true,
+            "master": true,
+            "startedAt": "2026-08-26T00:01:00Z",
+            "loop": null
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    7,
+                    "mapped-active-clears-latch",
+                    mapped_payload.clone(),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert!(!runtime.lock().unwrap().unmapped_active_blocked);
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+
+        let assert_exact_rejection = |event: protocol::DjLinkEnvelope, expected_code: &str| {
+            let engine_before = engine.snapshot();
+            let runtime_before = runtime.lock().unwrap().clone();
+            assert!(matches!(
+                dispatch_dj_link_event(
+                    event,
+                    &engine,
+                    &coordinator,
+                    &runtime,
+                    &admission,
+                    &transaction_active,
+                ),
+                DjLinkDispatchOutcome::Rejected { code, .. } if code == expected_code
+            ));
+            assert_eq!(engine.snapshot(), engine_before);
+            assert_eq!(*runtime.lock().unwrap(), runtime_before);
+        };
+        let mut stale_position = mapped_payload.clone();
+        stale_position["positionRevision"] = json!(1);
+        assert_exact_rejection(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                8,
+                "stale-position-revision",
+                stale_position,
+            ),
+            "stale_position_revision",
+        );
+        let mut stale_master = mapped_payload.clone();
+        stale_master["masterDeckRevision"] = json!(1);
+        assert_exact_rejection(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                9,
+                "stale-master-deck-revision",
+                stale_master,
+            ),
+            "stale_master_deck_revision",
+        );
+        let mut mismatched_session = mapped_payload;
+        mismatched_session["playSessionId"] = json!("different-session");
+        assert_exact_rejection(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                10,
+                "play-session-revision-mismatch",
+                mismatched_session,
+            ),
+            "play_session_revision_mismatch",
+        );
+        assert_exact_rejection(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::StateSync,
+                11,
+                "state-sync-master-context-mismatch",
+                json!({
+                    "released": false,
+                    "masterDeck": 2,
+                    "activePlaySessionId": "mapped-session"
+                }),
+            ),
+            "state_sync_master_context_mismatch",
+        );
+    }
+
+    #[test]
+    fn dj_link_dispatch_same_session_master_reentry_refreshes_context_without_start() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link master reentry test phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "master-reentry",
+            protocol::DjTrackSelector {
+                content_id: Some("master-reentry-content".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = engine.snapshot().timeline.id;
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        let initial_active = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "contentId": "master-reentry-content",
+            "trackBpm": 120.0,
+            "positionAtSendSec": 1.0,
+            "effectiveBpm": 120.0,
+            "positionRevision": 1,
+            "sampleAgeMs": 0,
+            "playSessionId": "master-reentry-session",
+            "isPlaying": true,
+            "master": true,
+            "startedAt": "2026-08-26T00:00:00Z",
+            "loop": null
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "master-reentry-initial-active",
+                    initial_active.clone(),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let engine_before_nonmaster = engine.snapshot();
+        let runtime_before_nonmaster = runtime.lock().unwrap().clone();
+        let mut nonmaster = initial_active.clone();
+        nonmaster["master"] = json!(false);
+        nonmaster["masterDeckRevision"] = json!(2);
+        nonmaster["positionRevision"] = json!(2);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    2,
+                    "master-reentry-nonmaster",
+                    nonmaster,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "not_current_playing_master"
+        ));
+        assert_eq!(engine.snapshot(), engine_before_nonmaster);
+        assert_eq!(*runtime.lock().unwrap(), runtime_before_nonmaster);
+
+        let engine_before_master_return = engine.snapshot();
+        let runtime_before_master_return = runtime.lock().unwrap().clone();
+        let mut master_return = initial_active.clone();
+        master_return["masterDeckRevision"] = json!(3);
+        master_return["positionRevision"] = json!(3);
+        master_return["positionAtSendSec"] = json!(3.0);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    3,
+                    "master-reentry-return",
+                    master_return,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(engine.snapshot(), engine_before_master_return);
+        let mut expected_runtime_after_master_return = runtime_before_master_return;
+        expected_runtime_after_master_return.master_deck_revision = Some(3);
+        expected_runtime_after_master_return.last_event_id =
+            Some("master-reentry-return".to_string());
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            expected_runtime_after_master_return,
+            "same-session master reentry may refresh only context revision and last event"
+        );
+
+        engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackSync,
+                    4,
+                    "master-reentry-sync-rev3",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 3,
+                        "contentId": "master-reentry-content",
+                        "trackBpm": 120.0,
+                        "positionAtSendSec": 4.0,
+                        "effectiveBpm": 120.0,
+                        "positionRevision": 4,
+                        "sampleAgeMs": 0,
+                        "playSessionId": "master-reentry-session",
+                        "isPlaying": true,
+                        "master": true,
+                        "startedAt": "2026-08-26T00:00:00Z",
+                        "loop": null
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    5,
+                    "master-reentry-loop-rev3",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 3,
+                        "playSessionId": "master-reentry-session",
+                        "loop": {
+                            "active": true,
+                            "startBeat": 0.0,
+                            "endBeat": 8.0,
+                            "lengthBeats": 8.0,
+                            "revision": 1,
+                            "sampleAgeMs": 0,
+                            "source": "rekordbox-hook-measured"
+                        }
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let engine_before_stale_master = engine.snapshot();
+        let runtime_before_stale_master = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    6,
+                    "master-reentry-stale-rev1",
+                    initial_active,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "stale_master_deck_revision"
+        ));
+        assert_eq!(engine.snapshot(), engine_before_stale_master);
+        assert_eq!(*runtime.lock().unwrap(), runtime_before_stale_master);
+    }
+
+    #[test]
+    fn dj_link_dispatch_engine_errors_preserve_full_runtime_authority() {
+        let active_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "contentId": "content-1",
+            "trackBpm": 60.0,
+            "positionAtSendSec": 0.0,
+            "effectiveBpm": 60.0,
+            "positionRevision": 1,
+            "sampleAgeMs": 0,
+            "playSessionId": "play-error",
+            "isPlaying": true,
+            "master": true,
+            "startedAt": "2026-08-25T00:04:00Z",
+            "loop": null
+        });
+
+        // A mapped ACTIVE whose canonical START is rejected must leave both
+        // the engine and every runtime authority field untouched.
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "invalid-timeline",
+            protocol::DjTrackSelector {
+                content_id: Some("content-1".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = TimelineId(u64::MAX);
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        {
+            let mut runtime = runtime.lock().unwrap();
+            runtime.seen_play_sessions.insert(
+                "expired-nonactive-receipt".to_string(),
+                Instant::now() - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1),
+            );
+        }
+        let engine_before = engine.snapshot();
+        let runtime_before = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "active-engine-error",
+                    active_payload.clone(),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. }
+                if code == "engine_publication_rejected"
+        ));
+        assert_eq!(engine.snapshot(), engine_before);
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_before,
+            "a rejected START must not purge an expired non-active receipt from authoritative runtime"
+        );
+
+        // Establish one valid mapped authority, then force each dispatch
+        // command into a deterministic engine rejection.  Runtime commits
+        // must occur only after the canonical engine ACK.
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut initial_snapshot = engine.snapshot();
+        initial_snapshot.timeline.loop_region = None;
+        engine
+            .apply_timeline_bank_published(
+                vec![initial_snapshot.timeline.clone()],
+                initial_snapshot.timeline.id,
+                false,
+            )
+            .unwrap();
+        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let mut mapping = dj_link_test_mapping(
+            "valid",
+            protocol::DjTrackSelector {
+                content_id: Some("content-1".to_string()),
+                title: None,
+                artist: None,
+            },
+        );
+        mapping.timeline_id = initial_snapshot.timeline.id;
+        coordinator.mappings.dj_track_triggers = vec![mapping];
+        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+        let coordinator = Mutex::new(coordinator);
+        let admission = ProjectExternalCommandAdmission::default();
+        let transaction_active = AtomicBool::new(false);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::MasterTrackActive,
+                    1,
+                    "active-before-errors",
+                    active_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let timeline_id = engine.snapshot().timeline.id.0.to_string();
+
+        let assert_engine_rejection_preserves_runtime = |event: protocol::DjLinkEnvelope| {
+            let engine_before = engine.snapshot();
+            let runtime_before = runtime.lock().unwrap().clone();
+            assert!(matches!(
+                dispatch_dj_link_event(
+                    event,
+                    &engine,
+                    &coordinator,
+                    &runtime,
+                    &admission,
+                    &transaction_active,
+                ),
+                DjLinkDispatchOutcome::Rejected { code, .. }
+                    if code == "engine_publication_rejected"
+            ));
+            assert_eq!(engine.snapshot(), engine_before);
+            assert_eq!(*runtime.lock().unwrap(), runtime_before);
+        };
+
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::MasterTrackSync,
+            2,
+            "sync-engine-error",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "content-1",
+                "trackBpm": 60.0,
+                "positionAtSendSec": 1.0,
+                "effectiveBpm": 60.0,
+                "positionRevision": 2,
+                "sampleAgeMs": 0,
+                "playSessionId": "play-error",
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-25T00:04:00Z",
+                "loop": null
+            }),
+        ));
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::LoopState,
+            3,
+            "loop-engine-error",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "playSessionId": "play-error",
+                "loop": {
+                    "active": true,
+                    "startBeat": 0.0,
+                    "endBeat": 8.0,
+                    "lengthBeats": 8.0,
+                    "revision": 1,
+                    "sampleAgeMs": 0,
+                    "source": "rekordbox-hook-measured"
+                }
+            }),
+        ));
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            4,
+            "beat-engine-error",
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": "play-error",
+                "bars": 3
+            }),
+        ));
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            5,
+            "timeline-loop-engine-error",
+            json!({
+                "timelineId": engine.snapshot().timeline.id.0.to_string(),
+                "playSessionId": "play-error",
+                "active": true
+            }),
+        ));
     }
 
     #[test]
@@ -111194,59 +117038,22 @@ mod media_audio_playback_tests {
 #[cfg(test)]
 mod live_audio_input_tests {
     use super::*;
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    use crate::asio_bridge_v2::StreamCallbackHooks;
     use std::cell::Cell;
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    use std::{collections::VecDeque, sync::atomic::AtomicUsize};
 
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    #[derive(Default)]
-    struct AsioHardwareSmokeTelemetry {
-        callbacks: AtomicU64,
-        frames: AtomicU64,
-        last_callback_frames: AtomicU64,
-        max_capture_delay_ns: AtomicU64,
-        non_finite_samples: AtomicU64,
-        terminal_event_kind: std::sync::atomic::AtomicU32,
-    }
-
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    unsafe extern "C" fn asio_hardware_smoke_sample_callback(
-        context: *mut std::ffi::c_void,
-        samples: *const f32,
-        len: usize,
-        capture_delay_ns: u64,
-        callback_frames: u32,
-    ) {
-        if context.is_null() || samples.is_null() {
-            return;
+    fn wasapi_live_audio_request() -> LiveAudioInputStartRequest {
+        LiveAudioInputStartRequest {
+            backend: LiveAudioInputBackend::WasapiShared,
+            device_id: None,
+            sample_rate: None,
+            stream_channels: None,
+            sample_format: None,
+            buffer_frames: None,
+            channel_mix: LiveAudioChannelMix::AverageAll,
         }
-        let telemetry = unsafe { &*(context.cast::<AsioHardwareSmokeTelemetry>()) };
-        let samples = unsafe { std::slice::from_raw_parts(samples, len) };
-        telemetry.callbacks.fetch_add(1, Ordering::Relaxed);
-        telemetry.frames.fetch_add(len as u64, Ordering::Relaxed);
-        telemetry
-            .last_callback_frames
-            .store(u64::from(callback_frames), Ordering::Relaxed);
-        telemetry
-            .max_capture_delay_ns
-            .fetch_max(capture_delay_ns, Ordering::Relaxed);
-        telemetry.non_finite_samples.fetch_add(
-            samples.iter().filter(|sample| !sample.is_finite()).count() as u64,
-            Ordering::Relaxed,
-        );
-    }
-
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    unsafe extern "C" fn asio_hardware_smoke_event_callback(
-        context: *mut std::ffi::c_void,
-        severity: u32,
-        kind: u32,
-        _message: *const u8,
-        _message_len: usize,
-    ) {
-        if context.is_null() || severity != 2 {
-            return;
-        }
-        let telemetry = unsafe { &*(context.cast::<AsioHardwareSmokeTelemetry>()) };
-        telemetry.terminal_event_kind.store(kind, Ordering::Release);
     }
 
     fn feature_frame(
@@ -111713,6 +117520,42 @@ mod live_audio_input_tests {
         assert_eq!(stop_owner.load(Ordering::Acquire), recovered);
     }
 
+    #[test]
+    fn live_audio_generation_allocation_is_checked_and_never_wraps() {
+        let cell = AtomicU64::new(0);
+        assert_eq!(allocate_live_audio_generation_from(&cell), Ok(1));
+        assert_eq!(allocate_live_audio_generation_from(&cell), Ok(2));
+        assert_eq!(cell.load(Ordering::Acquire), 2);
+
+        let saturated = AtomicU64::new(u64::MAX);
+        assert_eq!(
+            allocate_live_audio_generation_from(&saturated),
+            Err("Live audio input generation counter was exhausted".to_string()),
+            "overflow must reject instead of wrapping onto identity 0"
+        );
+        assert_eq!(
+            saturated.load(Ordering::Acquire),
+            u64::MAX,
+            "a rejected allocation must not consume identity 0"
+        );
+        assert_eq!(
+            rotate_live_audio_generation(&saturated),
+            Err("Live audio input generation counter was exhausted".to_string())
+        );
+        assert_eq!(saturated.load(Ordering::Acquire), u64::MAX);
+    }
+
+    #[test]
+    fn device_catalog_generation_bump_is_checked_and_never_wraps() {
+        assert_eq!(checked_next_device_catalog_generation(0), Ok(1));
+        assert_eq!(checked_next_device_catalog_generation(41), Ok(42));
+        assert_eq!(
+            checked_next_device_catalog_generation(u64::MAX),
+            Err("Live audio input device catalog generation was exhausted; restart Syndocal before refreshing devices".to_string()),
+            "device ids embed the generation, so wrap-around would resurrect stale identities"
+        );
+    }
+
     fn callback_info(device_delay: Duration) -> rodio::cpal::InputCallbackInfo {
         let capture = rodio::cpal::StreamInstant::new(1, 0);
         let callback = capture.add(device_delay).unwrap();
@@ -111831,148 +117674,710 @@ mod live_audio_input_tests {
         assert_eq!(backends[0].id, "wasapi_shared");
         assert!(!backends[0].requires_explicit_device);
         assert_eq!(backends[0].distribution, "default");
+        assert_eq!(
+            backends[0].availability,
+            if cfg!(target_os = "windows") {
+                "ready"
+            } else {
+                "unsupported"
+            }
+        );
+        if backends[0].availability == "ready" {
+            assert!(backends[0].availability_detail.is_none());
+        } else {
+            assert!(backends[0]
+                .availability_detail
+                .as_deref()
+                .is_some_and(|detail| !detail.trim().is_empty()));
+        }
         assert_eq!(backends[1].id, "asio");
         assert!(backends[1].requires_explicit_device);
         assert_eq!(backends[1].distribution, "separate_artifact");
-        #[cfg(all(target_os = "windows", feature = "asio"))]
-        let expected_asio_built = AsioBridgeLibrary::load()
-            .map(|bridge| bridge.asio_compiled())
-            .unwrap_or(false);
-        #[cfg(not(all(target_os = "windows", feature = "asio")))]
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let expected_asio_built = true;
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
         let expected_asio_built = false;
         assert_eq!(backends[1].built, expected_asio_built);
-
-        let default_request: LiveAudioInputStartRequest = serde_json::from_value(json!({
-            "channel_mix": { "mode": "average_all" }
-        }))
-        .unwrap();
-        assert_eq!(default_request.backend, LiveAudioInputBackend::WasapiShared);
-    }
-
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    #[test]
-    #[ignore = "requires SYNDOCAL_ASIO_BRIDGE_PATH and installed ASIO drivers"]
-    fn asio_bridge_catalog_and_capabilities_match_the_explicit_driver() {
-        let bridge = AsioBridgeLibrary::load().expect("ASIO bridge should load");
-        assert!(bridge.asio_compiled());
-        let drivers = bridge.drivers().expect("ASIO drivers should enumerate");
-        println!("ASIO drivers: {drivers:?}");
-        let driver = drivers
-            .first()
-            .expect("at least one ASIO driver is required");
-        let payload = bridge
-            .capabilities_json(&driver.id)
-            .expect("selected ASIO driver capabilities should resolve");
-        println!("ASIO capabilities: {payload}");
-        let capabilities: AsioBridgeCapabilities =
-            serde_json::from_str(&payload).expect("ASIO capabilities should match ABI v1 JSON");
-        assert_eq!(capabilities.abi_version, SYNDOCAL_ASIO_ABI_VERSION);
-        assert!(capabilities.built);
-        assert_eq!(capabilities.backend, "asio");
-        assert_eq!(capabilities.driver.id, driver.id);
-        assert!(!capabilities.input_configs.is_empty());
-    }
-
-    #[cfg(all(target_os = "windows", feature = "asio"))]
-    #[test]
-    #[ignore = "requires an explicit installed ASIO driver and captures live hardware input"]
-    fn asio_bridge_explicit_driver_stream_smoke() {
-        let driver_id = std::env::var("SYNDOCAL_ASIO_TEST_DRIVER_ID")
-            .expect("set SYNDOCAL_ASIO_TEST_DRIVER_ID=asio:<driver name>");
-        let sample_rate = std::env::var("SYNDOCAL_ASIO_TEST_SAMPLE_RATE")
-            .unwrap_or_else(|_| "48000".to_string())
-            .parse::<u32>()
-            .expect("SYNDOCAL_ASIO_TEST_SAMPLE_RATE must be an integer");
-        let channels = std::env::var("SYNDOCAL_ASIO_TEST_CHANNELS")
-            .unwrap_or_else(|_| "2".to_string())
-            .parse::<u32>()
-            .expect("SYNDOCAL_ASIO_TEST_CHANNELS must be an integer");
-        let buffer_frames = std::env::var("SYNDOCAL_ASIO_TEST_BUFFER_FRAMES")
-            .unwrap_or_else(|_| "1024".to_string())
-            .parse::<u32>()
-            .expect("SYNDOCAL_ASIO_TEST_BUFFER_FRAMES must be an integer");
-        let sample_format_name =
-            std::env::var("SYNDOCAL_ASIO_TEST_SAMPLE_FORMAT").unwrap_or_else(|_| "i16".to_string());
-        let sample_format = match sample_format_name.as_str() {
-            "f32" => 1,
-            "i16" => 2,
-            "i24" => 3,
-            "i32" => 4,
-            "f64" => 5,
-            _ => panic!("unsupported ASIO smoke sample format {sample_format_name}"),
-        };
-        let channel_mix = [AsioBridgeChannelMix {
-            channel_index: 0,
-            gain: 1.0,
-        }];
-        let bridge = AsioBridgeLibrary::load().expect("ASIO bridge should load");
-        assert!(bridge.asio_compiled());
-        let config = AsioBridgeStartConfig {
-            struct_size: std::mem::size_of::<AsioBridgeStartConfig>() as u32,
-            abi_version: SYNDOCAL_ASIO_ABI_VERSION,
-            driver_id: driver_id.as_ptr(),
-            driver_id_len: driver_id.len(),
-            sample_rate_hz: sample_rate,
-            input_channels: channels,
-            sample_format,
-            fixed_buffer_frames: buffer_frames,
-            channel_mix: channel_mix.as_ptr(),
-            channel_mix_len: channel_mix.len(),
-            flags: 0,
-            reserved: 0,
-        };
-        let mut telemetry = Box::<AsioHardwareSmokeTelemetry>::default();
-        let mut handle = std::ptr::null_mut();
-        let mut error = AsioBridgeString::default();
-        let status = unsafe {
-            (bridge.api.start)(
-                &config,
-                asio_hardware_smoke_sample_callback,
-                asio_hardware_smoke_event_callback,
-                telemetry.as_mut() as *mut AsioHardwareSmokeTelemetry as *mut std::ffi::c_void,
-                &mut handle,
-                &mut error,
-            )
-        };
-        let start_error = bridge.take_string(error);
-        assert_eq!(status, 0, "explicit ASIO driver should open: {start_error}");
-        assert!(!handle.is_null());
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while telemetry.callbacks.load(Ordering::Acquire) < 4
-            && telemetry.terminal_event_kind.load(Ordering::Acquire) == 0
-            && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(10));
+        assert!(matches!(
+            backends[1].availability.as_str(),
+            "ready" | "not_packaged" | "fault" | "unsupported"
+        ));
+        if backends[1].availability == "ready" {
+            assert!(backends[1].availability_detail.is_none());
+        } else {
+            assert!(backends[1]
+                .availability_detail
+                .as_deref()
+                .is_some_and(|detail| !detail.trim().is_empty()));
         }
-        let mut actual_buffer_frames = 0;
-        let buffer_status = unsafe {
-            (bridge.api.actual_buffer_frames)(handle.cast_const(), &mut actual_buffer_frames)
-        };
-        let xrun_count = unsafe { (bridge.api.xrun_count)(handle.cast_const()) };
-        let callbacks = telemetry.callbacks.load(Ordering::Acquire);
-        let frames = telemetry.frames.load(Ordering::Acquire);
-        let last_callback_frames = telemetry.last_callback_frames.load(Ordering::Acquire);
-        let max_capture_delay_ns = telemetry.max_capture_delay_ns.load(Ordering::Acquire);
-        let non_finite_samples = telemetry.non_finite_samples.load(Ordering::Acquire);
-        let terminal_event_kind = telemetry.terminal_event_kind.load(Ordering::Acquire);
-        let mut stop_error = AsioBridgeString::default();
-        let stop_status = unsafe { (bridge.api.stop)(handle, &mut stop_error) };
-        let stop_error = bridge.take_string(stop_error);
-        unsafe { (bridge.api.free)(handle) };
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        match asio_bridge_v2::probe_canonical_bridge() {
+            asio_bridge_v2::AsioBridgeAvailability::Ready(_) => {
+                assert_eq!(backends[1].availability, "ready")
+            }
+            asio_bridge_v2::AsioBridgeAvailability::NotPackaged { .. } => {
+                assert_eq!(backends[1].availability, "not_packaged")
+            }
+            asio_bridge_v2::AsioBridgeAvailability::Fault(_) => {
+                assert_eq!(backends[1].availability, "fault")
+            }
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        assert_eq!(backends[1].availability, "unsupported");
+    }
 
-        println!(
-            "ASIO smoke driver={driver_id} rate={sample_rate} channels={channels} format={sample_format_name} requested={buffer_frames} applied={actual_buffer_frames} callbacks={callbacks} frames={frames} callback_frames={last_callback_frames} max_delay_us={:.1} xruns={xrun_count}",
-            max_capture_delay_ns as f64 / 1_000.0,
+    #[test]
+    fn live_audio_backend_availability_wire_contract_covers_every_probe_class() {
+        let cases = [
+            (LiveAudioInputAvailability::Ready, None, true, "ready"),
+            (
+                LiveAudioInputAvailability::NotPackaged,
+                Some("canonical bridge is not packaged"),
+                true,
+                "not_packaged",
+            ),
+            (
+                LiveAudioInputAvailability::Fault,
+                Some("canonical bridge failed to load"),
+                true,
+                "fault",
+            ),
+            (
+                LiveAudioInputAvailability::Unsupported,
+                Some("backend is unsupported on this target"),
+                false,
+                "unsupported",
+            ),
+        ];
+        for (availability, detail, built, expected_wire) in cases {
+            let probe = LiveAudioInputBackendProbe {
+                availability,
+                detail: detail.map(str::to_owned),
+                built,
+            };
+            assert_eq!(probe.availability.as_str(), expected_wire);
+            assert_eq!(probe.built, built);
+            if availability == LiveAudioInputAvailability::Ready {
+                assert!(probe.detail.is_none());
+            } else {
+                assert!(probe
+                    .detail
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn live_audio_request_boundary_requires_explicit_backend_and_rejects_unknown_fields() {
+        let missing_backend = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
+            "channel_mix": { "mode": "average_all" }
+        }));
+        assert!(missing_backend.is_err(), "missing backend must fail closed");
+
+        let unknown_backend = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
+            "backend": "legacy_wasapi",
+            "channel_mix": { "mode": "average_all" }
+        }));
+        assert!(unknown_backend.is_err(), "unknown backend must fail closed");
+
+        let unknown_field = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
+            "backend": "wasapi_shared",
+            "channel_mix": { "mode": "average_all" },
+            "unexpected": true
+        }));
+        assert!(
+            unknown_field.is_err(),
+            "unknown request fields must fail closed"
         );
-        assert_eq!(buffer_status, 0);
-        assert_eq!(actual_buffer_frames, buffer_frames);
-        assert!(callbacks >= 4, "ASIO callback did not become live");
-        assert_eq!(last_callback_frames, u64::from(buffer_frames));
-        assert_eq!(non_finite_samples, 0);
-        assert_eq!(terminal_event_kind, 0, "ASIO terminal event was observed");
-        assert_eq!(xrun_count, 0);
-        assert_eq!(stop_status, 0, "ASIO stop failed: {stop_error}");
+
+        let unknown_backend_argument =
+            serde_json::from_value::<LiveAudioInputBackend>(json!("legacy_wasapi"));
+        assert!(
+            unknown_backend_argument.is_err(),
+            "Tauri backend arguments must reject unknown backend identifiers"
+        );
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    const ASIO_CONTRACT_DRIVER: &str = "asio:TOPPING Pro USB Audio Device";
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn asio_contract_selection() -> asio_bridge_v2::PersistedAsioSelection {
+        asio_bridge_v2::PersistedAsioSelection::new(
+            ASIO_CONTRACT_DRIVER.to_owned(),
+            "TOPPING Pro USB Audio Device".to_owned(),
+            48_000,
+            2,
+            "i32".to_owned(),
+            128,
+            vec![
+                asio_bridge_v2::ChannelMixGainJson {
+                    channel_index: 0,
+                    gain: 0.5,
+                },
+                asio_bridge_v2::ChannelMixGainJson {
+                    channel_index: 1,
+                    gain: 0.5,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn asio_contract_catalog_json(driver_id: &str) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "schemaVersion": 2,
+            "kind": "drivers",
+            "abiVersion": 2,
+            "backend": "asio",
+            "built": true,
+            "drivers": [{
+                "id": driver_id,
+                "name": "TOPPING Pro USB Audio Device",
+                "inputChannels": 2,
+                "sampleFormats": ["f32", "i24", "i32"],
+                "sampleRatesHz": [44100, 48000, 96000],
+                "bufferFrames": {"min": 8, "max": 2048}
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn asio_contract_capabilities_json(rate: u32) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "schemaVersion": 2,
+            "kind": "capabilities",
+            "abiVersion": 2,
+            "backend": "asio",
+            "built": true,
+            "driver": {
+                "id": ASIO_CONTRACT_DRIVER,
+                "name": "TOPPING Pro USB Audio Device",
+                "inputChannels": 2,
+                "sampleFormats": ["f32", "i24", "i32"],
+                "sampleRatesHz": [44100, 48000, 96000],
+                "bufferFrames": {"min": 8, "max": 2048}
+            },
+            "inputConfigs": [{
+                "channels": 2,
+                "sampleFormat": "i32",
+                "sampleRateHz": rate,
+                "bufferFrames": {"min": 8, "max": 2048}
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    struct AsioContractHooks {
+        events: Mutex<Vec<String>>,
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    impl AsioContractHooks {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn recorded(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    impl asio_bridge_v2::StreamCallbackHooks for AsioContractHooks {
+        fn on_samples(&self, mono_samples: &[f32], capture_delay_ns: u64) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("samples:{}:{capture_delay_ns}", mono_samples.len()));
+        }
+
+        fn on_terminal_latch(&self, kind: u32) {
+            self.events.lock().unwrap().push(format!("terminal:{kind}"));
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    struct AsioContractTransport {
+        start_results:
+            Mutex<VecDeque<Result<asio_bridge_v2::RawStart, asio_bridge_v2::BridgeCallFailure>>>,
+        stop_results: Mutex<VecDeque<Result<String, asio_bridge_v2::BridgeCallFailure>>>,
+        close_results: Mutex<VecDeque<Result<String, asio_bridge_v2::BridgeCallFailure>>>,
+        stop_calls: AtomicU64,
+        close_calls: AtomicU64,
+        close_slots_seen: Mutex<Vec<usize>>,
+        captured_sample_fn: std::sync::atomic::AtomicUsize,
+        captured_event_fn: std::sync::atomic::AtomicUsize,
+        captured_context: std::sync::atomic::AtomicUsize,
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    impl AsioContractTransport {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                start_results: Mutex::new(std::collections::VecDeque::new()),
+                stop_results: Mutex::new(std::collections::VecDeque::new()),
+                close_results: Mutex::new(std::collections::VecDeque::new()),
+                stop_calls: AtomicU64::new(0),
+                close_calls: AtomicU64::new(0),
+                close_slots_seen: Mutex::new(Vec::new()),
+                captured_sample_fn: AtomicUsize::new(0),
+                captured_event_fn: AtomicUsize::new(0),
+                captured_context: AtomicUsize::new(0),
+            })
+        }
+
+        fn push_start_success(&self, handle_value: usize) {
+            self.start_results
+                .lock()
+                .unwrap()
+                .push_back(Ok(asio_bridge_v2::RawStart {
+                    handle: asio_bridge_v2::RawStreamHandle(handle_value as *mut std::ffi::c_void),
+                    result_json: serde_json::to_string(&serde_json::json!({
+                        "schemaVersion": 2,
+                        "kind": "start",
+                        "actualBufferFrames": 128
+                    }))
+                    .unwrap(),
+                }));
+        }
+
+        fn invoke_captured_sample(&self, samples: &[f32], capture_delay_ns: u64) {
+            let context = self.captured_context.load(Ordering::Acquire) as *mut std::ffi::c_void;
+            assert!(!context.is_null(), "start must capture a callback context");
+            let sample_fn = unsafe {
+                std::mem::transmute::<usize, asio_bridge_v2::SampleCallbackFn>(
+                    self.captured_sample_fn.load(Ordering::Acquire),
+                )
+            };
+            unsafe {
+                sample_fn(
+                    context,
+                    samples.as_ptr(),
+                    samples.len(),
+                    capture_delay_ns,
+                    samples.len() as u32,
+                )
+            };
+        }
+
+        fn invoke_captured_event(&self, severity: u32, kind: u32) {
+            let context = self.captured_context.load(Ordering::Acquire) as *mut std::ffi::c_void;
+            assert!(!context.is_null(), "start must capture a callback context");
+            let event_fn = unsafe {
+                std::mem::transmute::<usize, asio_bridge_v2::EventCallbackFn>(
+                    self.captured_event_fn.load(Ordering::Acquire),
+                )
+            };
+            unsafe { event_fn(context, severity, kind, std::ptr::null(), 0) };
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    impl asio_bridge_v2::BridgeTransport for AsioContractTransport {
+        fn start(
+            &self,
+            _request_json: &[u8],
+            sample: asio_bridge_v2::SampleCallbackFn,
+            event: asio_bridge_v2::EventCallbackFn,
+            context: *mut std::ffi::c_void,
+        ) -> Result<asio_bridge_v2::RawStart, asio_bridge_v2::BridgeCallFailure> {
+            self.captured_sample_fn
+                .store(sample as usize, Ordering::Release);
+            self.captured_event_fn
+                .store(event as usize, Ordering::Release);
+            self.captured_context
+                .store(context as usize, Ordering::Release);
+            self.start_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("contract transport was not scripted for start")
+        }
+
+        fn stop(
+            &self,
+            handle: asio_bridge_v2::RawStreamHandle,
+        ) -> Result<String, asio_bridge_v2::BridgeCallFailure> {
+            self.stop_calls.fetch_add(1, Ordering::Relaxed);
+            assert!(!handle.is_null());
+            self.stop_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Ok(serde_json::to_string(&serde_json::json!({
+                        "schemaVersion": 2,
+                        "kind": "stop",
+                        "stopped": true,
+                        "streamWasActive": true
+                    }))
+                    .unwrap())
+                })
+        }
+
+        fn telemetry_json(
+            &self,
+            _handle: asio_bridge_v2::RawStreamHandle,
+        ) -> Result<String, asio_bridge_v2::BridgeCallFailure> {
+            Ok(serde_json::to_string(&serde_json::json!({
+                "schemaVersion": 2,
+                "kind": "telemetry",
+                "callbacks": 1,
+                "xruns": 0,
+                "callbackDurationNs": {"p50": 1, "p95": 1, "p99": 1, "max": 1},
+                "captureDelayNs": {"p50": 1, "p95": 1, "p99": 1, "max": 1}
+            }))
+            .unwrap())
+        }
+
+        fn close(
+            &self,
+            slot: &mut asio_bridge_v2::RawCloseSlot,
+        ) -> Result<String, asio_bridge_v2::BridgeCallFailure> {
+            self.close_calls.fetch_add(1, Ordering::Relaxed);
+            self.close_slots_seen.lock().unwrap().push(slot.0 as usize);
+            slot.0 = std::ptr::null_mut();
+            self.close_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Ok(serde_json::to_string(&serde_json::json!({
+                        "schemaVersion": 2,
+                        "kind": "close",
+                        "handleReleased": true,
+                        "streamWasActive": true
+                    }))
+                    .unwrap())
+                })
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn contract_session(
+        transport: &Arc<AsioContractTransport>,
+        live_generation: Arc<AtomicU64>,
+        hooks: Option<Arc<dyn asio_bridge_v2::StreamCallbackHooks>>,
+    ) -> asio_bridge_v2::AsioStreamSession<AsioContractTransport> {
+        asio_bridge_v2::publish_generation_and_start(
+            Arc::clone(transport),
+            &asio_contract_selection().start_request().unwrap(),
+            live_generation,
+            hooks,
+        )
+        .unwrap()
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_probe_loads_only_the_canonical_dll_filename_at_the_probed_directory() {
+        let directory = env::temp_dir().join(format!(
+            "syndocal_asio_contract_probe_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        // Only the exact canonical filename is ever consulted.  The
+        // `probe_canonical_bridge_at` seam shares the canonical probe's
+        // resolution path without touching process environment state, so
+        // alias independence is proven deterministically here and override
+        // independence follows structurally: no code path reads any
+        // environment variable, so there is nothing to race over.
+        fs::write(directory.join("syndocal-asio-bridge.dll"), b"decoy").unwrap();
+        let availability_with_alias = asio_bridge_v2::probe_canonical_bridge_at(&directory);
+        assert_eq!(availability_with_alias.label(), "NOT_PACKAGED");
+
+        fs::write(directory.join("syndocal_asio_bridge.dll"), b"not a dll").unwrap();
+        let availability_with_canonical_garbage =
+            asio_bridge_v2::probe_canonical_bridge_at(&directory);
+        assert_eq!(availability_with_canonical_garbage.label(), "FAULT");
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_start_revalidation_fails_closed_on_stale_catalog_and_capabilities() {
+        let selection = asio_contract_selection();
+
+        let missing_driver = asio_contract_catalog_json("asio:HOTONE AUDIO USB Audio Device");
+        match asio_bridge_v2::revalidate_selection_with_catalog(&selection, &missing_driver) {
+            asio_bridge_v2::SelectionRevalidationOutcome::StillLocked { reason, message } => {
+                assert_eq!(reason, asio_bridge_v2::StaleLockReason::DriverMissing);
+                assert!(message.contains(ASIO_CONTRACT_DRIVER));
+                assert!(message.contains("stays locked"));
+            }
+            other => panic!("expected StillLocked for a missing driver, got {other:?}"),
+        }
+
+        match asio_bridge_v2::revalidate_selection_with_capabilities(
+            &selection,
+            &asio_contract_capabilities_json(44_100),
+        ) {
+            asio_bridge_v2::SelectionRevalidationOutcome::StillLocked { reason, .. } => {
+                assert_eq!(reason, asio_bridge_v2::StaleLockReason::ConfigurationDrift);
+            }
+            other => panic!("expected StillLocked for rate drift, got {other:?}"),
+        }
+
+        match asio_bridge_v2::revalidate_selection_with_catalog(
+            &selection,
+            &asio_contract_catalog_json(ASIO_CONTRACT_DRIVER),
+        ) {
+            asio_bridge_v2::SelectionRevalidationOutcome::Revalidated {
+                current_driver_id, ..
+            } => assert_eq!(current_driver_id, ASIO_CONTRACT_DRIVER),
+            other => panic!("expected Revalidated, got {other:?}"),
+        }
+
+        let request = match asio_bridge_v2::revalidate_selection_with_capabilities(
+            &selection,
+            &asio_contract_capabilities_json(48_000),
+        ) {
+            asio_bridge_v2::SelectionRevalidationOutcome::Revalidated { start_request, .. } => {
+                start_request
+            }
+            other => panic!("expected Revalidated capabilities, got {other:?}"),
+        };
+        assert_eq!(request.driver_id, ASIO_CONTRACT_DRIVER);
+        assert_eq!(request.sample_rate_hz, 48_000);
+        assert_eq!(request.input_channels, 2);
+        assert_eq!(request.sample_format, "i32");
+        assert_eq!(request.fixed_buffer_frames, 128);
+        assert_eq!(request.channel_mix.len(), 2);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_close_owns_the_handle_exactly_once_and_reports_failures_visibly() {
+        let transport = AsioContractTransport::new();
+        transport.push_start_success(0xFEED);
+        let session = contract_session(&transport, Arc::new(AtomicU64::new(0)), None);
+        assert_eq!(
+            teardown_asio_v2_stream(session),
+            Ok(()),
+            "an orderly teardown stops once and closes once"
+        );
+        assert_eq!(transport.stop_calls.load(Ordering::Acquire), 1);
+        assert_eq!(transport.close_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            transport.close_slots_seen.lock().unwrap().as_slice(),
+            &[0xFEED]
+        );
+
+        let failing = AsioContractTransport::new();
+        failing.push_start_success(0xBEEF);
+        failing
+            .stop_results
+            .lock()
+            .unwrap()
+            .push_back(Err(asio_bridge_v2::BridgeCallFailure {
+                status: asio_bridge_v2::BridgeStatusOrUnknown::Known(
+                    asio_bridge_v2::BridgeStatus::BackendError,
+                ),
+                error_payload: None,
+                detail: "stop exploded".to_owned(),
+            }));
+        failing
+            .close_results
+            .lock()
+            .unwrap()
+            .push_back(Err(asio_bridge_v2::BridgeCallFailure {
+                status: asio_bridge_v2::BridgeStatusOrUnknown::Known(
+                    asio_bridge_v2::BridgeStatus::Terminal,
+                ),
+                error_payload: None,
+                detail: "close exploded".to_owned(),
+            }));
+        let session = contract_session(&failing, Arc::new(AtomicU64::new(0)), None);
+        let teardown_error = teardown_asio_v2_stream(session).unwrap_err();
+        assert!(teardown_error.contains("stop exploded"));
+        assert!(teardown_error.contains("close exploded"));
+        assert_eq!(failing.stop_calls.load(Ordering::Acquire), 1);
+        assert_eq!(failing.close_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            failing.close_slots_seen.lock().unwrap().as_slice(),
+            &[0xBEEF],
+            "close receives the raw handle even when the DLL reports failure"
+        );
+
+        let dropped = AsioContractTransport::new();
+        dropped.push_start_success(0xD00D);
+        let session = contract_session(&dropped, Arc::new(AtomicU64::new(0)), None);
+        let context = Arc::clone(session.context());
+        drop(session);
+        assert_eq!(dropped.close_calls.load(Ordering::Acquire), 0);
+        let snapshot = context.snapshot();
+        assert!(snapshot.safety_zero_requested);
+        assert_eq!(
+            snapshot.latched_terminal_kind,
+            Some(asio_bridge_v2::INTERNAL_FAULT_DROP_WITHOUT_CLOSE)
+        );
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_callback_generation_fencing_gates_the_application_hooks() {
+        let transport = AsioContractTransport::new();
+        transport.push_start_success(0xFACE);
+        let hooks = AsioContractHooks::new();
+        let live_generation = Arc::new(AtomicU64::new(0));
+        let session = contract_session(
+            &transport,
+            Arc::clone(&live_generation),
+            Some(Arc::clone(&hooks) as Arc<dyn asio_bridge_v2::StreamCallbackHooks>),
+        );
+        assert_eq!(session.generation(), 1);
+
+        let clean = [0.25_f32; 16];
+        transport.invoke_captured_sample(&clean, 100);
+        assert_eq!(hooks.recorded(), vec!["samples:16:100".to_owned()]);
+
+        live_generation.store(99, Ordering::Release);
+        transport.invoke_captured_sample(&clean, 200);
+        transport.invoke_captured_event(2, 5);
+        assert_eq!(
+            hooks.recorded(),
+            vec!["samples:16:100".to_owned()],
+            "stale-generation callbacks must never reach the application hooks"
+        );
+        let snapshot = session.context().snapshot();
+        assert_eq!(snapshot.stale_callbacks_total, 1);
+        assert_eq!(snapshot.latched_terminal_kind, None);
+        assert!(!snapshot.safety_zero_requested);
+        drop(session);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_terminal_events_latch_once_and_freeze_the_application_hooks() {
+        let transport = AsioContractTransport::new();
+        transport.push_start_success(0xC0DE);
+        let hooks = AsioContractHooks::new();
+        let session = contract_session(
+            &transport,
+            Arc::new(AtomicU64::new(0)),
+            Some(Arc::clone(&hooks) as Arc<dyn asio_bridge_v2::StreamCallbackHooks>),
+        );
+
+        let clean = [0.25_f32; 16];
+        transport.invoke_captured_sample(&clean, 500);
+        assert_eq!(hooks.recorded(), vec!["samples:16:500".to_owned()]);
+
+        transport.invoke_captured_event(2, 5);
+        let snapshot = session.context().snapshot();
+        assert_eq!(snapshot.latched_terminal_kind, Some(5));
+        assert!(snapshot.safety_zero_requested);
+
+        let clean_after_fault = [0.5_f32; 16];
+        transport.invoke_captured_sample(&clean_after_fault, 900);
+        transport.invoke_captured_event(2, 6);
+        assert_eq!(
+            hooks.recorded(),
+            vec!["samples:16:500".to_owned(), "terminal:5".to_owned()],
+            "delivery freezes after the one-shot terminal latch and later faults stay silent"
+        );
+        drop(session);
+
+        let message = deferred_live_audio_terminal_fault_message(DeferredLiveAudioTerminalFault {
+            source: LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE,
+            kind: 5,
+        });
+        assert!(message.contains("explicit ASIO input device was lost"));
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_internal_terminal_kinds_are_visible_and_latched_once() {
+        for (kind, expected_fragment) in [
+            (
+                asio_bridge_v2::INTERNAL_FAULT_DROP_WITHOUT_CLOSE,
+                "without an explicit Close",
+            ),
+            (
+                asio_bridge_v2::INTERNAL_FAULT_MALFORMED_EVENT,
+                "event payload was malformed",
+            ),
+            (
+                asio_bridge_v2::INTERNAL_FAULT_FRAME_MISMATCH,
+                "frame count changed after Start",
+            ),
+            (
+                asio_bridge_v2::INTERNAL_FAULT_NONFINITE_SAMPLE,
+                "non-finite sample reached the ASIO callback",
+            ),
+            (6, "callback gap exceeded 250 ms"),
+            (1, "ASIO input xrun"),
+        ] {
+            let message =
+                deferred_live_audio_terminal_fault_message(DeferredLiveAudioTerminalFault {
+                    source: LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE,
+                    kind,
+                });
+            assert!(
+                message.contains(&format!("ASIO terminal fault kind")),
+                "unexpected message shape: {message}"
+            );
+            assert!(
+                message.contains(expected_fragment),
+                "kind {kind} message {message:?} lacks {expected_fragment:?}"
+            );
+        }
+
+        let latch = DeferredLiveAudioTerminalFaultLatch::default();
+        assert!(latch.latch(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 2));
+        assert!(!latch.latch(LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE, 3));
+        let claimed = latch.claim().unwrap();
+        assert_eq!(claimed.source, LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE);
+        assert_eq!(claimed.kind, 2);
+        assert!(latch.claim().is_none());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_stream_hooks_feed_the_bounded_capture_queues_and_stop_on_terminal() {
+        let (free_slots, ready_chunks) = capture_slot_pool(4);
+        let free_slots = Arc::new(free_slots);
+        let ready_chunks = Arc::new(ready_chunks);
+        let capture_telemetry = Arc::new(LiveAudioInputCaptureTelemetry::default());
+        let safety = Arc::new(LiveAudioInputSafety::default());
+        let deferred = Arc::new(DeferredLiveAudioTerminalFaultLatch::default());
+        let hooks = AsioV2StreamHooks {
+            sample_rate: 48_000,
+            free_capture_slots: Arc::clone(&free_slots),
+            ready_capture_chunks: Arc::clone(&ready_chunks),
+            capture_telemetry,
+            safety: Arc::clone(&safety),
+            deferred_terminal_fault: Arc::clone(&deferred),
+            worker_wake: std::thread::current(),
+        };
+
+        let samples = [0.5_f32; 128];
+        hooks.on_samples(&samples, 1_000);
+        assert_eq!(ready_chunks.len(), 1);
+        let chunk = ready_chunks.pop().unwrap();
+        assert_eq!(chunk.len, 128);
+        assert!(chunk.samples[..128].iter().all(|value| *value == 0.5));
+
+        hooks.on_terminal_latch(5);
+        assert!(safety.terminal_faulted());
+        let fault = deferred.claim().unwrap();
+        assert_eq!(fault.source, LIVE_AUDIO_TERMINAL_SOURCE_ASIO_BRIDGE);
+        assert_eq!(fault.kind, 5);
+
+        hooks.on_samples(&samples, 2_000);
+        assert_eq!(
+            ready_chunks.len(),
+            0,
+            "the terminal fault must stop further queueing"
+        );
+        assert!(deferred.claim().is_none());
     }
 
     #[test]
@@ -111992,7 +118397,7 @@ mod live_audio_input_tests {
             &LiveAudioInputStartRequest {
                 stream_channels: Some(2),
                 sample_format: Some("f32".to_string()),
-                ..LiveAudioInputStartRequest::default()
+                ..wasapi_live_audio_request()
             },
         )
         .unwrap();
@@ -112020,7 +118425,7 @@ mod live_audio_input_tests {
                 sample_rate: Some(48_000),
                 stream_channels: Some(2),
                 sample_format: Some("f32".to_string()),
-                ..LiveAudioInputStartRequest::default()
+                ..wasapi_live_audio_request()
             },
         )
         .unwrap();
@@ -112067,7 +118472,7 @@ mod live_audio_input_tests {
             sample_format: Some("i16".to_string()),
             buffer_frames: Some(128),
             channel_mix: LiveAudioChannelMix::Single { channel_index: 1 },
-            ..LiveAudioInputStartRequest::default()
+            ..wasapi_live_audio_request()
         };
         let selected = resolve_live_audio_stream_config(&default, &supported, &request).unwrap();
         assert_eq!(selected.sample_format, rodio::cpal::SampleFormat::I16);
@@ -112128,7 +118533,7 @@ mod live_audio_input_tests {
 
         let unsupported = LiveAudioInputStartRequest {
             sample_rate: Some(96_000),
-            ..LiveAudioInputStartRequest::default()
+            ..wasapi_live_audio_request()
         };
         assert!(resolve_live_audio_stream_config(&default, &supported, &unsupported).is_err());
     }
@@ -112147,7 +118552,7 @@ mod live_audio_input_tests {
         for frames in [0, 1_601, 8_193] {
             let request = LiveAudioInputStartRequest {
                 buffer_frames: Some(frames),
-                ..LiveAudioInputStartRequest::default()
+                ..wasapi_live_audio_request()
             };
             assert!(
                 resolve_live_audio_stream_config(&default, &[], &request).is_err(),
@@ -112163,7 +118568,7 @@ mod live_audio_input_tests {
         );
         let out_of_range = LiveAudioInputStartRequest {
             buffer_frames: Some(32),
-            ..LiveAudioInputStartRequest::default()
+            ..wasapi_live_audio_request()
         };
         assert!(resolve_live_audio_stream_config(&narrow, &[], &out_of_range).is_err());
 
@@ -112175,7 +118580,7 @@ mod live_audio_input_tests {
         );
         let exact_attempt = LiveAudioInputStartRequest {
             buffer_frames: Some(256),
-            ..LiveAudioInputStartRequest::default()
+            ..wasapi_live_audio_request()
         };
         assert_eq!(
             resolve_live_audio_stream_config(&unknown, &[], &exact_attempt)
@@ -112215,7 +118620,7 @@ mod live_audio_input_tests {
             &heterogeneous,
             &LiveAudioInputStartRequest {
                 sample_rate: Some(48_000),
-                ..LiveAudioInputStartRequest::default()
+                ..wasapi_live_audio_request()
             },
         )
         .unwrap();
@@ -112225,7 +118630,7 @@ mod live_audio_input_tests {
             stream_channels: Some(preview.stream_config.channels),
             sample_format: Some(preview.sample_format.to_string()),
             buffer_frames: Some(128),
-            ..LiveAudioInputStartRequest::default()
+            ..wasapi_live_audio_request()
         };
         assert!(
             resolve_live_audio_stream_config(&explicit_rate_default, &heterogeneous, &start)
@@ -121561,6 +127966,28 @@ fn main() {
                 .map_err(|error| {
                     format!("Timeline cue audio settings worker could not start: {error}")
                 })?;
+            // Restore the persisted ASIO selection before any operator input.
+            // Restoration never enumerates drivers or touches the bridge: the
+            // restored selection stays locked until Start revalidates it
+            // against a fresh catalog and capabilities.
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            {
+                let asio_local_data_dir = app
+                    .path()
+                    .app_local_data_dir()
+                    .map_err(|error| {
+                        format!("Unable to resolve ASIO selection storage directory: {error}")
+                    })?;
+                let asio_selection_path = asio_selection_storage_path(&asio_local_data_dir);
+                let restore_outcome =
+                    load_asio_input_selection_from_path(&asio_selection_path)?;
+                let mut asio_selection = state
+                    .asio_input_selection
+                    .lock()
+                    .map_err(|_| "ASIO selection storage lock was poisoned during setup".to_string())?;
+                asio_selection.path = Some(asio_selection_path);
+                asio_selection.install_restore(restore_outcome);
+            }
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
             install_media_asset_operation_reaper(
@@ -121641,6 +128068,8 @@ fn main() {
             live_audio_input_lifecycle: Mutex::new(()),
             live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
             live_audio_input: Mutex::new(None),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
             video_preview: Arc::new(Mutex::new(
                 video::VideoPreviewRenderer::with_frame_provider(
                     video::VideoRuntimeConfig::default(),
@@ -121903,8 +128332,6 @@ fn main() {
             set_playback_master,
             trigger_playback_executor,
             rename_cue_list,
-            remove_cue_list,
-            set_cue_list,
             trigger_cue_list_next,
             trigger_cue_list_previous,
             update_cue_from_current,
@@ -122226,6 +128653,7 @@ fn main() {
             clear_vj_preview,
             get_live_video_monitor_frame,
             get_debug_video_output_test_pattern,
+            get_video_output_window_observation_v1,
             get_video_output_window_statuses,
             sync_open_video_output_windows,
             close_video_output_window,

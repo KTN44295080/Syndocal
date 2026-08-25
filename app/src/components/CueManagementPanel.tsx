@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
 import type { CueMetadataDraft } from "../editorDrafts";
 import type {
   ActiveFadeSummary,
@@ -30,11 +31,6 @@ export type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixt
 const cuesPerPage = 12;
 const timelinePlacementsPerCue = 8;
 
-const cueListDisplayLabel = (cueList: CueListSummary): string =>
-  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
-    ? "Bank 1"
-    : cueList.label;
-
 const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
   if (scope === "all") return "All Sources";
   if (scope === "lighting") return "Lighting Only";
@@ -52,14 +48,13 @@ interface CueManagementPanelProps {
     cueId: number,
     settings: CueLiveModifierSettings | null,
   ) => void | Promise<void>;
+  bankAuthority: FullBankAuthoritySnapshot;
   cues: CueSummary[];
-  allCues: CueSummary[];
-  cueLists: CueListSummary[];
   groupIds: string[];
   palettes: ReferencePaletteSummary[];
   effects: EffectSummary[];
   cueCaptureEffects: EffectSummary[];
-  selectedCueListId: number;
+  selectedCueListId: number | null;
   cueListLabel: string;
   activeCueId: number | null | undefined;
   revealCueId: number | null;
@@ -116,7 +111,7 @@ interface CueManagementPanelProps {
     track: TimelineTrackKind,
     nextDraftTime?: boolean,
   ) => void | Promise<void>;
-  onRemoveCue: (cueId: number) => void | Promise<void>;
+  onRemoveCue: (cueId: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
   onSeekTimeline: (timeMs: number) => void | Promise<void>;
   onOpenTimeline: () => void;
   onMoveTimelineCueEvent: (event: TimelineCueEventSummary, deltaMs: number) => void | Promise<void>;
@@ -130,16 +125,26 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
   const [cueEditing, setCueEditing] = createSignal(props.mode === "scene-settings");
   const [timelineDragCueId, setTimelineDragCueId] = createSignal<number | null>(null);
+  const bankAuthority = () => props.bankAuthority;
   // Preserve cue-editor controls across snapshot polling. Solid's keyed <For>
   // otherwise sees each deserialized Cue object as a replacement and remounts
   // native selects/inputs while an operator is using them.
-  const [stableCues, setStableCues] = createStore<CueSummary[]>(props.cues);
-  const displayCueLists = createMemo(() => props.cueLists.map((cueList) => ({
-    ...cueList,
-    label: cueListDisplayLabel(cueList),
-  })));
+  const [stableCues, setStableCues] = createStore<CueSummary[]>(
+    bankAuthority().issue === null ? props.cues : [],
+  );
+  // Use the exact persisted Bank rows shared by Lighting, Timeline, and the
+  // executor. Reconcile by the persisted id so polling replaces field values
+  // without remounting the native select/options or executor rows mid-edit.
+  const cueListSnapshot = createMemo(() => bankAuthority().issue === null ? [...bankAuthority().cueLists] : null);
+  const [stableCueLists, setStableCueLists] = createStore<CueListSummary[]>(
+    cueListSnapshot() ?? [],
+  );
   createEffect(() => {
-    setStableCues(reconcile(props.cues, { key: "id" }));
+    const snapshot = cueListSnapshot();
+    setStableCueLists(reconcile(snapshot ?? [], { key: "id" }));
+  });
+  createEffect(() => {
+    setStableCues(reconcile(bankAuthority().issue === null ? props.cues : [], { key: "id" }));
   });
   let timelineDragPointer: {
     cueId: number;
@@ -258,6 +263,18 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           ? "cuePanel cuePanelSceneSettings cuePanelEditing"
           : "cuePanel"
     }>
+      <Show
+        when={bankAuthority().issue === null}
+        fallback={
+          <p
+            class="empty"
+            role="alert"
+            data-bank-authority-unavailable={bankAuthority().issue?.kind}
+          >
+            {bankAuthority().issue ? bankAuthorityIssueMessage(bankAuthority().issue!) : ""}
+          </p>
+        }
+      >
       <Show when={props.mode !== "scene-settings"}>
       <div class="panelHeader">
         <h2>Cues</h2>
@@ -278,29 +295,39 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
       </div>
       </Show>
       <Show when={props.mode !== "scene-settings"}>
-      <div id="cue-list-editor" class="cueListManager cueEditOnly" aria-label="Cue List manager">
+      <div id="cue-list-editor" class="cueListManager cueEditOnly" aria-label="Bank manager">
         <label>
-          Cue List
-          <select value={props.selectedCueListId} onInput={(event) => props.onSelectCueList(Number(event.currentTarget.value))}>
-            <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+          Bank
+          <select value={props.selectedCueListId ?? ""} onInput={(event) => props.onSelectCueList(Number(event.currentTarget.value))}>
+            <For each={stableCueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
           </select>
         </label>
         <label>
-          List label
+          Bank name
           <input maxlength="64" value={props.cueListLabel} onInput={(event) => props.onCueListLabel(event.currentTarget.value)} />
         </label>
-        <button onClick={() => void props.onCreateCueList()}>New List</button>
-        <button onClick={() => void props.onRenameCueList()}>Rename</button>
-        <button class="danger" disabled={props.cueLists.length <= 1} onClick={() => void props.onRemoveCueList()}>Remove List</button>
+        <button onClick={() => void props.onCreateCueList()}>New Bank</button>
+        <button onClick={() => void props.onRenameCueList()}>Rename Bank</button>
+        <button class="danger" disabled={stableCueLists.length <= 1} onClick={() => void props.onRemoveCueList()}>Remove Bank</button>
       </div>
       </Show>
       <Show when={props.mode !== "scene-settings"}>
-      <div class="cueExecutorBank" aria-label="Cue List executors">
-        <For each={displayCueLists()}>
+      <div class="cueExecutorBank" aria-label="Bank executors">
+        <For each={stableCueLists}>
           {(cueList) => {
-            const activeCue = () => props.allCues.find((cue) => cue.id === cueList.active_cue_id)
-              ?? (cueList.id === props.selectedCueListId ? props.allCues.find((cue) => cue.id === props.activeCueId) : undefined);
-            const cueCount = () => props.allCues.filter((cue) => cue.cue_list_id === cueList.id).length;
+            const activeCue = () => {
+              const bankActiveCueId = cueList.active_cue_id;
+              if (bankActiveCueId !== null && bankActiveCueId !== undefined) {
+                return bankAuthority().cueById.get(bankActiveCueId);
+              }
+              const globalActiveCueId = props.activeCueId;
+              return cueList.id === props.selectedCueListId
+                && globalActiveCueId !== null
+                && globalActiveCueId !== undefined
+                ? bankAuthority().cueById.get(globalActiveCueId)
+                : undefined;
+            };
+            const cueCount = () => bankAuthority().cues.filter((cue) => cue.cue_list_id === cueList.id).length;
             return (
               <div class={`cueExecutor ${cueList.id === props.selectedCueListId ? "selected" : ""}`}>
                 <button class="cueExecutorSelect" aria-pressed={cueList.id === props.selectedCueListId} onClick={() => props.onSelectCueList(cueList.id)}>
@@ -607,18 +634,22 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                 </div>
                 <div class="cueEditRow">
                   <label>
-                    Cue #
+                    Scene #
                     <input value={draft().cue_number} onInput={(event) => props.onUpdateCueMetadataDraft(cue, { cue_number: event.currentTarget.value })} />
                   </label>
                   <label>
-                    List
+                    Bank
                     <select value={cue.cue_list_id} onInput={(event) => void props.onSetCueList(cue.id, Number(event.currentTarget.value))}>
-                      <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
+                    <For each={stableCueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
                     </select>
                   </label>
                   <label>
                     Label
-                  <input value={draft().label} onInput={(event) => props.onUpdateCueMetadataDraft(cue, { label: event.currentTarget.value })} />
+                  <input
+                    value={draft().label}
+                    data-cue-metadata-label={cue.id}
+                    onInput={(event) => props.onUpdateCueMetadataDraft(cue, { label: event.currentTarget.value })}
+                  />
                   </label>
                   <label>
                     Group
@@ -1179,6 +1210,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           }}
         </For>
       </div>
+      </Show>
     </div>
   );
 }

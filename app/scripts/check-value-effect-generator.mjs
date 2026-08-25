@@ -221,9 +221,10 @@ assert.doesNotMatch(
   /if \(family === "VALUE FX"\) \{[\s\S]*?return \{\s*Lfo:/,
   "VALUE FX must not silently create a Square LFO",
 );
-assert.ok(
-  sceneSettingsSource.includes('"VALUE FX": "Black / White generator"'),
-  "Scene Settings must describe the generator it actually creates",
+assert.doesNotMatch(
+  sceneSettingsSource,
+  /descriptions=|Black \/ White generator/,
+  "Scene Settings chooser must not restore the retired family-description row",
 );
 
 for (const effectEditorSource of [editorSource, colorEditorSource]) {

@@ -119,23 +119,29 @@ for (const role of ["fill", "band", "text"]) {
   );
 }
 
-// 6. Scene Matrix keeps idle cards neutral, but the right-edge settings strip
-// uses the cue identity while selected. Execution remains the stronger state
-// because it also colors the card border and exposes the LIVE treatment.
+// 6. Scene Matrix preserves the Bank/Cue identity on every card. An
+// unselected strip is intentionally darkened with color-mix so the identity
+// remains legible without making every card look active; selection is the
+// bright identity treatment, while execution also brightens the card border.
+const sceneMatrixEditStripBandRule = stylesSource.match(
+  /(?:^|\n)\.sceneMatrixEditStripBand\s*\{([^}]*)\}/m,
+);
+assert.ok(sceneMatrixEditStripBandRule, "Scene Matrix identity band rule must exist");
+const sceneMatrixEditStripBandDeclarations = sceneMatrixEditStripBandRule[1];
 assert.match(
-  stylesSource,
-  /\.sceneMatrixEditStripBand\s*\{[^}]*background:\s*var\(--ui-border\);[^}]*\}/s,
-  "idle Scene Matrix strips must use the neutral UI border token",
+  sceneMatrixEditStripBandDeclarations,
+  /background:\s*color-mix\(in\s+srgb,\s*var\(--cue-identity\)\s+24%,\s*#111619\);/,
+  "unselected Scene Matrix strips must retain a darkened cue identity color",
+);
+assert.doesNotMatch(
+  sceneMatrixEditStripBandDeclarations,
+  /background:\s*(?:var\(--ui-border\)|var\(--cue-identity\));/,
+  "unselected Scene Matrix strips must not fall back to neutral gray or bright identity",
 );
 assert.match(
   stylesSource,
   /\.sceneMatrixCard\s*\{[^}]*border:\s*1px solid var\(--ui-border\);[^}]*border-left-width:\s*3px;[^}]*\}/s,
-  "idle Scene Matrix cards must keep a neutral border",
-);
-assert.match(
-  stylesSource,
-  /\.sceneMatrixCard\.active\s+\.sceneMatrixEditStripBand\s*\{[^}]*background:\s*var\(--cue-identity\);[^}]*\}/s,
-  "executing Scene Matrix strips must use the cue identity color",
+  "Scene Matrix cards must retain a neutral outer border beside the identity band",
 );
 assert.match(
   stylesSource,
@@ -145,13 +151,26 @@ assert.match(
 assert.match(
   stylesSource,
   /\.sceneMatrixCard\.selected\s+\.sceneMatrixEditStripBand\s*\{[^}]*border-left:\s*0;[^}]*background:\s*var\(--cue-identity\);[^}]*\}/s,
-  "selected Scene Matrix settings strips must use the cue identity color without a white divider",
+  "selected Scene Matrix settings strips must use the bright cue identity color without a divider",
 );
 assert.match(
   stylesSource,
   /\.sceneMatrixCard\.selected\s*\{[^}]*outline:\s*none;[^}]*\}/s,
   "Scene Matrix selection must not fall back to a white card outline",
 );
+const inactiveSceneMatrixRules = [
+  ...stylesSource.matchAll(
+    /(?:^|\n)([^{}]*\.sceneMatrixCard:not\(\.selected\)[^{}]*)\{([^}]*)\}/gm,
+  ),
+];
+assert.ok(inactiveSceneMatrixRules.length > 0, "inactive Scene Matrix identity rule must exist");
+for (const [, selector, declarations] of inactiveSceneMatrixRules) {
+  assert.doesNotMatch(
+    declarations,
+    /background:\s*var\(--cue-identity\);/,
+    `${selector.trim()} must not make every inactive Scene Matrix card bright identity`,
+  );
+}
 assert.match(
   stylesSource,
   /\.sceneMatrixCuePrimaryRow\s*\{[^}]*color:\s*var\(--cue-identity-text\);[^}]*\}/s,

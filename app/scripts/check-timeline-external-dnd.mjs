@@ -15,9 +15,22 @@ const loadModule = async (name) => {
   const transpiled = transpile(source, name);
   return import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
 };
+const dataModule = (source, fileName) =>
+  `data:text/javascript;base64,${Buffer.from(transpile(source, fileName).outputText).toString("base64")}`;
 const runtime = await loadModule("timelineExternalDrag.ts");
 const dropRuntime = await loadModule("timelineExternalDropRuntime.ts");
 const localization = await loadModule("uiLocalization.ts");
+const bankAuthority = await loadModule("bankAuthority.ts");
+const gestureSource = await readFile(new URL("../src/timelineBlockGestures.ts", import.meta.url), "utf8");
+const canonicalKindSource = await readFile(new URL("../src/sceneCueKind.ts", import.meta.url), "utf8");
+const canonicalKindModuleUrl = dataModule(canonicalKindSource, "sceneCueKind.ts");
+const timelineSceneBlocksSource = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
+const timelineSceneBlockHelpers = await import(dataModule(
+  timelineSceneBlocksSource
+    .replace("./timelineBlockGestures", dataModule(gestureSource, "timelineBlockGestures.ts"))
+    .replace("./sceneCueKind", canonicalKindModuleUrl),
+  "timelineSceneBlocks.ts",
+));
 const overviewSource = await readFile(new URL("../src/components/TimelineOverview.tsx", import.meta.url), "utf8");
 const overviewPreflightMatch = overviewSource.match(/export const timelineOverviewExternalDropPreflight = [\s\S]*?\n};/);
 assert.ok(overviewPreflightMatch, "TimelineOverview must export the pre-callback external-drop seam");
@@ -290,6 +303,80 @@ assert.equal(await dropRuntime.executeTimelineExternalDrop(
 ), false);
 assert.equal(staleSceneCalls, 0, "stale Scene must be rejected before its callback");
 
+// A syntactically valid external MIME payload must still fail closed when its
+// Scene is the edited child owner or a nested child Timeline whose reference
+// graph returns to that owner. A separate acyclic nested Super Scene remains
+// admitted. The production runtime only receives this exact admission set;
+// both rejected payloads therefore prove zero Scene callback/IPC/event mutation.
+const childTimelineAuthority = bankAuthority.inspectBankAuthority(
+  [{ id: 1, label: "Bank 1", active_cue_id: null }],
+  [
+    { id: 40, cue_list_id: 1, child_timeline: { layers: [], events: [{ id: 1, cue_id: 43 }] } },
+    { id: 41, cue_list_id: 1, child_timeline: null },
+    { id: 42, cue_list_id: 1, child_timeline: { layers: [], events: [{ id: 1, cue_id: 40 }] } },
+    { id: 43, cue_list_id: 1, child_timeline: { layers: [], events: [{ id: 1, cue_id: 41 }] } },
+  ],
+  [],
+);
+assert.equal(childTimelineAuthority.issue, null);
+const childSafeSceneIds = timelineSceneBlockHelpers.timelineSceneBlockAllowedCueIds(childTimelineAuthority, 40);
+assert.deepEqual([... (childSafeSceneIds ?? [])], [41, 43], "child source admission retains only leaf and acyclic nested Super Scene sources");
+assert.equal(
+  timelineSceneBlockHelpers.timelineSceneBlockCueAllowedByAuthority(40, childTimelineAuthority, 40),
+  false,
+  "the child owner is not an admitted Scene source",
+);
+assert.equal(
+  timelineSceneBlockHelpers.timelineSceneBlockCueAllowedByAuthority(42, childTimelineAuthority, 40),
+  false,
+  "a nested Super Scene whose graph returns to the owner is not an admitted Scene source",
+);
+assert.equal(
+  timelineSceneBlockHelpers.timelineSceneBlockCueAllowedByAuthority(43, childTimelineAuthority, 40),
+  true,
+  "an acyclic nested Super Scene remains an admitted child Timeline source",
+);
+let forgedChildSceneMutationCalls = 0;
+let forgedChildSceneRejects = 0;
+for (const cueId of [40, 42]) {
+  const forgedChildScene = runtime.parseTimelineExternalDragPayload(JSON.stringify({
+    schema: 1,
+    kind: "scene",
+    cue_id: cueId,
+    lane_kind: "Lighting",
+  }));
+  assert.deepEqual(forgedChildScene, { schema: 1, kind: "scene", cue_id: cueId, lane_kind: "Lighting" });
+  assert.equal(await dropRuntime.executeTimelineExternalDrop(
+    forgedChildScene,
+    layers[2],
+    layers,
+    [],
+    childSafeSceneIds ?? new Set(),
+    0,
+    {
+      insertMedia: () => { throw new Error("forged child Scene must not call media placement"); },
+      placeScene: () => { forgedChildSceneMutationCalls += 1; return true; },
+      reject: () => { forgedChildSceneRejects += 1; },
+    },
+  ), false, `forged child Timeline Scene ${cueId} must be rejected before mutation`);
+}
+assert.equal(forgedChildSceneMutationCalls, 0, "forged child Timeline Scenes cause zero production placement callbacks/IPC/events");
+assert.equal(forgedChildSceneRejects, 2, "each forged child Timeline Scene reports exactly one rejection");
+let acyclicNestedSceneMutationCalls = 0;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  runtime.parseTimelineExternalDragPayload(JSON.stringify({ schema: 1, kind: "scene", cue_id: 43, lane_kind: "Lighting" })),
+  layers[2],
+  layers,
+  [],
+  childSafeSceneIds ?? new Set(),
+  0,
+  {
+    insertMedia: () => { throw new Error("acyclic nested Scene must not call media placement"); },
+    placeScene: () => { acyclicNestedSceneMutationCalls += 1; return true; },
+  },
+), true, "an acyclic nested Super Scene must reach the same production placement runtime");
+assert.equal(acyclicNestedSceneMutationCalls, 1, "an acyclic nested Super Scene gets exactly one placement callback");
+
 // TimelineOverview rejects malformed data, no target, kind mismatch, and a
 // locked target before invoking the App/backend callback. Exercise its actual
 // exported production seam, then run each source string through the exact App
@@ -302,11 +389,36 @@ const overviewRejects = [
   "Timeline lane Video A is locked. No source was placed.",
 ];
 assert.deepEqual([
-  overviewPreflight.timelineOverviewExternalDropPreflight(null, overviewTarget),
-  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, null),
-  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, layers[2]),
-  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, { ...overviewTarget, locked: true }),
+  overviewPreflight.timelineOverviewExternalDropPreflight(null, overviewTarget, true),
+  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, null, true),
+  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, layers[2], true),
+  overviewPreflight.timelineOverviewExternalDropPreflight(mediaVideo, { ...overviewTarget, locked: true }, true),
 ], overviewRejects);
+assert.equal(
+  overviewPreflight.timelineOverviewExternalDropPreflight(scene, layers[2], false),
+  "Scene 12 is unavailable until Bank authority is repaired.",
+  "a Bank-authority fault blocks a Scene drop before App/backend callbacks",
+);
+assert.equal(
+  overviewPreflight.timelineOverviewExternalDropPreflight(scene, layers[2], true),
+  null,
+  "repair restores only a currently authoritative Scene source",
+);
+assert.equal(
+  overviewPreflight.timelineOverviewExternalDropPreflight(
+    runtime.parseTimelineExternalDragPayload(JSON.stringify({ schema: 1, kind: "scene", cue_id: 42, lane_kind: "Lighting" })),
+    layers[2],
+    timelineSceneBlockHelpers.timelineSceneBlockCueAllowedByAuthority(42, childTimelineAuthority, 40),
+  ),
+  "Scene 42 is unavailable until Bank authority is repaired.",
+  "TimelineOverview preflight rejects a forged nested-child Scene before its App callback",
+);
+assert.match(overviewSource, /bankAuthority: FullBankAuthoritySnapshot;/);
+assert.match(overviewSource, /timelineChildCueId: number \| null;/);
+assert.match(overviewSource, /sceneSourceAuthoritative: boolean,/);
+assert.doesNotMatch(overviewSource, /sceneSourceAuthoritative = true/);
+assert.match(overviewSource, /timelineSceneBlockCueAllowedByAuthority\(\s*source\.cue_id,\s*props\.bankAuthority,\s*props\.timelineChildCueId,\s*\)/);
+assert.match(overviewSource, /timelineSceneBlockCueAllowedByAuthority\(\s*placement\.cueId,\s*props\.bankAuthority,\s*props\.timelineChildCueId,\s*\)/);
 
 const internalAvailabilityTokens = /\b(?:missing|hash_mismatch|unreadable|live_source)\b/;
 const assertLocalized = (source, expectedEn, expectedJa) => {
@@ -383,14 +495,17 @@ assert.equal(rejectedMutations, 0, "rejected external drops must not invoke a pr
 const sourceShelf = await readFile(new URL("../src/components/TimelineSourceShelf.tsx", import.meta.url), "utf8");
 assert.match(sourceShelf, /role="tablist" aria-label="Timeline source or inspector"/);
 assert.match(sourceShelf, /id="timeline-source-context-tab-sources" role="tab"/);
-assert.match(sourceShelf, /id="timeline-source-context-panel-sources" role="tabpanel"/);
+assert.match(sourceShelf, /id="timeline-source-context-panel-scenes" role="tabpanel"/);
+assert.match(sourceShelf, /id="timeline-source-context-panel-media" role="tabpanel"/);
+assert.equal(sourceShelf.match(/id="timeline-source-context-panel-scenes"/g)?.length, 1);
+assert.equal(sourceShelf.match(/id="timeline-source-context-panel-media"/g)?.length, 1);
 assert.match(sourceShelf, /id="timeline-source-context-panel-inspector" role="tabpanel"/);
 assert.match(sourceShelf, /role="group" aria-label="Timeline source categories"/);
 assert.match(sourceShelf, /aria-pressed=\{sourceShelfTab\(\) === "Scenes"\}/);
 assert.match(sourceShelf, /data-timeline-source-shelf-filter/);
 assert.match(
   sourceShelf,
-  /onDragStart=\{\(event\) => startSourceShelfDrag\(event, timelineExternalDragPayloadForScene\(cue\.id\)\)\}[\s\S]*?onClick=\{\(\) => placeSourceShelfPayload\(timelineExternalDragPayloadForScene\(cue\.id\)\)\}/,
+  /const placementPayload = timelineExternalDragPayloadForScene\(cue\.id\)[\s\S]*?onDragStart=\{\(event\) => startSourceShelfDrag\(event, placementPayload\)\}[\s\S]*?onClick=\{\(\) => placeSourceShelfPayload\(placementPayload\)\}/,
   "the mounted Scene source must feed the same strict payload to drag and accessible click",
 );
 assert.match(
@@ -410,7 +525,7 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const placeArmedTimelineCue = async \([\s\S]*?\) => timelineSceneBlocks\.addAt\(cueId, timeMs, "Lighting", false, \{[\s\S]*?layerId,/,
+  /const placeArmedTimelineCue = async \([\s\S]*?const cue = requireTimelineSceneBlockCue\(cueId\);[\s\S]*?await timelineSceneBlocks\.addAt\(cue\.id, timeMs, "Lighting", false, \{[\s\S]*?layerId,/,
   "validated Scene placement must retain the exact selected Lighting layer",
 );
 assert.match(
@@ -423,7 +538,6 @@ assert.match(
   /const invokeTimelineSceneBlockCommand = async <T,>\([\s\S]*?return invoke<T>\(command, args\);/,
   "the non-fixture Timeline Scene Block controller must terminate at the registered Tauri invoke edge",
 );
-const timelineSceneBlocksSource = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
 assert.match(
   timelineSceneBlocksSource,
   /const eventId = await options\.invoke<number>\("add_timeline_scene_block", \{[\s\S]*?cueId: next\.cue_id,[\s\S]*?timeMs: next\.time_ms,[\s\S]*?track: next\.track,[\s\S]*?layerId: next\.layer_id,/,

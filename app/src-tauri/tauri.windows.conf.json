@@ -1,7 +1,13 @@
 {
   "bundle": {
     "resources": {
-      "../../target/release/*.dll": ""
+      "../../target/release/avcodec-62.dll": "avcodec-62.dll",
+      "../../target/release/avdevice-62.dll": "avdevice-62.dll",
+      "../../target/release/avfilter-11.dll": "avfilter-11.dll",
+      "../../target/release/avformat-62.dll": "avformat-62.dll",
+      "../../target/release/avutil-60.dll": "avutil-60.dll",
+      "../../target/release/swresample-6.dll": "swresample-6.dll",
+      "../../target/release/swscale-9.dll": "swscale-9.dll"
     }
   }
 }

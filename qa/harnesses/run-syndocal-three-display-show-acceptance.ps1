@@ -1,22 +1,57 @@
 # Fail-closed native three-display Syndocal show acceptance harness.
 #
-# This is an observation-first harness for exactly one checkout-local
-# syndocal.exe, its one "Syndocal" editor window, and exactly two live native
-# Display-output windows.  It never creates outputs, changes Syndocal
-# settings, launches or terminates a process, talks to hardware, takes
-# screenshots, injects input, changes focus, or changes Z-order.  Its only
-# network use is read-only observation of the explicitly supplied loopback
-# 127.0.0.1 CDP port; it never contacts any non-loopback address.  The default
-# is a read-only dry-run.  Dry-run always writes a clearly labelled observation
-# verdict; it never calls a window mutation API and never calls the result an
-# acceptance.  -Apply is deliberately narrow: after every identity and
-# placement proof has passed, it may maximize the already-correct editor window
-# only.  It never moves an output window, so a swapped/default/first-monitor
-# placement is rejected rather than repaired into an accidental pass.
+# This is an observation-first harness for exactly one proven executable, its
+# one "Syndocal" editor window, and exactly two live native Display-output
+# windows.  It never creates outputs, changes Syndocal settings, launches or
+# terminates a Syndocal process, talks to hardware, takes screenshots, injects
+# input, changes focus, or changes Z-order.  Its only network use is read-only
+# observation of the explicitly supplied loopback 127.0.0.1 CDP port; it never
+# contacts any non-loopback address.  The default is a read-only dry-run.
+# Dry-run always writes a clearly labelled observation verdict; it never calls
+# a window mutation API and never calls the result an acceptance.  -Apply is
+# deliberately narrow: after every identity and placement proof has passed, it
+# may maximize the already-correct editor window only.  It never moves an
+# output window, so a swapped/default/first-monitor placement is rejected
+# rather than repaired into an accidental pass.
+#
+# Authority modes (-AuthorityMode; StandardRelease is the default):
+#   StandardRelease - the historical contract.  Apply accepts only this
+#     checkout's exact target\release\syndocal.exe as the candidate process.
+#   ShowAsioLocal - the separately licensed, same-host, local-only Show-ASIO
+#     artifact route (qa\ASIO_SHOW_LOCAL_ONLY.md).  This mode exists so the
+#     combined ASIO + three-display native acceptance can target
+#     syndocal-show-asio.exe instead of being structurally impossible.  It is
+#     NOT a generic alternate-exe escape:
+#       * Before any process or UI mutation, and again immediately before the
+#         executable-consuming phase (the maximize/stability reliance), the
+#         harness executes THIS checkout's app\scripts\check-show-asio-artifact.mjs
+#         with this checkout's pinned Node interpreter, requires exit code 0,
+#         requires empty stderr, and parses ONLY its exact single-line PASS
+#         contract ("Show-ASIO local artifact PASS: <dir> files=<N>
+#         distributionApproved=false"); anything else fails closed.
+#       * The canonical artifact directory and syndocal-show-asio.exe path are
+#         derived from that verified result alone: they must be inside this
+#         checkout, directly under target\show-asio-local, match the exact
+#         Syndocal_Show_ASIO_<version>_<commit12>_x64 leaf naming, and the
+#         extracted version/commit12 must equal the caller-supplied expected
+#         product version/Git HEAD.  Caller path/hash/version/HEAD mismatch,
+#         wrong checkout, missing/future/legacy manifest, extra or mutated
+#         artifact files, reparse-backed ancestry, hard-linked executables,
+#         non-current commit/host/source identity, and any installer/updater
+#         payload all fail closed (the checker enforces the manifest/tree/
+#         host-binding half; this harness enforces derivation, containment,
+#         link-count, and expectation cross-checks).
+#       * Both verification times, the checker identity (path + SHA-256), the
+#         artifact flavor, and the exact derived executable path/hash/version/
+#         git HEAD are bound into the run evidence (final.json
+#         authority_verifications and provenance.json).
+#       * Running the checker spawns one short-lived Node child process with a
+#         hard timeout; on timeout only that child is terminated.  No Syndocal
+#         process is ever launched or stopped by this harness.
 #
 # Required release/physical-role contract (all monitor selection is by the
-# explicit stable monitor identity, and the executable must be the clean
-# 1.2.0-alpha.12 artifact for the supplied exact HEAD and SHA-256; selection is
+# explicit stable monitor identity, and the executable must be the exact
+# expected artifact for the supplied exact HEAD and SHA-256; selection is
 # NEVER by resolution, primary flag, or first match):
 #   editor/operator  \\.\DISPLAY2  1920x1080 at DPI 96
 #   LED output        \\.\DISPLAY5  1920x1080 at DPI 144
@@ -62,19 +97,25 @@
 # units; raw multi-line or oversized text never reaches evidence or console.
 #
 # Self-test seams are the functions marked SEAM.  The companion self-test
-# replaces every UI/process/network-facing seam - including the loopback CDP
-# transport and the narrow native window seams around IsWindow, owner-PID
-# lookup, title read, and ShowWindow - with deterministic synthetic values;
-# it performs no real UI/process/network mutation.
+# replaces every UI/process/network/Node-facing seam - including the loopback
+# CDP transport, the narrow native window seams around IsWindow, owner-PID
+# lookup, title read, and ShowWindow, the Show-ASIO checker invocation, and
+# the hard-link probe - with deterministic synthetic values; it performs no
+# real UI/process/network mutation and never invokes a real Node runtime.
 
 [CmdletBinding()]
 param(
   [switch]$Apply,
 
+  [ValidateSet("StandardRelease", "ShowAsioLocal")]
+  [string]$AuthorityMode = "StandardRelease",
+
   [string]$ExpectedExecutablePath = "",
   [string]$ExpectedSha256 = "",
   [string]$ExpectedProductVersion = "",
   [string]$ExpectedGitHead = "",
+
+  [string]$ShowAsioNodeExecutablePath = "",
 
   [string]$ExpectedEditorMonitorIdentity = "",
   [string]$ExpectedLedMonitorIdentity = "",
@@ -106,6 +147,22 @@ $script:ThreeDisplaySchemaVersion = 1
 $script:ThreeDisplayRequiredProductVersion = "1.2.0-alpha.12"
 $script:ThreeDisplaySwMaximize = 3
 $script:ThreeDisplayMaximumDiagnosticLength = 400
+$script:ThreeDisplayAuthorityStandardRelease = "StandardRelease"
+$script:ThreeDisplayAuthorityShowAsioLocal = "ShowAsioLocal"
+# Show-ASIO local-only artifact authority contract (qa\ASIO_SHOW_LOCAL_ONLY.md
+# and app\scripts\check-show-asio-artifact.mjs are the authorities; these
+# mirrors exist only so this harness can independently reject a checker result
+# that drifts from them).
+$script:ThreeDisplayShowAsioCheckerRelativePath = "app\scripts\check-show-asio-artifact.mjs"
+$script:ThreeDisplayShowAsioManifestFilename = "show-asio-local-manifest.json"
+$script:ThreeDisplayShowAsioArtifactFlavor = "windows-show-asio-local-only"
+$script:ThreeDisplayShowAsioArtifactRelativeParent = "target\show-asio-local"
+$script:ThreeDisplayShowAsioArtifactLeafPrefix = "Syndocal_Show_ASIO_"
+$script:ThreeDisplayShowAsioExecutableName = "syndocal-show-asio.exe"
+$script:ThreeDisplayShowAsioProcessName = "syndocal-show-asio"
+$script:ThreeDisplayShowAsioPassLineRegex = '^Show-ASIO local artifact PASS: (.+) files=([1-9][0-9]*) distributionApproved=false$'
+$script:ThreeDisplayShowAsioLeafRegex = '^Syndocal_Show_ASIO_([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)_([0-9a-f]{12})_x64$'
+$script:ThreeDisplayShowAsioCheckerTimeoutMs = 180000
 $script:ThreeDisplayRoleContracts = @{
   editor = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY2"; effective_dpi = 96; physical_width = 1920; physical_height = 1080 }
   led = [pscustomobject]@{ gdi_device_name = "\\.\DISPLAY5"; effective_dpi = 144; physical_width = 1920; physical_height = 1080 }
@@ -204,6 +261,23 @@ public static class SyndocalThreeDisplayNative {
   [DllImport("user32.dll", SetLastError = true)] public static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME deviceName);
   [DllImport("user32.dll", SetLastError = true)] public static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME deviceName);
   [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct SyndocalThreeDisplayFileTime { public uint LowPart; public int HighPart; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct BY_HANDLE_FILE_INFORMATION {
+    public uint FileAttributes;
+    public SyndocalThreeDisplayFileTime CreationTime;
+    public SyndocalThreeDisplayFileTime LastAccessTime;
+    public SyndocalThreeDisplayFileTime LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr CreateFileW(string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+  [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetFileInformationByHandle(IntPtr handle, out BY_HANDLE_FILE_INFORMATION information);
 }
 "@
 }
@@ -322,8 +396,13 @@ function Get-ThreeDisplayNativeProcessPath {
 }
 
 function Get-SyndocalCandidateProcesses {
-  # SEAM: synthetic tests replace all real process enumeration and image-path queries.
-  $processes = @(Get-Process -Name syndocal -ErrorAction SilentlyContinue -ErrorVariable errors)
+  # SEAM: synthetic tests replace all real process enumeration and image-path
+  # queries.  The process image name is authority-mode dependent: only
+  # "syndocal" (StandardRelease) or exactly "syndocal-show-asio"
+  # (ShowAsioLocal) may be requested; the exact executable-path equality
+  # filter downstream is the real acceptance boundary.
+  param([Parameter(Mandatory = $true)][ValidateSet("syndocal", "syndocal-show-asio")][string]$ProcessName)
+  $processes = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue -ErrorVariable errors)
   foreach ($record in @($errors)) {
     if ("$($record.FullyQualifiedErrorId)" -notmatch "^NoProcessFound\b") {
       throw "Fail closed: syndocal process enumeration failed: $(ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$record.Exception.Message) -Fallback 'process enumeration failed without a readable single-line diagnostic')"
@@ -373,6 +452,284 @@ function Test-ThreeDisplayCheckoutClean {
     throw "Fail closed: exact alpha.12 artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
   }
   return $true
+}
+
+function Resolve-ThreeDisplayShowAsioNodeExecutablePath {
+  # SEAM: resolves the exact Node interpreter for this checkout's Show-ASIO
+  # checker.  Never guesses from PATH: either the explicitly supplied
+  # -ShowAsioNodeExecutablePath is used, or the pinned per-user dev toolchain
+  # location documented in qa\CODEX_HANDOFF_2026-08-19.md.  Missing or
+  # reparse-backed interpreters fail closed.
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ConfiguredNodeExecutablePath
+  )
+  $candidate = if (-not [string]::IsNullOrWhiteSpace($ConfiguredNodeExecutablePath)) {
+    $ConfiguredNodeExecutablePath
+  } else {
+    (Join-Path $env:LOCALAPPDATA "SyndocalDev\node-v22.22.1-win-x64\node.exe")
+  }
+  if ($candidate -match "[\r\n]") { throw "Fail closed: Show-ASIO Node executable path contains a line break." }
+  $full = [IO.Path]::GetFullPath($candidate)
+  if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+    throw "Fail closed: Show-ASIO checker Node interpreter '$full' does not exist; supply -ShowAsioNodeExecutablePath with this checkout's exact node.exe."
+  }
+  $item = Get-Item -LiteralPath $full -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "Fail closed: Show-ASIO checker Node interpreter '$full' is a reparse point."
+  }
+  return [IO.Path]::GetFullPath($item.FullName)
+}
+
+function Invoke-ThreeDisplayShowAsioArtifactVerification {
+  # SEAM: the complete Node/checker process boundary.  The real body spawns
+  # THIS checkout's app\scripts\check-show-asio-artifact.mjs under THIS
+  # checkout's pinned Node as one short-lived child with a hard timeout and
+  # captures stdout/stderr/exit verbatim for the strict single-line PASS
+  # parser.  It never interprets the result here, never launches or stops any
+  # Syndocal process, and on timeout terminates only its own hung child.
+  param(
+    [Parameter(Mandatory = $true)][string]$CheckoutRootPath,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$NodeExecutablePath
+  )
+  $checkoutRoot = [IO.Path]::GetFullPath($CheckoutRootPath)
+  $checkerPath = Join-Path $checkoutRoot $script:ThreeDisplayShowAsioCheckerRelativePath
+  if (-not (Test-Path -LiteralPath $checkerPath -PathType Leaf)) {
+    throw "Fail closed: this checkout's Show-ASIO authority checker '$checkerPath' does not exist."
+  }
+  $checkerItem = Get-Item -LiteralPath $checkerPath -Force
+  if (($checkerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "Fail closed: this checkout's Show-ASIO authority checker '$checkerPath' is a reparse point."
+  }
+  $checkerSha256 = Get-ExecutableSha256 -Path ([IO.Path]::GetFullPath($checkerItem.FullName))
+  $nodePath = Resolve-ThreeDisplayShowAsioNodeExecutablePath -ConfiguredNodeExecutablePath $NodeExecutablePath
+  $invokedAtUtc = [DateTime]::UtcNow.ToString("o")
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $nodePath
+  $startInfo.Arguments = ('"' + $checkerPath + '"')
+  $startInfo.WorkingDirectory = $checkoutRoot
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  if ($null -eq $process) { throw "Fail closed: Show-ASIO authority checker child process could not be started." }
+  try {
+    $standardOutTask = $process.StandardOutput.ReadToEndAsync()
+    $standardErrorTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($script:ThreeDisplayShowAsioCheckerTimeoutMs)) {
+      try { $process.Kill() } catch { }
+      throw "Fail closed: Show-ASIO authority checker exceeded $($script:ThreeDisplayShowAsioCheckerTimeoutMs) ms and was terminated."
+    }
+    # The parameterless wait guarantees the redirected-stream async readers
+    # have drained before their tasks are consumed.
+    $process.WaitForExit()
+    $exitCode = [int]$process.ExitCode
+    $standardOut = [string]$standardOutTask.GetAwaiter().GetResult()
+    $standardError = [string]$standardErrorTask.GetAwaiter().GetResult()
+  } finally {
+    $process.Dispose()
+  }
+  return [pscustomobject]@{
+    exit_code = $exitCode
+    standard_out = $standardOut
+    standard_error = $standardError
+    checker_path = [IO.Path]::GetFullPath($checkerItem.FullName)
+    checker_sha256 = $checkerSha256
+    node_executable_path = $nodePath
+    invoked_at_utc = $invokedAtUtc
+  }
+}
+
+function ConvertTo-ThreeDisplayShowAsioVerifiedPassContract {
+  # Pure fail-closed parser of the checker result.  Accepts ONLY exit code 0,
+  # empty stderr, exactly one non-empty stdout line that matches the exact
+  # single-line PASS contract, and a plausible absolute artifact directory;
+  # every other shape is rejected before any path derivation happens.
+  param([Parameter(Mandatory = $true)]$Verification)
+  Assert-ThreeDisplayExactPropertyNames -Value $Verification -Expected @(
+    "exit_code", "standard_out", "standard_error", "checker_path", "checker_sha256", "node_executable_path", "invoked_at_utc"
+  ) -Subject "Show-ASIO authority verification"
+  if (-not ($Verification.exit_code -is [int]) -or [int]$Verification.exit_code -ne 0) {
+    throw "Fail closed: Show-ASIO authority checker exited with '$($Verification.exit_code)' instead of 0."
+  }
+  if (-not [string]::IsNullOrWhiteSpace([string]$Verification.standard_error)) {
+ throw "Fail closed: Show-ASIO authority checker wrote unexpected stderr output."
+  }
+  $standardOut = [string]$Verification.standard_out
+  $lines = @($standardOut -split "\r?\n")
+  if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") { $lines = @($lines | Select-Object -First ($lines.Count - 1)) }
+  if ($lines.Count -ne 1) {
+    throw "Fail closed: Show-ASIO authority checker stdout is not exactly one line ($($lines.Count) candidate lines)."
+  }
+  $passLine = [string]$lines[0]
+  if ($passLine -cne $passLine.Trim()) {
+    throw "Fail closed: Show-ASIO authority PASS line carries leading or trailing whitespace."
+  }
+  $passMatch = [regex]::Match($passLine, $script:ThreeDisplayShowAsioPassLineRegex)
+  if (-not $passMatch.Success -or $passMatch.Index -ne 0 -or $passMatch.Length -ne $passLine.Length) {
+    throw "Fail closed: Show-ASIO authority checker line is not the exact single-line PASS contract."
+  }
+  $artifactDirectoryRaw = $passMatch.Groups[1].Value
+  $filesVerified = [int64]::Parse($passMatch.Groups[2].Value, [Globalization.CultureInfo]::InvariantCulture)
+  if ([string]::IsNullOrWhiteSpace($artifactDirectoryRaw) -or -not [IO.Path]::IsPathRooted($artifactDirectoryRaw) -or $artifactDirectoryRaw -match '[/\r\n"]') {
+    throw "Fail closed: Show-ASIO authority PASS directory is not one plain rooted Windows path."
+  }
+  return [pscustomobject]@{
+    pass_line = $passLine
+    artifact_directory_raw = $artifactDirectoryRaw
+    files_verified = $filesVerified
+  }
+}
+
+function Test-ThreeDisplaySingleLinkFile {
+  # SEAM: proves via kernel32 that the file has exactly one hard link (no
+  # second directory entry aliases the same file data).
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $GENERIC_NONE = [uint32]0
+  $SHARE_ALL = [uint32]7
+  $OPEN_EXISTING = [uint32]3
+  $FILE_ATTRIBUTE_NORMAL = [uint32]0x80
+  $handle = [SyndocalThreeDisplayNative]::CreateFileW($Path, $GENERIC_NONE, $SHARE_ALL, [IntPtr]::Zero, $OPEN_EXISTING, $FILE_ATTRIBUTE_NORMAL, [IntPtr]::Zero)
+  if ($handle -eq [IntPtr](-1) -or $handle -eq [IntPtr]::Zero) {
+    throw "Fail closed: cannot open '$Path' to prove it has exactly one hard link."
+  }
+  try {
+    $information = New-Object SyndocalThreeDisplayNative+BY_HANDLE_FILE_INFORMATION
+    if (-not [SyndocalThreeDisplayNative]::GetFileInformationByHandle($handle, [ref]$information)) {
+      throw "Fail closed: GetFileInformationByHandle failed for '$Path'."
+    }
+    if (($information.FileAttributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Fail closed: '$Path' carries a reparse-point attribute at open time."
+    }
+    if ([uint32]$information.NumberOfLinks -ne [uint32]1) {
+      throw "Fail closed: '$Path' reports $($information.NumberOfLinks) hard links; an aliased Show-ASIO executable is prohibited."
+    }
+    return $true
+  } finally { [void][SyndocalThreeDisplayNative]::CloseHandle($handle) }
+}
+
+function Assert-ThreeDisplayShowAsioInsideCheckout {
+  param(
+    [Parameter(Mandatory = $true)][string]$CandidatePath,
+    [Parameter(Mandatory = $true)][string]$CheckoutRootPath,
+    [Parameter(Mandatory = $true)][string]$Subject
+  )
+  $root = [IO.Path]::GetFullPath($CheckoutRootPath).TrimEnd('\', '/')
+  $candidate = [IO.Path]::GetFullPath($CandidatePath)
+  if (-not $candidate.StartsWith($root + "\", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fail closed: $Subject '$candidate' is outside this checkout '$root'; wrong-checkout artifacts are prohibited."
+  }
+  return $candidate
+}
+
+function Get-ThreeDisplayShowAsioAuthorityRecord {
+  # Derives the canonical artifact directory/executable exclusively from a
+  # verified PASS result, rejects every caller/identity mismatch, and returns
+  # one evidence record binding flavor, manifest/checker identity, exact
+  # executable identity, and this verification time.
+  param(
+    [Parameter(Mandatory = $true)]$Configuration,
+    [Parameter(Mandatory = $true)]$ParsedPass,
+    [Parameter(Mandatory = $true)]$Verification,
+    [Parameter(Mandatory = $true)][string]$Phase
+  )
+  foreach ($expectation in @("expected_sha256", "expected_product_version", "expected_git_head")) {
+    if ([string]::IsNullOrWhiteSpace([string]$Configuration.$expectation)) {
+      throw "Fail closed: ShowAsioLocal authority requires exact $expectation before the checker may authorize anything."
+    }
+  }
+  $checkoutRoot = [IO.Path]::GetFullPath($Configuration.checkout_root)
+  $artifactDirectory = $null
+  try {
+    $artifactDirectory = Assert-ThreeDisplayShowAsioInsideCheckout -CandidatePath $ParsedPass.artifact_directory_raw -CheckoutRootPath $checkoutRoot -Subject "Show-ASIO artifact directory"
+  } catch [System.ArgumentException] {
+    throw "Fail closed: Show-ASIO authority PASS directory is not a valid Windows path."
+  }
+  $expectedParent = [IO.Path]::GetFullPath((Join-Path $checkoutRoot ($script:ThreeDisplayShowAsioArtifactRelativeParent + "\"))).TrimEnd('\')
+  $actualParent = (Split-Path -Parent $artifactDirectory)
+  if (-not [string]::Equals($actualParent, $expectedParent, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fail closed: Show-ASIO artifact directory parent '$actualParent' is not the exact authority root '$expectedParent'."
+  }
+  $leafName = Split-Path -Leaf $artifactDirectory
+  $leafMatch = [regex]::Match($leafName, $script:ThreeDisplayShowAsioLeafRegex)
+  if (-not $leafMatch.Success -or $leafMatch.Length -ne $leafName.Length) {
+    throw "Fail closed: Show-ASIO artifact directory leaf '$leafName' is not the exact versioned authority name."
+  }
+  $leafVersion = $leafMatch.Groups[1].Value
+  $leafCommit12 = $leafMatch.Groups[2].Value
+  if (-not [string]::Equals($leafVersion, [string]$Configuration.expected_product_version, [StringComparison]::Ordinal)) {
+    throw "Fail closed: Show-ASIO artifact directory binds version '$leafVersion', expected '$($Configuration.expected_product_version)'; caller/version drift is rejected."
+  }
+  if (-not [string]::Equals($leafCommit12, [string]$Configuration.expected_git_head.ToLowerInvariant().Substring(0, 12), [StringComparison]::Ordinal)) {
+    throw "Fail closed: Show-ASIO artifact directory binds commit '$($leafCommit12)', expected HEAD prefix '$($Configuration.expected_git_head.Substring(0, 12))'; caller/HEAD drift is rejected."
+  }
+  Test-ThreeDisplayReparseAncestry -Path $artifactDirectory
+  $executablePath = Join-Path $artifactDirectory $script:ThreeDisplayShowAsioExecutableName
+  if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
+    throw "Fail closed: verified Show-ASIO application executable '$executablePath' does not exist."
+  }
+  $executableItem = Get-Item -LiteralPath $executablePath -Force
+  if (($executableItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "Fail closed: verified Show-ASIO application executable '$executablePath' is a reparse point."
+  }
+  if (-not (Test-ThreeDisplaySingleLinkFile -Path $executablePath)) {
+    throw "Fail closed: '$executablePath' did not prove exactly one hard link; an aliased Show-ASIO executable is prohibited."
+  }
+  $canonicalExecutable = [IO.Path]::GetFullPath($executableItem.FullName)
+  $callerExpected = $Configuration.caller_expected_executable_path
+  if ($null -ne $callerExpected -and -not [string]::IsNullOrWhiteSpace([string]$callerExpected)) {
+    if (-not [string]::Equals([IO.Path]::GetFullPath([string]$callerExpected), $canonicalExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Fail closed: caller ExpectedExecutablePath '$callerExpected' differs from the checker-derived artifact executable '$canonicalExecutable'."
+    }
+  }
+  $executableSha256 = Get-ExecutableSha256 -Path $canonicalExecutable
+  if (-not [string]::Equals($executableSha256, [string]$Configuration.expected_sha256, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fail closed: Show-ASIO executable SHA-256 mismatch between checks or versus caller expectation (actual '$executableSha256')."
+  }
+  $executableVersion = Get-ExecutableProductVersion -Path $canonicalExecutable
+  if (-not [string]::Equals($executableVersion, [string]$Configuration.expected_product_version, [StringComparison]::Ordinal)) {
+    throw "Fail closed: Show-ASIO executable ProductVersion mismatch (actual '$executableVersion')."
+  }
+  $checkoutHead = Resolve-ThreeDisplayGitHead -CheckoutRootPath $checkoutRoot
+  if (-not [string]::Equals($checkoutHead, [string]$Configuration.expected_git_head, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Fail closed: checkout git HEAD mismatch during Show-ASIO authority verification (actual '$checkoutHead')."
+  }
+  return [ordered]@{
+    phase = $Phase
+    authority_mode = $script:ThreeDisplayAuthorityShowAsioLocal
+    artifact_flavor = $script:ThreeDisplayShowAsioArtifactFlavor
+    manifest_filename = $script:ThreeDisplayShowAsioManifestFilename
+    checker_relative_path = $script:ThreeDisplayShowAsioCheckerRelativePath
+    checker_path = [string]$Verification.checker_path
+    checker_sha256 = [string]$Verification.checker_sha256
+    node_executable_path = [string]$Verification.node_executable_path
+    pass_line = (ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$ParsedPass.pass_line))
+    files_verified = [long]$ParsedPass.files_verified
+    distribution_approved = $false
+    artifact_directory = $artifactDirectory
+    executable_path = $canonicalExecutable
+    executable_sha256 = $executableSha256
+    executable_product_version = $executableVersion
+    checkout_git_head = $checkoutHead
+    verified_at_utc = [string]$Verification.invoked_at_utc
+  }
+}
+
+function Invoke-ThreeDisplayShowAsioAuthorityGate {
+  # The only ShowAsioLocal authorization boundary.  Runs the real checker
+  # seam once per call, derives the executable from the verified result, and
+  # pins it into the live configuration so every downstream consumer uses the
+  # checker-derived path.  StandardRelease passes through untouched ($null).
+  param(
+    [Parameter(Mandatory = $true)]$Configuration,
+    [Parameter(Mandatory = $true)][ValidateSet("pre-mutation", "pre-executable-use", "dry-run-pre-executable-use")][string]$Phase
+  )
+  if ([string]$Configuration.authority_mode -ne $script:ThreeDisplayAuthorityShowAsioLocal) { return $null }
+  $verification = Invoke-ThreeDisplayShowAsioArtifactVerification -CheckoutRootPath $Configuration.checkout_root -NodeExecutablePath ([string]$Configuration.show_asio_node_executable_path)
+  $parsedPass = ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification $verification
+  $record = Get-ThreeDisplayShowAsioAuthorityRecord -Configuration $Configuration -ParsedPass $parsedPass -Verification $verification -Phase $Phase
+  $Configuration.expected_executable_path = [string]$record.executable_path
+  return [pscustomobject]$record
 }
 
 function Get-ThreeDisplaySourceDeviceName {
@@ -615,6 +972,7 @@ function Test-ThreeDisplayIdentityFormat {
 function New-ThreeDisplayConfiguration {
   param(
     [Parameter(Mandatory = $true)][bool]$IsApply,
+    [ValidateSet("StandardRelease", "ShowAsioLocal")][string]$AuthorityMode = $script:ThreeDisplayAuthorityStandardRelease,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ExecutablePath,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Sha256,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ProductVersion,
@@ -629,7 +987,8 @@ function New-ThreeDisplayConfiguration {
     [Parameter(Mandatory = $true)][int]$CdpPort,
     [Parameter(Mandatory = $true)][int]$IntervalMs,
     [Parameter(Mandatory = $true)][int]$Attempts,
-    [Parameter(Mandatory = $true)][string]$CheckoutRootPath
+    [Parameter(Mandatory = $true)][string]$CheckoutRootPath,
+    [AllowEmptyString()][string]$ShowAsioNodeExecutablePath = ""
   )
   if ($IntervalMs -lt $script:ThreeDisplayMinimumSampleIntervalMs) {
     throw "Fail closed: SampleIntervalMs=$IntervalMs is below $($script:ThreeDisplayMinimumSampleIntervalMs) ms."
@@ -640,10 +999,35 @@ function New-ThreeDisplayConfiguration {
   if ($CdpPort -lt 0 -or $CdpPort -gt 65535) {
     throw "Fail closed: CdpPort must be 0 (unconfigured) or an exact TCP port in 1..65535."
   }
-  $defaultExecutablePath = [IO.Path]::GetFullPath((Join-Path $CheckoutRootPath "target\release\syndocal.exe"))
-  $effectiveExecutablePath = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $defaultExecutablePath } else { [IO.Path]::GetFullPath($ExecutablePath) }
-  if ($IsApply -and -not [string]::Equals($effectiveExecutablePath, $defaultExecutablePath, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Fail closed: -Apply ExpectedExecutablePath must be this checkout's exact target\\release\\syndocal.exe path; another checkout is prohibited."
+  if ($ShowAsioNodeExecutablePath -match "[\r\n]") { throw "Fail closed: ShowAsioNodeExecutablePath contains a line break." }
+  $checkoutRoot = [IO.Path]::GetFullPath($CheckoutRootPath)
+  $defaultExecutablePath = [IO.Path]::GetFullPath((Join-Path $checkoutRoot "target\release\syndocal.exe"))
+  $showAsioArtifactParent = [IO.Path]::GetFullPath((Join-Path $checkoutRoot ($script:ThreeDisplayShowAsioArtifactRelativeParent + "\")))
+  $callerExpectedExecutablePath = $null
+  if ([string]::Equals($AuthorityMode, $script:ThreeDisplayAuthorityStandardRelease, [StringComparison]::Ordinal)) {
+    $effectiveExecutablePath = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $defaultExecutablePath } else { [IO.Path]::GetFullPath($ExecutablePath) }
+    if ($IsApply -and -not [string]::Equals($effectiveExecutablePath, $defaultExecutablePath, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Fail closed: -Apply StandardRelease ExpectedExecutablePath must be this checkout's exact target\\release\\syndocal.exe path; another checkout is prohibited."
+    }
+  } else {
+    # ShowAsioLocal: the authoritative path is derived only from a verified
+    # checker PASS result at gate time.  A caller-supplied path is accepted
+    # only as a cross-check expectation and must already name the exact
+    # artifact executable shape under this checkout's show-asio-local root.
+    $effectiveExecutablePath = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { "" } else { [IO.Path]::GetFullPath($ExecutablePath) }
+    if ($effectiveExecutablePath -ne "") {
+      $callerExpectedExecutablePath = $effectiveExecutablePath
+      if (-not $callerExpectedExecutablePath.StartsWith($showAsioArtifactParent, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Fail closed: ShowAsioLocal ExpectedExecutablePath must live under this checkout's $script:ThreeDisplayShowAsioArtifactRelativeParent tree; generic alternate executables are prohibited."
+      }
+      if ((Split-Path -Leaf $callerExpectedExecutablePath) -cne $script:ThreeDisplayShowAsioExecutableName) {
+        throw "Fail closed: ShowAsioLocal ExpectedExecutablePath must end in exactly $script:ThreeDisplayShowAsioExecutableName."
+      }
+      $callerDirectoryLeaf = Split-Path -Leaf (Split-Path -Parent $callerExpectedExecutablePath)
+      if (-not $callerDirectoryLeaf.EndsWith("_x64", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Fail closed: ShowAsioLocal ExpectedExecutablePath directory leaf '$callerDirectoryLeaf' must carry the _x64 authority suffix."
+      }
+    }
   }
   $values = [ordered]@{
     ExpectedSha256 = $Sha256; ExpectedGitHead = $GitHead
@@ -683,6 +1067,9 @@ function New-ThreeDisplayConfiguration {
   }
   [pscustomobject]@{
     apply = $IsApply; fully_configured = $fullyConfigured; checkout_root = [IO.Path]::GetFullPath($CheckoutRootPath)
+    authority_mode = [string]$AuthorityMode
+    caller_expected_executable_path = $callerExpectedExecutablePath
+    show_asio_node_executable_path = $(if ([string]::IsNullOrWhiteSpace($ShowAsioNodeExecutablePath)) { "" } else { [IO.Path]::GetFullPath($ShowAsioNodeExecutablePath) })
     expected_executable_path = $effectiveExecutablePath; expected_sha256 = $Sha256.ToLowerInvariant()
     expected_product_version = $ProductVersion; expected_git_head = $GitHead.ToLowerInvariant()
     sample_interval_ms = $IntervalMs; max_sample_attempts = $Attempts; cdp_port = $CdpPort
@@ -784,14 +1171,15 @@ function Get-ThreeDisplayExpectedMonitor {
 function Get-ThreeDisplayExactCheckoutProcess {
   param([Parameter(Mandatory = $true)]$Configuration)
   $expected = [IO.Path]::GetFullPath($Configuration.expected_executable_path)
+  $processName = if ([string]$Configuration.authority_mode -eq $script:ThreeDisplayAuthorityShowAsioLocal) { $script:ThreeDisplayShowAsioProcessName } else { "syndocal" }
   $matches = @(
-    Get-SyndocalCandidateProcesses | Where-Object {
+    Get-SyndocalCandidateProcesses -ProcessName $processName | Where-Object {
       -not [string]::IsNullOrWhiteSpace([string]$_.native_image_path) -and
       [string]::Equals([IO.Path]::GetFullPath([string]$_.native_image_path), $expected, [StringComparison]::OrdinalIgnoreCase)
     }
   )
   if ($matches.Count -ne 1) {
-    throw "Fail closed: exact checkout process selection found $($matches.Count) exact syndocal.exe match(es) for '$expected'; exactly one is required."
+    throw "Fail closed: exact checkout process selection found $($matches.Count) exact $processName match(es) for '$expected'; exactly one is required."
   }
   return $matches[0]
 }
@@ -1222,6 +1610,21 @@ function Get-ThreeDisplayStrictSample {
   if (-not $Configuration.fully_configured) {
     throw "Fail closed: strict three-display acceptance requires explicit hash/version/HEAD, all role monitor identities, and exact LED/projector output IDs and labels."
   }
+  if ([string]$Configuration.authority_mode -eq $script:ThreeDisplayAuthorityShowAsioLocal) {
+    # Defense in depth: even if some future code path bypassed the authority
+    # gate, a strict sample in ShowAsioLocal mode refuses to consume anything
+    # that is not exactly the checker-derived artifact executable shape.
+    $showExecutable = [string]$Configuration.expected_executable_path
+    if ([string]::IsNullOrWhiteSpace($showExecutable)) {
+      throw "Fail closed: ShowAsioLocal strict sample ran before the authority gate resolved the artifact executable."
+    }
+    $canonicalShowExecutable = Assert-ThreeDisplayShowAsioInsideCheckout -CandidatePath $showExecutable -CheckoutRootPath $Configuration.checkout_root -Subject "Show-ASIO executable"
+    $expectedShowParent = [IO.Path]::GetFullPath((Join-Path $Configuration.checkout_root ($script:ThreeDisplayShowAsioArtifactRelativeParent + "\")))
+    if (-not $canonicalShowExecutable.StartsWith($expectedShowParent, [StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path -Leaf $canonicalShowExecutable) -cne $script:ThreeDisplayShowAsioExecutableName) {
+      throw "Fail closed: ShowAsioLocal strict sample refuses generic alternate executable '$canonicalShowExecutable'."
+    }
+  }
   $process = Get-ThreeDisplayExactCheckoutProcess -Configuration $Configuration
   $actualHash = Get-ExecutableSha256 -Path $Configuration.expected_executable_path
   if (-not [string]::Equals($actualHash, $Configuration.expected_sha256, [StringComparison]::OrdinalIgnoreCase)) { throw "Fail closed: executable SHA256 mismatch (actual '$actualHash')." }
@@ -1291,10 +1694,16 @@ function Get-ThreeDisplayDryRunObservation {
       inventory = @(Get-ThreeDisplayMonitorInventory)
       sample = $null
       errors = @()
+      authority_verifications = @()
     }
   }
   $inventory = @(Get-ThreeDisplayMonitorInventory)
   try {
+    # A fully configured ShowAsioLocal dry-run consumes the artifact identity,
+    # so it too must pass the authority gate before any executable use.
+    $authorityVerifications = [System.Collections.Generic.List[object]]::new()
+    $dryRunAuthority = Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $Configuration -Phase "dry-run-pre-executable-use"
+    if ($null -ne $dryRunAuthority) { $authorityVerifications.Add($dryRunAuthority) }
     $sample = Get-ThreeDisplayStrictSample -Configuration $Configuration -RequireEditorMaximized $true
     return [pscustomobject]@{
       verdict = "dry-run-would-accept"
@@ -1303,6 +1712,7 @@ function Get-ThreeDisplayDryRunObservation {
       inventory = @($sample.monitors)
       sample = $sample
       errors = @()
+      authority_verifications = @($authorityVerifications)
     }
   } catch {
     return [pscustomobject]@{
@@ -1312,12 +1722,22 @@ function Get-ThreeDisplayDryRunObservation {
       inventory = @($inventory)
       sample = $null
       errors = @((ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "dry-run rejection without a readable single-line diagnostic"))
+      authority_verifications = @()
     }
   }
 }
 
 function Invoke-ThreeDisplayApplyAcceptance {
   param([Parameter(Mandatory = $true)]$Configuration)
+  # ShowAsioLocal authority verifications, in mandatory order:
+  #   1. "pre-mutation" - before any process enumeration or window
+  #      observation/mutation happens at all;
+  #   2. "pre-executable-use" - immediately before the harness relies on the
+  #      artifact executable again (the maximize mutation and the stability
+  #      sampling phase), so a mutation between the two checks is caught.
+  $authorityVerifications = [System.Collections.Generic.List[object]]::new()
+  $preMutationAuthority = Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $Configuration -Phase "pre-mutation"
+  if ($null -ne $preMutationAuthority) { $authorityVerifications.Add($preMutationAuthority) }
   $operation = [ordered]@{ performed = $false; kind = "none"; target_role = $null; prechange_revalidation = $null; reason = "already maximized or no action required" }
   $initial = Get-ThreeDisplayStrictSample -Configuration $Configuration -RequireEditorMaximized $false
   $editor = @($initial.windows | Where-Object { $_.role -eq "editor" })[0]
@@ -1327,6 +1747,8 @@ function Invoke-ThreeDisplayApplyAcceptance {
     # never masks a swapped/default output by moving it.
     $prechange = Get-ThreeDisplayStrictSample -Configuration $Configuration -RequireEditorMaximized $false
     $currentEditor = @($prechange.windows | Where-Object { $_.role -eq "editor" })[0]
+    $preUseAuthority = Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $Configuration -Phase "pre-executable-use"
+    if ($null -ne $preUseAuthority) { $authorityVerifications.Add($preUseAuthority) }
     [void](Invoke-ThreeDisplayWindowMaximize `
       -HandleDecimal ([long]$currentEditor.window.handle_decimal) `
       -ExpectedProcessId ([uint32]$currentEditor.window.owner_pid) `
@@ -1336,6 +1758,9 @@ function Invoke-ThreeDisplayApplyAcceptance {
       prechange_revalidation = $prechange.observed_at_utc
       reason = "explicit -Apply allowed only the already-correct editor HWND to maximize"
     }
+  } else {
+    $preUseAuthority = Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $Configuration -Phase "pre-executable-use"
+    if ($null -ne $preUseAuthority) { $authorityVerifications.Add($preUseAuthority) }
   }
   $stable = [System.Collections.Generic.List[object]]::new()
   $consecutive = 0
@@ -1345,7 +1770,7 @@ function Invoke-ThreeDisplayApplyAcceptance {
       $consecutive++
       $stable.Add([pscustomobject]@{ attempt = $attempt; stable = $true; consecutive = $consecutive; sample = $sample; error = $null })
       if ($consecutive -ge $script:ThreeDisplayRequiredSamples) {
-        return [pscustomobject]@{ accepted = $true; operation = $operation; before = $initial; samples = @($stable); failure = $null }
+        return [pscustomobject]@{ accepted = $true; operation = $operation; before = $initial; samples = @($stable); failure = $null; authority_verifications = @($authorityVerifications) }
       }
     } catch {
       $consecutive = 0
@@ -1353,7 +1778,7 @@ function Invoke-ThreeDisplayApplyAcceptance {
     }
     if ($attempt -lt $Configuration.max_sample_attempts) { [void](Invoke-ThreeDisplaySampleDelay -Milliseconds $Configuration.sample_interval_ms) }
   }
-  return [pscustomobject]@{ accepted = $false; operation = $operation; before = $initial; samples = @($stable); failure = "Fail closed: no $($script:ThreeDisplayRequiredSamples) consecutive stable three-display samples within $($Configuration.max_sample_attempts) attempts." }
+  return [pscustomobject]@{ accepted = $false; operation = $operation; before = $initial; samples = @($stable); failure = "Fail closed: no $($script:ThreeDisplayRequiredSamples) consecutive stable three-display samples within $($Configuration.max_sample_attempts) attempts."; authority_verifications = @($authorityVerifications) }
 }
 
 function Invoke-ThreeDisplayAcceptance {
@@ -1368,10 +1793,23 @@ function Invoke-ThreeDisplayAcceptance {
     schema_version = $script:ThreeDisplaySchemaVersion
     tool = "run-syndocal-three-display-show-acceptance.ps1"
     mode = if ($Configuration.apply) { "apply" } else { "dry-run" }
+    authority_mode = [string]$Configuration.authority_mode
     observed_at_utc = [DateTime]::UtcNow.ToString("o")
     checkout_root = $Configuration.checkout_root
-    expected_executable_path = $Configuration.expected_executable_path
+    expected_executable_path = $(if ([string]$Configuration.authority_mode -eq $script:ThreeDisplayAuthorityShowAsioLocal -and [string]::IsNullOrWhiteSpace([string]$Configuration.expected_executable_path)) { "<derived-at-authority-gate-time>" } else { $Configuration.expected_executable_path })
     fully_configured = $Configuration.fully_configured
+    show_asio_authority_contract = $(if ([string]$Configuration.authority_mode -ne $script:ThreeDisplayAuthorityShowAsioLocal) { $null } else {
+      [ordered]@{
+        artifact_flavor = $script:ThreeDisplayShowAsioArtifactFlavor
+        manifest_filename = $script:ThreeDisplayShowAsioManifestFilename
+        checker_relative_path = $script:ThreeDisplayShowAsioCheckerRelativePath
+        artifact_parent_relative = $script:ThreeDisplayShowAsioArtifactRelativeParent
+        executable_name = $script:ThreeDisplayShowAsioExecutableName
+        process_image_name = $script:ThreeDisplayShowAsioProcessName
+        required_verifications_per_apply = 2
+        distribution_approved = $false
+      }
+    })
     expectations = [ordered]@{
       sha256 = if ($Configuration.expected_sha256) { $Configuration.expected_sha256 } else { $null }
       product_version = if ($Configuration.expected_product_version) { $Configuration.expected_product_version } else { $null }
@@ -1383,6 +1821,8 @@ function Invoke-ThreeDisplayAcceptance {
       read_only_default = $true
       creates_or_changes_syndocal_outputs = $false
       launches_or_terminates_processes = $false
+      launches_or_terminates_syndocal_processes = $false
+      spawns_show_asio_checker_node_child = ([string]$Configuration.authority_mode -eq $script:ThreeDisplayAuthorityShowAsioLocal)
       screenshots_taken = $false
       hardware_access = $false
       non_loopback_network_access = $false
@@ -1405,6 +1845,7 @@ function Invoke-ThreeDisplayAcceptance {
         accepted = [bool]$applyResult.accepted
         required_consecutive_samples = $script:ThreeDisplayRequiredSamples
         samples = @($applyResult.samples)
+        authority_verifications = @($applyResult.authority_verifications)
         native_hardware_claim = $false
       }
       if (-not $applyResult.accepted) { $failure = $applyResult.failure }
@@ -1416,6 +1857,7 @@ function Invoke-ThreeDisplayAcceptance {
         accepted = $false
         message = $dry.message
         errors = @($dry.errors)
+        authority_verifications = @($dry.authority_verifications)
         native_hardware_claim = $false
       }
       if ($dry.errors.Count -gt 0) { $failure = @($dry.errors)[0] }
@@ -1423,7 +1865,7 @@ function Invoke-ThreeDisplayAcceptance {
     }
   } catch {
     $failure = ConvertTo-ThreeDisplayOneLineDiagnostic -Value ([string]$_.Exception.Message) -Fallback "acceptance failed without a readable single-line diagnostic"
-    $final = [ordered]@{ verdict = "rejected"; accepted = $false; errors = @($failure); native_hardware_claim = $false }
+    $final = [ordered]@{ verdict = "rejected"; accepted = $false; errors = @($failure); authority_verifications = @(); native_hardware_claim = $false }
   }
   if ($Configuration.apply) {
     $monitorValue = if ($null -ne $before) { @($before.monitors) } else { @() }
@@ -1470,7 +1912,7 @@ function Invoke-ThreeDisplayAcceptanceMain {
   }
   $evidenceDirectory = New-ThreeDisplayEvidenceDirectory -RootPath $root -Slug $EvidenceSlug
   try {
-    $configuration = New-ThreeDisplayConfiguration -IsApply ([bool]$Apply) -ExecutablePath $ExpectedExecutablePath -Sha256 $ExpectedSha256 -ProductVersion $ExpectedProductVersion -GitHead $ExpectedGitHead -EditorIdentity $ExpectedEditorMonitorIdentity -LedIdentity $ExpectedLedMonitorIdentity -ProjectorIdentity $ExpectedProjectorMonitorIdentity -LedId $LedOutputId -LedLabel $LedOutputLabel -ProjectorId $ProjectorOutputId -ProjectorLabel $ProjectorOutputLabel -CdpPort $CdpPort -IntervalMs $SampleIntervalMs -Attempts $MaxSampleAttempts -CheckoutRootPath $script:ThreeDisplayCheckoutRoot
+    $configuration = New-ThreeDisplayConfiguration -IsApply ([bool]$Apply) -AuthorityMode $AuthorityMode -ExecutablePath $ExpectedExecutablePath -Sha256 $ExpectedSha256 -ProductVersion $ExpectedProductVersion -GitHead $ExpectedGitHead -EditorIdentity $ExpectedEditorMonitorIdentity -LedIdentity $ExpectedLedMonitorIdentity -ProjectorIdentity $ExpectedProjectorMonitorIdentity -LedId $LedOutputId -LedLabel $LedOutputLabel -ProjectorId $ProjectorOutputId -ProjectorLabel $ProjectorOutputLabel -CdpPort $CdpPort -IntervalMs $SampleIntervalMs -Attempts $MaxSampleAttempts -CheckoutRootPath $script:ThreeDisplayCheckoutRoot -ShowAsioNodeExecutablePath $ShowAsioNodeExecutablePath
     $result = Invoke-ThreeDisplayAcceptance -Configuration $configuration -EvidenceDirectory $evidenceDirectory
     [Console]::Out.WriteLine((@{ evidence_directory = $result.evidence_directory; verdict = $result.verdict; accepted = $result.accepted; native_hardware_claim = $false } | ConvertTo-Json -Compress))
     if ($result.succeeded) { exit 0 }

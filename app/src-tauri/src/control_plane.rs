@@ -19,17 +19,17 @@ use protocol::control_plane::{
     OperationSourceFamily, SchemaIdentity, CONTROL_PLANE_SCHEMA_VERSION,
 };
 use protocol::control_plane_command::{
-    CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID, EMPTY_CUE_CREATE_OPERATION_ID,
-    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
-    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
-    OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
-    OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
-    OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
-    SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
-    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_RENAME_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID,
+    EMPTY_CUE_CREATE_OPERATION_ID, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
+    OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+    OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
+    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
+    OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
@@ -50,9 +50,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 480;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 479;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "bea9db6c8cc249bc3f2bc55aaab6b20680bc6e91af882719da8a9f29731ecd44";
+    "35cd157a0c764bf910f2f248c09ffd816fff52dd9f4669e88dcedc8ae78b184c";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -139,7 +139,6 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
             | "load_node_graph_preset_file"
             | "save_node_graph"
             | "remove_node_graph"
-            | "remove_cue_list"
             | "add_timeline_cue_event"
             | "reconform_timeline_to_bpm"
             | "set_group_fixture_limits"
@@ -281,6 +280,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_video_layer_thumbnail"
             | "get_video_layer_transition_runtime"
             | "get_video_output_render_plans"
+            | "get_video_output_window_observation_v1"
             | "get_video_output_window_statuses"
             | "get_video_preview_diagnostics"
             | "get_video_runtime_status"
@@ -512,6 +512,8 @@ fn is_backend_authoritative_project_mutation(command: &str) -> bool {
             | "set_video_layer_isf_control"
             | "set_effect_enabled"
             | "create_empty_cue"
+            | "create_cue_list"
+            | "rename_cue_list"
             | "delete_cue_list"
             | "reorder_cue_lists"
     )
@@ -547,9 +549,6 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "set_output_config"
             | "set_dmx_outputs"
             | "create_cue_from_current"
-            | "create_cue_list"
-            | "rename_cue_list"
-            | "set_cue_list"
             | "create_reference_palette"
             | "update_reference_palette"
             | "remove_reference_palette"
@@ -1146,6 +1145,7 @@ enum ReviewedCanonicalOperation {
     RelinquishOutputLease,
     ForceTransferOutputLease,
     ReorderCueLists,
+    RenameCueList,
     DeleteCueList,
     CreateEmptyCue,
 }
@@ -1170,6 +1170,7 @@ impl ReviewedCanonicalOperation {
             Self::RelinquishOutputLease => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
             Self::ForceTransferOutputLease => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::ReorderCueLists => CUE_LIST_REORDER_OPERATION_ID,
+            Self::RenameCueList => CUE_LIST_RENAME_OPERATION_ID,
             Self::DeleteCueList => CUE_LIST_DELETE_OPERATION_ID,
             Self::CreateEmptyCue => EMPTY_CUE_CREATE_OPERATION_ID,
         }
@@ -1203,6 +1204,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
             Some(ReviewedCanonicalOperation::ForceTransferOutputLease)
         }
         "reorder_cue_lists" => Some(ReviewedCanonicalOperation::ReorderCueLists),
+        "rename_cue_list" => Some(ReviewedCanonicalOperation::RenameCueList),
         "delete_cue_list" => Some(ReviewedCanonicalOperation::DeleteCueList),
         "create_empty_cue" => Some(ReviewedCanonicalOperation::CreateEmptyCue),
         _ => None,
@@ -1237,6 +1239,16 @@ fn canonical_descriptor_for_source(
             ReceiptPolicy::ExactTerminalReceipt,
         ),
         ReviewedCanonicalOperation::ReorderCueLists => (
+            OperationClass::Mutation,
+            vec![
+                OperationCapability::LocalWindowBound,
+                OperationCapability::AuthoritativeProjectMutation,
+            ],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowAuthoritativeMutation,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
+        ReviewedCanonicalOperation::RenameCueList => (
             OperationClass::Mutation,
             vec![
                 OperationCapability::LocalWindowBound,
@@ -1498,6 +1510,11 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
+        "get_video_output_window_observation_v1" => (
+            "syndocal.query.video.output_window_observation.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
         "poll_control_plane_observation_events" => (
             "syndocal.query.events.observations.v1",
             OperationClass::RuntimeObservation,
@@ -1547,6 +1564,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "relinquish_output_lease_v2"
             | "force_transfer_output_lease_v2"
             | "reorder_cue_lists"
+            | "rename_cue_list"
             | "delete_cue_list"
             | "create_empty_cue"
     ) {
@@ -1864,6 +1882,19 @@ mod tests {
                 "cancel_pane_window_close",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
+            // D3/P0: the authoritative Bank create/rename routes carry the
+            // exact E/R/H/owner authority receipt args themselves, so they
+            // must classify as backend-authoritative project mutations and
+            // never require a renderer transaction ticket to reach their
+            // handlers.
+            (
+                "create_cue_list",
+                TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation,
+            ),
+            (
+                "rename_cue_list",
+                TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation,
+            ),
         ] {
             assert_eq!(classes.get(route).copied(), Some(expected), "{route}");
             assert_eq!(
@@ -1872,29 +1903,35 @@ mod tests {
                 "{route}"
             );
         }
+        // Clean break: the retired direct Bank mutation routes are gone from
+        // both the production handler inventory and this admission table.
+        assert!(classes.get("set_cue_list").is_none());
+        assert_eq!(tauri_route_admission_class("set_cue_list"), None);
+        assert!(classes.get("remove_cue_list").is_none());
+        assert_eq!(tauri_route_admission_class("remove_cue_list"), None);
         let mut counts = std::collections::BTreeMap::new();
         for name in &names {
             let class = tauri_route_admission_class(name)
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 480);
+        assert_eq!(names.len(), 479);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            133
+            130
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
-            29
+            31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 87);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 88);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 143);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
-        assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 30);
+        assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
             tauri_route_admission_class("future_unreviewed_mutation"),
@@ -1906,7 +1943,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 13] = [
+        const R0_ALLOWLIST: [&str; 14] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -1916,13 +1953,14 @@ mod tests {
             "syndocal.query.project.authority.v1",
             "syndocal.query.runtime.generations.v1",
             "syndocal.query.video.display_monitors.v1",
+            "syndocal.query.video.output_window_observation.v1",
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 480);
-        const ENGINE_COMMAND_COUNT: usize = 263;
+        assert_eq!(names.len(), 479);
+        const ENGINE_COMMAND_COUNT: usize = 264;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -1948,7 +1986,7 @@ mod tests {
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            480 + ENGINE_COMMAND_COUNT
+            479 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1963,7 +2001,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            467 + ENGINE_COMMAND_COUNT
+            465 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -1994,7 +2032,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 467);
+        assert_eq!(tauri_unavailable.clone().count(), 465);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2257,8 +2295,8 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 480;
-        const ENGINE_COUNT: usize = 263;
+        const TAURI_COUNT: usize = 479;
+        const ENGINE_COUNT: usize = 264;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 419;
@@ -2271,7 +2309,7 @@ mod tests {
         assert_eq!(LEGACY_SOURCE_TOTAL, 1484);
         assert_eq!(SOURCE_TOTAL, 1517);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 31);
+        assert_eq!(canonical.canonical_operations.len(), 33);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2574,11 +2612,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 31);
+        assert_eq!(direct.len(), 33);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1062);
+        assert_eq!(unclassified.len(), 1060);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2691,6 +2729,28 @@ mod tests {
                 .unwrap()
                 .map(|operation| operation.operation_id.as_str()),
             Some(SET_EFFECT_ENABLED_OPERATION_ID)
+        );
+        let cue_list_rename_direct = direct
+            .iter()
+            .find(|source| source.source_key.source_id == "rename_cue_list")
+            .expect("rename_cue_list must be a direct canonical project-mutation source");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&cue_list_rename_direct.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(CUE_LIST_RENAME_OPERATION_ID)
+        );
+        let cue_list_rename_alias = aliases
+            .iter()
+            .find(|source| source.source_key.source_id == "rename_cue_list")
+            .expect("frontend rename_cue_list must retain its canonical alias row");
+        assert_eq!(
+            canonical
+                .canonical_operation_for_source(&cue_list_rename_alias.source_key)
+                .unwrap()
+                .map(|operation| operation.operation_id.as_str()),
+            Some(CUE_LIST_RENAME_OPERATION_ID)
         );
         let timeline_authority_direct = direct
             .iter()
@@ -2883,6 +2943,7 @@ mod tests {
             } else if matches!(
                 operation.operation_id.as_str(),
                 CUE_LIST_DELETE_OPERATION_ID
+                    | CUE_LIST_RENAME_OPERATION_ID
                     | CUE_LIST_REORDER_OPERATION_ID
                     | EMPTY_CUE_CREATE_OPERATION_ID
             ) {
@@ -3214,11 +3275,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1484);
+        assert_eq!(legacy.operations.len(), 1483);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1484);
+        assert_eq!(operations.len(), 1483);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

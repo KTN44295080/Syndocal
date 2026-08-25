@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use protocol::VideoOutputMapping;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::util::DeviceExt;
 
@@ -11,7 +12,15 @@ use crate::{
         requested_video_device_features, write_frame_texture, write_mapping_mask_texture,
         CompositorParams, GpuCompositePipelines, GpuFrameTextureSpec,
     },
-    PreparedVideoOutput,
+    PreparedVideoOutput, VideoOutputArtisticAdmission, VideoOutputArtisticPayload,
+    VideoOutputArtisticRejection, VideoOutputArtisticRenderResult, VideoOutputPresentationContract,
+};
+
+const HARD_BLACKOUT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +31,9 @@ pub enum GpuSurfaceError {
     Device(String),
     Frame(CpuCompositeError),
     Present(String),
+    /// The admission gate refused the artistic result before anything was
+    /// submitted to the surface. No pixels were presented.
+    Rejected(VideoOutputArtisticRejection),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -31,7 +43,14 @@ pub struct GpuSurfaceBufferStats {
     pub output_reallocations: u64,
     pub layer_reallocations: u64,
     pub frames_presented: u64,
+    pub hard_blackout_frames_presented: u64,
     pub compressed_layer_uploads: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GpuSubmissionValidationState {
+    legacy_prepared_output_validated: bool,
+    artistic_output_validated: bool,
 }
 
 struct NativeGpuLayerBuffers {
@@ -264,6 +283,7 @@ impl NativeGpuFrameBuffers {
             output_reallocations: self.output_reallocations,
             layer_reallocations: self.layer_reallocations,
             frames_presented: self.frames_presented,
+            hard_blackout_frames_presented: 0,
             compressed_layer_uploads: self.compressed_layer_uploads,
         }
     }
@@ -409,7 +429,8 @@ pub struct GpuSurfacePresenter {
     buffer_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     adapter_name: String,
-    buffer_path_validated: bool,
+    submission_validation: GpuSubmissionValidationState,
+    hard_blackout_frames_presented: u64,
     gpu_buffers: Option<NativeGpuFrameBuffers>,
 }
 
@@ -580,7 +601,8 @@ impl GpuSurfacePresenter {
             buffer_pipeline,
             sampler,
             adapter_name,
-            buffer_path_validated: false,
+            submission_validation: GpuSubmissionValidationState::default(),
+            hard_blackout_frames_presented: 0,
             gpu_buffers: None,
         })
     }
@@ -594,10 +616,16 @@ impl GpuSurfacePresenter {
     }
 
     pub fn buffer_stats(&self) -> GpuSurfaceBufferStats {
-        self.gpu_buffers
+        let mut stats = self
+            .gpu_buffers
             .as_ref()
             .map(NativeGpuFrameBuffers::stats)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        stats.frames_presented = stats
+            .frames_presented
+            .saturating_add(self.hard_blackout_frames_presented);
+        stats.hard_blackout_frames_presented = self.hard_blackout_frames_presented;
+        stats
     }
 
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), GpuSurfaceError> {
@@ -700,7 +728,7 @@ impl GpuSurfacePresenter {
             return Err(GpuSurfaceError::InvalidSize);
         }
         self.resize(width, height)?;
-        let validate_submission = !self.buffer_path_validated;
+        let validate_submission = !self.submission_validation.legacy_prepared_output_validated;
         if validate_submission {
             self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         }
@@ -841,7 +869,7 @@ impl GpuSurfacePresenter {
                     "GPU buffer presentation validation failed: {error}"
                 )));
             }
-            self.buffer_path_validated = true;
+            self.submission_validation.legacy_prepared_output_validated = true;
         }
         surface_texture.present();
         gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
@@ -873,6 +901,211 @@ impl GpuSurfacePresenter {
             Err(error) => Err(GpuSurfaceError::Present(error.to_string())),
         }
     }
+
+    /// Presents one canonical [`VideoOutputArtisticRenderResult`] produced by
+    /// the shared C1/C3 artistic renderer. This is the production seam for
+    /// native Display output: composition already happened in the video core,
+    /// so this method never recomposites layers and applies the existing WGSL
+    /// output mapping exactly once.
+    ///
+    /// Admission is fail-closed via [`VideoOutputPresentationContract::admit`]:
+    /// stale generations, foreign outputs, wrong sizes, partial payloads, and
+    /// non-fresh (LastValid/Error) evidence are rejected before the surface is
+    /// touched. A hard blackout bypasses the mapping entirely and clears the
+    /// swapchain image to byte-exact opaque black (`[0, 0, 0, 255]`), because
+    /// mapping values such as `black_level` would lift even a black frame.
+    ///
+    /// Steady state performs no allocation beyond first-call GPU buffer
+    /// growth: the artistic frame bytes are written into the existing
+    /// composition storage buffer and mapping uniform. The frame data remains
+    /// borrowed; ownership stays with the caller.
+    pub fn present_output_artistic_result(
+        &mut self,
+        result: &VideoOutputArtisticRenderResult,
+        contract: &VideoOutputPresentationContract,
+    ) -> Result<(), GpuSurfaceError> {
+        let presentation = resolve_output_artistic_presentation(result, contract)?;
+        self.resize(contract.width, contract.height)?;
+        match presentation {
+            GpuArtisticPresentation::ExactBlackClear => self.present_hard_blackout_surface(),
+            GpuArtisticPresentation::MapOnce { frame, mapping } => {
+                self.present_mapped_artistic_buffer(frame, mapping, contract.width, contract.height)
+            }
+        }
+    }
+
+    fn present_hard_blackout_surface(&mut self) -> Result<(), GpuSurfaceError> {
+        // Absolute blackout bypass: no texture upload, no mapping pass, no
+        // stored content. Clearing the swapchain image keeps presented bytes
+        // exact black regardless of mapping state or stale caches.
+        let surface_texture = self.acquire_surface_texture()?;
+        let output_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Syndocal native GPU hard blackout encoder"),
+            });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Syndocal native GPU hard blackout pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(HARD_BLACKOUT_CLEAR_COLOR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        self.queue.submit(Some(encoder.finish()));
+        surface_texture.present();
+        self.hard_blackout_frames_presented = self.hard_blackout_frames_presented.saturating_add(1);
+        Ok(())
+    }
+
+    fn present_mapped_artistic_buffer(
+        &mut self,
+        frame: &VideoFrame,
+        mapping: &VideoOutputMapping,
+        width: u32,
+        height: u32,
+    ) -> Result<(), GpuSurfaceError> {
+        let validate_submission = !self.submission_validation.artistic_output_validated;
+        if validate_submission {
+            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        }
+        let buffer_size =
+            u64::try_from(frame.data.len()).map_err(|_| GpuSurfaceError::InvalidSize)?;
+        if self.gpu_buffers.is_none() {
+            self.gpu_buffers = Some(NativeGpuFrameBuffers::new(
+                &self.device,
+                &self.composite_pipelines.bind_group_layout,
+                &self.buffer_bind_group_layout,
+                buffer_size,
+            ));
+        }
+        let surface_texture = self.acquire_surface_texture()?;
+        let gpu_buffers = self.gpu_buffers.as_mut().expect("GPU buffers initialized");
+        gpu_buffers.ensure_output_capacity(
+            &self.device,
+            &self.composite_pipelines.bind_group_layout,
+            &self.buffer_bind_group_layout,
+            buffer_size,
+        );
+        // The artistic frame is already composed by the video core: one write
+        // replaces the whole per-layer composite stage and the single mapping
+        // dispatch below is its only consumer.
+        self.queue
+            .write_buffer(&gpu_buffers.composition, 0, &frame.data);
+        let mapping_params = output_mapping_params(width, height, mapping);
+        let dimensions = dimensions_uniform(width, height);
+        write_mapping_mask_texture(&self.queue, &gpu_buffers.mapping_dummy_texture, mapping);
+        self.queue
+            .write_buffer(&gpu_buffers.mapping_params, 0, &mapping_params);
+        self.queue
+            .write_buffer(&gpu_buffers.dimensions, 0, &dimensions);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Syndocal native GPU artistic output encoder"),
+            });
+        encoder.clear_buffer(&gpu_buffers.mapped, 0, Some(buffer_size));
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Syndocal native GPU artistic output mapping pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.composite_pipelines.output_mapping);
+            pass.set_bind_group(0, &gpu_buffers.mapping_bind_group, &[]);
+            let (workgroups_x, workgroups_y) = dispatch_dimensions(width, height);
+            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+        let output_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Syndocal native GPU artistic buffer output pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.buffer_pipeline);
+            pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        if validate_submission {
+            if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+                return Err(GpuSurfaceError::Present(format!(
+                    "GPU artistic presentation validation failed: {error}"
+                )));
+            }
+            self.submission_validation.artistic_output_validated = true;
+        }
+        surface_texture.present();
+        let gpu_buffers = self.gpu_buffers.as_mut().expect("GPU buffers initialized");
+        gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum GpuArtisticPresentation<'a> {
+    ExactBlackClear,
+    MapOnce {
+        frame: &'a VideoFrame,
+        mapping: &'a VideoOutputMapping,
+    },
+}
+
+impl GpuArtisticPresentation<'_> {
+    #[cfg(test)]
+    fn mapping_dispatch_count(&self) -> u8 {
+        match self {
+            Self::ExactBlackClear => 0,
+            Self::MapOnce { .. } => 1,
+        }
+    }
+
+    #[cfg(test)]
+    fn has_pixel_payload(&self) -> bool {
+        matches!(self, Self::MapOnce { .. })
+    }
+}
+
+fn resolve_output_artistic_presentation<'a>(
+    result: &'a VideoOutputArtisticRenderResult,
+    contract: &VideoOutputPresentationContract,
+) -> Result<GpuArtisticPresentation<'a>, GpuSurfaceError> {
+    match contract.admit(result).map_err(GpuSurfaceError::Rejected)? {
+        VideoOutputArtisticAdmission::PresentHardBlackout => {
+            Ok(GpuArtisticPresentation::ExactBlackClear)
+        }
+        VideoOutputArtisticAdmission::MapOnceAndPresent => match &result.payload {
+            VideoOutputArtisticPayload::Frame(frame) => Ok(GpuArtisticPresentation::MapOnce {
+                frame,
+                mapping: &result.output_mapping,
+            }),
+            VideoOutputArtisticPayload::HardBlackout => Err(GpuSurfaceError::Rejected(
+                VideoOutputArtisticRejection::AdmissionPayloadMismatch,
+            )),
+        },
+    }
 }
 
 fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
@@ -885,6 +1118,7 @@ fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{apply_video_output_mapping, video_output_black_frame};
 
     fn test_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -901,6 +1135,16 @@ mod tests {
             ..Default::default()
         }))
         .ok()
+    }
+
+    fn test_compositor() -> Option<crate::GpuCompositor> {
+        match crate::GpuCompositor::new() {
+            Ok(compositor) => Some(compositor),
+            Err(error) => {
+                eprintln!("GPU compositor test skipped: {error:?}");
+                None
+            }
+        }
     }
 
     fn output_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -1007,5 +1251,262 @@ mod tests {
         );
         assert_eq!(buffers.stats().layer_slots, 2);
         assert_eq!(buffers.stats().layer_reallocations, 3);
+    }
+
+    fn artistic_rgba_frame(width: u32, height: u32) -> VideoFrame {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                data.extend_from_slice(&[(x * 37 % 256) as u8, (y * 53 % 256) as u8, 200, 255]);
+            }
+        }
+        VideoFrame {
+            layer_id: 0,
+            width,
+            height,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: crate::VideoPixelFormat::Rgba8,
+            data,
+        }
+    }
+
+    fn artistic_result(
+        payload: crate::VideoOutputArtisticPayload,
+        output_mapping: VideoOutputMapping,
+        freshness: crate::VideoOutputRenderFreshness,
+    ) -> crate::VideoOutputArtisticRenderResult {
+        crate::VideoOutputArtisticRenderResult {
+            payload,
+            output_mapping,
+            output_mapping_identity: crate::VideoOutputMappingIdentity::from_mapping(
+                &output_mapping,
+            ),
+            evidence: crate::VideoOutputRenderEvidence {
+                project_render_epoch: 7,
+                output_id: 9,
+                freshness,
+                error: None,
+            },
+        }
+    }
+
+    fn presentation_contract(width: u32, height: u32) -> VideoOutputPresentationContract {
+        VideoOutputPresentationContract::new(7, 9, width, height, &VideoOutputMapping::default())
+    }
+
+    fn presentation_contract_with_mapping(
+        width: u32,
+        height: u32,
+        mapping: &VideoOutputMapping,
+    ) -> VideoOutputPresentationContract {
+        VideoOutputPresentationContract::new(7, 9, width, height, mapping)
+    }
+
+    #[test]
+    fn legacy_and_artistic_first_submission_validation_are_independent() {
+        let mut state = GpuSubmissionValidationState::default();
+        assert!(!state.legacy_prepared_output_validated);
+        assert!(!state.artistic_output_validated);
+
+        state.legacy_prepared_output_validated = true;
+        assert!(state.legacy_prepared_output_validated);
+        assert!(
+            !state.artistic_output_validated,
+            "legacy validation cannot waive the artistic path's first submission validation"
+        );
+
+        state.artistic_output_validated = true;
+        assert!(state.legacy_prepared_output_validated);
+        assert!(state.artistic_output_validated);
+    }
+
+    #[test]
+    fn artistic_admission_resolves_blackout_bypass_or_single_mapping_fail_closed() {
+        use crate::{VideoOutputArtisticPayload, VideoOutputRenderFreshness};
+
+        let mapped = artistic_result(
+            VideoOutputArtisticPayload::Frame(artistic_rgba_frame(2, 1)),
+            VideoOutputMapping::default(),
+            VideoOutputRenderFreshness::Fresh,
+        );
+        let mapped_plan =
+            resolve_output_artistic_presentation(&mapped, &presentation_contract(2, 1)).unwrap();
+        assert_eq!(mapped_plan.mapping_dispatch_count(), 1);
+        assert!(mapped_plan.has_pixel_payload());
+
+        let mut hostile_mapping = VideoOutputMapping::default();
+        hostile_mapping.black_level = 0.9;
+        let blackout = artistic_result(
+            VideoOutputArtisticPayload::HardBlackout,
+            hostile_mapping,
+            VideoOutputRenderFreshness::Fresh,
+        );
+        // `black_level = 0.9` is bound into both sides of the contract, but a
+        // hard blackout still has no pixel payload and schedules no mapping
+        // dispatch. The only production arm is the exact-black render-pass clear.
+        let blackout_plan = resolve_output_artistic_presentation(
+            &blackout,
+            &presentation_contract_with_mapping(2, 1, &hostile_mapping),
+        )
+        .unwrap();
+        assert_eq!(blackout_plan.mapping_dispatch_count(), 0);
+        assert!(!blackout_plan.has_pixel_payload());
+        assert!(matches!(
+            blackout_plan,
+            GpuArtisticPresentation::ExactBlackClear
+        ));
+        assert_eq!(HARD_BLACKOUT_CLEAR_COLOR.r, 0.0);
+        assert_eq!(HARD_BLACKOUT_CLEAR_COLOR.g, 0.0);
+        assert_eq!(HARD_BLACKOUT_CLEAR_COLOR.b, 0.0);
+        assert_eq!(HARD_BLACKOUT_CLEAR_COLOR.a, 1.0);
+
+        assert_eq!(
+            resolve_output_artistic_presentation(&mapped, &presentation_contract(0, 1)),
+            Err(GpuSurfaceError::Rejected(
+                VideoOutputArtisticRejection::ZeroAreaContract {
+                    width: 0,
+                    height: 1,
+                }
+            ))
+        );
+
+        assert_eq!(
+            resolve_output_artistic_presentation(
+                &blackout,
+                &presentation_contract_with_mapping(u32::MAX, u32::MAX, &hostile_mapping),
+            ),
+            Err(GpuSurfaceError::Rejected(
+                VideoOutputArtisticRejection::FrameByteLengthOverflow {
+                    width: u32::MAX,
+                    height: u32::MAX,
+                }
+            ))
+        );
+
+        let mut substituted_mapping = mapped.clone();
+        substituted_mapping.output_mapping.black_level = 0.75;
+        assert!(matches!(
+            resolve_output_artistic_presentation(
+                &substituted_mapping,
+                &presentation_contract(2, 1),
+            ),
+            Err(GpuSurfaceError::Rejected(
+                VideoOutputArtisticRejection::ResultMappingIdentityMismatch { .. }
+            ))
+        ));
+
+        let mut foreign_mapping = mapped.clone();
+        foreign_mapping.output_mapping.black_level = 0.75;
+        foreign_mapping.output_mapping_identity =
+            crate::VideoOutputMappingIdentity::from_mapping(&foreign_mapping.output_mapping);
+        assert!(matches!(
+            resolve_output_artistic_presentation(&foreign_mapping, &presentation_contract(2, 1)),
+            Err(GpuSurfaceError::Rejected(
+                VideoOutputArtisticRejection::ContractMappingIdentityMismatch { .. }
+            ))
+        ));
+
+        let mut stale = mapped.clone();
+        stale.evidence.project_render_epoch = 6;
+        assert!(matches!(
+            resolve_output_artistic_presentation(&stale, &presentation_contract(2, 1)),
+            Err(GpuSurfaceError::Rejected(_))
+        ));
+
+        let mut foreign = mapped.clone();
+        foreign.evidence.output_id = 8;
+        assert!(matches!(
+            resolve_output_artistic_presentation(&foreign, &presentation_contract(2, 1)),
+            Err(GpuSurfaceError::Rejected(_))
+        ));
+
+        let mut wrong_size = mapped.clone();
+        let VideoOutputArtisticPayload::Frame(frame) = &mut wrong_size.payload else {
+            panic!("mapped result contains a frame")
+        };
+        frame.width = 4;
+        assert!(matches!(
+            resolve_output_artistic_presentation(&wrong_size, &presentation_contract(2, 1)),
+            Err(GpuSurfaceError::Rejected(_))
+        ));
+
+        let mut partial = mapped;
+        let VideoOutputArtisticPayload::Frame(frame) = &mut partial.payload else {
+            panic!("mapped result contains a frame")
+        };
+        frame.data.pop();
+        assert!(matches!(
+            resolve_output_artistic_presentation(&partial, &presentation_contract(2, 1)),
+            Err(GpuSurfaceError::Rejected(_))
+        ));
+
+        let mut rolled_back = blackout;
+        rolled_back.evidence.freshness = VideoOutputRenderFreshness::LastValid;
+        assert!(matches!(
+            resolve_output_artistic_presentation(
+                &rolled_back,
+                &presentation_contract_with_mapping(2, 1, &hostile_mapping),
+            ),
+            Err(GpuSurfaceError::Rejected(_))
+        ));
+    }
+
+    #[test]
+    fn wgsl_output_mapping_applies_to_an_artistic_frame_exactly_once() {
+        use protocol::VideoOutputMapping;
+
+        let Some(compositor) = test_compositor() else {
+            return;
+        };
+        let frame = artistic_rgba_frame(8, 8);
+        let mut mapping = VideoOutputMapping::default();
+        mapping.offset_x = 0.125;
+        mapping.scale_x = 1.25;
+        mapping.rotation_deg = 8.0;
+        mapping.black_level = 0.15;
+        mapping.edge_blend_left = 0.25;
+        mapping.edge_blend_gamma = 1.7;
+
+        let mapped_once_gpu = compositor
+            .apply_output_mapping_rgba8(&frame, &mapping)
+            .unwrap();
+        let mapped_once_cpu = apply_video_output_mapping(frame.clone(), &mapping);
+        let mapped_twice_cpu = apply_video_output_mapping(mapped_once_cpu.clone(), &mapping);
+        assert_eq!(
+            mapped_once_gpu.data, mapped_once_cpu.data,
+            "the WGSL mapping pass must reproduce the CPU mapping exactly once"
+        );
+        assert_ne!(
+            mapped_once_cpu.data, mapped_twice_cpu.data,
+            "the test mapping must detect a double application"
+        );
+    }
+
+    #[test]
+    fn wgsl_mapping_would_lift_a_hard_blackout_so_the_gate_forces_the_bypass() {
+        use protocol::VideoOutputMapping;
+
+        let black = video_output_black_frame(4, 4);
+        let mut hostile = VideoOutputMapping::default();
+        hostile.black_level = 0.9;
+        hostile.edge_blend_top = 1.0;
+
+        let lifted_cpu = apply_video_output_mapping(black.clone(), &hostile);
+        assert_ne!(
+            lifted_cpu.data, black.data,
+            "black_level lifts even contract-black pixels on the CPU path"
+        );
+
+        let Some(compositor) = test_compositor() else {
+            return;
+        };
+        let lifted_gpu = compositor
+            .apply_output_mapping_rgba8(&black, &hostile)
+            .unwrap();
+        assert_ne!(
+            lifted_gpu.data, black.data,
+            "the WGSL mapping pass would lift a blackout frame too"
+        );
     }
 }

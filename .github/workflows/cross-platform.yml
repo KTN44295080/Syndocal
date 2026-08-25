@@ -105,12 +105,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-lgpl-shared.zip'
-          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-shared'
-          Invoke-WebRequest 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip' -OutFile $archive
-          Expand-Archive -LiteralPath $archive -DestinationPath $extract
-          $sdk = Get-ChildItem $extract -Directory -Filter 'ffmpeg-n8.1-*-win64-lgpl-shared*' | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $sdk) { throw 'The extracted FFmpeg SDK directory was not found.' }
+          winget install --id Gyan.FFmpeg.Shared --exact --version 8.1.2 --accept-package-agreements --accept-source-agreements --disable-interactivity
+          $packageRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe'
+          $sdkRoots = @(Get-ChildItem -LiteralPath $packageRoot -Directory -Filter 'ffmpeg-8.1.2-full_build-shared' -ErrorAction Stop)
+          if ($sdkRoots.Count -ne 1) { throw "Expected exactly one pinned Gyan FFmpeg 8.1.2 shared SDK under $packageRoot; found $($sdkRoots.Count)." }
+          $sdk = $sdkRoots[0].FullName
+          if (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
+            throw "Pinned Gyan FFmpeg 8.1.2 shared runtime is incomplete: $sdk"
+          }
           "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
           (Join-Path $sdk 'bin') >> $env:GITHUB_PATH
@@ -202,6 +204,26 @@ jobs:
       - name: Stage Windows runtime libraries
         if: runner.os == 'Windows'
         run: pnpm --dir app run prepare:runtime-libs
+
+      - name: Assert staged pinned runtime before dependent tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+          $expected = @($inventory.runtime_dlls | ForEach-Object { $_.filename })
+          if ($expected.Count -ne 7) { throw "Expected exactly seven pinned FFmpeg runtime DLLs in the inventory; found $($expected.Count)." }
+          foreach ($name in $expected) {
+            $candidate = Join-Path 'target/release' $name
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              throw "Cold-clean staging did not produce a pinned runtime DLL before dependent tests: $candidate"
+            }
+          }
+          Write-Host "All $($expected.Count) pinned FFmpeg DLLs are staged in target/release before any dependent test runs."
+
+      - name: Verify Windows ASIO and runtime packaging boundary
+        if: runner.os == 'Windows'
+        run: pnpm --dir app run check:asio-packaging
 
       - name: Validate Windows warning ratchet SDK paths
         if: runner.os == 'Windows'
@@ -362,6 +384,7 @@ jobs:
           if (-not (Get-ChildItem $msiExe.DirectoryName -Filter 'avcodec-*.dll')) {
             throw 'MSI did not place FFmpeg DLLs beside syndocal.exe.'
           }
+          pnpm --dir app run check:windows-release-artifacts -- --nsis-root $installDir --msi-root $extractDir
 
           $uninstaller = Join-Path $installDir 'uninstall.exe'
           if (Test-Path $uninstaller) {
@@ -396,7 +419,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.11-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.12-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

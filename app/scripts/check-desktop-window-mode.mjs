@@ -126,6 +126,559 @@ const closeRequestedEnd = app.indexOf("      .then((unlisten)", closeRequestedSt
 assert.ok(closeRequestedStart >= 0 && closeRequestedEnd > closeRequestedStart, "CloseRequested source must remain discoverable");
 const closeRequestedSource = app.slice(closeRequestedStart, closeRequestedEnd);
 
+const unwrapExpression = (expression) => {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+};
+
+const isIdentifierNamed = (node, name) => ts.isIdentifier(node) && node.text === name;
+const isNullLiteral = (node) => node.kind === ts.SyntaxKind.NullKeyword;
+const isBooleanLiteral = (node, value) => value
+  ? node.kind === ts.SyntaxKind.TrueKeyword
+  : node.kind === ts.SyntaxKind.FalseKeyword;
+const isCallNamed = (node, name) => {
+  const expression = unwrapExpression(node);
+  return ts.isCallExpression(expression) && isIdentifierNamed(expression.expression, name);
+};
+const isAwaitedCallNamed = (node, name) => {
+  const expression = unwrapExpression(node);
+  return ts.isAwaitExpression(expression) && isCallNamed(expression.expression, name);
+};
+const statementIsReturn = (statement) => ts.isReturnStatement(statement);
+const blockStatements = (statement) => ts.isBlock(statement) ? [...statement.statements] : [statement];
+const blockReturnsImmediately = (statement) => {
+  const statements = blockStatements(statement);
+  return statements.length === 1 && statementIsReturn(statements[0]);
+};
+const isCallStatement = (statement, name) => ts.isExpressionStatement(statement) && isCallNamed(statement.expression, name);
+const isPreventDefaultStatement = (statement) => {
+  if (!ts.isExpressionStatement(statement)) return false;
+  const expression = unwrapExpression(statement.expression);
+  return ts.isCallExpression(expression)
+    && ts.isPropertyAccessExpression(expression.expression)
+    && isIdentifierNamed(expression.expression.expression, "event")
+    && expression.expression.name.text === "preventDefault";
+};
+const isIfCondition = (statement, predicate) => ts.isIfStatement(statement) && predicate(unwrapExpression(statement.expression));
+const isTimelinePaneCondition = (expression) => ts.isBinaryExpression(expression)
+  && expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+  && isIdentifierNamed(expression.left, "paneWindow")
+  && ts.isStringLiteral(expression.right)
+  && expression.right.text === "timeline";
+const isCloseRefreshDuplicateCondition = (expression) => ts.isBinaryExpression(expression)
+  && expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  && isIdentifierNamed(expression.left, "protectedCloseRefreshInFlight")
+  && ts.isBinaryExpression(expression.right)
+  && expression.right.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+  && isCallNamed(expression.right.left, "protectedCloseRequest")
+  && isNullLiteral(expression.right.right);
+const isNegatedIdentifier = (expression, name) => ts.isPrefixUnaryExpression(expression)
+  && expression.operator === ts.SyntaxKind.ExclamationToken
+  && isIdentifierNamed(expression.operand, name);
+const hasVariableInitializer = (statement, name, predicate) => ts.isVariableStatement(statement)
+  && [...statement.declarationList.declarations].some((declaration) => isIdentifierNamed(declaration.name, name)
+    && declaration.initializer !== undefined
+    && predicate(unwrapExpression(declaration.initializer)));
+const staticBooleanTruth = (expression) => {
+  const current = unwrapExpression(expression);
+  if (current.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (current.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return undefined;
+};
+const visitOutsideNestedClosures = (root, onNode) => {
+  const walk = (node, isRoot) => {
+    onNode(node);
+    if (!isRoot && ts.isFunctionLike(node)) return;
+    if (node.kind === ts.SyntaxKind.StaticBlock) return;
+    if (ts.isIfStatement(node)) {
+      const truthiness = staticBooleanTruth(node.expression);
+      walk(unwrapExpression(node.expression), false);
+      if (truthiness === false) {
+        if (node.elseStatement !== undefined) walk(node.elseStatement, false);
+      } else if (truthiness === true) {
+        walk(node.thenStatement, false);
+      } else {
+        walk(node.thenStatement, false);
+        if (node.elseStatement !== undefined) walk(node.elseStatement, false);
+      }
+      return;
+    }
+    if (ts.isConditionalExpression(node)) {
+      const truthiness = staticBooleanTruth(node.condition);
+      walk(unwrapExpression(node.condition), false);
+      if (truthiness === false) {
+        walk(node.whenFalse, false);
+      } else if (truthiness === true) {
+        walk(node.whenTrue, false);
+      } else {
+        walk(node.whenTrue, false);
+        walk(node.whenFalse, false);
+      }
+      return;
+    }
+    ts.forEachChild(node, (child) => walk(child, false));
+  };
+  walk(root, true);
+};
+const hasAssignment = (node, target, predicate) => {
+  let matched = false;
+  visitOutsideNestedClosures(node, (child) => {
+    if (
+      ts.isBinaryExpression(child)
+      && child.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && isIdentifierNamed(child.left, target)
+      && predicate(unwrapExpression(child.right))
+    ) {
+      matched = true;
+    }
+  });
+  return matched;
+};
+const hasCall = (node, name) => {
+  let matched = false;
+  visitOutsideNestedClosures(node, (child) => {
+    if (isCallNamed(child, name)) matched = true;
+  });
+  return matched;
+};
+const getVariableAwaitingCall = (statement, name, callName) => ts.isVariableStatement(statement)
+  && [...statement.declarationList.declarations].some((declaration) => isIdentifierNamed(declaration.name, name)
+    && declaration.initializer !== undefined
+    && isAwaitedCallNamed(declaration.initializer, callName));
+const isDisposedReturnGuard = (statement) => isIfCondition(statement, (expression) => isIdentifierNamed(expression, "closeRequestListenerDisposed"))
+  && blockReturnsImmediately(statement.thenStatement);
+const isEnrichedTimelineCloseRequest = (statement) => {
+  if (!isCallStatement(statement, "setProtectedCloseRequest")) return false;
+  const call = unwrapExpression(statement.expression);
+  if (call.arguments.length !== 1 || !ts.isObjectLiteralExpression(call.arguments[0])) return false;
+  const properties = [...call.arguments[0].properties];
+  const hasCloseRequestSpread = properties.some((property) => ts.isSpreadAssignment(property)
+    && isIdentifierNamed(property.expression, "closeRequest"));
+  const hasContext = properties.some((property) => ts.isPropertyAssignment(property)
+    && ts.isIdentifier(property.name)
+    && property.name.text === "pendingClose"
+    && isIdentifierNamed(unwrapExpression(property.initializer), "pendingContext"));
+  const hasFailure = properties.some((property) => ts.isPropertyAssignment(property)
+    && ts.isIdentifier(property.name)
+    && property.name.text === "pendingCloseQueryFailed"
+    && isIdentifierNamed(unwrapExpression(property.initializer), "pendingCloseQueryFailed"))
+    || properties.some((property) => ts.isShorthandPropertyAssignment(property)
+      && property.name.text === "pendingCloseQueryFailed");
+  return hasCloseRequestSpread && hasContext && hasFailure;
+};
+const findCloseRequestedHandler = (candidate, label) => {
+  const sourceFile = ts.createSourceFile(`${label}.tsx`, candidate, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  let handler;
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.name.text === "onCloseRequested"
+      && node.arguments.length === 1
+      && ts.isArrowFunction(node.arguments[0])
+      && node.arguments[0].modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+    ) {
+      assert.equal(handler, undefined, `${label}: exactly one async CloseRequested handler is required`);
+      handler = node.arguments[0];
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  assert.ok(handler !== undefined, `${label}: async CloseRequested handler is required`);
+  assert.ok(ts.isBlock(handler.body), `${label}: CloseRequested handler must use a statement block`);
+  return handler;
+};
+const assertCorrelatedTimelineCloseControlFlow = (candidate, label) => {
+  const handler = findCloseRequestedHandler(candidate, label);
+  const statements = [...handler.body.statements];
+  const approvalIndex = statements.findIndex((statement) => isIfCondition(statement, (expression) => isCallNamed(expression, "consumeNativeCloseApproval"))
+    && blockReturnsImmediately(statement.thenStatement));
+  const timelineIndex = statements.findIndex((statement) => isIfCondition(statement, isTimelinePaneCondition));
+  const duplicateIndex = statements.findIndex((statement) => isIfCondition(statement, isCloseRefreshDuplicateCondition));
+  const preventBeforeRefreshIndex = statements.findIndex((statement) => isPreventDefaultStatement(statement));
+  const refreshIndex = statements.findIndex((statement) => getVariableAwaitingCall(statement, "freshSnapshot", "refreshSnapshotForProtectedClose"));
+  assert.ok(approvalIndex === 0, `${label}: an approved close must bypass every remaining CloseRequested branch first`);
+  assert.ok(timelineIndex > approvalIndex, `${label}: timeline close handling must follow the approval bypass`);
+  assert.ok(duplicateIndex > timelineIndex, `${label}: main duplicate suppression must follow the timeline branch`);
+  assert.ok(preventBeforeRefreshIndex > duplicateIndex && refreshIndex > preventBeforeRefreshIndex, `${label}: main close must prevent before its bounded refresh`);
+
+  const timelineStatements = blockStatements(statements[timelineIndex].thenStatement);
+  const closeRequestIndex = timelineStatements.findIndex((statement) => hasVariableInitializer(statement, "closeRequest", (expression) => isCallNamed(expression, "protectedCloseRequestForCurrentState")));
+  const missingRequestIndex = timelineStatements.findIndex((statement) => isIfCondition(statement, (expression) => isNegatedIdentifier(expression, "closeRequest"))
+    && blockReturnsImmediately(statement.thenStatement));
+  const preventIndex = timelineStatements.findIndex((statement) => isPreventDefaultStatement(statement));
+  const pendingContextIndex = timelineStatements.findIndex((statement) => hasVariableInitializer(statement, "pendingContext", isNullLiteral));
+  const queryFailureIndex = timelineStatements.findIndex((statement) => hasVariableInitializer(statement, "pendingCloseQueryFailed", (expression) => isBooleanLiteral(expression, false)));
+  const queryTryIndex = timelineStatements.findIndex((statement) => ts.isTryStatement(statement));
+  const disposedIndex = timelineStatements.findIndex((statement) => isDisposedReturnGuard(statement));
+  const enrichedRequestIndices = timelineStatements
+    .map((statement, index) => (isEnrichedTimelineCloseRequest(statement) ? index : -1))
+    .filter((index) => index >= 0);
+  assert.equal(
+    enrichedRequestIndices.length,
+    1,
+    `${label}: the timeline branch must publish the enriched request as exactly one authoritative post-disposal publish`,
+  );
+  const enrichedRequestIndex = enrichedRequestIndices[0];
+  const postPublishStatements = timelineStatements.slice(enrichedRequestIndex + 1);
+  const terminatesAtBarePostPublishReturn = postPublishStatements.length === 1
+    && statementIsReturn(postPublishStatements[0])
+    && postPublishStatements[0].expression === undefined;
+  assert.ok(
+    closeRequestIndex >= 0
+      && missingRequestIndex > closeRequestIndex
+      && preventIndex > missingRequestIndex
+      && pendingContextIndex > preventIndex
+      && queryFailureIndex > pendingContextIndex
+      && queryTryIndex > queryFailureIndex
+      && disposedIndex > queryTryIndex
+      && enrichedRequestIndex > disposedIndex
+      && terminatesAtBarePostPublishReturn,
+    `${label}: timeline close must prevent, query, fence disposal, publish the enriched request, then terminate at a bare post-publish return with no dead statements`,
+  );
+
+  const queryTry = timelineStatements[queryTryIndex];
+  assert.ok(
+    hasAssignment(queryTry.tryBlock, "pendingContext", (expression) => isAwaitedCallNamed(expression, "queryOwnPanePendingCloseContext")),
+    `${label}: timeline close must await the correlated pending-close query in its try path`,
+  );
+  assert.ok(queryTry.catchClause !== undefined, `${label}: timeline close must handle pending-close query failure explicitly`);
+  assert.ok(
+    hasAssignment(queryTry.catchClause, "pendingCloseQueryFailed", (expression) => isBooleanLiteral(expression, true))
+      && hasCall(queryTry.catchClause, "setMessage"),
+    `${label}: timeline close query failure must set the failure flag and operator-visible message`,
+  );
+};
+
+assertCorrelatedTimelineCloseControlFlow(app, "App CloseRequested");
+const replaceCloseRequestedOnce = (candidate, expected, replacement, label) => {
+  const closeHandler = candidate.slice(closeRequestedStart, closeRequestedEnd);
+  const index = closeHandler.indexOf(expected);
+  assert.ok(index >= 0, `${label}: hostile fixture anchor must remain discoverable`);
+  assert.equal(closeHandler.indexOf(expected, index + expected.length), -1, `${label}: hostile fixture anchor must stay unique inside CloseRequested`);
+  const absoluteIndex = closeRequestedStart + index;
+  return candidate.slice(0, absoluteIndex) + replacement + candidate.slice(absoluteIndex + expected.length);
+};
+const queryOnlyComment = replaceCloseRequestedOnce(
+  app,
+  "pendingContext = await queryOwnPanePendingCloseContext();",
+  "// pendingContext = await queryOwnPanePendingCloseContext();",
+  "comment-only correlated query",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(queryOnlyComment, "comment-only correlated query"),
+  /await the correlated pending-close query/,
+  "a query token inside a comment must not satisfy the CloseRequested contract",
+);
+const noQueryFailureFlag = replaceCloseRequestedOnce(
+  app,
+  "pendingCloseQueryFailed = true;",
+  "// pendingCloseQueryFailed = true;",
+  "comment-only query failure flag",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(noQueryFailureFlag, "comment-only query failure flag"),
+  /failure flag and operator-visible message/,
+  "a failure-flag token inside a comment must not satisfy the CloseRequested contract",
+);
+const enrichedRequestStart = app.indexOf("          setProtectedCloseRequest({", closeRequestedStart);
+const enrichedRequestEnd = app.indexOf("          });", enrichedRequestStart);
+assert.ok(enrichedRequestStart >= 0 && enrichedRequestEnd > enrichedRequestStart, "enriched timeline close-request fixture must remain discoverable");
+const bareCloseRequest = `${app.slice(0, enrichedRequestStart)}          setProtectedCloseRequest(closeRequest);${app.slice(enrichedRequestEnd + "          });".length)}`;
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(bareCloseRequest, "bare timeline close request"),
+  /publish the enriched request/,
+  "the old bare close-request path must not satisfy the correlated CloseRequested contract",
+);
+const noDisposalFence = replaceCloseRequestedOnce(
+  app,
+  "if (closeRequestListenerDisposed) return;\n          setProtectedCloseRequest({",
+  "// if (closeRequestListenerDisposed) return;\n          setProtectedCloseRequest({",
+  "comment-only disposal fence",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(noDisposalFence, "comment-only disposal fence"),
+  /fence disposal/,
+  "a disposal-fence token inside a comment must not satisfy the CloseRequested contract",
+);
+const nestedCallbackCorrelatedQuery = replaceCloseRequestedOnce(
+  app,
+  "pendingContext = await queryOwnPanePendingCloseContext();",
+  "await (async () => {\n              pendingContext = await queryOwnPanePendingCloseContext();\n            })()",
+  "nested-callback correlated query",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(nestedCallbackCorrelatedQuery, "nested-callback correlated query"),
+  /await the correlated pending-close query/,
+  "a correlated query hidden inside a nested callback closure must not satisfy the CloseRequested contract",
+);
+const nestedCallbackFailureHandling = replaceCloseRequestedOnce(
+  app,
+  "pendingCloseQueryFailed = true;\n            setMessage(`Pane window close status could not be verified: ${error}`);",
+  "void (class {\n              static flagFailure() {\n                pendingCloseQueryFailed = true;\n                setMessage(`Pane window close status could not be verified: ${error}`);\n              }\n            })",
+  "nested-callback query failure handling",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(nestedCallbackFailureHandling, "nested-callback query failure handling"),
+  /failure flag and operator-visible message/,
+  "failure flag and operator message hidden inside a nested class-method closure must not satisfy the CloseRequested contract",
+);
+const staticallyDeadQueryBranch = replaceCloseRequestedOnce(
+  app,
+  "pendingContext = await queryOwnPanePendingCloseContext();",
+  "if (false) {\n              pendingContext = await queryOwnPanePendingCloseContext();\n            }",
+  "statically-dead correlated query branch",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(staticallyDeadQueryBranch, "statically-dead correlated query branch"),
+  /await the correlated pending-close query/,
+  "the correlated query hidden under a statically false if-branch must not satisfy the CloseRequested contract",
+);
+const deadStatementAfterPostPublishReturn = replaceCloseRequestedOnce(
+  app,
+  "            pendingCloseQueryFailed,\n          });\n          return;",
+  "            pendingCloseQueryFailed,\n          });\n          return;\n          event.preventDefault();",
+  "dead statement after post-publish return",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(deadStatementAfterPostPublishReturn, "dead statement after post-publish return"),
+  /terminate at a bare post-publish return/,
+  "executable statements after the post-publish return must fail the CloseRequested contract",
+);
+const missingPostPublishReturn = replaceCloseRequestedOnce(
+  app,
+  "            pendingCloseQueryFailed,\n          });\n          return;",
+  "            pendingCloseQueryFailed,\n          });",
+  "missing post-publish return",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(missingPostPublishReturn, "missing post-publish return"),
+  /terminate at a bare post-publish return/,
+  "a timeline branch that falls through instead of returning after publishing must fail the CloseRequested contract",
+);
+const earlyFakePublishMisplacedReal = replaceCloseRequestedOnce(
+  app,
+  "if (closeRequestListenerDisposed) return;\n          setProtectedCloseRequest({\n            ...closeRequest,\n            pendingClose: pendingContext,\n            pendingCloseQueryFailed,\n          });\n          return;",
+  "if (closeRequestListenerDisposed) return;\n          setProtectedCloseRequest({ ...closeRequest, pendingClose: pendingContext, pendingCloseQueryFailed });\n          return;\n          setProtectedCloseRequest({\n            ...closeRequest,\n            pendingClose: pendingContext,\n            pendingCloseQueryFailed,\n          });",
+  "early fake publish with misplaced authoritative publish",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(earlyFakePublishMisplacedReal, "early fake publish with misplaced authoritative publish"),
+  /exactly one authoritative/,
+  "an earlier duplicate fake publish must not satisfy the authoritative publish ordering while the real publish stays misplaced after the bare return",
+);
+
+const replaceAppOnce = (expected, replacement, label) => {
+  const index = app.indexOf(expected);
+  assert.ok(index >= 0, `${label}: hostile fixture anchor must remain discoverable`);
+  assert.equal(app.indexOf(expected, index + expected.length), -1, `${label}: hostile fixture anchor must stay unique`);
+  return app.slice(0, index) + replacement + app.slice(index + expected.length);
+};
+const readsProperty = (expression, root, property) => {
+  const current = unwrapExpression(expression);
+  return ts.isPropertyAccessExpression(current)
+    && isIdentifierNamed(unwrapExpression(current.expression), root)
+    && current.name.text === property;
+};
+const isEqualityOnStringProperty = (expression, root, property, value) => ts.isBinaryExpression(expression)
+  && expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+  && readsProperty(expression.left, root, property)
+  && ts.isStringLiteral(expression.right)
+  && expression.right.text === value;
+const findSoleArrowDeclaration = (sourceFileCandidate, name, label) => {
+  let found;
+  const visit = (node) => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === name
+      && node.initializer !== undefined
+      && ts.isArrowFunction(node.initializer)
+    ) {
+      assert.equal(found, undefined, `${label}: ${name} must have exactly one arrow-function declaration`);
+      found = node.initializer;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFileCandidate);
+  assert.ok(found !== undefined, `${label}: ${name} arrow declaration is required`);
+  return found;
+};
+const translatedFirstStringArgument = (expression, label, why) => {
+  const call = unwrapExpression(expression);
+  assert.ok(
+    ts.isCallExpression(call)
+      && isIdentifierNamed(call.expression, "translateUiText")
+      && call.arguments[0] !== undefined
+      && ts.isStringLiteral(call.arguments[0]),
+    `${label}: ${why}`,
+  );
+  return call.arguments[0].text;
+};
+const messageArgumentText = (statement, sourceFileCandidate) => {
+  const call = unwrapExpression(statement.expression);
+  const argument = call.arguments[0];
+  if (argument === undefined) return "";
+  if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) return argument.text;
+  if (ts.isTemplateExpression(argument)) return argument.getText(sourceFileCandidate);
+  return "";
+};
+
+const assertProtectedCloseDialogConsumesPendingCloseSignals = (candidate, label) => {
+  const sourceFileCandidate = ts.createSourceFile(
+    `${label}.tsx`,
+    candidate,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const copyFunction = findSoleArrowDeclaration(sourceFileCandidate, "protectedCloseCopy", label);
+  assert.ok(ts.isBlock(copyFunction.body), `${label}: protectedCloseCopy must use a statement block`);
+  const timelineCopyGuard = [...copyFunction.body.statements].find((statement) => isIfCondition(
+    statement,
+    (expression) => ts.isBinaryExpression(expression)
+      && expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+      && isNegatedIdentifier(expression.left, "request")
+      && isEqualityOnStringProperty(expression.right, "request", "pane", "timeline"),
+  ));
+  assert.ok(timelineCopyGuard !== undefined, `${label}: protected-close copy must branch on the captured timeline pane`);
+  const timelineCopyReturn = blockStatements(timelineCopyGuard.thenStatement).find(
+    (statement) => statementIsReturn(statement) && statement.expression !== undefined,
+  );
+  assert.ok(timelineCopyReturn !== undefined, `${label}: protected-close timeline copy must return the operator-facing copy object`);
+  const timelineCopyLiteral = unwrapExpression(timelineCopyReturn.expression);
+  assert.ok(ts.isObjectLiteralExpression(timelineCopyLiteral), `${label}: protected-close timeline copy must be an object literal`);
+  const detailProperty = [...timelineCopyLiteral.properties].find((property) => ts.isPropertyAssignment(property)
+    && ts.isIdentifier(property.name)
+    && property.name.text === "detail");
+  assert.ok(detailProperty !== undefined, `${label}: protected-close timeline copy must expose an operator-visible detail`);
+  const detailConditional = unwrapExpression(detailProperty.initializer);
+  assert.ok(
+    ts.isConditionalExpression(detailConditional),
+    `${label}: protected-close timeline copy must consume request.pendingClose to choose the correlated parent-waiting detail`,
+  );
+  assert.ok(
+    readsProperty(detailConditional.condition, "request", "pendingClose"),
+    `${label}: protected-close timeline copy must consume request.pendingClose to choose the correlated parent-waiting detail`,
+  );
+  assert.equal(
+    translatedFirstStringArgument(detailConditional.whenTrue, label, "pending-close-aware timeline detail must come from translateUiText"),
+    "Timeline edits will be discarded. The main window is waiting for this Timeline window.",
+    `${label}: consumed request.pendingClose must surface the correlated parent-waiting consequence to the operator`,
+  );
+  assert.equal(
+    translatedFirstStringArgument(detailConditional.whenFalse, label, "plain timeline detail must come from translateUiText"),
+    "Timeline edits will be discarded.",
+    `${label}: unconsumed request.pendingClose must keep the plain timeline consequence`,
+  );
+  const cancelFunction = findSoleArrowDeclaration(sourceFileCandidate, "cancelProtectedClose", label);
+  assert.ok(ts.isBlock(cancelFunction.body), `${label}: cancelProtectedClose must use a statement block`);
+  const cancelStatements = [...cancelFunction.body.statements];
+  const cancelTimelineGuard = cancelStatements.find((statement) => isIfCondition(
+    statement,
+    (expression) => isEqualityOnStringProperty(expression, "request", "pane", "timeline"),
+  ));
+  assert.ok(cancelTimelineGuard !== undefined, `${label}: cancel must branch on the captured timeline pane`);
+  const cancelBranchStatements = blockStatements(cancelTimelineGuard.thenStatement);
+  const seededContextIndex = cancelBranchStatements.findIndex((statement) => hasVariableInitializer(
+    statement,
+    "pendingContext",
+    (expression) => readsProperty(expression, "request", "pendingClose"),
+  ));
+  assert.ok(seededContextIndex >= 0, `${label}: cancel must seed its decision from the captured request.pendingClose`);
+  const recheckGuardIndex = cancelBranchStatements.findIndex((statement, index) => index > seededContextIndex && isIfCondition(
+    statement,
+    (expression) => ts.isBinaryExpression(expression)
+      && expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+      && readsProperty(expression.left, "request", "pendingCloseQueryFailed")
+      && ts.isBinaryExpression(expression.right)
+      && expression.right.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+      && isIdentifierNamed(expression.right.left, "pendingContext")
+      && isNullLiteral(expression.right.right),
+  ));
+  assert.ok(recheckGuardIndex >= 0, `${label}: cancel must consult request.pendingCloseQueryFailed before trusting the captured pending-close context`);
+  const recheckTry = blockStatements(cancelBranchStatements[recheckGuardIndex].thenStatement).find((statement) => ts.isTryStatement(statement));
+  assert.ok(recheckTry !== undefined, `${label}: failed-flag or missing context must trigger the bounded cancel re-query`);
+  assert.ok(
+    hasAssignment(recheckTry.tryBlock, "pendingContext", (expression) => isAwaitedCallNamed(expression, "queryOwnPanePendingCloseContext")),
+    `${label}: the cancel re-query must await the correlated pending-close query`,
+  );
+  assert.ok(recheckTry.catchClause !== undefined, `${label}: the cancel re-query must handle failure explicitly`);
+  const recheckCatchStatements = [...recheckTry.catchClause.block.statements];
+  assert.equal(
+    recheckCatchStatements.length,
+    3,
+    `${label}: failed cancel re-query must re-arm the flag, warn the operator, and stop before dismissing`,
+  );
+  const republishStatement = recheckCatchStatements[0];
+  assert.ok(isCallStatement(republishStatement, "setProtectedCloseRequest"), `${label}: failed cancel re-query must republish the captured request`);
+  const republishCall = unwrapExpression(republishStatement.expression);
+  const republishLiteral = republishCall.arguments[0] !== undefined ? unwrapExpression(republishCall.arguments[0]) : undefined;
+  assert.ok(
+    republishLiteral !== undefined
+      && ts.isObjectLiteralExpression(republishLiteral)
+      && [...republishLiteral.properties].some((property) => ts.isSpreadAssignment(property) && isIdentifierNamed(property.expression, "request"))
+      && [...republishLiteral.properties].some((property) => ts.isPropertyAssignment(property)
+        && ts.isIdentifier(property.name)
+        && property.name.text === "pendingCloseQueryFailed"
+        && isBooleanLiteral(unwrapExpression(property.initializer), true)),
+    `${label}: failed cancel re-query must fail closed by re-arming pendingCloseQueryFailed on the kept-open request`,
+  );
+  assert.ok(isCallStatement(recheckCatchStatements[1], "setMessage"), `${label}: failed cancel re-query must warn through the operator-visible message channel`);
+  assert.ok(
+    messageArgumentText(recheckCatchStatements[1], sourceFileCandidate).includes("Pane window close status could not be verified"),
+    `${label}: failed cancel re-query must surface a visible fail-closed operator warning`,
+  );
+  assert.ok(
+    statementIsReturn(recheckCatchStatements[2]) && recheckCatchStatements[2].expression === undefined,
+    `${label}: failed cancel re-query must stop before the dismiss path so the dialog stays open`,
+  );
+  assert.ok(
+    cancelStatements.length >= 2
+      && isCallStatement(cancelStatements[cancelStatements.length - 2], "setProtectedCloseRequest")
+      && (() => {
+        const call = unwrapExpression(cancelStatements[cancelStatements.length - 2].expression);
+        return call.arguments.length === 1 && isNullLiteral(unwrapExpression(call.arguments[0]));
+      })()
+      && isCallStatement(cancelStatements[cancelStatements.length - 1], "setMessage")
+      && messageArgumentText(cancelStatements[cancelStatements.length - 1], sourceFileCandidate) === "Close canceled.",
+    `${label}: only the unfailed cancel path may dismiss the dialog with the operator confirmation`,
+  );
+};
+
+assertProtectedCloseDialogConsumesPendingCloseSignals(app, "App protected-close dialog");
+const unconditionalTimelineDetail = replaceAppOnce(
+  "detail: request?.pendingClose\n          ? translateUiText(",
+  "// detail: request?.pendingClose\n          detail: true ? translateUiText(",
+  "comment-only pending-close copy consumption",
+);
+assert.throws(
+  () => assertProtectedCloseDialogConsumesPendingCloseSignals(unconditionalTimelineDetail, "comment-only pending-close copy consumption"),
+  /consume request\.pendingClose/,
+  "a pendingClose token inside a comment must not satisfy the dialog-consumption contract",
+);
+const failureFlagFreeRecheckGuard = replaceAppOnce(
+  "if (request.pendingCloseQueryFailed || pendingContext === null) {",
+  "if (pendingContext === null) { // request.pendingCloseQueryFailed || pendingContext === null",
+  "comment-only failure-flag decision consumption",
+);
+assert.throws(
+  () => assertProtectedCloseDialogConsumesPendingCloseSignals(failureFlagFreeRecheckGuard, "comment-only failure-flag decision consumption"),
+  /consult request\.pendingCloseQueryFailed/,
+  "a pendingCloseQueryFailed token inside a comment must not satisfy the dialog-decision contract",
+);
+const silentFailedRequery = replaceAppOnce(
+  "setProtectedCloseRequest({ ...request, pendingCloseQueryFailed: true });",
+  "setProtectedCloseRequest({ ...request }); // pendingCloseQueryFailed: true",
+  "silent failed cancel re-query",
+);
+assert.throws(
+  () => assertProtectedCloseDialogConsumesPendingCloseSignals(silentFailedRequery, "silent failed cancel re-query"),
+  /fail closed by re-arming pendingCloseQueryFailed/,
+  "a failed cancel re-query without the re-armed failure flag must fail the dialog-consumption contract",
+);
+
 assert.equal(config.app.windows[0].maximized, true, "the primary desktop window must start maximized");
 assert.equal(config.app.windows[0].decorations, false, "the primary desktop window must be frameless");
 assert.equal(config.app.windows[0].resizable, true, "the frameless primary window must stay resizable");
@@ -258,11 +811,6 @@ assert.ok(
     !protectedCloseSource.includes("UNSAVED SESSION"),
   "protected native close requests must use the operator-styled in-app dialog and reissue one approved close",
 );
-assert.match(
-  closeRequestedSource,
-  /\.onCloseRequested\(async \(event\) => \{\s*if \(consumeNativeCloseApproval\(\)\) \{\s*return;\s*\}\s*if \(paneWindow === "timeline"\) \{[\s\S]*?event\.preventDefault\(\);\s*setProtectedCloseRequest\(closeRequest\);\s*return;\s*\}\s*if \(protectedCloseRefreshInFlight \|\| protectedCloseRequest\(\) !== null\) \{\s*event\.preventDefault\(\);\s*return;\s*\}\s*event\.preventDefault\(\);\s*const freshSnapshot = await refreshSnapshotForProtectedClose\(\);/,
-  "an approved native close must bypass the listener, keep timeline synchronous, suppress duplicate main checks, and prevent the main close before awaiting a bounded fresh snapshot",
-);
 assert.ok(
   closeRequestedSource.includes("protectedCloseRefreshInFlight") &&
     closeRequestedSource.includes("protectedCloseRequest() !== null") &&
@@ -374,8 +922,8 @@ assert.ok(
 );
 assert.match(
   protectedCloseRequestSource,
-  /if \(paneWindow === "timeline"\) \{[\s\S]*?return timelineEditorDirty\(\)\s*\?\s*\{ pane: "timeline", reason: "timeline-dirty" \}\s*:\s*null;/,
-  "timeline child-pane close protection must remain dirty-only",
+  /if \(paneWindow === "timeline"\) \{[\s\S]*?return timelineEditorDirty\(\)\s*\?\s*\{[\s\S]*?pane:\s*"timeline",[\s\S]*?reason:\s*"timeline-dirty",[\s\S]*?pendingClose:\s*null,[\s\S]*?pendingCloseQueryFailed:\s*false,[\s\S]*?\}[\s\S]*?:\s*null;/,
+  "timeline child-pane close protection must begin dirty-only with no invented pending-close context",
 );
 assert.ok(
   !protectedCloseMainDetailSource.includes("projectDirty()") &&

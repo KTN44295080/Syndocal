@@ -1,5 +1,7 @@
 import type { TimelineEventDraft } from "./editorDrafts";
+import type { FullBankAuthoritySnapshot } from "./bankAuthority";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
+import { sceneCueKind, type SceneCueKind } from "./sceneCueKind";
 import type { ClockSource, CueSummary, TimelineCueEventSummary, TimelineTrackKind, VideoLayerSummary } from "./types";
 import { projectTimelineBlockStretch, type TimelineStretchMode } from "./timelineBlockGestures";
 
@@ -176,11 +178,22 @@ export const timelineSceneBlockSourceSummary = (cue: CueSummary | undefined) => 
   return `L ${lightingTargetCount} · P ${paletteTargetCount} · V ${videoTargetCount} · FX ${effectTargetCount} · Fade ${cue.fade_ms} ms`;
 };
 
+// Timeline and Lighting deliberately share one classification authority.
+// The focused data-URL checkers inject this canonical module explicitly.
+export const timelineSceneBlockCueKind: (
+  cue: Pick<CueSummary, "child_timeline" | "effect_targets">,
+) => SceneCueKind = sceneCueKind;
+
 export const buildTimelineSceneBlockCueOptions = (cues: CueSummary[]) => cues.map((cue) => ({
   id: cue.id,
   cue_list_id: cue.cue_list_id,
   cue_number: cue.cue_number || String(cue.id),
   label: cue.label,
+  fade_ms: Math.max(0, finiteOr(cue.fade_ms, 0)),
+  kind: timelineSceneBlockCueKind(cue),
+  replace_group: (cue.recall_mode ?? "Coexist") === "ReplaceGroup",
+  flash: cue.live_modifiers?.flash ?? false,
+  super_scene: Boolean(cue.child_timeline),
   authored_beats: cue.authored_beats ?? null,
   step_count: (cue.steps ?? []).length,
   source_summary: timelineSceneBlockSourceSummary(cue),
@@ -228,16 +241,239 @@ export const timelineSceneBlockCueOptionsEqual = (
     option.cue_list_id === candidate.cue_list_id &&
     option.cue_number === candidate.cue_number &&
     option.label === candidate.label &&
+    option.fade_ms === candidate.fade_ms &&
+    option.kind === candidate.kind &&
+    option.replace_group === candidate.replace_group &&
+    option.flash === candidate.flash &&
+    option.super_scene === candidate.super_scene &&
     option.authored_beats === candidate.authored_beats &&
     option.step_count === candidate.step_count &&
     option.source_summary === candidate.source_summary;
 });
 
-export const buildTimelineSceneBlockRows = (events: TimelineCueEventSummary[], cues: CueSummary[]) => {
-  const cuesById = new Map(cues.map((cue) => [cue.id, cue]));
-  return events.map((event) => {
-    const cue = cuesById.get(event.cue_id);
-    return {
+export interface TimelineSourceShelfBankView<OptionT> {
+  /** Stable unique key derived from identity ids; never from display labels. */
+  key: string;
+  cue_list_id: number;
+  /** Exact authoritative Bank label; never rewritten or synthesized. */
+  label: string;
+  scenes: OptionT[];
+}
+
+/**
+ * The Scene Matrix Bank identity key.  Timeline uses this exact key rather
+ * than a Cue colour so every Scene in one authoritative Bank has one colour.
+ */
+export const timelineSourceShelfBankIdentity = (cueListId: number) => `bank:${cueListId}`;
+
+const validTimelineSceneBlockIdentity = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+const validTimelineSceneBlockEventIdentity = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * Canonicalize the complete Cue-to-Cue child Timeline graph before admitting
+ * any source. A graph with a missing endpoint, malformed/duplicate event id,
+ * or cycle is not partly usable: callers receive null and close every input.
+ */
+const timelineSceneBlockChildReferenceGraph = (
+  authority: FullBankAuthoritySnapshot,
+): ReadonlyMap<number, readonly number[]> | null => {
+  if (authority.issue || authority.cueById.size !== authority.cues.length) return null;
+  const graph = new Map<number, number[]>();
+  for (const cue of authority.cues) {
+    if (!validTimelineSceneBlockIdentity(cue.id) || authority.cueById.get(cue.id) !== cue) return null;
+    const child = cue.child_timeline;
+    const references: number[] = [];
+    if (child !== null && child !== undefined) {
+      if (typeof child !== "object" || Array.isArray(child) || !Array.isArray(child.events)) return null;
+      const eventIds = new Set<number>();
+      for (const event of child.events) {
+        if (
+          event === null
+          || typeof event !== "object"
+          || !validTimelineSceneBlockEventIdentity(event.id)
+          || !validTimelineSceneBlockIdentity(event.cue_id)
+          || eventIds.has(event.id)
+          || !authority.cueById.has(event.cue_id)
+        ) return null;
+        eventIds.add(event.id);
+        references.push(event.cue_id);
+      }
+    }
+    graph.set(cue.id, references);
+  }
+
+  // An iterative depth-first walk avoids accepting a cycle hidden beyond a
+  // nested Super Scene, without depending on stack depth or partial subsets.
+  const state = new Map<number, 0 | 1 | 2>();
+  for (const rootCueId of graph.keys()) {
+    if (state.get(rootCueId) === 2) continue;
+    state.set(rootCueId, 1);
+    const pending: Array<{ cueId: number; nextIndex: number }> = [{ cueId: rootCueId, nextIndex: 0 }];
+    while (pending.length > 0) {
+      const frame = pending[pending.length - 1];
+      const references = graph.get(frame.cueId);
+      if (!references) return null;
+      if (frame.nextIndex >= references.length) {
+        state.set(frame.cueId, 2);
+        pending.pop();
+        continue;
+      }
+      const nextCueId = references[frame.nextIndex];
+      frame.nextIndex += 1;
+      const nextState = state.get(nextCueId) ?? 0;
+      if (nextState === 1) return null;
+      if (nextState === 0) {
+        state.set(nextCueId, 1);
+        pending.push({ cueId: nextCueId, nextIndex: 0 });
+      }
+    }
+  }
+  return graph;
+};
+
+const childReferenceCueIdsReaching = (
+  graph: ReadonlyMap<number, readonly number[]>,
+  targetCueId: number,
+): ReadonlySet<number> => {
+  const reverse = new Map<number, number[]>();
+  for (const [sourceCueId, references] of graph) {
+    for (const referencedCueId of references) {
+      const sources = reverse.get(referencedCueId);
+      if (sources) sources.push(sourceCueId);
+      else reverse.set(referencedCueId, [sourceCueId]);
+    }
+  }
+  const reaching = new Set<number>([targetCueId]);
+  const pending = [targetCueId];
+  while (pending.length > 0) {
+    const cueId = pending.pop();
+    if (cueId === undefined) break;
+    for (const sourceCueId of reverse.get(cueId) ?? []) {
+      if (reaching.has(sourceCueId)) continue;
+      reaching.add(sourceCueId);
+      pending.push(sourceCueId);
+    }
+  }
+  return reaching;
+};
+
+/**
+ * One authoritative Scene-source admission set for every Timeline authoring
+ * edge. A root Timeline may reference every exact Scene. A child Timeline may
+ * reference an acyclic nested Super Scene, but never itself or a Scene whose
+ * child-reference graph reaches that owner. This preserves recursive DVC
+ * import/transport while rejecting exactly the cyclic authoring targets.
+ *
+ * This returns null, rather than a partial set, whenever the full Bank/Cue
+ * graph or child owner cannot be proven. Callers must treat null as closed and
+ * must not substitute an ID-only membership check.
+ */
+export const timelineSceneBlockAllowedCueIds = (
+  authority: FullBankAuthoritySnapshot,
+  timelineChildCueId: number | null = null,
+): ReadonlySet<number> | null => {
+  const graph = timelineSceneBlockChildReferenceGraph(authority);
+  if (!graph) return null;
+  if (timelineChildCueId === null) return new Set(authority.cues.map((cue) => cue.id));
+  if (!validTimelineSceneBlockIdentity(timelineChildCueId) || !authority.cueById.get(timelineChildCueId)?.child_timeline) {
+    return null;
+  }
+  const reachesOwnerCueIds = childReferenceCueIdsReaching(graph, timelineChildCueId);
+  return new Set(authority.cues
+    .filter((cue) => !reachesOwnerCueIds.has(cue.id))
+    .map((cue) => cue.id));
+};
+
+/** Exact terminal admission predicate; never infer eligibility from a cue ID alone. */
+export const timelineSceneBlockCueAllowedByAuthority = (
+  cueId: number,
+  authority: FullBankAuthoritySnapshot,
+  timelineChildCueId: number | null = null,
+) => Number.isSafeInteger(cueId)
+  && cueId > 0
+  && timelineSceneBlockAllowedCueIds(authority, timelineChildCueId)?.has(cueId) === true;
+
+/**
+ * The Timeline root must expose every authoritative Scene. A child Timeline
+ * excludes only the owner and Cue graph paths that return to it; acyclic
+ * nested Super Scenes remain valid. Every other omission is invalid.
+ */
+export const timelineSourceShelfCueOptionsMatchAuthority = <OptionT extends { id: number; cue_list_id: number }>(
+  cueOptions: readonly OptionT[],
+  authority: FullBankAuthoritySnapshot,
+  timelineChildCueId: number | null = null,
+): boolean => {
+  const expectedCueIds = timelineSceneBlockAllowedCueIds(authority, timelineChildCueId);
+  if (expectedCueIds === null) return false;
+  if (cueOptions.length !== expectedCueIds.size) return false;
+  const seenOptionIds = new Set<number>();
+  for (const option of cueOptions) {
+    const exactCue = authority.cueById.get(option.id);
+    if (
+      seenOptionIds.has(option.id) ||
+      !expectedCueIds.has(option.id) ||
+      !exactCue ||
+      exactCue.cue_list_id !== option.cue_list_id
+    ) return false;
+    seenOptionIds.add(option.id);
+  }
+  return seenOptionIds.size === expectedCueIds.size;
+};
+
+/**
+ * Groups Timeline source-shelf scenes from the one complete App authority.
+ * Any authority fault or transformed option that no longer matches its exact
+ * authoritative Scene closes the complete result. There is deliberately no
+ * partial "unavailable Bank" grouping path.
+ */
+export const groupTimelineSourceShelfBanks = <OptionT extends { id: number; cue_list_id: number }>(
+  cueOptions: readonly OptionT[],
+  authority: FullBankAuthoritySnapshot,
+  timelineChildCueId: number | null = null,
+): TimelineSourceShelfBankView<OptionT>[] => {
+  if (!timelineSourceShelfCueOptionsMatchAuthority(cueOptions, authority, timelineChildCueId)) return [];
+  const scenesByBank = new Map<number, OptionT[]>();
+  for (const option of cueOptions) {
+    const bucket = scenesByBank.get(option.cue_list_id);
+    if (bucket) bucket.push(option);
+    else scenesByBank.set(option.cue_list_id, [option]);
+  }
+  return authority.cueLists.map((bank) => ({
+    key: `bank:${bank.id}`,
+    cue_list_id: bank.id,
+    label: bank.label,
+    scenes: scenesByBank.get(bank.id) ?? [],
+  }));
+};
+
+/** Preserve keyed DOM/card state when polling returns semantically unchanged Banks. */
+export const timelineSourceShelfBankViewsEqual = <OptionT>(
+  previous: readonly TimelineSourceShelfBankView<OptionT>[],
+  next: readonly TimelineSourceShelfBankView<OptionT>[],
+) => previous.length === next.length && previous.every((bank, index) => {
+  const candidate = next[index];
+  return bank.key === candidate.key &&
+    bank.cue_list_id === candidate.cue_list_id &&
+    bank.label === candidate.label &&
+    bank.scenes.length === candidate.scenes.length &&
+    bank.scenes.every((scene, sceneIndex) => Object.is(scene, candidate.scenes[sceneIndex]));
+});
+
+export const buildTimelineSceneBlockRows = (
+  events: TimelineCueEventSummary[],
+  authority: FullBankAuthoritySnapshot,
+) => {
+  // A Timeline event with an unresolved source cannot be represented as an
+  // invented Bank 0. The complete surface is unavailable when Bank authority
+  // is faulted; otherwise omit only a source that vanished between snapshots.
+  // Neither case may produce a placement candidate.
+  if (authority.issue) return [];
+  return events.flatMap((event) => {
+    const cue = authority.cueById.get(event.cue_id);
+    if (!cue) return [];
+    return [{
       ...event,
       duration_ms: event.duration_ms ?? 0,
       source_offset_ms: event.source_offset_ms ?? 0,
@@ -245,11 +481,11 @@ export const buildTimelineSceneBlockRows = (events: TimelineCueEventSummary[], c
       fade_out_ms: event.fade_out_ms ?? 0,
       loop_count: event.loop_count ?? 1,
       jump_to_event_id: event.jump_to_event_id ?? null,
-      cue_number: cue?.cue_number || String(event.cue_id),
-      cue_label: cue?.label ?? `Cue ${event.cue_id}`,
-      cue_list_id: cue?.cue_list_id ?? 0,
+      cue_number: cue.cue_number || String(event.cue_id),
+      cue_label: cue.label,
+      cue_list_id: cue.cue_list_id,
       source_summary: timelineSceneBlockSourceSummary(cue),
-    };
+    }];
   });
 };
 

@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
@@ -14,6 +15,15 @@ import {
   type AuthoredEffectEnableIntentLifecycle,
   type AuthoredProjectMutationFence,
 } from "./authoredEffectEnableController";
+import {
+  bankAuthorityIssueMessage,
+  bankAuthoritySemanticToken,
+  bankAuthoritySelectedCueList,
+  createBankAuthorityDelayFence,
+  inspectBankAuthority,
+  nextBankAuthorityId,
+  type BankAuthorityDelayCapture,
+} from "./bankAuthority";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import {
@@ -89,6 +99,10 @@ import { VideoControlPanel } from "./components/VideoControlPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
+import {
+  requestVideoOutputWindowObservationV1,
+  type VideoOutputWindowObservationV1,
+} from "./videoOutputWindowObservation";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineSourceShelf } from "./components/TimelineSourceShelf";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
@@ -104,7 +118,6 @@ import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import {
   PROJECT_TRANSACTION_SCHEMA_VERSION,
   projectTransactionRecoveryCanAdopt,
-  projectTransactionRecoveryIsTerminal,
   projectTransactionShapeFingerprint,
 } from "./types";
 import type {
@@ -122,6 +135,8 @@ import {
   createTimelineSceneBlockViewportFixture,
   timelinePlacementDisplayEndMs,
   reconcileTimelineEventDrafts,
+  timelineSceneBlockAllowedCueIds,
+  timelineSceneBlockCueAllowedByAuthority,
   timelineSceneBlockCueOptionsEqual,
   timelineEventDraftMatchesSummary,
   timelineExecutionIsLive,
@@ -234,6 +249,22 @@ import { bundledLibraryProfileRequest } from "./bundledLibrary";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import {
+  readLiveAudioInputSelectionStorage,
+  restoreLiveAudioInputSelection,
+  revalidateLiveAudioInputSelection,
+  serializeLiveAudioInputSelection,
+  writeLiveAudioInputSelectionStorage,
+  type LiveAudioInputSelectionCatalogueEntry,
+  type PersistedLiveAudioInputSelectionV1,
+} from "./liveAudioInputSelectionStorage";
+import {
+  liveAudioInputAsioSelectionVerdict,
+  liveAudioInputBackendCanDispatch,
+  parseLiveAudioInputBackendSummary,
+  parseLiveAudioInputBackendSummaries,
+} from "./liveAudioInputPresentation";
+import type { LiveAudioInputSavedSelectionState } from "./components/LiveAudioInputRail";
+import {
   createPatchRepairSingleflight,
   fixturePatchIdsAreExact,
   isStageRendererTicketedCommand,
@@ -243,6 +274,21 @@ import {
   waitForPublishedCommandRecovery,
   type PatchRepairTransactionCommand,
 } from "./patchTransactionD2";
+import {
+  ProjectTransactionTerminalAcknowledgementUnresolvedError,
+  ProjectTransactionTerminalMalformedMutationError,
+  ProjectTransactionTerminalRecoveryHoldError,
+  ProjectTransactionTerminalRecoveryUnresolvedError,
+  createProjectTransactionTerminalSettlement,
+  projectTransactionTerminalArgs,
+  projectTransactionTerminalMutationIsWellFormed,
+  recoverProjectTransactionTerminalAction,
+  settleProjectTransactionTerminalAcknowledgement,
+  type ProjectTransactionIdentity,
+  type ProjectTransactionTerminalAction,
+  type ProjectTransactionTerminalArgs,
+  type ProjectTransactionTerminalRecoveryResult,
+} from "./projectTransactionRecovery";
 import {
   createTimelineCueAudioSettingsQueue,
   createTimelineCueAudioStatusRequestGate,
@@ -852,6 +898,17 @@ import {
   specializedTimelineSelectionFromItems,
 } from "./timelineAdvancedResult";
 
+declare global {
+  interface Window {
+    /** Test-only Scene Matrix viewport fixture snapshot; never installed in production. */
+    __syndocalReadSceneMatrixFixtureSnapshot?: () => EngineSnapshot;
+    /** Test-only full-authority fault injection for momentary-release proof. */
+    __syndocalSetSceneMatrixBankAuthorityFault?: (enabled: boolean) => void;
+    /** Native-only read-only QA receiver for the exact output-window observation command. */
+    __syndocalReadVideoOutputWindowObservationV1?: () => Promise<VideoOutputWindowObservationV1>;
+  }
+}
+
 const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connected in this browser preview.";
 
 const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
@@ -873,6 +930,23 @@ const emptyAutoVjSnapshot = defaultAutoVjSnapshot();
 const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
+const liveAudioInputBackendDispatchDenial = (
+  requestedBackend: LiveAudioInputBackendId,
+  backend: unknown,
+): string => {
+  const parsed = parseLiveAudioInputBackendSummary(backend);
+  if (!parsed.ok) {
+    return `Audio input backend ${requestedBackend} has an invalid catalogue entry (${parsed.reason_code}); devices and Start are locked.`;
+  }
+  if (parsed.summary.id !== requestedBackend) {
+    return `Audio input backend ${requestedBackend} is absent from the current catalogue; devices and Start are locked.`;
+  }
+  if (!parsed.summary.built) {
+    return `Audio input backend ${requestedBackend} is not built; devices and Start are locked.`;
+  }
+  return `Audio input backend ${requestedBackend} is ${parsed.summary.availability}; devices and Start are locked.`;
+};
+
 const emptyTimelineFollowRuntime = (): TimelineFollowRuntimeSummary => ({
   epoch: 0,
   generation: 0,
@@ -890,14 +964,6 @@ const emptyTimelineFollowRuntime = (): TimelineFollowRuntimeSummary => ({
 
 const projectHistoryChangedEvent = "syndocal:project-history-changed";
 const authoritativeApplicationCurrentProperty = "__syndocalAuthoritativeApplicationCurrent";
-const cueListDisplayLabel = (cueList: CueListSummary): string =>
-  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
-    ? "Bank 1"
-    : cueList.label;
-const playbackExecutorDisplay = (executor: PlaybackExecutorSummary): PlaybackExecutorSummary =>
-  executor.cue_list_id === 1 && executor.label.trim().toLowerCase() === "main"
-    ? { ...executor, label: "Bank 1" }
-    : executor;
 let activeOperatorLockMode: OperatorLockMode | null = null;
 let applyServerAuthoritativeProjectMutationResult: ((result: ProjectHistoryMutationResult) => boolean) | null = null;
 
@@ -929,9 +995,6 @@ const projectMutationCommands = new Set([
   "set_output_config",
   "set_dmx_outputs",
   "create_cue_from_current",
-  "create_cue_list",
-  "rename_cue_list",
-  "set_cue_list",
   "create_reference_palette",
   "update_reference_palette",
   "remove_reference_palette",
@@ -1076,6 +1139,8 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "set_video_layer_isf_control",
   "set_effect_enabled",
   "create_empty_cue",
+  "create_cue_list",
+  "rename_cue_list",
   "delete_cue_list",
   "reorder_cue_lists",
 ]);
@@ -1278,6 +1343,64 @@ export function mediaAssetMappingPreflightProvenance(
     : null;
 }
 
+/**
+ * Startup pane-record retirement requires independently proven child absence;
+ * a failed placement capture is not such proof. This pure census turns one
+ * webview-window enumeration into a per-pane verdict against the EXACT native
+ * child label `pane-${pane}` (no title, ordinal, substring, or case folding).
+ * Any malformation, duplicate exact label, or unusable entry fails closed to
+ * "unknown", which callers must treat as "retain the popped record".
+ */
+export type PaneChildPresenceVerdict =
+  | { kind: "absent" }
+  | { kind: "present" }
+  | { kind: "unknown"; reason: string };
+
+export type PaneChildPresenceVerdictMap = Record<string, PaneChildPresenceVerdict>;
+
+export const paneChildLabelForPane = (pane: string): string => `pane-${pane}`;
+
+export const paneChildPresenceVerdicts = (
+  panes: readonly string[],
+  enumeratedWindows: unknown,
+): PaneChildPresenceVerdictMap => {
+  const verdicts: PaneChildPresenceVerdictMap = {};
+  const unknownForAll = (reason: string) => {
+    for (const pane of panes) verdicts[pane] = { kind: "unknown", reason };
+  };
+  if (!Array.isArray(enumeratedWindows)) {
+    unknownForAll("window enumeration was not an array");
+    return verdicts;
+  }
+  const exactLabelCounts = new Map<string, number>();
+  let malformedReason: string | null = null;
+  for (const candidate of enumeratedWindows) {
+    const label = typeof candidate === "object" && candidate !== null
+      ? (candidate as { label?: unknown }).label
+      : undefined;
+    if (typeof label !== "string" || label.length === 0) {
+      malformedReason = malformedReason ?? "a listed window exposed no usable exact label";
+      continue;
+    }
+    exactLabelCounts.set(label, (exactLabelCounts.get(label) ?? 0) + 1);
+  }
+  // One malformed entry means the census is incomplete, so absence is not
+  // provable for any pane; presence reporting waits for a clean enumeration.
+  if (malformedReason !== null) {
+    unknownForAll(malformedReason);
+    return verdicts;
+  }
+  for (const pane of panes) {
+    const occurrences = exactLabelCounts.get(paneChildLabelForPane(pane)) ?? 0;
+    verdicts[pane] = occurrences === 1
+      ? { kind: "present" }
+      : occurrences === 0
+        ? { kind: "absent" }
+        : { kind: "unknown", reason: `duplicate exact child label ${paneChildLabelForPane(pane)}` };
+  }
+  return verdicts;
+};
+
 const projectHistoryMutationFromUnknown = (value: unknown): ProjectHistoryMutationResult | null => {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
@@ -1380,6 +1503,9 @@ const invoke = async <T,>(
         : "Operator Partial Lock blocks programming and project replacement commands.",
     );
   }
+  if (projectMutation) {
+    await resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation();
+  }
   if (!projectMutation) {
     const result = await tauriInvoke<T>(command, args);
     if (command === "get_media_asset_operation_terminal_result") {
@@ -1466,13 +1592,26 @@ const invoke = async <T,>(
     throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
   }
   if (serverAuthoritativeMutation) {
-    const result = await tauriInvoke<T>(command, command === "set_effect_enabled"
+    const strictBankMutation = command === "create_cue_list"
+      || command === "rename_cue_list"
+      || command === "reorder_cue_lists"
+      || command === "delete_cue_list";
+    const authoritativeCommandArgs = command === "set_effect_enabled"
       ? commandArgs
-      : {
-        ...commandArgs,
-        expectedEpoch,
-        ownerId: projectTransactionOwnerId,
-      });
+      : strictBankMutation
+        ? {
+          request: {
+            ...commandArgs,
+            expectedEpoch,
+            ownerId: projectTransactionOwnerId,
+          },
+        }
+        : {
+          ...commandArgs,
+          expectedEpoch,
+          ownerId: projectTransactionOwnerId,
+        };
+    const result = await tauriInvoke<T>(command, authoritativeCommandArgs);
     const current = dispatchProjectHistoryMutationFromUnknown(result);
     markAuthoritativeApplicationCurrent(result, current);
     return result;
@@ -1506,11 +1645,16 @@ const invoke = async <T,>(
   } catch (beginError) {
     throw beginError;
   }
-  let ticketCancellationAttempted = false;
-  const cancelOpenedProjectTransaction = async () => {
-    if (ticketCancellationAttempted) return;
-    ticketCancellationAttempted = true;
-    await cancelProjectTransactionWithRecovery(transaction, transactionIdentity).catch(() => undefined);
+  // One opened ticket owns one terminal cleanup promise. A failed cleanup is
+  // deliberately retained and rethrown to the foreground; issuing a second
+  // Cancel from an outer catch would otherwise obscure the exact unresolved
+  // receipt and can strand the backend's closing lane.
+  let openedTransactionCancellation: Promise<ProjectHistoryMutationResult | null> | null = null;
+  const cancelOpenedProjectTransaction = () => {
+    if (!openedTransactionCancellation) {
+      openedTransactionCancellation = cancelProjectTransactionWithRecovery(transaction, transactionIdentity);
+    }
+    return openedTransactionCancellation;
   };
   try {
     // A signal can arrive while Begin itself is awaiting. Recheck after its
@@ -1528,12 +1672,17 @@ const invoke = async <T,>(
     // Backend mutation commands may opt into server-authoritative transaction
     // ownership. Tauri ignores unused object fields for legacy commands, while
     // newly hardened commands reject raw/direct IPC without this exact ticket.
-    const ticketedArgs = {
+    const ticketedRequest = {
       ...commandArgs,
       projectTransactionId: transaction.transaction_id,
       expectedEpoch: transaction.project_epoch,
       ownerId: projectTransactionOwnerId,
     };
+    const strictTicketedRequestMutation = command === "set_fixture_transform"
+      || command === "move_cue_between_scene_banks_batch";
+    const ticketedArgs = strictTicketedRequestMutation
+      ? { request: ticketedRequest }
+      : ticketedRequest;
     const publishedCommand: PatchRepairTransactionCommand | null = command === "patch_fixtures"
       ? command
       : command === "repair_fixture_profile"
@@ -1576,28 +1725,16 @@ const invoke = async <T,>(
         throw commandError;
       }
     }
-    let mutation: ProjectHistoryMutationResult;
-    try {
-      mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
-        transactionId: transaction.transaction_id,
-        expectedEpoch: transaction.project_epoch,
-        clientOperationId: transaction.client_operation_id,
-        shapeFingerprint: transaction.shape_fingerprint,
-        commandName: transactionIdentity.commandName,
-        schemaVersion: transaction.schema_version,
-        ownerId: projectTransactionOwnerId,
-      });
-    } catch (commitError) {
-      const terminal = await queryProjectTransactionTerminal(transactionIdentity).catch(() => null);
-      if (!terminal || terminal.status !== "committed") throw commitError;
-      mutation = terminal.mutation;
-    }
-    window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }));
-    await acknowledgeProjectTransaction(transactionIdentity).catch(() => undefined);
+    const settleTerminal = createAppProjectTransactionTerminalSettlement(transactionIdentity);
+    await commitProjectTransactionWithRecovery(transaction, transactionIdentity, settleTerminal);
     return result;
   } catch (error) {
     if (!(error instanceof ProjectTransactionPublicationUnconfirmedError)
-      && !(error instanceof ProjectTransactionPublicationIndeterminateError)) {
+      && !(error instanceof ProjectTransactionPublicationIndeterminateError)
+      && !(error instanceof ProjectTransactionTerminalAcknowledgementUnresolvedError)
+      && !(error instanceof ProjectTransactionTerminalMalformedMutationError)
+      && !(error instanceof ProjectTransactionTerminalRecoveryHoldError)
+      && !(error instanceof ProjectTransactionTerminalRecoveryUnresolvedError)) {
       await cancelOpenedProjectTransaction();
     }
     throw error;
@@ -1651,6 +1788,10 @@ type SelectedTimelineAutomation = {
 type ControlEditCaptureTarget =
   | { kind: "selectedFixture"; fixtureId: number }
   | { kind: "selectedGroup"; groupId: string };
+type PendingControlEditLookUpdate = {
+  targets: Map<string, ControlEditCaptureTarget>;
+  authority: BankAuthorityDelayCapture;
+};
 type ViewportControlEditHistoryEntry = {
   cueId: number;
   beforeTargets: CueSummary["targets"];
@@ -2088,14 +2229,6 @@ const projectTransactionOperationId = () => typeof crypto !== "undefined" && "ra
   ? `project-op:${++projectTransactionOperationSequence}:${crypto.randomUUID()}`
   : `project-op:${++projectTransactionOperationSequence}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-type ProjectTransactionIdentity = {
-  clientOperationId: string;
-  shapeFingerprint: string;
-  commandName: string;
-  schemaVersion: number;
-  ownerId: string;
-};
-
 const queryProjectTransactionRecovery = async (
   identity: ProjectTransactionIdentity,
 ): Promise<ProjectTransactionRecovery | null> => tauriInvoke<ProjectTransactionRecovery | null>(
@@ -2106,6 +2239,166 @@ const queryProjectTransactionRecovery = async (
 const acknowledgeProjectTransaction = async (
   identity: ProjectTransactionIdentity,
 ) => tauriInvoke<void>("acknowledge_project_transaction", identity);
+
+const projectTransactionForegroundRecoveryEvent = "syndocal:project-transaction-terminal-recovery";
+
+type ProjectTransactionForegroundRecoveryDetail = Readonly<{
+  message: string;
+}>;
+
+const reportProjectTransactionForegroundRecovery = (message: string) => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<ProjectTransactionForegroundRecoveryDetail>(
+    projectTransactionForegroundRecoveryEvent,
+    { detail: { message } },
+  ));
+};
+
+const reportProjectTransactionForegroundRecoveryWithRetry = (message: string) =>
+  reportProjectTransactionForegroundRecovery(
+    `${message} Retry a project mutation to continue this exact terminal recovery.`,
+  );
+
+const waitForProjectTransactionTerminalRecovery = (milliseconds: number) => new Promise<void>((resolve) => {
+  window.setTimeout(resolve, milliseconds);
+});
+
+type ProjectTransactionForegroundTerminalRecovery = Readonly<{
+  phase: "terminal" | "acknowledgement";
+  action: ProjectTransactionTerminalAction;
+  identity: ProjectTransactionIdentity;
+  terminalArgs: ProjectTransactionTerminalArgs;
+  retry: () => Promise<unknown>;
+}>;
+
+// This is intentionally structured rather than a status string: a later
+// explicit project mutation resumes the exact action/ticket after its bounded
+// batch expires. The raw project mutation is never retained here, so no retry
+// path can replay it.
+let foregroundProjectTransactionTerminalRecovery: ProjectTransactionForegroundTerminalRecovery | null = null;
+
+const clearForegroundProjectTransactionTerminalRecovery = (
+  recovery: ProjectTransactionForegroundTerminalRecovery,
+) => {
+  if (foregroundProjectTransactionTerminalRecovery === recovery) {
+    foregroundProjectTransactionTerminalRecovery = null;
+  }
+};
+
+const installForegroundProjectTransactionTerminalRecovery = (
+  phase: ProjectTransactionForegroundTerminalRecovery["phase"],
+  action: ProjectTransactionTerminalAction,
+  identity: ProjectTransactionIdentity,
+  terminalArgs: ProjectTransactionTerminalArgs,
+  buildRetry: (
+    clear: () => void,
+  ) => () => Promise<unknown>,
+): ProjectTransactionForegroundTerminalRecovery => {
+  const existing = foregroundProjectTransactionTerminalRecovery;
+  if (existing) {
+    throw new Error(
+      `Project transaction ${existing.action} recovery remains pending; retry that exact ${existing.phase} before starting another mutation.`,
+    );
+  }
+  let recovery: ProjectTransactionForegroundTerminalRecovery;
+  const clear = () => clearForegroundProjectTransactionTerminalRecovery(recovery);
+  recovery = Object.freeze({
+    phase,
+    action,
+    identity,
+    terminalArgs,
+    retry: buildRetry(clear),
+  });
+  foregroundProjectTransactionTerminalRecovery = recovery;
+  return recovery;
+};
+
+const resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation = async (): Promise<void> => {
+  const recovery = foregroundProjectTransactionTerminalRecovery;
+  if (!recovery) return;
+  reportProjectTransactionForegroundRecovery(
+    `Retrying pending project transaction ${recovery.action} ${recovery.phase} recovery before the next mutation.`,
+  );
+  await recovery.retry();
+};
+
+const createAppProjectTransactionTerminalSettlement = (identity: ProjectTransactionIdentity) =>
+  createProjectTransactionTerminalSettlement(
+    (mutation) => window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(
+      projectHistoryChangedEvent,
+      { detail: mutation },
+    )),
+    () => acknowledgeProjectTransaction(identity),
+  );
+
+const settleAppProjectTransactionTerminal = (
+  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
+  mutation: ProjectHistoryMutationResult,
+) => settleProjectTransactionTerminalAcknowledgement(
+  settlement,
+  mutation,
+  waitForProjectTransactionTerminalRecovery,
+  reportProjectTransactionForegroundRecoveryWithRetry,
+);
+
+const settleProjectTransactionTerminalInForeground = async (
+  action: ProjectTransactionTerminalAction,
+  identity: ProjectTransactionIdentity,
+  terminalArgs: ProjectTransactionTerminalArgs,
+  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
+  mutation: ProjectHistoryMutationResult,
+): Promise<void> => {
+  const recovery = installForegroundProjectTransactionTerminalRecovery(
+    "acknowledgement",
+    action,
+    identity,
+    terminalArgs,
+    (clear) => async () => {
+      await settleAppProjectTransactionTerminal(settlement, mutation);
+      clear();
+    },
+  );
+  await recovery.retry();
+};
+
+const recoverProjectTransactionTerminalInForeground = async (
+  action: ProjectTransactionTerminalAction,
+  terminalArgs: ProjectTransactionTerminalArgs,
+  identity: ProjectTransactionIdentity,
+  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
+): Promise<ProjectTransactionTerminalRecoveryResult> => {
+  const recovery = installForegroundProjectTransactionTerminalRecovery(
+    "terminal",
+    action,
+    identity,
+    terminalArgs,
+    (clear) => async () => {
+      const result = await recoverProjectTransactionTerminal(action, terminalArgs, identity);
+      const mutation = result.kind === "operation" ? result.mutation : result.recovery.mutation;
+      await settleAppProjectTransactionTerminal(settlement, mutation);
+      clear();
+      return result;
+    },
+  );
+  return await recovery.retry() as ProjectTransactionTerminalRecoveryResult;
+};
+
+const recoverProjectTransactionTerminal = async (
+  action: ProjectTransactionTerminalAction,
+  terminalArgs: ProjectTransactionTerminalArgs,
+  identity: ProjectTransactionIdentity,
+) => recoverProjectTransactionTerminalAction({
+  identity,
+  terminalArgs,
+  action,
+  query: queryProjectTransactionRecovery,
+  invokeTerminal: (args) => tauriInvoke<ProjectHistoryMutationResult>(
+    action === "commit" ? "commit_project_transaction" : "cancel_project_transaction",
+    args,
+  ),
+  wait: waitForProjectTransactionTerminalRecovery,
+  reportUnresolved: reportProjectTransactionForegroundRecoveryWithRetry,
+});
 
 type PublishedProjectTransactionCommandRecovery =
   | { kind: "published"; result: ProjectTransactionCommandResult }
@@ -2156,116 +2449,111 @@ const beginProjectTransactionWithRecovery = async (
     if (!recovered) throw beginError;
     if (recovered.status === "pending") return recovered.ticket;
     if (recovered.status === "committed") {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
-        detail: recovered.mutation,
-      }));
-      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      const settlement = createAppProjectTransactionTerminalSettlement(identity);
+      await settleAppProjectTransactionTerminal(settlement, recovered.mutation);
       throw new Error(
         "Project transaction committed while the Begin reply was lost; command result was not delivered. Refresh before retrying.",
       );
     }
     if (recovered.status === "cancelled") {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
-        detail: recovered.mutation,
-      }));
-      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+      const settlement = createAppProjectTransactionTerminalSettlement(identity);
+      await settleAppProjectTransactionTerminal(settlement, recovered.mutation);
       throw new Error("Project transaction was cancelled while the Begin reply was lost.");
     }
     throw new Error("Project transaction receipt was already acknowledged; use a new operation ID.");
   }
 };
 
-const queryProjectTransactionTerminal = async (
-  identity: ProjectTransactionIdentity,
-): Promise<ProjectTransactionRecovery | null> => {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const queried = await queryProjectTransactionRecovery(identity);
-      if (queried && projectTransactionRecoveryIsTerminal(queried.status)) return queried;
-    } catch {
-      // A lost recovery reply is retried with the same operation identity.
-    }
-  }
-  return null;
-};
-
 const cancelProjectTransactionWithRecovery = async (
   transaction: ProjectTransactionTicket,
   identity: ProjectTransactionIdentity,
 ): Promise<ProjectHistoryMutationResult | null> => {
-  const cancelArgs = {
-    transactionId: transaction.transaction_id,
-    expectedEpoch: transaction.project_epoch,
-    clientOperationId: transaction.client_operation_id,
-    shapeFingerprint: transaction.shape_fingerprint,
-    commandName: identity.commandName,
-    schemaVersion: transaction.schema_version,
-    ownerId: identity.ownerId,
-  };
+  const cancelArgs = projectTransactionTerminalArgs(transaction, identity);
+  const settleTerminal = createAppProjectTransactionTerminalSettlement(identity);
+  let cancellation: ProjectHistoryMutationResult | null = null;
   try {
-    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>(
+    cancellation = await tauriInvoke<ProjectHistoryMutationResult>(
       "cancel_project_transaction",
       cancelArgs,
     );
-    window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
-      detail: cancellation,
-    }));
-    await acknowledgeProjectTransaction(identity).catch(() => undefined);
-    return cancellation;
-  } catch (cancelError) {
-    const terminal = await queryProjectTransactionTerminal(identity).catch(() => null);
-    if (terminal?.status === "cancelled") {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
-        detail: terminal.mutation,
-      }));
-      await acknowledgeProjectTransaction(identity).catch(() => undefined);
-      return terminal.mutation;
+    if (!projectTransactionTerminalMutationIsWellFormed(cancellation)) {
+      throw new ProjectTransactionTerminalMalformedMutationError(
+        "Project transaction Cancel reply was malformed; querying the exact terminal receipt.",
+      );
     }
-    if (terminal?.status === "committed") {
-      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, {
-        detail: terminal.mutation,
-      }));
-      await acknowledgeProjectTransaction(identity).catch(() => undefined);
+  } catch {
+    const recovered = await recoverProjectTransactionTerminalInForeground(
+      "cancel",
+      cancelArgs,
+      identity,
+      settleTerminal,
+    );
+    if (recovered.kind === "operation") {
+      return recovered.mutation;
+    }
+    if (recovered.recovery.status === "cancelled") {
+      return recovered.recovery.mutation;
+    }
+    if (recovered.recovery.status === "committed") {
       throw new Error(
         "Project transaction committed while Cancel was in flight; inspect the recovered history before retrying.",
       );
     }
-    if (terminal?.status === "acknowledged") {
-      throw new Error("Project transaction was already acknowledged while Cancel was in flight.");
-    }
-    throw cancelError;
   }
+  if (cancellation === null) {
+    throw new Error("Project transaction Cancel recovery returned no terminal mutation.");
+  }
+  await settleProjectTransactionTerminalInForeground(
+    "cancel",
+    identity,
+    cancelArgs,
+    settleTerminal,
+    cancellation,
+  );
+  return cancellation;
 };
 
 const commitProjectTransactionWithRecovery = async (
   transaction: ProjectTransactionTicket,
   identity: ProjectTransactionIdentity,
+  settleTerminal: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
 ): Promise<ProjectHistoryMutationResult> => {
-  const commitArgs = {
-    transactionId: transaction.transaction_id,
-    expectedEpoch: transaction.project_epoch,
-    clientOperationId: transaction.client_operation_id,
-    shapeFingerprint: transaction.shape_fingerprint,
-    commandName: identity.commandName,
-    schemaVersion: transaction.schema_version,
-    ownerId: identity.ownerId,
-  };
+  const commitArgs = projectTransactionTerminalArgs(transaction, identity);
+  let committed: ProjectHistoryMutationResult | null = null;
   try {
-    return await tauriInvoke<ProjectHistoryMutationResult>(
+    committed = await tauriInvoke<ProjectHistoryMutationResult>(
       "commit_project_transaction",
       commitArgs,
     );
-  } catch (commitError) {
-    const terminal = await queryProjectTransactionTerminal(identity).catch(() => null);
-    if (terminal?.status === "committed") return terminal.mutation;
-    if (terminal?.status === "cancelled") {
+    if (!projectTransactionTerminalMutationIsWellFormed(committed)) {
+      throw new ProjectTransactionTerminalMalformedMutationError(
+        "Project transaction Commit reply was malformed; querying the exact terminal receipt.",
+      );
+    }
+  } catch {
+    const recovered = await recoverProjectTransactionTerminalInForeground(
+      "commit",
+      commitArgs,
+      identity,
+      settleTerminal,
+    );
+    if (recovered.kind === "operation") return recovered.mutation;
+    if (recovered.recovery.status === "committed") return recovered.recovery.mutation;
+    if (recovered.recovery.status === "cancelled") {
       throw new Error("Project transaction was cancelled while Commit was in flight.");
     }
-    if (terminal?.status === "acknowledged") {
-      throw new Error("Project transaction was already acknowledged while Commit was in flight.");
-    }
-    throw commitError;
   }
+  if (committed === null) {
+    throw new Error("Project transaction Commit recovery returned no terminal mutation.");
+  }
+  await settleProjectTransactionTerminalInForeground(
+    "commit",
+    identity,
+    commitArgs,
+    settleTerminal,
+    committed,
+  );
+  return committed;
 };
 
 // A convergence poll can briefly leave the old transaction/recovery detail in
@@ -2722,7 +3010,7 @@ export default function App() {
   const [cueCaptureScope, setCueCaptureScope] = createSignal<CueCaptureScopeMode>("all");
   const [cueEffectCaptureTargets, setCueEffectCaptureTargets] = createSignal<CueEffectTarget[]>([]);
   const [cueEffectCaptureStateOverrideIds, setCueEffectCaptureStateOverrideIds] = createSignal<number[]>([]);
-  const [selectedCueListId, setSelectedCueListId] = createSignal(1);
+  const [selectedCueListId, setSelectedCueListId] = createSignal<number | null>(null);
   const [selectedSceneCueId, setSelectedSceneCueId] = createSignal<number | null>(null);
   const [selectedSceneEffectId, setSelectedSceneEffectId] = createSignal<number | null>(null);
   const [sceneSettingsSurface, setSceneSettingsSurface] =
@@ -3086,6 +3374,146 @@ export default function App() {
   });
   const [liveAudioInputStatusKnown, setLiveAudioInputStatusKnown] = createSignal(!isTauriRuntime());
   const [liveAudioInputBusy, setLiveAudioInputBusy] = createSignal(false);
+  type LiveAudioInputSavedSelectionRuntime =
+    | {
+        phase: "stale";
+        raw: string;
+        selection: PersistedLiveAudioInputSelectionV1;
+        reason_code: string;
+        message: string;
+      }
+    | { phase: "invalid"; raw: string; reason_code: string; message: string }
+    | {
+        phase: "ready";
+        raw: string;
+        selection: PersistedLiveAudioInputSelectionV1;
+        startRequest: LiveAudioInputStartRequest;
+        message: string;
+      };
+  type LiveAudioInputAsioRevalidationArm = {
+    /** Current operator configuration only; never restored or persisted. */
+    request: LiveAudioInputStartRequest;
+    request_fingerprint: string;
+    native_invalid_verdict_fingerprint: string;
+    saved_selection_fingerprint: string;
+    project_authority_fingerprint: string;
+  };
+  const [
+    liveAudioInputSavedSelection,
+    setLiveAudioInputSavedSelection,
+  ] = createSignal<LiveAudioInputSavedSelectionRuntime | null>(null);
+  const [liveAudioInputPersistError, setLiveAudioInputPersistError] = createSignal<string | null>(null);
+  const [
+    liveAudioInputAsioRevalidationArm,
+    setLiveAudioInputAsioRevalidationArm,
+  ] = createSignal<LiveAudioInputAsioRevalidationArm | null>(null);
+  const liveAudioInputSavedRuntimeFromRaw = (
+    raw: string,
+  ): LiveAudioInputSavedSelectionRuntime => {
+    const restored = restoreLiveAudioInputSelection(raw);
+    return restored.state === "stale"
+      ? {
+          phase: "stale",
+          raw,
+          selection: restored.selection,
+          reason_code: restored.reason_code,
+          message: restored.message,
+        }
+      : {
+          phase: "invalid",
+          raw,
+          reason_code: restored.reason_code,
+          message: restored.message,
+      };
+  };
+  /**
+   * A machine-local saved intent applies only to the backend it names.  Its
+   * stale/invalid verdict remains visible, but it must never lock a separately
+   * configured backend or supply that backend's Start request.
+   */
+  const savedRuntimeAppliesToCurrentBackend = (
+    runtime: LiveAudioInputSavedSelectionRuntime | null,
+    backendId = selectedLiveAudioInputBackend(),
+  ): runtime is Extract<LiveAudioInputSavedSelectionRuntime, { selection: PersistedLiveAudioInputSelectionV1 }> =>
+    runtime !== null && "selection" in runtime && runtime.selection.backend === backendId;
+  const liveAudioInputSavedSelectionFingerprint = (): string => {
+    const runtime = liveAudioInputSavedSelection();
+    return runtime === null ? "absent" : `${runtime.phase}:${runtime.raw}`;
+  };
+  const liveAudioInputProjectAuthorityFingerprint = (): string => {
+    const authority = projectMappingsAuthority();
+    return JSON.stringify([
+      authority.project_epoch,
+      authority.project_revision,
+      authority.checkpoint_hash,
+      currentProjectPath(),
+    ]);
+  };
+  const liveAudioInputAsioInvalidVerdictFingerprint = (): string | null => {
+    const raw = liveAudioInputStatus().asio_selection;
+    if (raw === null || raw === undefined) return null;
+    const verdict = liveAudioInputAsioSelectionVerdict(raw);
+    if (!verdict.contract_valid || verdict.state !== "invalid") return null;
+    try {
+      const fingerprint = JSON.stringify(raw);
+      return typeof fingerprint === "string" ? fingerprint : null;
+    } catch {
+      return null;
+    }
+  };
+  const liveAudioInputStartRequestFingerprint = (
+    request: LiveAudioInputStartRequest,
+  ): string | null => {
+    const channelMix = request.channel_mix;
+    const normalizedChannelMix = channelMix.mode === "average_all"
+      ? { mode: "average_all" }
+      : channelMix.mode === "single" && Number.isInteger(channelMix.channel_index)
+        ? { mode: "single", channel_index: channelMix.channel_index }
+        : channelMix.mode === "stereo_pair" &&
+            Number.isInteger(channelMix.left_channel_index) &&
+            Number.isInteger(channelMix.right_channel_index)
+          ? {
+              mode: "stereo_pair",
+              left_channel_index: channelMix.left_channel_index,
+              right_channel_index: channelMix.right_channel_index,
+            }
+          : null;
+    if (normalizedChannelMix === null) return null;
+    return JSON.stringify({
+      backend: request.backend,
+      device_id: request.device_id ?? null,
+      sample_rate: request.sample_rate ?? null,
+      stream_channels: request.stream_channels ?? null,
+      sample_format: request.sample_format ?? null,
+      buffer_frames: request.buffer_frames ?? null,
+      channel_mix: normalizedChannelMix,
+    });
+  };
+  let liveAudioInputSavedSelectionStartupRestoreAttempted = false;
+  /**
+   * Machine-local audio intent is read once as this App instance starts, before
+   * any backend/device discovery can select a default. A stale saved intent
+   * pins only its exact backend; its device/configuration remain locked until
+   * the refreshed catalogue proves the full exact match.
+   */
+  const restoreSavedLiveAudioInputSelectionAtStartup = (): void => {
+    if (liveAudioInputSavedSelectionStartupRestoreAttempted) return;
+    liveAudioInputSavedSelectionStartupRestoreAttempted = true;
+    const restoredSelectionStorage = readLiveAudioInputSelectionStorage(() => window.localStorage);
+    if (!restoredSelectionStorage.ok) {
+      setMessage(
+        `Reading the saved machine-local live audio input selection failed: ${restoredSelectionStorage.error}`,
+      );
+      return;
+    }
+    if (restoredSelectionStorage.raw === null) return;
+    const restoredRuntime = liveAudioInputSavedRuntimeFromRaw(restoredSelectionStorage.raw);
+    setLiveAudioInputSavedSelection(restoredRuntime);
+    if (restoredRuntime.phase === "stale") {
+      setSelectedLiveAudioInputBackend(restoredRuntime.selection.backend);
+    }
+  };
+  restoreSavedLiveAudioInputSelectionAtStartup();
   const [liveAudioInputTelemetryFresh, setLiveAudioInputTelemetryFresh] = createSignal(false);
   let liveAudioInputTelemetryAcceptedAt = 0;
   const clearLiveAudioInputTelemetryFreshness = () => {
@@ -3364,17 +3792,16 @@ export default function App() {
     setSceneSettingsSurface("contents");
     setSceneFxStagePreview(null);
   };
-  const openCueEditor = (forceCreate = false) => {
-    if (!forceCreate) {
-      const cueId = selectedSceneCueId() ?? snapshot().active_cue_id ?? snapshot().cues[0]?.id ?? null;
-      if (cueId !== null) {
-        openTimelineSourceCue(cueId);
-        return;
-      }
+  const openCueEditor = () => {
+    // The retired Timeline Create-scene drawer route is removed. Editing is
+    // routed to Lighting's authoritative Scene Settings details surface; with
+    // no Scene available the request fails closed with a visible reason.
+    const cueId = selectedSceneCueId() ?? snapshot().active_cue_id ?? snapshot().cues[0]?.id ?? null;
+    if (cueId === null) {
+      setMessage("No Scene is available to edit; create Scenes in Lighting.");
+      return;
     }
-    setSelectedSceneCueId(null);
-    setTimelineDeskSurface("show");
-    setTimelineContextDrawer("cue");
+    openTimelineSourceCue(cueId);
   };
   const snapshotCues = createMemo(() => snapshot().cues);
   const timelineChildCue = createMemo(() => {
@@ -3743,22 +4170,140 @@ export default function App() {
   const paneWindowOperationPending = (pane: "stage" | "timeline") =>
     Boolean(pendingPaneWindowOperations()[pane]);
   let disposePaneWindowEvents = () => undefined;
+  let stopStartupPaneRestoreChain = () => undefined;
   if (isTauriRuntime() && !paneWindow) {
     let listenerDisposed = false;
     let unlistenPaneWindowTerminal: (() => void) | undefined;
-    const restorePoppedPaneWindows = async () => {
+    // P2 invariant: a popped record may survive startup only while a
+    // tracked/live child identity can render it. A failed capture does NOT
+    // prove that a native child is absent, so no record is ever cleared on
+    // capture failure alone: a bounded retry chain runs first, and only an
+    // independent exact-label presence census decides retirement afterwards.
+    // Present or unknown children keep their records popped so a live but
+    // untrackable child can never dual-render with the main window.
+    const PANE_WINDOW_RESTORE_CAPTURE_ATTEMPTS = 3;
+    const PANE_WINDOW_RESTORE_CAPTURE_RETRY_DELAY_MS = 400;
+    // Liveness latch: once teardown ran, no retry timer fires, no chain
+    // restarts, and no restore-path state or message updates happen.
+    let startupPaneRestoreChainAlive = true;
+    let startupPaneRestoreRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    stopStartupPaneRestoreChain = () => {
+      startupPaneRestoreChainAlive = false;
+      if (startupPaneRestoreRetryTimer !== null) {
+        clearTimeout(startupPaneRestoreRetryTimer);
+        startupPaneRestoreRetryTimer = null;
+      }
+    };
+    const startupUntrackedPoppedRecords = () =>
+      poppedPanes().filter((pane) => !paneLifecycleController.transitionOf(pane));
+    const retainUnknownStartupRecord = (pane: string, cause: string, reason: string) => {
+      setMessage(
+        `Pane window ${pane} stays popped; child presence unknown (${reason}); ${cause}`,
+      );
+    };
+    // Capture failure is not child-absence proof. This reconciliation acts on
+    // each untracked record only after an independent enumeration of all
+    // webview windows proves the fate of its exact `pane-${pane}` label:
+    // present keeps the record popped, a clean absent verdict retires it
+    // through the normal closed acknowledgment, and any throw, malformed
+    // enumeration, or duplicate exact label keeps the record as unknown.
+    const reconcileStartupPaneRecordsByPresence = async (
+      candidates: PaneWindowKind[],
+      cause: string,
+    ): Promise<void> => {
+      if (candidates.length === 0 || !startupPaneRestoreChainAlive) return;
+      let verdicts: PaneChildPresenceVerdictMap;
+      try {
+        verdicts = paneChildPresenceVerdicts(candidates, await getAllWebviewWindows());
+      } catch (probeError) {
+        if (!startupPaneRestoreChainAlive) return;
+        for (const pane of candidates) {
+          retainUnknownStartupRecord(pane, cause, String(probeError));
+        }
+        return;
+      }
+      if (!startupPaneRestoreChainAlive) return;
+      for (const pane of candidates) {
+        const verdict = verdicts[pane];
+        if (verdict?.kind === "present") {
+          setMessage(
+            `Pane window ${pane} retained because live child exists (${cause}).`,
+          );
+          continue;
+        }
+        if (verdict?.kind !== "absent") {
+          retainUnknownStartupRecord(pane, cause, verdict?.reason ?? "no presence verdict");
+          continue;
+        }
+        // Proven absence only: the exact label is gone from a well-formed,
+        // duplicate-free enumeration, and the record stayed untracked so a
+        // tracked identity's own terminal flow stays authoritative.
+        if (!paneLifecycleController.transitionOf(pane)) {
+          acknowledgePaneWindowClosed(pane);
+          setMessage(
+            `Pane window ${pane} renders in the main window again:`
+              + ` no live ${paneChildLabelForPane(pane)} child exists (${cause}).`,
+          );
+        }
+      }
+    };
+    // A retry iteration runs outside the listener chain's own catch, so an
+    // unexpected failure still settles the lifecycle controller fail-closed,
+    // but it clears a record only when the presence census proves absence.
+    const failStartupRestoreRetryClosed = (error: unknown): Promise<void> =>
+      reconcileStartupPaneRecordsByPresence(startupUntrackedPoppedRecords(), "retry chain failed")
+        .catch(() => undefined)
+        .then(() => {
+          paneLifecycleController.dispose(String(error));
+          if (startupPaneRestoreChainAlive) {
+            setMessage(
+              `Pane window restore retry failed: ${error};`
+                + ` records without proven absence stayed popped.`,
+            );
+          }
+        });
+    // Single-slot bounded scheduling: at most one retry timer exists at any
+    // moment, chains never overlap, cleanup cancels any unfired retry, and
+    // the attempt cap bounds the chain length.
+    const scheduleStartupPaneRestoreRetry = (remainingCaptureAttempts: number) => {
+      if (!startupPaneRestoreChainAlive || startupPaneRestoreRetryTimer !== null) return;
+      startupPaneRestoreRetryTimer = setTimeout(() => {
+        startupPaneRestoreRetryTimer = null;
+        void restorePoppedPaneWindows(remainingCaptureAttempts)
+          .catch((chainError) => failStartupRestoreRetryClosed(chainError).catch(() => undefined));
+      }, PANE_WINDOW_RESTORE_CAPTURE_RETRY_DELAY_MS);
+    };
+    const restorePoppedPaneWindows = async (
+      remainingCaptureAttempts: number = PANE_WINDOW_RESTORE_CAPTURE_ATTEMPTS,
+    ) => {
+      if (!startupPaneRestoreChainAlive) return;
       const panes = poppedPanes();
       if (panes.length === 0) return;
       let statuses: PaneWindowStatusReport[] = [];
       try {
         statuses = await invoke<PaneWindowStatusReport[]>("capture_pane_window_placements");
       } catch (error) {
-        // Fail closed: native children may still be alive, so local popped
-        // records are retained for retry instead of being bulk-cleared.
-        setMessage(`Pane window restore failed; panes kept for retry: ${error}`);
+        if (!startupPaneRestoreChainAlive) return;
+        if (remainingCaptureAttempts > 1) {
+          // Transient failure: native children may still be alive, so local
+          // popped records are retained for the scheduled retry instead of
+          // being bulk-cleared.
+          setMessage(`Pane window restore failed; panes kept for retry: ${error}`);
+          scheduleStartupPaneRestoreRetry(remainingCaptureAttempts - 1);
+          return;
+        }
+        // The retry budget is exhausted, but capture failure still proves no
+        // absence: each untracked record retires only when the independent
+        // exact-label census proves its child is gone.
+        await reconcileStartupPaneRecordsByPresence(
+          startupUntrackedPoppedRecords(),
+          `capture failed ${PANE_WINDOW_RESTORE_CAPTURE_ATTEMPTS} times`,
+        );
         return;
       }
+      if (!startupPaneRestoreChainAlive) return;
       for (const pane of panes) {
+        if (!startupPaneRestoreChainAlive) return;
         const status = statuses.find((candidate) => candidate.pane === pane);
         if (status && !status.instance_id) {
           setMessage(
@@ -3803,10 +4348,17 @@ export default function App() {
         await restorePoppedPaneWindows();
         return true;
       })
-      .catch((error) => {
-        for (const pane of poppedPanes()) acknowledgePaneWindowClosed(pane);
+      .catch(async (error) => {
+        // Listener loss settles every waiter, but it proves nothing about
+        // which children exist: records clear only on independently proven
+        // absence, tracked identities included via the untracked filter, and
+        // everything else stays popped as unknown.
+        await reconcileStartupPaneRecordsByPresence(
+          startupUntrackedPoppedRecords(),
+          "terminal listener unavailable",
+        ).catch(() => undefined);
         paneLifecycleController.dispose(String(error));
-        setMessage(`Pane window listener failed: ${error}`);
+        if (startupPaneRestoreChainAlive) setMessage(`Pane window listener failed: ${error}`);
         return false;
       });
     disposePaneWindowEvents = () => {
@@ -3817,6 +4369,7 @@ export default function App() {
   onCleanup(() => {
     disposePaneWindowEvents();
     unsubscribePaneLifecycleView();
+    stopStartupPaneRestoreChain();
     paneLifecycleController.dispose("Pane window lifecycle was disposed.");
   });
   if (isTauriRuntime() && !paneWindow && autoOpenPaneWindows) {
@@ -4096,7 +4649,9 @@ export default function App() {
         }))
       : [viewportFixtureData.cueRecallCue];
     const sceneMatrixBankLayout = [
-      { id: 1, label: "Bank 1", cueIds: [304] },
+      // The persisted Bank keeps its authored label. Identity-keyed rendering
+      // must show "Main" everywhere and never rewrite it to "Bank 1".
+      { id: 1, label: "Main", cueIds: [304] },
       { id: 2, label: "Front", cueIds: [301, 302] },
       { id: 3, label: "Back", cueIds: [303, 320] },
       ...Array.from({ length: 10 }, (_, index) => ({
@@ -4109,9 +4664,14 @@ export default function App() {
       sceneMatrixBankLayout.flatMap((bank) => bank.cueIds.map((cueId) => [cueId, bank.id] as const)),
     );
     const fixtureCues = sceneMatrixFixture
-      ? structuredClone(viewportFixtureData.sceneMatrixCues).map((cue) => viewportFixture === "scene-matrix"
-        ? { ...cue, cue_list_id: sceneMatrixCueListByCueId.get(cue.id) ?? 1 }
-        : cue)
+      ? structuredClone(viewportFixtureData.sceneMatrixCues).map((cue) => {
+          if (viewportFixture !== "scene-matrix") return cue;
+          const cueListId = sceneMatrixCueListByCueId.get(cue.id);
+          if (cueListId === undefined) {
+            throw new Error(`Scene Matrix fixture Scene ${cue.id} has no exact Bank identity.`);
+          }
+          return { ...cue, cue_list_id: cueListId };
+        })
       : cueFixtureCues;
     if (sceneMatrixFixture && fixtureCues[0]) {
       // T7: one persisted cue color so the harness can assert it wins the hash hue.
@@ -4291,7 +4851,7 @@ export default function App() {
           },
         ],
       };
-      return ({
+      const next: EngineSnapshot = {
       ...current,
       fixtures: cueNodeGraphFixture
         ? []
@@ -4392,7 +4952,9 @@ export default function App() {
             },
           ]
         : current.timeline_bank,
-    });
+      };
+      latestEngineSnapshot = next;
+      return next;
     });
     if (blindFixture) {
       const liveRedValues = Array.from({ length: 512 }, () => 0);
@@ -4944,6 +5506,7 @@ export default function App() {
     __syndocalSelectMappingViewportStageObject?: () => void;
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
+    __syndocalSetSceneMatrixBankAuthorityFault?: (enabled: boolean) => void;
     __syndocalCloneFixtureSnapshot?: () => number;
     __syndocalSetControlFixtureSelection?: (
       fixtureIds: number[],
@@ -4985,6 +5548,25 @@ export default function App() {
     sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject = () => setSelectedStageObjectId(1);
   }
   if (viewportFixture === "scene-matrix") {
+    let bankAuthorityFaultCueBackup: CueSummary[] | null = null;
+    sceneBlockFixtureWindow.__syndocalReadSceneMatrixFixtureSnapshot = () => structuredClone(snapshot());
+    sceneBlockFixtureWindow.__syndocalSetSceneMatrixBankAuthorityFault = (enabled) => {
+      if (enabled) {
+        setSnapshot((current) => {
+          if (bankAuthorityFaultCueBackup !== null) return current;
+          bankAuthorityFaultCueBackup = structuredClone(current.cues);
+          return {
+            ...current,
+            cues: current.cues.map((cue) => ({ ...cue, cue_list_id: 999_999 })),
+          };
+        });
+        return;
+      }
+      if (bankAuthorityFaultCueBackup === null) return;
+      const restoredCues = bankAuthorityFaultCueBackup;
+      bankAuthorityFaultCueBackup = null;
+      setSnapshot((current) => ({ ...current, cues: restoredCues }));
+    };
     sceneBlockFixtureWindow.__syndocalCloneCueSnapshot = () => {
       setSnapshot((current) => ({
         ...current,
@@ -5069,6 +5651,8 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadTimelineProductionCaptureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
+    delete sceneBlockFixtureWindow.__syndocalReadSceneMatrixFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalSetSceneMatrixBankAuthorityFault;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
     delete sceneBlockFixtureWindow.__syndocalCloneFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
@@ -5161,6 +5745,7 @@ export default function App() {
     });
   });
   const projectTransactionOwnerRegistrationStatusKey = "project-owner-registration";
+  const projectTransactionTerminalRecoveryStatusKey = "project-transaction-terminal-recovery";
   const [projectTransactionOwnerRegistrationRevision, setProjectTransactionOwnerRegistrationRevision] = createSignal(0);
   const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
   const [daslightProjectImportBusy, setDaslightProjectImportBusy] = createSignal(false);
@@ -5169,12 +5754,23 @@ export default function App() {
     // A failed owner registration is the actionable native boundary. Do not
     // let unrelated polling/background errors erase it before a later caller
     // successfully re-arms the same owner registration.
-    setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
-      && key !== projectTransactionOwnerRegistrationStatusKey
+    setAppStatus((current) => (current.key === projectTransactionOwnerRegistrationStatusKey
+        || current.key === projectTransactionTerminalRecoveryStatusKey)
+      && key !== current.key
       ? current
       : appStatusFromMessage(text, key));
     return text;
   };
+  const handleProjectTransactionForegroundRecovery = (event: Event) => {
+    const detail = (event as CustomEvent<ProjectTransactionForegroundRecoveryDetail>).detail;
+    if (typeof detail?.message !== "string" || detail.message.trim() === "") return;
+    setMessage(detail.message, projectTransactionTerminalRecoveryStatusKey);
+  };
+  window.addEventListener(projectTransactionForegroundRecoveryEvent, handleProjectTransactionForegroundRecovery);
+  onCleanup(() => window.removeEventListener(
+    projectTransactionForegroundRecoveryEvent,
+    handleProjectTransactionForegroundRecovery,
+  ));
   const finishDisplayAddPostCommitRefresh = (
     statusBeforeRefresh: string,
     statusAfterRefresh: string,
@@ -5186,7 +5782,8 @@ export default function App() {
       refreshError,
     );
     if (result.kind === "clear") {
-      setAppStatus((current) => current.key === projectTransactionOwnerRegistrationStatusKey
+      setAppStatus((current) => (current.key === projectTransactionOwnerRegistrationStatusKey
+          || current.key === projectTransactionTerminalRecoveryStatusKey)
         ? current
         : appStatusFromMessage("Ready"));
     } else if (result.kind === "refresh_pending") {
@@ -5287,6 +5884,26 @@ export default function App() {
   // Every main/pane App attempts its own registration. A failure remains
   // fail-closed and is retried only by a later owner-bound/generic caller.
   void ensureProjectTransactionOwnerRegistration().catch(() => undefined);
+  // This is a native QA receiver only: it publishes no UI state and never
+  // reaches into raw Tauri internals. The typed generic invoke facade keeps
+  // owner registration and the canonical read-only command inventory intact.
+  if (isTauriRuntime()) {
+    const readVideoOutputWindowObservationV1 = async () => {
+      // This receiver belongs only to the main renderer. A pane must never
+      // impersonate the main QA surface or turn its own window identity into a
+      // successful global observation.
+      if (getCurrentWindow().label !== "main") {
+        throw new Error("Video output window observation is available only from the main Syndocal window.");
+      }
+      return requestVideoOutputWindowObservationV1((command) => invoke(command));
+    };
+    window.__syndocalReadVideoOutputWindowObservationV1 = readVideoOutputWindowObservationV1;
+    onCleanup(() => {
+      if (window.__syndocalReadVideoOutputWindowObservationV1 === readVideoOutputWindowObservationV1) {
+        delete window.__syndocalReadVideoOutputWindowObservationV1;
+      }
+    });
+  }
   const invokeRegisteredOwnerCommand = async <T,>(
     command:
       | "lock_project_operator_session"
@@ -5338,7 +5955,9 @@ export default function App() {
     setSetupSubTab(layout.setup_sub_tab);
     setControlMode(layout.control_mode);
     setTimelineDeskSurface(layout.timeline_desk_surface);
-    setTimelineContextDrawer(layout.timeline_context_drawer);
+    // Persisted retired drawer state fails closed to the closed drawer; the
+    // Timeline Create-scene route was removed and must never restore.
+    setTimelineContextDrawer(layout.timeline_context_drawer === "cue" ? "none" : layout.timeline_context_drawer);
     setEditDeskSurface(layout.edit_desk_surface);
     setControlCategory(layout.control_category);
     setTopSplitRatio(layout.top_split_ratio);
@@ -7687,12 +8306,63 @@ export default function App() {
     [] as TimelineLayerSummary[],
     { equals: sameTimelineLayerSummaries },
   );
+  // Bank/Cue/Executor identity is a single authority for every placement and
+  // playback surface. It must be initialized before Timeline-derived memos;
+  // Solid evaluates those memos while constructing the component.
+  const bankAuthority = createMemo(() => inspectBankAuthority(
+    snapshot().cue_lists,
+    snapshot().cues,
+    snapshot().playback_executors,
+ ));
+  const requireBankAuthority = () => {
+    const authority = bankAuthority();
+    if (authority.issue) {
+      setMessage(bankAuthorityIssueMessage(authority.issue));
+      return null;
+    }
+    return authority;
+  };
+  const requireAuthoritativeCueList = (cueListId: number): CueListSummary | null => {
+    const authority = requireBankAuthority();
+    if (!authority) return null;
+    const cueList = authority.cueListById.get(cueListId) ?? null;
+    if (!cueList) setMessage(`Scene Bank ${cueListId} is no longer available.`);
+    return cueList;
+  };
+  const requireAuthoritativeCue = (cueId: number): CueSummary | null => {
+    const authority = requireBankAuthority();
+    if (!authority) return null;
+    const cue = authority.cueById.get(cueId) ?? null;
+    if (!cue) setMessage(`Scene ${cueId} is no longer available.`);
+    return cue;
+  };
+  const timelineSceneBlockCueRejectionMessage = (cueId: number, childCueId: number | null) =>
+    childCueId === null
+      ? `Scene ${cueId} is no longer available.`
+      : `Scene ${cueId} cannot be used inside this child Timeline.`;
+  /**
+   * This is the terminal Scene-source authorization for Timeline authoring.
+   * Shelf and gesture filters are convenience only; every add/set path must
+   * arrive here (or the command dispatcher below) before it can persist.
+   */
+  const requireTimelineSceneBlockCue = (cueId: number): CueSummary | null => {
+    const authority = requireBankAuthority();
+    if (!authority) return null;
+    const childCueId = timelineChildCueId();
+    if (!timelineSceneBlockCueAllowedByAuthority(cueId, authority, childCueId)) {
+      setMessage(timelineSceneBlockCueRejectionMessage(cueId, childCueId));
+      return null;
+    }
+    return authority.cueById.get(cueId) ?? null;
+  };
   const timelineCueOptions = createMemo(
-    () => buildTimelineSceneBlockCueOptions(
-      timelineChildCueId() === null
-        ? snapshotCues()
-        : snapshotCues().filter((cue) => cue.id !== timelineChildCueId() && !cue.child_timeline),
-    ),
+    () => {
+      const authority = bankAuthority();
+      const allowedCueIds = timelineSceneBlockAllowedCueIds(authority, timelineChildCueId());
+      if (allowedCueIds === null) return [];
+      const candidates = authority.cues.filter((cue) => allowedCueIds.has(cue.id));
+      return buildTimelineSceneBlockCueOptions([...candidates]);
+    },
     [],
     { equals: timelineSceneBlockCueOptionsEqual },
   );
@@ -7705,6 +8375,8 @@ export default function App() {
     return cues[0]?.id ?? null;
   });
   const timelineArmedCue = createMemo(() => {
+    const authority = bankAuthority();
+    if (authority.issue) return null;
     const cue = timelineCueOptions().find((candidate) => candidate.id === timelineArmedCueId());
     return cue ? {
       id: cue.id,
@@ -7717,7 +8389,19 @@ export default function App() {
       ),
     } : null;
   });
+  createEffect(() => {
+    const armedCueId = timelineArmedCueId();
+    if (armedCueId === null) return;
+    const authority = bankAuthority();
+    if (!timelineSceneBlockCueAllowedByAuthority(armedCueId, authority, timelineChildCueId())) {
+      setTimelineArmedCueId(null);
+    }
+  });
   const toggleTimelineArmedCue = (cueId: number | null) => {
+    if (cueId !== null && !requireTimelineSceneBlockCue(cueId)) {
+      setTimelineArmedCueId(null);
+      return;
+    }
     const nextCueId = timelineArmedCueId() === cueId ? null : cueId;
     setTimelineArmedCueId(nextCueId);
     if (cueId !== null) {
@@ -7727,7 +8411,7 @@ export default function App() {
     }
   };
   const timelineEventRows = createMemo(
-    () => buildTimelineSceneBlockRows(snapshotTimelineEvents(), snapshotCues()),
+    () => buildTimelineSceneBlockRows(snapshotTimelineEvents(), bankAuthority()),
     [],
     { equals: timelineSceneBlockRowsEqual },
   );
@@ -8979,21 +9663,29 @@ export default function App() {
       : null;
   });
   const hasCueEffectCaptureTargets = createMemo(() => cueEffectCaptureTargets().length > 0);
-  const selectedCueList = createMemo<CueListSummary>(() =>
-    snapshot().cue_lists.find((cueList) => cueList.id === selectedCueListId())
-      ?? snapshot().cue_lists[0]
-      ?? { id: 1, label: "Bank 1", active_cue_id: null },
-  );
-  const selectedCueListDisplayLabel = createMemo(() => {
-    return cueListDisplayLabel(selectedCueList());
-  });
-  const selectedCueListCues = createMemo(() =>
-    snapshot().cues.filter((cue) => cue.cue_list_id === selectedCueList().id),
-  );
+  const selectedCueList = createMemo<CueListSummary | null>(() => bankAuthoritySelectedCueList(
+    bankAuthority(),
+    selectedCueListId(),
+  ));
   createEffect(() => {
+    const requestedId = selectedCueListId();
+    const authority = bankAuthority();
+    if (requestedId === null && authority.issue === null) {
+      const bootstrap = authority.cueLists[0] ?? null;
+      if (bootstrap) {
+        setSelectedCueListId(bootstrap.id);
+        setCueListLabel(bootstrap.label);
+      } else {
+        setCueListLabel("");
+      }
+      return;
+    }
     const selected = selectedCueList();
-    if (selected.id !== selectedCueListId()) setSelectedCueListId(selected.id);
-    setCueListLabel(selectedCueListDisplayLabel());
+    if (!selected) {
+      setCueListLabel("");
+      return;
+    }
+    setCueListLabel(selected.label);
   });
   const cueCaptureScopeErrorForEffectSelection = (hasEffectTargets: boolean) => {
     switch (cueCaptureScope()) {
@@ -9088,9 +9780,10 @@ export default function App() {
   });
   const selectedSceneCue = createMemo(() => {
     const cueId = selectedSceneCueId();
-    return cueId === null
+    const authority = bankAuthority();
+    return cueId === null || authority.issue
       ? null
-      : snapshot().cues.find((cue) => cue.id === cueId) ?? null;
+      : authority.cueById.get(cueId) ?? null;
   });
   const selectedSceneEffects = createMemo(() => {
     const cue = selectedSceneCue();
@@ -9111,6 +9804,7 @@ export default function App() {
   // preserve cue > group > cue-hash priority across Timeline consumers.
   const cueIdentities = createMemo<Record<number, CueIdentitySource>>(() => {
     const map: Record<number, CueIdentitySource> = {};
+    if (bankAuthority().issue) return map;
     const colors = snapshot().group_colors ?? {};
     for (const cue of snapshot().cues) {
       map[cue.id] = {
@@ -9123,6 +9817,7 @@ export default function App() {
   });
   const groupColors = createMemo<Record<string, string>>(() => snapshot().group_colors ?? {});
   const setCueColor = async (cueId: number, color: string | null) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
@@ -9142,6 +9837,7 @@ export default function App() {
     cueId: number,
     settings: CueLiveModifierSettings | null,
   ) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
@@ -10222,7 +10918,7 @@ export default function App() {
     cueId: number,
     update: (child: ChildTimelineSummary) => ChildTimelineSummary,
   ) => {
-    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    const cue = requireAuthoritativeCue(cueId);
     if (!cue?.child_timeline) throw new Error(`Timeline Cue ${cueId} was not found`);
     const childTimeline = normalizedChildTimeline(update(normalizedChildTimeline(cue.child_timeline)));
     const localFixture = viewportFixture === "timeline-layered"
@@ -10408,6 +11104,20 @@ export default function App() {
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    const authority = requireBankAuthority();
+    if (!authority) {
+      const issue = bankAuthority().issue;
+      throw new Error(issue ? bankAuthorityIssueMessage(issue) : "Bank authority is unavailable.");
+    }
+    if (command === "add_timeline_scene_block"
+      || command === "set_timeline_scene_block"
+      || command === "set_timeline_cue_event") {
+      const cueId = Number(args?.cueId);
+      const childCueId = timelineChildCueId();
+      if (!timelineSceneBlockCueAllowedByAuthority(cueId, authority, childCueId)) {
+        throw new Error(timelineSceneBlockCueRejectionMessage(cueId, childCueId));
+      }
+    }
     const childCueId = timelineChildCueId();
     if (childCueId !== null) {
       const current = activeTimeline();
@@ -11175,7 +11885,7 @@ export default function App() {
       setMessage("Undo canceled; unsaved Timeline edits were kept.");
       return;
     }
-    if (viewportFixture === "scene-matrix") {
+    if (!isTauriRuntime()) {
       const entry = viewportSceneMatrixBankMoveUndo();
       if (!entry) return;
       setSnapshot((current) => ({
@@ -12729,9 +13439,21 @@ export default function App() {
     }
   };
 
-  const pendingControlEditTargets = new Map<number, Map<string, ControlEditCaptureTarget>>();
+  const pendingControlEditTargets = new Map<number, PendingControlEditLookUpdate>();
   let controlEditWriteTimer: number | null = null;
   let controlEditFlushChain = Promise.resolve();
+  const controlEditBankAuthorityFence = createBankAuthorityDelayFence(
+    bankAuthoritySemanticToken(bankAuthority()),
+  );
+  createEffect(() => {
+    const currentToken = bankAuthoritySemanticToken(bankAuthority());
+    if (!controlEditBankAuthorityFence.observe(currentToken)) return;
+    pendingControlEditTargets.clear();
+    if (controlEditWriteTimer !== null) {
+      window.clearTimeout(controlEditWriteTimer);
+      controlEditWriteTimer = null;
+    }
+  });
   const cloneCueTargets = (targets: CueSummary["targets"]): CueSummary["targets"] =>
     targets.map((target) => ({
       fixture_id: target.fixture_id,
@@ -12827,9 +13549,28 @@ export default function App() {
   const runControlEditLookUpdate = async (
     cueId: number,
     captureTargets: ControlEditCaptureTarget[],
+    capturedAuthority: BankAuthorityDelayCapture,
   ) => {
-    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
-    if (!cue || captureTargets.length === 0) return;
+    const authority = bankAuthority();
+    const currentBankAuthorityToken = bankAuthoritySemanticToken(authority);
+    if (authority.issue) {
+      setMessage(`Cue ${cueId} look update was discarded: ${bankAuthorityIssueMessage(authority.issue)}`);
+      return;
+    }
+    if (!controlEditBankAuthorityFence.isCurrent(
+        capturedAuthority,
+        projectMappingsAuthority(),
+        currentBankAuthorityToken,
+      )) {
+      setMessage(`Cue ${cueId} look update was discarded because Bank authority changed. Review Store Scope and retry.`);
+      return;
+    }
+    const cue = authority.cueById.get(cueId);
+    if (!cue) {
+      setMessage(`Cue ${cueId} look update was discarded because the Cue is no longer authoritative.`);
+      return;
+    }
+    if (captureTargets.length === 0) return;
     if (viewportFixture === "edit-live" || viewportFixture === "blind") {
       updateViewportControlEditLook(cue, captureTargets);
       setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
@@ -12851,14 +13592,19 @@ export default function App() {
       controlEditWriteTimer = null;
     }
     controlEditFlushChain = controlEditFlushChain.then(async () => {
-      const queued = [...pendingControlEditTargets.entries()].map(([cueId, targets]) => ({
+      const queued = [...pendingControlEditTargets.entries()].map(([cueId, pending]) => ({
         cueId,
-        targets: [...targets.values()],
+        targets: [...pending.targets.values()],
+        authority: pending.authority,
       }));
       pendingControlEditTargets.clear();
       for (const entry of queued) {
         try {
-          await runControlEditLookUpdate(entry.cueId, entry.targets);
+          await runControlEditLookUpdate(
+            entry.cueId,
+            entry.targets,
+            entry.authority,
+          );
         } catch (error) {
           setMessage(String(error));
         }
@@ -12871,9 +13617,29 @@ export default function App() {
     captureTarget: ControlEditCaptureTarget,
   ) => {
     if (cueId === null) return;
-    const targets = pendingControlEditTargets.get(cueId) ?? new Map<string, ControlEditCaptureTarget>();
-    targets.set(controlEditTargetKey(captureTarget), captureTarget);
-    pendingControlEditTargets.set(cueId, targets);
+    const authority = bankAuthority();
+    if (authority.issue || !authority.cueById.has(cueId)) {
+      if (authority.issue) setMessage(bankAuthorityIssueMessage(authority.issue));
+      else setMessage(`Scene ${cueId} is no longer available.`);
+      return;
+    }
+    const currentProjectAuthority = captureProjectAuthorityIdentity();
+    const currentBankAuthorityToken = bankAuthoritySemanticToken(authority);
+    const currentCapture = controlEditBankAuthorityFence.capture(currentProjectAuthority);
+    const existing = pendingControlEditTargets.get(cueId);
+    const pending = existing
+      && controlEditBankAuthorityFence.isCurrent(
+        existing.authority,
+        currentProjectAuthority,
+        currentBankAuthorityToken,
+      )
+      ? existing
+      : {
+          targets: new Map<string, ControlEditCaptureTarget>(),
+          authority: currentCapture,
+        };
+    pending.targets.set(controlEditTargetKey(captureTarget), captureTarget);
+    pendingControlEditTargets.set(cueId, pending);
     if (snapshot().programmer.blind) return;
     if (controlEditWriteTimer !== null) window.clearTimeout(controlEditWriteTimer);
     controlEditWriteTimer = window.setTimeout(() => {
@@ -14047,6 +14813,9 @@ export default function App() {
       return false;
     }
     abortMediaAssetOperationsForAuthorityChange(next);
+    // A project-authority application is a project boundary: a pending ASIO
+    // revalidation arm is spent before the new authority token is published.
+    setLiveAudioInputAsioRevalidationArm(null);
     projectTransactionAuthorityRevision = next.project_revision;
     projectTransactionAuthorityCheckpointHash = next.checkpoint_hash;
     setProjectMappingsAuthority(next);
@@ -14101,6 +14870,9 @@ export default function App() {
   };
 
   const commitPreparedProjectControlMappings = (prepared: PreparedProjectControlMappings) => {
+    // Committing a prepared project-authority image is a project boundary: any
+    // pending ASIO revalidation arm is spent with the authority transition.
+    setLiveAudioInputAsioRevalidationArm(null);
     abortMediaAssetOperationsForAuthorityChange(prepared.token);
     mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx, prepared.dj);
     setMidiMappings(prepared.midi);
@@ -14683,12 +15455,20 @@ export default function App() {
     targetLayer: TimelineLayerSummary,
     timeMs: number,
   ) => {
-    await executeTimelineExternalDrop(
+    if (source.kind === "scene" && !requireTimelineSceneBlockCue(source.cue_id)) return;
+    // This exact source set is passed into the shared production DnD runtime,
+    // so a syntactically valid forged MIME payload cannot reach placeScene even
+    // if it bypassed the Shelf/Overview gesture guards.
+    const allowedSceneCueIds = timelineSceneBlockAllowedCueIds(
+      bankAuthority(),
+      timelineChildCueId(),
+    ) ?? new Set<number>();
+    const placed = await executeTimelineExternalDrop(
       source,
       targetLayer,
       timelineLayers(),
       snapshot().video.media_assets,
-      new Set(snapshot().cues.map((cue) => cue.id)),
+      allowedSceneCueIds,
       timeMs,
       {
         reject: setMessage,
@@ -14699,7 +15479,17 @@ export default function App() {
             setMessage(translateUiText(`Scene ${cueId} is no longer available.`, uiLocale()));
             return false;
           }
-          const beforeEventIds = new Set(snapshot().timeline.events.map((event) => event.id));
+          const timelineOwnerCueId = timelineChildCueId();
+          const eventCollectionForTimelineOwner = (ownerCueId: number | null) => {
+            if (ownerCueId === null) return snapshot().timeline.events;
+            return snapshot().cues.find((candidate) => candidate.id === ownerCueId)?.child_timeline?.events ?? null;
+          };
+          const beforeEvents = eventCollectionForTimelineOwner(timelineOwnerCueId);
+          if (beforeEvents === null) {
+            setMessage(translateUiText("The active child Timeline is no longer available.", uiLocale()));
+            return false;
+          }
+          const beforeEventIds = new Set(beforeEvents.map((event) => event.id));
           await placeArmedTimelineCue(
             cue.id,
             startMs,
@@ -14708,12 +15498,13 @@ export default function App() {
             timelineStretchMode(),
             timelineMagnetEnabled(),
           );
-          return snapshot().timeline.events.some((event) =>
+          const afterEvents = eventCollectionForTimelineOwner(timelineOwnerCueId);
+          return afterEvents?.some((event) =>
             !beforeEventIds.has(event.id) &&
             event.cue_id === cue.id &&
             event.track === "Lighting" &&
             event.layer_id === layerId &&
-            event.time_ms === Math.max(0, Math.round(startMs)));
+            event.time_ms === Math.max(0, Math.round(startMs))) ?? false;
         },
         insertMedia: async (mediaAssetId, placement) => {
           const placed = await insertMediaAssetOnTimeline(mediaAssetId, placement);
@@ -14723,6 +15514,9 @@ export default function App() {
       },
       mediaAssetAvailabilityById(),
     );
+    if (placed && source.kind === "scene") {
+      setMessage(translateUiText(`Scene ${source.cue_id} placed on the Timeline.`, uiLocale()));
+    }
   };
   const setTimelineGuideEnabled = async (enabled: boolean) => {
     try {
@@ -15404,6 +16198,9 @@ export default function App() {
           ? candidate.operator_policy.lock_mode
           : null);
         batch(() => {
+          // Either branch of an authority-bundle commit is a project boundary:
+          // spend any pending ASIO revalidation arm inside the atomic batch.
+          setLiveAudioInputAsioRevalidationArm(null);
           if (options.replacement) resetMediaAssetUiForProjectReplacement();
           if (preparedMappings) {
             commitPreparedProjectControlMappings(preparedMappings);
@@ -17989,6 +18786,12 @@ export default function App() {
   });
 
   const createCue = async () => {
+    if (!requireBankAuthority()) return;
+    const cueList = selectedCueList();
+    if (!cueList) {
+      setMessage("Create a Bank before creating a Scene.");
+      return;
+    }
     const scopeError = cueCaptureScopeError();
     if (scopeError) {
       setMessage(scopeError);
@@ -18007,14 +18810,18 @@ export default function App() {
     if (viewportFixture === "scene-matrix") {
       const template = snapshot().cues[0];
       if (!template) {
-        setMessage("Create a Cue List before creating a scene.");
+        setMessage("Create a Bank before creating a Scene.");
         return;
       }
-      const cueId = Math.max(0, ...snapshot().cues.map((cue) => cue.id)) + 1;
+      const cueId = nextBankAuthorityId(snapshot().cues.map((cue) => cue.id));
+      if (cueId === null) {
+        setMessage("New Scene ID could not be allocated safely.");
+        return;
+      }
       const cue = {
         ...structuredClone(template),
         id: cueId,
-        cue_list_id: selectedCueList().id,
+        cue_list_id: cueList.id,
         cue_number: String(snapshot().cues.length + 1),
         label: cueLabel().trim() || `Cue ${cueId}`,
         fade_ms: cueFadeMs(),
@@ -18027,7 +18834,7 @@ export default function App() {
       setSelectedSceneCueId(cueId);
       setSelectedSceneEffectId(null);
       setSceneSettingsSurface("contents");
-      setMessage(`Created cue ${cueId}`);
+      setMessage(`Created Scene ${cueId}`);
       return;
     }
     try {
@@ -18036,14 +18843,14 @@ export default function App() {
         fadeMs: cueFadeMs(),
         authoredBeats: cueAuthoredBeats(),
         captureScope,
-        cueListId: selectedCueList().id,
+        cueListId: cueList.id,
         effectTargets: cueEffectCaptureTargets(),
       });
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setSelectedSceneCueId(cueId);
       setSelectedSceneEffectId(null);
       setSceneSettingsSurface("contents");
-      setMessage(`Created cue ${cueId}`);
+      setMessage(`Created Scene ${cueId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -18051,31 +18858,61 @@ export default function App() {
   };
 
   const nextCueListLabel = () => {
-    const labels = new Set(snapshot().cue_lists.map((cueList) => cueListDisplayLabel(cueList).trim().toLowerCase()));
+    const labels = new Set(snapshot().cue_lists.map((cueList) => cueList.label.trim().toLowerCase()));
     let index = 1;
     while (labels.has(`bank ${index}`)) index += 1;
     return `Bank ${index}`;
   };
 
   const createCueList = async (): Promise<boolean> => {
+    if (!requireBankAuthority()) return false;
     const label = cueListLabel().trim() || nextCueListLabel();
-    if (viewportFixture === "scene-matrix") {
-      const cueListId = Math.max(0, ...snapshot().cue_lists.map((cueList) => cueList.id)) + 1;
+    if (!isTauriRuntime()) {
+      const cueListId = nextBankAuthorityId(snapshot().cue_lists.map((cueList) => cueList.id));
+      if (cueListId === null) {
+        setMessage("New Bank ID could not be allocated safely.");
+        return false;
+      }
       setSnapshot((current) => ({
         ...current,
         cue_lists: [...current.cue_lists, { id: cueListId, label, active_cue_id: null }],
       }));
       setSelectedCueListId(cueListId);
       setCueListLabel(label);
-      setMessage(`Created Cue List ${label}`);
+      setMessage(`Created Bank ${label}`);
       return true;
     }
     try {
-      const cueListId = await invoke<number>("create_cue_list", { label });
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while creating the Bank; nothing was applied.");
+        return false;
+      }
+      const result = await invoke<ProjectHistoryMutationResult & { cue_list_id: number }>("create_cue_list", {
+        label,
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("New Bank acknowledgement was stale; refresh before retrying.");
+        return false;
+      }
+      const cueListId = result.cue_list_id;
+      if (!Number.isSafeInteger(cueListId) || cueListId <= 0) {
+        setMessage("New Bank acknowledgement omitted its committed Bank ID; refresh before retrying.");
+        return false;
+      }
       await refreshSnapshot();
+      if (!snapshot().cue_lists.some((cueList) => cueList.id === cueListId)) {
+        setMessage("New Bank was acknowledged, but the refreshed project did not contain it.");
+        return false;
+      }
       setSelectedCueListId(cueListId);
       setCueListLabel(label);
-      setMessage(`Created Cue List ${label}`);
+      setMessage(`Created Bank ${label}`);
       return true;
     } catch (error) {
       setMessage(String(error));
@@ -18084,9 +18921,8 @@ export default function App() {
   };
 
   const createSceneInCueList = async (cueListId: number): Promise<boolean> => {
-    const cueList = snapshot().cue_lists.find((candidate) => candidate.id === cueListId);
+    const cueList = requireAuthoritativeCueList(cueListId);
     if (!cueList) {
-      setMessage(`Scene Bank ${cueListId} is no longer available.`);
       return false;
     }
     setSelectedCueListId(cueListId);
@@ -18097,7 +18933,11 @@ export default function App() {
       const template = snapshot().cues.find((cue) => cue.cue_list_id === cueListId)
         ?? snapshot().cues[0]
         ?? viewportFixtureData.cueRecallCue;
-      const cueId = Math.max(0, ...snapshot().cues.map((cue) => cue.id)) + 1;
+      const cueId = nextBankAuthorityId(snapshot().cues.map((cue) => cue.id));
+      if (cueId === null) {
+        setMessage("New Scene ID could not be allocated safely.");
+        return false;
+      }
       const cue: CueSummary = {
         ...structuredClone(template),
         id: cueId,
@@ -18130,7 +18970,7 @@ export default function App() {
       setSelectedSceneCueId(cueId);
       setSelectedSceneEffectId(null);
       setSceneSettingsSurface("contents");
-      setMessage(`Created scene in ${cueListDisplayLabel(cueList)}`);
+      setMessage(`Created scene in ${cueList.label}`);
       return true;
     }
     const beforeCueIds = new Set(snapshot().cues.map((cue) => cue.id));
@@ -18164,7 +19004,7 @@ export default function App() {
       setSelectedSceneCueId(createdCue.id);
       setSelectedSceneEffectId(null);
       setSceneSettingsSurface("contents");
-      setMessage(`Created scene in ${cueListDisplayLabel(cueList)}`);
+      setMessage(`Created scene in ${cueList.label}`);
       return true;
     } catch (error) {
       setMessage(String(error));
@@ -18173,13 +19013,19 @@ export default function App() {
   };
 
   const renameCueList = async (): Promise<boolean> => {
-    if (viewportFixture === "scene-matrix") {
-      const label = cueListLabel().trim();
-      if (!label) {
-        setMessage("Cue List label is required.");
-        return false;
-      }
-      const cueListId = selectedCueList().id;
+    if (!requireBankAuthority()) return false;
+    const selected = selectedCueList();
+    if (!selected) {
+      setMessage("The selected Bank is no longer available.");
+      return false;
+    }
+    const label = cueListLabel().trim();
+    if (!label) {
+      setMessage("Bank name is required.");
+      return false;
+    }
+    const cueListId = selected.id;
+    if (!isTauriRuntime()) {
       setSnapshot((current) => ({
         ...current,
         cue_lists: current.cue_lists.map((cueList) => cueList.id === cueListId
@@ -18187,13 +19033,36 @@ export default function App() {
           : cueList),
       }));
       setCueListLabel(label);
-      setMessage(`Renamed Cue List ${cueListId}`);
+      setMessage(`Renamed Bank ${cueListId}`);
       return true;
     }
     try {
-      await invoke("rename_cue_list", { cueListId: selectedCueList().id, label: cueListLabel() });
-      setMessage(`Renamed Cue List ${selectedCueList().id}`);
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while renaming the Bank; nothing was applied.");
+        return false;
+      }
+      const result = await invoke<ProjectHistoryMutationResult>("rename_cue_list", {
+        cueListId,
+        label,
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
+      });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("Bank rename acknowledgement was stale; refresh before retrying.");
+        return false;
+      }
       await refreshSnapshot();
+      const renamed = snapshot().cue_lists.find((cueList) => cueList.id === cueListId);
+      if (!renamed || renamed.label !== label) {
+        setMessage("Bank rename was acknowledged, but the refreshed project did not contain the requested label.");
+        return false;
+      }
+      setCueListLabel(label);
+      setMessage(`Renamed Bank ${cueListId}`);
       return true;
     } catch (error) {
       setMessage(String(error));
@@ -18202,20 +19071,29 @@ export default function App() {
   };
 
   const removeCueList = async (cueListId?: number, confirmed = false): Promise<boolean> => {
-    const cueList = snapshot().cue_lists.find((candidate) => candidate.id === (cueListId ?? selectedCueList().id))
-      ?? selectedCueList();
-    if (snapshot().cue_lists.length <= 1) {
-      setMessage("At least one bank is required.");
+    if (!requireBankAuthority()) return false;
+    const targetCueListId = cueListId ?? selectedCueList()?.id ?? null;
+    const cueList = targetCueListId === null ? null : requireAuthoritativeCueList(targetCueListId);
+    if (!cueList) {
+      setMessage("The selected Bank is no longer available.");
       return false;
     }
-    if (!confirmed && !confirmDestructiveAction("cue list", cueListDisplayLabel(cueList))) return false;
-    if (viewportFixture === "scene-matrix") {
+    if (snapshot().cue_lists.length <= 1) {
+      setMessage("At least one Bank is required.");
+      return false;
+    }
+    const deletingSelectedBank = selectedCueListId() === cueList.id;
+    const deletedBankIndex = snapshot().cue_lists.findIndex((candidate) => candidate.id === cueList.id);
+    if (!confirmed && !confirmDestructiveAction("Bank", cueList.label)) return false;
+    if (!isTauriRuntime()) {
       const beforeCues = structuredClone(snapshot().cues);
       const beforeCueLists = structuredClone(snapshot().cue_lists);
       const afterCueLists = beforeCueLists.filter((candidate) => candidate.id !== cueList.id);
       const afterCues = beforeCues.filter((cue) => cue.cue_list_id !== cueList.id);
       const remainingCueLists = afterCueLists;
-      const nextSelectedCueList = remainingCueLists[0] ?? null;
+      const nextSelectedCueList = deletingSelectedBank
+        ? remainingCueLists[Math.min(Math.max(0, deletedBankIndex), remainingCueLists.length - 1)] ?? null
+        : null;
       const deletingSelectedScene = selectedSceneCueId() !== null && beforeCues.some((cue) =>
         cue.id === selectedSceneCueId() && cue.cue_list_id === cueList.id);
       setSnapshot((current) => ({
@@ -18245,9 +19123,9 @@ export default function App() {
       }
       if (nextSelectedCueList) {
         setSelectedCueListId(nextSelectedCueList.id);
-        setCueListLabel(cueListDisplayLabel(nextSelectedCueList));
+        setCueListLabel(nextSelectedCueList.label);
       }
-      setMessage(`Removed Cue List ${cueListDisplayLabel(cueList)}; its scenes were deleted.`);
+      setMessage(`Removed Bank ${cueList.label}; its Scenes were deleted.`);
       return true;
     }
     try {
@@ -18275,16 +19153,18 @@ export default function App() {
         return false;
       }
       const remainingCueLists = snapshot().cue_lists.filter((candidate) => candidate.id !== cueList.id);
-      const nextSelectedCueList = remainingCueLists[0] ?? null;
+      const nextSelectedCueList = deletingSelectedBank
+        ? remainingCueLists[Math.min(Math.max(0, deletedBankIndex), remainingCueLists.length - 1)] ?? null
+        : null;
       if (nextSelectedCueList) {
         setSelectedCueListId(nextSelectedCueList.id);
-        setCueListLabel(cueListDisplayLabel(nextSelectedCueList));
+        setCueListLabel(nextSelectedCueList.label);
       }
       if (selectedSceneCueId() !== null && !snapshot().cues.some((cue) => cue.id === selectedSceneCueId())) {
         setSelectedSceneCueId(null);
         setSelectedSceneEffectId(null);
       }
-      setMessage(`Removed Cue List ${cueListDisplayLabel(cueList)}; its scenes were deleted.`);
+      setMessage(`Removed Bank ${cueList.label}; its Scenes were deleted.`);
       return true;
     } catch (error) {
       setMessage(String(error));
@@ -18293,6 +19173,15 @@ export default function App() {
   };
 
   const reorderCueLists = async (orderedCueListIds: number[]): Promise<boolean> => {
+    const authority = requireBankAuthority();
+    if (!authority) return false;
+    const requestedIds = new Set(orderedCueListIds);
+    if (requestedIds.size !== orderedCueListIds.length
+      || orderedCueListIds.length !== authority.cueLists.length
+      || orderedCueListIds.some((cueListId) => !authority.cueListById.has(cueListId))) {
+      setMessage("Scene Bank reorder was rejected because the requested identity set is invalid.");
+      return false;
+    }
     const beforeCueLists = structuredClone(snapshot().cue_lists);
     const byId = new Map(beforeCueLists.map((cueList) => [cueList.id, cueList]));
     const ordered = orderedCueListIds
@@ -18329,7 +19218,7 @@ export default function App() {
         return false;
       }
       const result = await invoke<ProjectHistoryMutationResult>("reorder_cue_lists", {
-        request: { cueListIds: orderedCueListIds },
+        cueListIds: orderedCueListIds,
         expectedEpoch: currentAuthority.project_epoch,
         expectedRevision: currentAuthority.project_revision,
         expectedCheckpointHash: currentAuthority.checkpoint_hash,
@@ -18349,15 +19238,37 @@ export default function App() {
   };
 
   const setCueList = async (cueId: number, cueListId: number) => {
+    const cue = requireAuthoritativeCue(cueId);
+    const destination = requireAuthoritativeCueList(cueListId);
+    if (!cue || !destination) {
+      return;
+    }
+    if (cue.cue_list_id === cueListId) return;
     try {
-      await invoke("set_cue_list", { cueId, cueListId });
-      await refreshSnapshot();
+      await runSceneMatrixBankMoveTransaction(cue, cueListId, cue.group_id?.trim() || null, null, "after");
+      if (viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator") {
+        setSnapshot((current) => ({
+          ...current,
+          cues: applySceneMatrixCueListMove(
+            current.cues,
+            cueId,
+            null,
+            cueListId,
+            cue.group_id?.trim() || null,
+            "after",
+          ),
+        }));
+      } else {
+        await refreshSnapshot();
+      }
+      setMessage(`Cue moved to ${destination.label}.`);
     } catch (error) {
       setMessage(String(error));
     }
   };
 
   const setCuePalette = async (cue: CueSummary, paletteId: number, enabled: boolean) => {
+    if (!requireAuthoritativeCue(cue.id)) return;
     const withoutPalette = cue.palette_targets.filter((target) => target.palette_id !== paletteId);
     const fixtureIds = [...new Set(cue.targets.map((target) => target.fixture_id))].sort((left, right) => left - right);
     if (enabled && fixtureIds.length === 0) {
@@ -18377,6 +19288,7 @@ export default function App() {
   };
 
   const triggerCueList = async (cueListId: number, direction: "next" | "previous") => {
+    if (!requireAuthoritativeCueList(cueListId)) return;
     try {
       await invoke(direction === "next" ? "trigger_cue_list_next" : "trigger_cue_list_previous", { cueListId });
       setMessage(direction === "next" ? `GO List ${cueListId}` : `Back List ${cueListId}`);
@@ -18387,6 +19299,7 @@ export default function App() {
   };
 
   const createPlaybackExecutor = async (label: string, cueListId: number, page: number, slot: number) => {
+    if (!requireAuthoritativeCueList(cueListId)) return;
     try {
       const executorId = await invoke<number>("create_playback_executor", { label, cueListId, page, slot });
       setMessage(`Created Playback Executor ${executorId} on page ${page}, slot ${slot}.`);
@@ -18400,7 +19313,13 @@ export default function App() {
     executor: PlaybackExecutorSummary,
     patch: Partial<PlaybackExecutorSummary>,
   ) => {
+    const authority = requireBankAuthority();
+    if (!authority || authority.executorById.get(executor.id) === undefined) {
+      if (authority) setMessage(`Playback Executor ${executor.id} is no longer available.`);
+      return;
+    }
     const next = { ...executor, ...patch };
+    if (!requireAuthoritativeCueList(next.cue_list_id)) return;
     try {
       await invoke("update_playback_executor", {
         executorId: next.id,
@@ -18416,6 +19335,11 @@ export default function App() {
   };
 
   const removePlaybackExecutor = async (executor: PlaybackExecutorSummary) => {
+    const authority = requireBankAuthority();
+    if (!authority || authority.executorById.get(executor.id) === undefined) {
+      if (authority) setMessage(`Playback Executor ${executor.id} is no longer available.`);
+      return;
+    }
     if (!confirmDestructiveAction("playback executor", executor.label)) return;
     try {
       await invoke("remove_playback_executor", { executorId: executor.id });
@@ -18427,6 +19351,11 @@ export default function App() {
   };
 
   const setPlaybackExecutorLevel = async (executorId: number, level: number) => {
+    const authority = requireBankAuthority();
+    if (!authority || authority.executorById.get(executorId) === undefined) {
+      if (authority) setMessage(`Playback Executor ${executorId} is no longer available.`);
+      return;
+    }
     try {
       await invoke("set_playback_executor_level", { executorId, level });
       await refreshSnapshot(false);
@@ -18436,6 +19365,7 @@ export default function App() {
   };
 
   const setPlaybackMaster = async (level: number) => {
+    if (!requireBankAuthority()) return;
     try {
       await invoke("set_playback_master", { level });
       await refreshSnapshot(false);
@@ -18445,6 +19375,11 @@ export default function App() {
   };
 
   const triggerPlaybackExecutor = async (executorId: number, direction: "next" | "previous") => {
+    const authority = requireBankAuthority();
+    if (!authority || authority.executorById.get(executorId) === undefined) {
+      if (authority) setMessage(`Playback Executor ${executorId} is no longer available.`);
+      return;
+    }
     try {
       await invoke("trigger_playback_executor", { executorId, direction });
       setMessage(`${direction === "next" ? "GO" : "Back"} Playback Executor ${executorId}.`);
@@ -18455,6 +19390,7 @@ export default function App() {
   };
 
   const triggerCue = async (cueId: number) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     if (viewportFixture === "scene-matrix") {
       setSnapshot((current) => {
         const cue = current.cues.find((candidate) => candidate.id === cueId);
@@ -18484,6 +19420,13 @@ export default function App() {
   };
 
   const releaseCueById = async (cueId: number) => {
+    if (!Number.isSafeInteger(cueId) || cueId <= 0) {
+      setMessage("Cue release was rejected because its ID is invalid.");
+      return;
+    }
+    // Release is safety-lowering and may be the second half of a momentary
+    // flash that began before Bank authority became unavailable. Never gate
+    // this cleanup behind the authority needed for a new activation.
     if (viewportFixture === "scene-matrix") {
       setSnapshot((current) => {
         const cue = current.cues.find((candidate) => candidate.id === cueId);
@@ -18522,6 +19465,7 @@ export default function App() {
     direction: CueLiveDirection,
     segment: number,
   ) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     if (viewportFixture === "scene-matrix") {
       setSnapshot((current) => ({
         ...current,
@@ -18548,6 +19492,7 @@ export default function App() {
   };
 
   const clearCueLiveModifierLive = async (cueId: number) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     if (viewportFixture === "scene-matrix") {
       setSnapshot((current) => ({
         ...current,
@@ -18570,6 +19515,7 @@ export default function App() {
     label: string,
     fadeMs: number,
   ) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     const normalizedFadeMs = Math.max(0, Math.round(Number.isFinite(fadeMs) ? fadeMs : cueFadeMs()));
     const scopeError = cueCaptureScopeError();
     if (scopeError) {
@@ -18597,6 +19543,7 @@ export default function App() {
   };
 
   const setCueEffectTargets = async (cueId: number, effectTargets: CueEffectTarget[]) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     try {
       await invoke("set_cue_effect_targets", { cueId, effectTargets });
       setMessage(`Saved cue ${cueId} Effect Recall only.`);
@@ -18607,6 +19554,7 @@ export default function App() {
   };
 
   const setCueSteps = async (cueId: number, steps: CueStepSummary[]) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     try {
       await invoke("set_cue_steps", { cueId, steps });
       setMessage(`Saved ${steps.length} Static step(s) for cue ${cueId}.`);
@@ -18617,6 +19565,7 @@ export default function App() {
   };
 
   const setCueMetadata = async (cue: CueSummary) => {
+    if (!requireAuthoritativeCue(cue.id)) return;
     const draft = cueMetadataDraft(cue);
     const fadeMs = Math.max(0, Math.round(Number.isFinite(draft.fade_ms) ? draft.fade_ms : cue.fade_ms));
     const authoredBeats = draft.authored_beats === null || !Number.isFinite(draft.authored_beats)
@@ -18703,6 +19652,7 @@ export default function App() {
   };
 
   const moveCue = async (cueId: number, delta: -1 | 1) => {
+    if (!requireAuthoritativeCue(cueId)) return;
     try {
       await invoke("move_cue", { cueId, delta });
       await refreshSnapshot();
@@ -18718,6 +19668,8 @@ export default function App() {
     targetCueId: number | null,
     position: "before" | "after",
   ) => {
+    if (!requireAuthoritativeCue(cue.id) || !requireAuthoritativeCueList(cueListId)) return null;
+    if (targetCueId !== null && !requireAuthoritativeCue(targetCueId)) return null;
     if (!isTauriRuntime()) return null;
     await invoke("move_cue_between_scene_banks_batch", {
       cueId: cue.id,
@@ -18734,9 +19686,19 @@ export default function App() {
     position: "before" | "after",
     targetCueListId: number,
   ) => {
+    if (!requireBankAuthority()) return;
+    if (!requireAuthoritativeCue(sourceCueId) || !requireAuthoritativeCueList(targetCueListId)) return;
+    if (targetCueId !== null && !requireAuthoritativeCue(targetCueId)) return;
     if (sourceCueId === targetCueId) return;
     const resolvedPosition = targetCueId === null ? "after" : position;
     const cues = snapshot().cues;
+    // Fixture undo must restore the image that existed at user intent time.
+    // The production-shaped transaction bridge can publish its terminal
+    // authority snapshot during the await below, so cloning afterward would
+    // capture the already-moved result and make Undo a no-op.
+    const localFixtureBeforeCues = viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator"
+      ? structuredClone(cues)
+      : null;
     const sourceCue = cues.find((cue) => cue.id === sourceCueId);
     const targetCue = targetCueId === null
       ? null
@@ -18782,9 +19744,8 @@ export default function App() {
         ? targetList.findIndex((cue) => cue.id === targetCue.id)
         : targetList.length;
       if (targetCue && targetIndex < 0) return;
-      // set_cue_list appends the Cue to its destination list. Move it upward
-      // to the requested target; the local fixture uses the exact target
-      // insertion instead of depending on backend ordering details.
+      // The cross-Bank batch applies the exact target insertion. The local
+      // fixture mirrors that placement instead of depending on backend order.
       delta = -1;
       stepCount = Math.max(0, targetList.length - targetIndex - (resolvedPosition === "after" ? 1 : 0));
     }
@@ -18805,10 +19766,12 @@ export default function App() {
       }
 
       if (viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator") {
-        const beforeCues = structuredClone(cues);
+        // This stays tied to the pre-await capture above. Do not derive it
+        // from the latest signal, which may now contain terminal authority.
+        const beforeCues = localFixtureBeforeCues!;
         const afterCues = crossesBank
           ? applySceneMatrixCueListMove(
-            cues,
+            beforeCues,
             sourceCueId,
             targetCueId,
             targetCueListId,
@@ -18816,7 +19779,7 @@ export default function App() {
             resolvedPosition,
           )
           : applySceneMatrixCueMove(
-            cues,
+            beforeCues,
             sourceCueId,
             normalizedTargetGroupId,
             false,
@@ -18864,6 +19827,7 @@ export default function App() {
   };
 
   const duplicateCue = async (cue: CueSummary) => {
+    if (!requireAuthoritativeCue(cue.id)) return;
     const draft = cueMetadataDraft(cue);
     const baseLabel = draft.label.trim() || cue.label;
     try {
@@ -18879,6 +19843,7 @@ export default function App() {
   };
 
   const triggerNextCue = async () => {
+    if (!requireBankAuthority()) return;
     try {
       await invoke("trigger_next_cue");
       setMessage("GO");
@@ -18889,6 +19854,7 @@ export default function App() {
   };
 
   const triggerPreviousCue = async () => {
+    if (!requireBankAuthority()) return;
     try {
       await invoke("trigger_previous_cue");
       setMessage("Back");
@@ -18899,6 +19865,7 @@ export default function App() {
   };
 
   const setCueFadePaused = async (paused: boolean) => {
+    if (!requireBankAuthority()) return;
     try {
       await invoke("set_cue_fade_paused", { paused });
       setMessage(paused ? "Cue fade paused." : "Cue fade resumed.");
@@ -18908,34 +19875,44 @@ export default function App() {
     }
   };
 
-  const removeCue = async (cueId: number) => {
-    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
-    if (cue) {
-      const linkedPlacements = snapshot().timeline.events.filter((event) => event.cue_id === cueId);
-      const linkedPlacementIds = new Set(linkedPlacements.map((event) => event.id));
-      const incomingJumpCount = snapshot().timeline.events.filter((event) =>
-        event.cue_id !== cueId &&
-        event.jump_to_event_id !== null &&
-        event.jump_to_event_id !== undefined &&
-        linkedPlacementIds.has(event.jump_to_event_id),
-      ).length;
-      if (!confirmCueRemoval(cue.label, linkedPlacements.length, incomingJumpCount)) {
-        return;
+  const cueRemovalImpact = (cueId: number) => {
+    const linkedPlacements = snapshot().timeline.events.filter((event) => event.cue_id === cueId);
+    const linkedPlacementIds = new Set(linkedPlacements.map((event) => event.id));
+    const incomingJumps = snapshot().timeline.events.filter((event) =>
+      event.cue_id !== cueId &&
+      event.jump_to_event_id !== null &&
+      event.jump_to_event_id !== undefined &&
+      linkedPlacementIds.has(event.jump_to_event_id),
+    );
+    return {
+      linkedPlacements: linkedPlacements.length,
+      incomingJumps: incomingJumps.length,
+    };
+  };
+
+  const removeCue = async (cueId: number, confirmed = false): Promise<boolean> => {
+    const cue = requireAuthoritativeCue(cueId);
+    if (!cue) return false;
+    if (cue && !confirmed) {
+      const impact = cueRemovalImpact(cueId);
+      if (!confirmCueRemoval(cue.label, impact.linkedPlacements, impact.incomingJumps)) {
+        return false;
       }
     }
     try {
       await invoke("remove_cue", { cueId });
       setMessage(`Removed cue ${cueId}`);
       await refreshSnapshot();
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
   const openTimelineSourceCue = (cueId: number) => {
-    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    const cue = requireAuthoritativeCue(cueId);
     if (!cue) {
-      setMessage(`Source Cue ${cueId} is no longer available.`);
       return;
     }
     setWorkspaceTab("control");
@@ -18945,6 +19922,22 @@ export default function App() {
     setSceneSettingsSurface("details");
     setTimelineContextDrawer("none");
     setMessage(`Opened Cue details for ${cue.cue_number || cue.id}.`);
+  };
+
+  const beginSceneRename = (cueId: number) => {
+    const cue = requireAuthoritativeCue(cueId);
+    if (!cue) {
+      return;
+    }
+    openTimelineSourceCue(cueId);
+    setMessage(`Rename Scene ${cue.cue_number || cue.id}.`);
+    queueMicrotask(() => window.requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        `[data-cue-metadata-label="${cueId}"]`,
+      );
+      input?.focus();
+      input?.select();
+    }));
   };
 
   const setTimelineMetronome = async (enabled: boolean, countInBeats: number) => {
@@ -18978,9 +19971,8 @@ export default function App() {
   };
 
   const openOrCreateSuperScene = async (cueId: number) => {
-    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    const cue = requireAuthoritativeCue(cueId);
     if (!cue) {
-      setMessage(`Source Cue ${cueId} is no longer available.`);
       return false;
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
@@ -19240,20 +20232,25 @@ export default function App() {
     durationMs: number,
     stretchMode: "RATE" | "WINDOW",
     snapEnabled: boolean,
-  ) => timelineSceneBlocks.addAt(cueId, timeMs, "Lighting", false, {
-    layerId,
-    durationMs,
-    authoredBeats: snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null,
-    stretchMode,
-    snapEnabled,
-    loopCount: 1,
-  });
+  ) => {
+    const cue = requireTimelineSceneBlockCue(cueId);
+    if (!cue) return;
+    await timelineSceneBlocks.addAt(cue.id, timeMs, "Lighting", false, {
+      layerId,
+      durationMs,
+      authoredBeats: cue.authored_beats ?? null,
+      stretchMode,
+      snapEnabled,
+      loopCount: 1,
+    });
+  };
 
   const beginTimelineCueDrag = (
     cue: CueSummary,
     point: TimelineCueDragPoint,
     sourceSurface: TimelineCueDragState["source_surface"] = "cue-editor",
   ) => {
+    if (!requireAuthoritativeCue(cue.id)) return;
     setTimelineCueDrag({
       cue_id: cue.id,
       cue_label: cue.label,
@@ -19282,6 +20279,8 @@ export default function App() {
       : null;
     setTimelineCueDrag(null);
     if (!drag || canceled || (!drag.moved && !moved)) return;
+    const authoritativeCue = requireAuthoritativeCue(drag.cue_id);
+    if (!authoritativeCue) return;
     const hitElement = document.elementFromPoint(point.clientX, point.clientY);
     const matrixColumn = drag.source_surface === "scene-matrix"
       ? hitElement?.closest<HTMLElement>("[data-scene-matrix-column]")
@@ -19343,11 +20342,8 @@ export default function App() {
       setMessage("Video lanes accept Video media sources; Cue drops require a Lighting lane.");
       return;
     }
-    const cue = snapshotCues().find((candidate) => candidate.id === drag.cue_id);
-    if (!cue) {
-      setMessage(`Cue ${drag.cue_id} was not found.`);
-      return;
-    }
+    const cue = requireTimelineSceneBlockCue(drag.cue_id);
+    if (!cue) return;
     const canvasRect = canvas.getBoundingClientRect();
     if (point.clientX < canvasRect.left || point.clientX > canvasRect.right) {
       setMessage("Drop the Cue inside the timeline canvas.");
@@ -20591,12 +21587,29 @@ export default function App() {
     let request!: Promise<boolean>;
     request = (async () => {
       try {
-        const backends = await invoke<LiveAudioInputBackendSummary[]>("live_audio_input_backends");
+        const rawBackends = await invoke<unknown>("live_audio_input_backends");
+        const parsedBackends = parseLiveAudioInputBackendSummaries(rawBackends);
+        if (!parsedBackends.ok) {
+          const location = parsedBackends.index >= 0
+            ? `entry ${parsedBackends.index}`
+            : "payload";
+          throw new Error(
+            `Audio input backend catalogue rejected at ${location}: ${parsedBackends.reason_code}.`,
+          );
+        }
+        const backends = parsedBackends.summaries;
         if (epoch !== liveAudioInputBackendsEpoch) return false;
+        const savedRuntime = liveAudioInputSavedSelection();
         const currentBackend = selectedLiveAudioInputBackend();
-        const nextBackend = backends.find((backend) => backend.id === currentBackend)
-          ?? backends.find((backend) => backend.id === "wasapi_shared")
-          ?? backends[0];
+        const pinnedSavedBackendId =
+          savedRuntimeAppliesToCurrentBackend(savedRuntime, currentBackend)
+            ? savedRuntime.selection.backend
+            : null;
+        let nextBackend = backends.find((backend) => backend.id === currentBackend) ?? null;
+        if (!nextBackend && pinnedSavedBackendId === null) {
+          nextBackend =
+            backends.find((backend) => backend.id === "wasapi_shared") ?? backends[0] ?? null;
+        }
         setLiveAudioInputBackends(backends);
         setLiveAudioInputBackendsKnown(true);
         setLiveAudioInputBackendError(null);
@@ -20609,7 +21622,7 @@ export default function App() {
           setLiveAudioInputBufferFrames(null);
           setLiveAudioInputChannelMix({ mode: "average_all" });
         }
-        return Boolean(nextBackend?.built);
+        return liveAudioInputBackendCanDispatch(nextBackend);
       } catch (error) {
         if (epoch !== liveAudioInputBackendsEpoch) return false;
         const detail = String(error);
@@ -20639,10 +21652,20 @@ export default function App() {
     backendId = selectedLiveAudioInputBackend(),
   ): Promise<boolean> => {
     const epoch = ++liveAudioInputCapabilitiesEpoch;
+    const selectedBackendId = selectedLiveAudioInputBackend();
     const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
-    if (!backend?.built || (backend.requires_explicit_device && !deviceId.trim())) {
+    const backendRequiresExplicitDevice = backend?.requires_explicit_device === true;
+    if (
+      !liveAudioInputBackendsKnown() ||
+      backendId !== selectedBackendId ||
+      !liveAudioInputBackendCanDispatch(backend) ||
+      (backendRequiresExplicitDevice && !deviceId.trim())
+    ) {
       setLiveAudioInputCapabilities(null);
       setLiveAudioInputCapabilitiesBusy(false);
+      if (announce && (!liveAudioInputBackendCanDispatch(backend) || backendId !== selectedBackendId)) {
+        setMessage(liveAudioInputBackendDispatchDenial(backendId, backend));
+      }
       return false;
     }
     setLiveAudioInputCapabilitiesBusy(true);
@@ -20667,29 +21690,185 @@ export default function App() {
     }
     return false;
   };
+  const clearAppliedLiveAudioInputSavedSelectionSignals = () => {
+    setSelectedLiveAudioInputDevice("");
+    setLiveAudioInputCapabilities(null);
+    setLiveAudioInputSampleRate(null);
+    setLiveAudioInputBufferFrames(null);
+    setLiveAudioInputChannelMix({ mode: "average_all" });
+  };
+  const liveAudioInputSavedCatalogueFromCurrentSignals = (): LiveAudioInputSelectionCatalogueEntry[] =>
+    liveAudioInputDevices().map((device) => ({
+      device,
+      capabilities:
+        device.id === selectedLiveAudioInputDevice() ? liveAudioInputCapabilities() : null,
+    }));
+  const liveAudioInputSavedSelectionUiState = createMemo<LiveAudioInputSavedSelectionState | null>(
+    () => {
+      const runtime = liveAudioInputSavedSelection();
+      if (!runtime) return null;
+      return {
+        phase: runtime.phase,
+        reason_code: runtime.phase === "ready" ? "REVALIDATED" : runtime.reason_code,
+        message: runtime.message,
+        backend: "selection" in runtime ? runtime.selection.backend : null,
+      };
+    },
+  );
+  const applySavedLiveAudioInputSelectionRevalidation = (
+    runtime: Extract<LiveAudioInputSavedSelectionRuntime, { phase: "stale" | "ready" }>,
+    catalogue: readonly LiveAudioInputSelectionCatalogueEntry[],
+    announce: boolean,
+    applySignals: boolean,
+  ): void => {
+    // Applying a saved-selection verdict is a saved boundary: any pending ASIO
+    // revalidation arm is spent here, before signals or storage can move.
+    setLiveAudioInputAsioRevalidationArm(null);
+    const candidate = restoreLiveAudioInputSelection(runtime.raw);
+    if (candidate.state !== "stale") {
+      setLiveAudioInputSavedSelection({
+        phase: "invalid",
+        raw: runtime.raw,
+        reason_code: candidate.reason_code,
+        message: candidate.message,
+      });
+      return;
+    }
+    const result = revalidateLiveAudioInputSelection(candidate, catalogue);
+    if (result.state === "ready") {
+      setLiveAudioInputSavedSelection({
+        phase: "ready",
+        raw: runtime.raw,
+        selection: result.selection,
+        startRequest: result.start_request,
+        message: result.message,
+      });
+      if (applySignals) {
+        const appliedEntry = catalogue.find(
+          (entry) => entry.device.id === result.current_device_id && entry.capabilities !== null,
+        );
+        if (appliedEntry?.capabilities) {
+          setSelectedLiveAudioInputDevice(appliedEntry.device.id);
+          setLiveAudioInputCapabilities(appliedEntry.capabilities);
+          setLiveAudioInputSampleRate(result.selection.sample_rate);
+          setLiveAudioInputBufferFrames(result.selection.buffer_frames);
+          setLiveAudioInputChannelMix(result.selection.channel_mix);
+        }
+      }
+      if (announce) {
+        setMessage("Saved audio input selection revalidated against the refreshed device list.");
+      }
+      return;
+    }
+    setLiveAudioInputSavedSelection({
+      phase: "stale",
+      raw: runtime.raw,
+      selection: result.selection,
+      reason_code: result.reason_code,
+      message: result.message,
+    });
+    if (applySignals) clearAppliedLiveAudioInputSavedSelectionSignals();
+    if (announce) setMessage(result.message);
+  };
+  const maybePersistLiveAudioInputSelection = (): void => {
+    const deviceId = selectedLiveAudioInputDevice();
+    const device = liveAudioInputDevices().find((candidate) => candidate.id === deviceId);
+    const resolvedConfig = liveAudioInputCapabilities()?.resolved_config;
+    const sampleRate = liveAudioInputSampleRate();
+    const bufferFrames = liveAudioInputBufferFrames();
+    if (!device || !resolvedConfig || sampleRate === null || bufferFrames === null) return;
+    const serialized = serializeLiveAudioInputSelection({
+      backend: selectedLiveAudioInputBackend(),
+      device,
+      sample_rate: sampleRate,
+      sample_format: resolvedConfig.sample_format,
+      stream_channels: resolvedConfig.channels,
+      buffer_frames: bufferFrames,
+      channel_mix: liveAudioInputChannelMix(),
+    });
+    if (!serialized.ok) {
+      const detail = `Live audio input selection was not saved (${serialized.reason_code}): ${serialized.message}`;
+      setLiveAudioInputPersistError(detail);
+      setMessage(detail);
+      return;
+    }
+    const written = writeLiveAudioInputSelectionStorage(
+      () => window.localStorage,
+      serialized.serialized,
+    );
+    if (!written.ok) {
+      setLiveAudioInputPersistError(written.error);
+      setMessage(`Saving the machine-local live audio input selection failed: ${written.error}`);
+      return;
+    }
+    setLiveAudioInputPersistError(null);
+    const runtime = liveAudioInputSavedSelection();
+    if (!runtime || runtime.phase === "invalid" || runtime.raw !== serialized.serialized) {
+      setLiveAudioInputSavedSelection(liveAudioInputSavedRuntimeFromRaw(serialized.serialized));
+    }
+  };
+  const noteLiveAudioInputOperatorChange = (): void => {
+    const runtime = liveAudioInputSavedSelection();
+    const previousRaw = runtime && runtime.phase !== "invalid" ? runtime.raw : null;
+    if (runtime && runtime.phase === "ready") {
+      setLiveAudioInputSavedSelection(liveAudioInputSavedRuntimeFromRaw(runtime.raw));
+    }
+    maybePersistLiveAudioInputSelection();
+    const updated = liveAudioInputSavedSelection();
+    if (
+      updated &&
+      updated.phase === "stale" &&
+      (previousRaw === null || updated.raw !== previousRaw)
+    ) {
+      applySavedLiveAudioInputSelectionRevalidation(
+        updated,
+        liveAudioInputSavedCatalogueFromCurrentSignals(),
+        false,
+        false,
+      );
+    }
+  };
   const selectLiveAudioInputDevice = (deviceId: string) => {
     if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
+    setLiveAudioInputAsioRevalidationArm(null);
     setSelectedLiveAudioInputDevice(deviceId);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
+    noteLiveAudioInputOperatorChange();
     void refreshLiveAudioInputCapabilities(
       deviceId,
       true,
       null,
       selectedLiveAudioInputBackend(),
-    );
+    ).then(() => {
+      noteLiveAudioInputOperatorChange();
+    });
   };
   const selectLiveAudioInputSampleRate = (sampleRate: number | null) => {
+    setLiveAudioInputAsioRevalidationArm(null);
     setLiveAudioInputSampleRate(sampleRate);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
+    noteLiveAudioInputOperatorChange();
     void refreshLiveAudioInputCapabilities(
       selectedLiveAudioInputDevice(),
       true,
       sampleRate,
       selectedLiveAudioInputBackend(),
-    );
+    ).then(() => {
+      noteLiveAudioInputOperatorChange();
+    });
+  };
+  const selectLiveAudioInputBufferFrames = (bufferFrames: number | null) => {
+    setLiveAudioInputAsioRevalidationArm(null);
+    setLiveAudioInputBufferFrames(bufferFrames);
+    noteLiveAudioInputOperatorChange();
+  };
+  const selectLiveAudioInputChannelMix = (channelMix: LiveAudioChannelMix) => {
+    setLiveAudioInputAsioRevalidationArm(null);
+    setLiveAudioInputChannelMix(channelMix);
+    noteLiveAudioInputOperatorChange();
   };
   const refreshLiveAudioInputDevices = (announce = true): Promise<void> => {
     if (liveAudioInputDevicesRefreshInFlight) return liveAudioInputDevicesRefreshInFlight;
@@ -20708,17 +21887,29 @@ export default function App() {
     let request!: Promise<void>;
     request = (async () => {
       try {
-        if (!liveAudioInputBackendsKnown() || liveAudioInputBackendError()) {
-          const backendReady = await refreshLiveAudioInputBackends(announce);
-          if (!backendReady) return;
+        // Refresh is an availability probe, not merely a device-list redraw.
+        // Replace the catalogue atomically before reading the selected backend;
+        // never keep a prior ready summary if the current probe faults.
+        const backendReady = await refreshLiveAudioInputBackends(announce);
+        if (!backendReady) {
+          const backendId = selectedLiveAudioInputBackend();
+          const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
+          setLiveAudioInputDevices([]);
+          setLiveAudioInputCapabilities(null);
+          if (announce) {
+            setMessage(
+              liveAudioInputBackendError() ?? liveAudioInputBackendDispatchDenial(backendId, backend),
+            );
+          }
+          return;
         }
         const backendId = selectedLiveAudioInputBackend();
         const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
-        if (!backend?.built) {
+        if (!liveAudioInputBackendCanDispatch(backend)) {
           setLiveAudioInputDevices([]);
           setLiveAudioInputCapabilities(null);
-          if (announce && backend) {
-            setMessage("Selected audio capture backend is not built into this application.");
+          if (announce) {
+            setMessage(liveAudioInputBackendDispatchDenial(backendId, backend));
           }
           return;
         }
@@ -20726,6 +21917,45 @@ export default function App() {
           backend: backendId,
         });
         if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
+        // Publish the exact returned catalogue before saved-selection
+        // revalidation. Revalidation may apply one freshly generated device
+        // id, but never synthesizes an option or falls back to a default.
+        setLiveAudioInputDevices(devices);
+
+        const savedRuntime = liveAudioInputSavedSelection();
+        if (savedRuntimeAppliesToCurrentBackend(savedRuntime, backendId)) {
+          const identityMatches = devices.filter(
+            (device) =>
+              device.backend === savedRuntime.selection.device_identity.backend &&
+              device.name === savedRuntime.selection.device_identity.name &&
+              device.label === savedRuntime.selection.device_identity.label,
+          );
+          let probedCapabilities: LiveAudioInputCapabilities | null = null;
+          let probeDeviceId: string | null = null;
+          if (identityMatches.length === 1) {
+            probeDeviceId = identityMatches[0].id;
+            try {
+              probedCapabilities = await invoke<LiveAudioInputCapabilities>(
+                "get_live_audio_input_capabilities",
+                {
+                  backend: backendId,
+                  deviceId: probeDeviceId,
+                  sampleRate: savedRuntime.selection.sample_rate,
+                },
+              );
+            } catch {
+              probedCapabilities = null;
+            }
+          }
+          if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
+          const catalogue: LiveAudioInputSelectionCatalogueEntry[] = devices.map((device) => ({
+            device,
+            capabilities:
+              probeDeviceId !== null && device.id === probeDeviceId ? probedCapabilities : null,
+          }));
+          applySavedLiveAudioInputSelectionRevalidation(savedRuntime, catalogue, announce, true);
+          return;
+        }
 
         let selectedDeviceId = "";
         let selectionRequiresConfirmation = false;
@@ -20757,7 +21987,6 @@ export default function App() {
           }
         }
 
-        setLiveAudioInputDevices(devices);
         if (selectionRequiresConfirmation) {
           setLiveAudioInputCapabilities(null);
           if (announce) {
@@ -20806,6 +22035,7 @@ export default function App() {
     ) {
       return;
     }
+    setLiveAudioInputAsioRevalidationArm(null);
     liveAudioInputDevicesRefreshEpoch += 1;
     liveAudioInputCapabilitiesEpoch += 1;
     setSelectedLiveAudioInputBackend(backendId);
@@ -20816,37 +22046,241 @@ export default function App() {
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
     setLiveAudioInputBackendError(null);
+    noteLiveAudioInputOperatorChange();
     const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
-    if (!backend?.built) {
-      if (backend) setMessage("Selected audio capture backend is not built into this application.");
+    if (!liveAudioInputBackendCanDispatch(backend)) {
+      setMessage(liveAudioInputBackendDispatchDenial(backendId, backend));
       return;
     }
     void refreshLiveAudioInputDevices(false);
   };
-  const startLiveAudioInput = async () => {
-    if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
-    const backend = liveAudioInputBackends().find(
-      (candidate) => candidate.id === selectedLiveAudioInputBackend(),
-    );
-    if (!liveAudioInputBackendsKnown() || !backend?.built) {
-      setMessage("Select a built audio input backend before Start.");
-      return;
+  const currentLiveAudioInputStartRequest = (): { ok: true; request: LiveAudioInputStartRequest } | {
+    ok: false;
+    message: string;
+  } => {
+    const backendId = selectedLiveAudioInputBackend();
+    const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
+    if (!liveAudioInputBackendsKnown() || !backend || !liveAudioInputBackendCanDispatch(backend)) {
+      return { ok: false, message: "Select a ready audio input backend before Start." };
     }
-    if (backend.requires_explicit_device && !selectedLiveAudioInputDevice().trim()) {
-      setMessage("Select an ASIO driver before Start. Automatic driver selection is disabled.");
-      return;
+    const deviceId = selectedLiveAudioInputDevice().trim();
+    if (backend.requires_explicit_device && !deviceId) {
+      return {
+        ok: false,
+        message: "Select an ASIO driver before Start. Automatic driver selection is disabled.",
+      };
+    }
+    if (
+      backend.requires_explicit_device &&
+      !liveAudioInputDevices().some(
+        (device) => device.id === deviceId && device.backend.trim().toLowerCase() === "asio",
+      )
+    ) {
+      return {
+        ok: false,
+        message: "Reselect a current ASIO driver before Start. Stale driver ids are not accepted.",
+      };
     }
     if (
       backend.requires_explicit_device &&
       (liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null)
     ) {
-      setMessage("Select an explicit ASIO sample rate and fixed buffer before Start.");
-      return;
+      return {
+        ok: false,
+        message: "Select an explicit ASIO sample rate and fixed buffer before Start.",
+      };
     }
     const resolvedConfig = liveAudioInputCapabilities()?.resolved_config;
     if (!resolvedConfig) {
-      setMessage("Resolve a supported live audio input configuration before Start.");
+      return {
+        ok: false,
+        message: "Resolve a supported live audio input configuration before Start.",
+      };
+    }
+    return {
+      ok: true,
+      request: {
+        backend: backendId,
+        device_id: deviceId || null,
+        sample_rate: liveAudioInputSampleRate(),
+        stream_channels: resolvedConfig.channels,
+        sample_format: resolvedConfig.sample_format,
+        buffer_frames: liveAudioInputBufferFrames(),
+        channel_mix: liveAudioInputChannelMix(),
+      },
+    };
+  };
+  const liveAudioInputAsioRevalidationEligible = createMemo(() => {
+    if (
+      // An invalid verdict is only actionable against a verified current
+      // native status; an unknown status can never make revalidation eligible.
+      !liveAudioInputStatusKnown() ||
+      liveAudioInputBusy() ||
+      liveAudioInputBackendsBusy() ||
+      liveAudioInputStatus().running ||
+      selectedLiveAudioInputBackend() !== "asio" ||
+      liveAudioInputAsioInvalidVerdictFingerprint() === null
+    ) {
+      return false;
+    }
+    const savedRuntime = liveAudioInputSavedSelection();
+    if (savedRuntimeAppliesToCurrentBackend(savedRuntime, "asio") && savedRuntime.phase !== "ready") {
+      return false;
+    }
+    const current = currentLiveAudioInputStartRequest();
+    return current.ok && current.request.backend === "asio" &&
+      liveAudioInputStartRequestFingerprint(current.request) !== null;
+  });
+  const armLiveAudioInputAsioRevalidation = (): void => {
+    // An arm is never cumulative: every explicit operator action replaces the
+    // previous one after proving the same currently selected ASIO request.
+    setLiveAudioInputAsioRevalidationArm(null);
+    if (!liveAudioInputStatusKnown()) {
+      // A forced Revalidate while the native status is unknown must refuse to
+      // arm: there is no verified current invalid verdict to revalidate.
+      setMessage(
+        "Current audio input status is unknown; ASIO revalidation cannot be armed until a fresh status arrives.",
+      );
       return;
+    }
+    if (!liveAudioInputAsioRevalidationEligible()) {
+      setMessage(
+        "Select a ready current ASIO driver, sample rate, and fixed buffer before revalidation.",
+      );
+      return;
+    }
+    const current = currentLiveAudioInputStartRequest();
+    const nativeInvalidVerdictFingerprint = liveAudioInputAsioInvalidVerdictFingerprint();
+    if (!current.ok || current.request.backend !== "asio" || nativeInvalidVerdictFingerprint === null) {
+      setMessage("The current ASIO invalid-selection verdict cannot be revalidated safely.");
+      return;
+    }
+    const requestFingerprint = liveAudioInputStartRequestFingerprint(current.request);
+    if (requestFingerprint === null) {
+      setMessage("The current ASIO request is invalid; native revalidation remains locked.");
+      return;
+    }
+    setLiveAudioInputAsioRevalidationArm({
+      request: {
+        ...current.request,
+        channel_mix: { ...current.request.channel_mix },
+      },
+      request_fingerprint: requestFingerprint,
+      native_invalid_verdict_fingerprint: nativeInvalidVerdictFingerprint,
+      saved_selection_fingerprint: liveAudioInputSavedSelectionFingerprint(),
+      project_authority_fingerprint: liveAudioInputProjectAuthorityFingerprint(),
+    });
+    setMessage("ASIO revalidation is armed for one Start with the exact current driver configuration.");
+  };
+  const liveAudioInputAsioRevalidationArmIsCurrent = (
+    arm: LiveAudioInputAsioRevalidationArm,
+  ): boolean => {
+    // Currentness requires a verified current native status. While the status
+    // is unknown, an arm can never stay current, so it clears instead of
+    // surviving an outage and replaying against a recovered stale verdict.
+    if (!liveAudioInputStatusKnown()) return false;
+    const current = currentLiveAudioInputStartRequest();
+    const currentRequestFingerprint = current.ok
+      ? liveAudioInputStartRequestFingerprint(current.request)
+      : null;
+    return selectedLiveAudioInputBackend() === "asio" &&
+      currentRequestFingerprint === arm.request_fingerprint &&
+      liveAudioInputStartRequestFingerprint(arm.request) === arm.request_fingerprint &&
+      liveAudioInputAsioInvalidVerdictFingerprint() === arm.native_invalid_verdict_fingerprint &&
+      liveAudioInputSavedSelectionFingerprint() === arm.saved_selection_fingerprint &&
+      liveAudioInputProjectAuthorityFingerprint() === arm.project_authority_fingerprint;
+  };
+  const liveAudioInputAsioRevalidationArmed = createMemo(() => {
+    const arm = liveAudioInputAsioRevalidationArm();
+    return arm !== null && liveAudioInputAsioRevalidationArmIsCurrent(arm);
+  });
+  createEffect(() => {
+    const arm = liveAudioInputAsioRevalidationArm();
+    if (arm !== null && !liveAudioInputAsioRevalidationArmed()) {
+      setLiveAudioInputAsioRevalidationArm(null);
+    }
+  });
+  const startLiveAudioInput = async () => {
+    // Consume-and-clear at the absolute entry of every Start attempt, before
+    // the busy guard, any validation, refresh, or IPC. A busy, failed, forged,
+    // or replayed attempt therefore spends a pending revalidation arm; replay
+    // stays at zero native IPC until a new explicit Revalidate arms again.
+    const asioRevalidationArmAtAttempt = liveAudioInputAsioRevalidationArm();
+    setLiveAudioInputAsioRevalidationArm(null);
+    if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
+    const savedRuntime = liveAudioInputSavedSelection();
+    const selectedBackendId = selectedLiveAudioInputBackend();
+    const savedRuntimeApplies = savedRuntimeAppliesToCurrentBackend(savedRuntime, selectedBackendId);
+    let request: LiveAudioInputStartRequest | null = null;
+    if (savedRuntimeApplies) {
+      if (savedRuntime.phase !== "ready" || !savedRuntime.startRequest) {
+        setMessage(savedRuntime.message);
+        return;
+      }
+      request = savedRuntime.startRequest;
+    } else {
+      const current = currentLiveAudioInputStartRequest();
+      if (!current.ok) {
+        setMessage(current.message);
+        return;
+      }
+      request = current.request;
+    }
+    // This is deliberately adjacent to the stream-open IPC, not only a rail
+    // disabled-state check. A saved ready selection may outlive a later
+    // catalogue probe, and a forged/direct UI event must not reuse that old
+    // ready verdict after the backend becomes unavailable.
+    const requestedBackendId = request.backend;
+    const currentBackend = liveAudioInputBackends().find(
+      (candidate) => candidate.id === requestedBackendId,
+    );
+    const savedRequestMatchesCurrentSelection = !savedRuntimeApplies || (
+      savedRuntime.phase === "ready" &&
+      savedRuntime.selection.backend === requestedBackendId &&
+      selectedLiveAudioInputBackend() === requestedBackendId
+    );
+    if (
+      !liveAudioInputBackendsKnown() ||
+      !savedRequestMatchesCurrentSelection ||
+      selectedLiveAudioInputBackend() !== requestedBackendId ||
+      !liveAudioInputBackendCanDispatch(currentBackend)
+    ) {
+      if (!liveAudioInputBackendsKnown()) {
+        setMessage("Audio input backend catalogue is unavailable; Start is locked.");
+      } else if (!savedRequestMatchesCurrentSelection) {
+        setMessage("Saved audio input backend no longer matches the current selection; Start is locked.");
+      } else if (selectedLiveAudioInputBackend() !== requestedBackendId) {
+        setMessage("Requested audio input backend no longer matches the current selection; Start is locked.");
+      } else {
+        setMessage(liveAudioInputBackendDispatchDenial(requestedBackendId, currentBackend));
+      }
+      return;
+    }
+    const nativeAsioVerdict = requestedBackendId === "asio" && liveAudioInputStatus().asio_selection != null
+      ? liveAudioInputAsioSelectionVerdict(liveAudioInputStatus().asio_selection)
+      : null;
+    if (nativeAsioVerdict !== null && nativeAsioVerdict.start_locked) {
+      if (nativeAsioVerdict.state !== "restored") {
+        const requestFingerprint = liveAudioInputStartRequestFingerprint(request);
+        const exactInvalidAsioRevalidationArm = nativeAsioVerdict.state === "invalid" &&
+          asioRevalidationArmAtAttempt !== null &&
+          asioRevalidationArmAtAttempt.request.backend === "asio" &&
+          liveAudioInputAsioRevalidationArmIsCurrent(asioRevalidationArmAtAttempt) &&
+          requestFingerprint !== null &&
+          requestFingerprint === asioRevalidationArmAtAttempt.request_fingerprint &&
+          liveAudioInputStartRequestFingerprint(asioRevalidationArmAtAttempt.request) ===
+            asioRevalidationArmAtAttempt.request_fingerprint &&
+          liveAudioInputAsioInvalidVerdictFingerprint() ===
+            asioRevalidationArmAtAttempt.native_invalid_verdict_fingerprint &&
+          liveAudioInputSavedSelectionFingerprint() ===
+            asioRevalidationArmAtAttempt.saved_selection_fingerprint &&
+          liveAudioInputProjectAuthorityFingerprint() ===
+            asioRevalidationArmAtAttempt.project_authority_fingerprint;
+        if (!exactInvalidAsioRevalidationArm) {
+          setMessage(nativeAsioVerdict.message);
+          return;
+        }
+      }
     }
     invalidateLiveAudioInputLevels();
     clearLiveAudioInputTelemetryFreshness();
@@ -20854,15 +22288,6 @@ export default function App() {
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
     try {
-      const request: LiveAudioInputStartRequest = {
-        backend: selectedLiveAudioInputBackend(),
-        device_id: selectedLiveAudioInputDevice().trim() || null,
-        sample_rate: liveAudioInputSampleRate(),
-        stream_channels: resolvedConfig.channels,
-        sample_format: resolvedConfig.sample_format,
-        buffer_frames: liveAudioInputBufferFrames(),
-        channel_mix: liveAudioInputChannelMix(),
-      };
       const nextStatus = await invoke<LiveAudioInputStatus>("start_live_audio_input", { request });
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
         setLiveAudioInputStatus(nextStatus);
@@ -20887,6 +22312,7 @@ export default function App() {
     }
   };
   const stopLiveAudioInput = async () => {
+    setLiveAudioInputAsioRevalidationArm(null);
     if (liveAudioInputBusy()) return;
     invalidateLiveAudioInputLevels();
     clearLiveAudioInputTelemetryFreshness();
@@ -20931,6 +22357,9 @@ export default function App() {
       }
     } catch (error) {
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
+        // A failed/unknown status poll must immediately spend any pending ASIO
+        // revalidation arm: nothing may replay against an unverifiable status.
+        setLiveAudioInputAsioRevalidationArm(null);
         invalidateLiveAudioInputLevels();
         setLiveAudioInputStatus((current) => ({
           ...current,
@@ -20965,6 +22394,14 @@ export default function App() {
     } finally {
       liveAudioStatusRequests.endPoll();
     }
+  };
+  // The operator-facing Refresh is a single current-state probe: enumerate
+  // the backend/device catalogue first, then publish the native status that
+  // contains its ASIO persisted-selection verdict. Neither half may reuse a
+  // prior ready summary after an explicit Refresh.
+  const refreshLiveAudioInputOperatorState = async () => {
+    await refreshLiveAudioInputDevices(true);
+    if (isTauriRuntime()) await refreshLiveAudioInputStatus();
   };
   const refreshLiveAudioInputLevels = async () => {
     expireLiveAudioInputTelemetry();
@@ -22490,6 +23927,7 @@ export default function App() {
     cueId: number,
     effectTargets: CueEffectTarget[],
   ) => {
+    if (!requireAuthoritativeCue(cueId)) return false;
     if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
@@ -22655,6 +24093,7 @@ export default function App() {
   const removeSceneEffect = async (effectId: number) => {
     const cue = selectedSceneCue();
     if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return;
+    const wasRunning = selectedSceneIsRunning();
     const nextTargets = cue.effect_targets.filter((target) => target.effect_id !== effectId);
     const saved = await persistSceneEffectTargets(cue.id, nextTargets);
     if (!saved) return;
@@ -22669,7 +24108,17 @@ export default function App() {
         }
       : null);
     if (nextTarget) loadSceneEffectDraft(cue.id, nextTarget.effect_id);
-    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    const keepsExecutableContent = nextTargets.length > 0
+      || cue.targets.length > 0
+      || cue.palette_targets.length > 0
+      || cue.video_targets.length > 0
+      || cue.video_output_targets.length > 0
+      || cue.node_graph_targets.length > 0
+      || (cue.steps?.length ?? 0) > 0;
+    if (!snapshot().programmer.blind) {
+      if (keepsExecutableContent) await triggerCue(cue.id);
+      else if (wasRunning) await releaseCueById(cue.id);
+    }
     setMessage(`Removed cue-owned FX ${effectId} from scene ${cue.id}.`);
   };
 
@@ -23500,7 +24949,9 @@ export default function App() {
     }
     if (mode === "live") {
       setTimelineDeskSurface("show");
-      setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
+      // The retired Timeline Create-scene drawer can no longer be preserved
+      // across mode switches; Timeline reopens with its drawer closed.
+      setTimelineContextDrawer("none");
     }
     // Domain panels unmount while switching. Return focus to the persistent tab
     // after the new panel/Portal host has been published.
@@ -23515,7 +24966,7 @@ export default function App() {
       workspace: WorkspaceTab;
       controlMode: ControlMode;
       selectedSceneCueId: number | null;
-      selectedCueListId: number;
+      selectedCueListId: number | null;
       sceneSettingsSurface: SceneSettingsSurface;
       timelineContextDrawer: TimelineContextDrawer;
       message: string;
@@ -23605,12 +25056,12 @@ export default function App() {
           overviewShowDurationMs={timelineOverviewShowDurationMs()}
           overviewEditExtentMs={timelineOverviewEditExtentMs()}
           selectedEventId={selectedTimelineSceneBlockEventId()}
-          selectedCueId={selectedTimelineCueId()}
-          selectedCueIsSuperScene={Boolean(snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline)}
+          selectedCueId={bankAuthority().issue === null ? selectedTimelineCueId() : null}
+          selectedCueIsSuperScene={bankAuthority().issue === null && Boolean(snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline)}
           contextDrawer={timelineContextDrawer()}
           stretchMode={timelineStretchMode()}
           magnetEnabled={timelineMagnetEnabled()}
-          armedCueId={timelineArmedCueId()}
+          armedCueId={bankAuthority().issue === null ? timelineArmedCueId() : null}
           armedCueLabel={timelineArmedCue()?.label ?? null}
           deskSurface={timelineDeskSurface()}
           showDeskSurfaceTabs={false}
@@ -23640,7 +25091,7 @@ export default function App() {
           onRevealPlayhead={revealTimelinePlayhead}
           onStretchMode={setTimelineStretchMode}
           onMagnetEnabled={setTimelineMagnetEnabled}
-          onArmCue={toggleTimelineArmedCue}
+          onArmCue={(cueId) => toggleTimelineArmedCue(cueId)}
           onOpenOrCreateSuperScene={(cueId) => { void openOrCreateSuperScene(cueId); }}
           onContextDrawer={setTimelineContextDrawer}
           onDeskSurface={selectTimelineDeskSurface}
@@ -23683,18 +25134,17 @@ export default function App() {
       editor={sceneEffectEditor()}
       details={
         <CueManagementPanel
+          bankAuthority={bankAuthority()}
           mode="scene-settings"
           onSetCueColor={setCueColor}
           groupColors={groupColors()}
           onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
           cues={[cue()]}
-          allCues={snapshot().cues}
-          cueLists={snapshot().cue_lists}
           groupIds={fixtureGroupRows().map((row) => row.groupId)}
           palettes={referencePalettes()}
           effects={snapshot().effects}
           cueCaptureEffects={cueCaptureEligibleEffects()}
-          selectedCueListId={selectedCueList().id}
+          selectedCueListId={selectedCueListId()}
           cueListLabel={cueListLabel()}
           activeCueId={snapshot().active_cue_id}
           revealCueId={cue().id}
@@ -23906,6 +25356,14 @@ export default function App() {
   );
 
   const renderLightingCuePads = () => (
+    <Show
+      when={bankAuthority().issue === null}
+      fallback={
+        <p class="empty" role="alert" data-bank-authority-unavailable={bankAuthority().issue?.kind}>
+          {bankAuthority().issue ? bankAuthorityIssueMessage(bankAuthority().issue!) : ""}
+        </p>
+      }
+    >
     <div class="liveCuePadSurface">
       <div class="liveCuePadHeader">
         <h3>Cue Pads</h3>
@@ -23954,9 +25412,9 @@ export default function App() {
                   pad.cue.group_id ? groupColors()[pad.cue.group_id] : null,
                 ),
               } : undefined}
-              disabled={!pad.cue}
+              disabled={!pad.cue || bankAuthority().issue !== null}
               onClick={() => {
-                if (pad.cue) void triggerCue(pad.cue.id);
+                if (bankAuthority().issue === null && pad.cue) void triggerCue(pad.cue.id);
               }}
             >
               <span>{pad.slot}</span>
@@ -23967,6 +25425,7 @@ export default function App() {
         </For>
       </div>
     </div>
+    </Show>
   );
 
   const { handleControlKeyDown } = createAppKeyboardController({
@@ -24843,16 +26302,20 @@ export default function App() {
           >
             <Show when={controlLiveView() === "matrix"}>
               <SceneMatrixPanel
+              bankAuthority={bankAuthority()}
+              bankMutationFailureMessage={message()}
               toolbar={liveDeskViewActions()}
-              cues={snapshot().cues}
-              cueLists={snapshot().cue_lists}
-              selectedCueListId={selectedCueList().id}
+              selectedCueListId={selectedCueListId()}
               onSelectCueList={setSelectedCueListId}
               onCueListLabel={setCueListLabel}
               onCreateCueList={createCueList}
               onRenameCueList={renameCueList}
               onRemoveCueList={removeCueList}
               onCreateSceneForCueList={createSceneInCueList}
+              onRenameCue={beginSceneRename}
+              onDuplicateCue={duplicateCue}
+              onRemoveCue={removeCue}
+              cueRemovalImpact={cueRemovalImpact}
               onReorderCueLists={reorderCueLists}
               groupColors={groupColors()}
               onSetGroupColor={setGroupColor}
@@ -24869,7 +26332,7 @@ export default function App() {
               onTriggerCue={triggerCue}
               onSelectCue={selectSceneCue}
               onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={() => openCueEditor(true)}
+              onOpenCueEditor={() => openCueEditor()}
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
@@ -25051,16 +26514,20 @@ export default function App() {
           </div>
           <Show when={controlLiveView() === "matrix"}>
             <SceneMatrixPanel
+              bankAuthority={bankAuthority()}
+              bankMutationFailureMessage={message()}
               toolbar={liveDeskViewActions()}
-              cues={snapshot().cues}
-              cueLists={snapshot().cue_lists}
-              selectedCueListId={selectedCueList().id}
+              selectedCueListId={selectedCueListId()}
               onSelectCueList={setSelectedCueListId}
               onCueListLabel={setCueListLabel}
               onCreateCueList={createCueList}
               onRenameCueList={renameCueList}
               onRemoveCueList={removeCueList}
               onCreateSceneForCueList={createSceneInCueList}
+              onRenameCue={beginSceneRename}
+              onDuplicateCue={duplicateCue}
+              onRemoveCue={removeCue}
+              cueRemovalImpact={cueRemovalImpact}
               onReorderCueLists={reorderCueLists}
               groupColors={groupColors()}
               onSetGroupColor={setGroupColor}
@@ -25077,13 +26544,21 @@ export default function App() {
               onTriggerCue={triggerCue}
               onSelectCue={selectSceneCue}
               onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={() => openCueEditor(true)}
+              onOpenCueEditor={() => openCueEditor()}
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
             />
           </Show>
           <Show when={controlLiveView() === "pads"}>
+            <Show
+              when={bankAuthority().issue === null}
+              fallback={
+                <p class="empty" role="alert" data-bank-authority-unavailable={bankAuthority().issue?.kind}>
+                  {bankAuthority().issue ? bankAuthorityIssueMessage(bankAuthority().issue!) : ""}
+                </p>
+              }
+            >
             <div class="liveCuePadSurface">
               <div class="liveCuePadHeader">
                 <h3>Cue Pads</h3>
@@ -25147,6 +26622,7 @@ export default function App() {
                 </For>
               </div>
             </div>
+            </Show>
           </Show>
           <Show when={snapshot().active_fade}>
             {(fade) => (
@@ -25178,6 +26654,7 @@ export default function App() {
           >Video</button>
         </nav>
         <EditableTouchSurface
+          bankAuthority={bankAuthority()}
           snapshot={snapshot()}
           surface={snapshot().touch_surface}
           selectedFixtureId={selectedFixtureId()}
@@ -25193,6 +26670,7 @@ export default function App() {
           onClearCueLiveModifier={clearCueLiveModifierLive}
         />
         <TouchCuePanel
+          bankAuthority={bankAuthority()}
           snapshot={snapshot()}
           activeCue={activeCue()}
           nextCue={nextCue()}
@@ -25728,12 +27206,17 @@ export default function App() {
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
             get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
             get liveAudioInputBusy() { return liveAudioInputBusy(); },
+            get liveAudioInputSavedSelection() { return liveAudioInputSavedSelectionUiState(); },
+            get liveAudioInputPersistError() { return liveAudioInputPersistError(); },
+            get liveAudioInputAsioRevalidationEligible() { return liveAudioInputAsioRevalidationEligible(); },
+            get liveAudioInputAsioRevalidationArmed() { return liveAudioInputAsioRevalidationArmed(); },
             onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
             onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
             onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
-            onSetLiveAudioInputBufferFrames: setLiveAudioInputBufferFrames,
-            onSetLiveAudioInputChannelMix: setLiveAudioInputChannelMix,
-            onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
+            onSetLiveAudioInputBufferFrames: selectLiveAudioInputBufferFrames,
+            onSetLiveAudioInputChannelMix: selectLiveAudioInputChannelMix,
+            onRefreshLiveAudioInputDevices: refreshLiveAudioInputOperatorState,
+            onArmLiveAudioInputAsioRevalidation: armLiveAudioInputAsioRevalidation,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
           }}
@@ -25889,6 +27372,10 @@ export default function App() {
             get liveAudioInputStatus() { return liveAudioInputStatus(); },
             get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
             get liveAudioInputBusy() { return liveAudioInputBusy(); },
+            get liveAudioInputSavedSelection() { return liveAudioInputSavedSelectionUiState(); },
+            get liveAudioInputPersistError() { return liveAudioInputPersistError(); },
+            get liveAudioInputAsioRevalidationEligible() { return liveAudioInputAsioRevalidationEligible(); },
+            get liveAudioInputAsioRevalidationArmed() { return liveAudioInputAsioRevalidationArmed(); },
             get previewLayerId() { return videoPreviewLayerId(); },
             get previewBusy() { return vjPreviewTransportBusy(); },
             get previewError() { return vjPreviewTransportError(); },
@@ -25911,9 +27398,10 @@ export default function App() {
             onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
             onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
             onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
-            onSetLiveAudioInputBufferFrames: setLiveAudioInputBufferFrames,
-            onSetLiveAudioInputChannelMix: setLiveAudioInputChannelMix,
-            onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
+            onSetLiveAudioInputBufferFrames: selectLiveAudioInputBufferFrames,
+            onSetLiveAudioInputChannelMix: selectLiveAudioInputChannelMix,
+            onRefreshLiveAudioInputDevices: refreshLiveAudioInputOperatorState,
+            onArmLiveAudioInputAsioRevalidation: armLiveAudioInputAsioRevalidation,
             onStartLiveAudioInput: startLiveAudioInput,
             onStopLiveAudioInput: stopLiveAudioInput,
             onStagePreview: stageVjPreviewLayer,
@@ -26178,7 +27666,10 @@ export default function App() {
               </section>
             ) : workspaceTab() === "control" && controlMode() === "live" ? (
               <TimelineSourceShelf
+                bankAuthority={bankAuthority()}
                 cueOptions={timelineCueOptions()}
+                timelineChildCueId={timelineChildCueId()}
+                uiLocale={uiLocale()}
                 mediaAssets={snapshot().video.media_assets}
                 mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
                 timelineLayers={timelineLayers()}
@@ -26554,9 +28045,7 @@ export default function App() {
               onRemove={removeReferencePalette}
             />
             <PlaybackExecutorPanel
-              executors={snapshot().playback_executors.map(playbackExecutorDisplay)}
-              cueLists={snapshot().cue_lists}
-              cues={snapshot().cues}
+              bankAuthority={bankAuthority()}
               playbackMaster={snapshot().playback_master}
               onCreate={createPlaybackExecutor}
               onUpdate={updatePlaybackExecutor}
@@ -26722,104 +28211,6 @@ export default function App() {
             />
           </Show>
           </FaderAttributeEditorPanel>
-          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue" && selectedSceneCueId() === null}>
-          <aside
-            class="timelineContextDrawer"
-            data-timeline-context-drawer-panel="cue"
-            aria-label="Create scene drawer"
-          >
-            <header class="timelineContextDrawerHeader">
-              <div>
-                <strong>Create scene</strong>
-                <span data-no-localize>{selectedCueListDisplayLabel()}</span>
-              </div>
-              <button
-                type="button"
-                class="timelineContextDrawerClose"
-                aria-label="Close Create scene"
-                title="Close Create scene"
-                onClick={() => setTimelineContextDrawer("none")}
-              >
-                <span aria-hidden="true" data-no-localize>×</span>
-              </button>
-            </header>
-            <div class="timelineContextDrawerBody">
-          <CueManagementPanel
-            mode={controlMode() === "live" ? "live" : "edit"}
-            onSetCueColor={setCueColor}
-            groupColors={groupColors()}
-            onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
-            cues={selectedCueListCues()}
-            allCues={snapshot().cues}
-            cueLists={snapshot().cue_lists}
-            groupIds={fixtureGroupRows().map((row) => row.groupId)}
-            palettes={referencePalettes()}
-            effects={snapshot().effects}
-            cueCaptureEffects={cueCaptureEligibleEffects()}
-            selectedCueListId={selectedCueList().id}
-            cueListLabel={cueListLabel()}
-            activeCueId={snapshot().active_cue_id}
-            revealCueId={revealedSourceCueId()}
-            revealCueRevision={revealedSourceCueRevision()}
-            activeFade={snapshot().active_fade}
-            timelinePositionMs={snapshot().timeline.position_ms}
-            bpm={snapshot().clock.bpm}
-            timelineTrack={timelineTrack()}
-            cueLabel={cueLabel()}
-            cueFadeMs={cueFadeMs()}
-            cueAuthoredBeats={cueAuthoredBeats()}
-            cueAuthoredBeatsSeeded={cueAuthoredBeatsSeeded()}
-            cueAuthoredBeatsError={cueAuthoredBeatsError()}
-            cueCaptureScope={cueCaptureScope()}
-            cueCaptureScopeError={cueCaptureScopeError()}
-            hasCueSources={hasCueSources()}
-            cueEffectCaptureTargets={cueEffectCaptureTargets()}
-            cueCapturePreview={cueCapturePreview()}
-            stageViewBoxSize={stageViewBoxSize}
-            stageOrigin={stageOrigin2d()}
-            selectedFixtureId={selectedFixtureId()}
-            timelinePlacementNudgeMs={timelinePlacementNudgeMs()}
-            cueMetadataDraft={cueMetadataDraft}
-            cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
-            onCueLabel={setCueLabel}
-            onCueFadeMs={setCueFadeMs}
-            onCueAuthoredBeats={updateCueAuthoredBeats}
-            onCueCaptureScope={setCueCaptureScope}
-            onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
-            onSelectCueList={setSelectedCueListId}
-            onCueListLabel={setCueListLabel}
-            onCreateCueList={createCueList}
-            onRenameCueList={renameCueList}
-            onRemoveCueList={removeCueList}
-            onSetCueList={setCueList}
-            onSetCuePalette={setCuePalette}
-            onTriggerCueList={triggerCueList}
-            onCreateCue={createCue}
-            onSelectFixture={setSelectedFixtureId}
-            onTriggerPreviousCue={() => triggerCueList(selectedCueList().id, "previous")}
-            onTriggerNextCue={() => triggerCueList(selectedCueList().id, "next")}
-            onSetCueFadePaused={setCueFadePaused}
-            onUpdateCueMetadataDraft={updateCueMetadataDraft}
-            onMoveCue={moveCue}
-            onSetCueMetadata={setCueMetadata}
-            onSetCueEffectTargets={setCueEffectTargets}
-            onSetCueSteps={setCueSteps}
-            onDuplicateCue={duplicateCue}
-            onUpdateCue={updateCue}
-            onTriggerCue={triggerCue}
-            onAddTimelineCueEventAt={addTimelineCueEventAt}
-            onRemoveCue={removeCue}
-            onSeekTimeline={seekTimeline}
-            onOpenTimeline={() => selectTimelineDeskSurface("show")}
-            onMoveTimelineCueEvent={moveTimelineCueEvent}
-            onRemoveTimelineEvent={removeTimelineEvent}
-            onBeginTimelineCueDrag={beginTimelineCueDrag}
-            onMoveTimelineCueDrag={moveTimelineCueDrag}
-            onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-          />
-            </div>
-          </aside>
-          </Show>
           <div class="timelinePanel">
         <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "show"}>
             <Portal mount={timelineUpperHost()!}>
@@ -26832,8 +28223,10 @@ export default function App() {
               }}
             >
             <TimelineCueEventsPanel
+              bankAuthority={bankAuthority()}
               embeddedControls={false}
               contextDrawer={timelineContextDrawer()}
+              timelineChildCueId={timelineChildCueId()}
               childTimelineLabel={timelineChildCue()?.label ?? null}
               cueIdentities={cueIdentities()}
               positionMs={activeTimeline().position_ms}
@@ -26898,8 +28291,8 @@ export default function App() {
               snapMode={timelineSnapMode()}
               gridMs={timelineGridMs()}
               selectedCueId={selectedTimelineCueId()}
-              selectedCueIsSuperScene={Boolean(
-                snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline,
+              selectedCueIsSuperScene={bankAuthority().issue === null && Boolean(
+                bankAuthority().cueById.get(selectedTimelineCueId() ?? -1)?.child_timeline,
               )}
               eventTimeMs={timelineEventTimeMs()}
               blockDurationMs={timelineBlockDurationMs()}
@@ -26910,7 +28303,7 @@ export default function App() {
               eventRows={timelineEventRows()}
               stretchMode={timelineStretchMode()}
               magnetEnabled={timelineMagnetEnabled()}
-              armedCueId={timelineArmedCueId()}
+              armedCueId={bankAuthority().issue === null ? timelineArmedCueId() : null}
               armedCue={timelineArmedCue()}
               timelineEventDraft={timelineEventDraft}
               onSeek={seekTimeline}

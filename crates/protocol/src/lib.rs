@@ -7496,6 +7496,7 @@ pub enum OscControlAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OscControlMapping {
     pub address: String,
     pub action: OscControlAction,
@@ -7523,6 +7524,7 @@ pub type DmxControlAction = OscControlAction;
 /// other's assignments. It shares the OSC action enum, so future backend
 /// actions inherit the same typed persistence contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct DmxControlMapping {
     pub universe: u16,
     pub channel: u16,
@@ -7783,6 +7785,7 @@ pub enum MidiControlAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct MidiControlMapping {
     pub channel: Option<u8>,
     pub message: MidiControlMessage,
@@ -7823,9 +7826,13 @@ pub enum ClockSource {
     MidiTimecode,
     Ltc,
     AbletonLink,
+    DjLink,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `Debug` is implemented manually for this type so the generic Web Remote
+/// pairing PIN and the DJ Link authority token can never be rendered into
+/// logs, crash reports, or test output.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct RemoteControlConfig {
     pub bind_ip: String,
     pub port: u16,
@@ -7839,6 +7846,11 @@ pub struct RemoteControlConfig {
     pub max_message_bytes: usize,
     #[serde(default = "default_remote_max_messages_per_second")]
     pub max_messages_per_second: u16,
+    /// Generic Web Remote `/ws` clients plus the HTTP asset/health routes.
+    /// Legacy configs predate this switch, so absence deserializes as
+    /// enabled and current behavior is preserved unchanged.
+    #[serde(default = "default_web_remote_enabled")]
+    pub web_remote_enabled: bool,
     /// Dedicated DJ Link is opt-in and never uses the generic pairing PIN.
     #[serde(default)]
     pub dj_link_enabled: bool,
@@ -7884,6 +7896,40 @@ fn default_remote_max_messages_per_second() -> u16 {
     60
 }
 
+fn default_web_remote_enabled() -> bool {
+    true
+}
+
+impl std::fmt::Debug for RemoteControlConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Presence-only credential rendering: neither the pairing PIN nor the
+        // DJ Link token value is ever exposed, only whether one is set.
+        let pin_presence = if self.pairing_pin.is_empty() {
+            "unset"
+        } else {
+            "redacted"
+        };
+        let token_presence = match self.dj_link_token.as_deref() {
+            Some(token) if !token.is_empty() => "redacted",
+            _ => "unset",
+        };
+        formatter
+            .debug_struct("RemoteControlConfig")
+            .field("bind_ip", &self.bind_ip)
+            .field("port", &self.port)
+            .field("pairing_pin", &pin_presence)
+            .field("allow_lan", &self.allow_lan)
+            .field("max_connections", &self.max_connections)
+            .field("max_message_bytes", &self.max_message_bytes)
+            .field("max_messages_per_second", &self.max_messages_per_second)
+            .field("web_remote_enabled", &self.web_remote_enabled)
+            .field("dj_link_enabled", &self.dj_link_enabled)
+            .field("dj_link_bind_ip", &self.dj_link_bind_ip)
+            .field("dj_link_token", &token_presence)
+            .finish()
+    }
+}
+
 impl Default for RemoteControlConfig {
     fn default() -> Self {
         Self {
@@ -7894,6 +7940,7 @@ impl Default for RemoteControlConfig {
             max_connections: default_remote_max_connections(),
             max_message_bytes: default_remote_max_message_bytes(),
             max_messages_per_second: default_remote_max_messages_per_second(),
+            web_remote_enabled: default_web_remote_enabled(),
             dj_link_enabled: false,
             dj_link_bind_ip: None,
             dj_link_token: None,
@@ -7916,6 +7963,11 @@ pub struct RemoteControlStatus {
     pub active_connections: usize,
     pub rejected_connections: u64,
     pub clients: Vec<RemoteClientSummary>,
+    /// Immutable transport mode of the owning listener. A status produced
+    /// without a running server (or a legacy payload missing this field)
+    /// reports `false`: no generic Web Remote transport is available.
+    #[serde(default)]
+    pub web_remote_enabled: bool,
     /// Additive process-local DJ Link truth.  The token is intentionally not
     /// represented anywhere in this status DTO.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7925,14 +7977,37 @@ pub struct RemoteControlStatus {
 /// DJ Link is a dedicated, authenticated LAN protocol. It intentionally does
 /// not reuse the generic remote PIN or expose the credential in any status
 /// payload.
-pub const DJ_LINK_PROTOCOL_VERSION: u8 = 1;
+pub const DJ_LINK_PROTOCOL_VERSION: u8 = 2;
+/// The only peer identity production ingress accepts. Anything else fails
+/// envelope validation before authentication is attempted.
+pub const DJ_LINK_AGENT_ID: &str = "rb-output-dj-agent";
 pub const DJ_LINK_MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const DJ_LINK_MAX_STRING_BYTES: usize = 256;
 pub const DJ_LINK_MIN_TOKEN_BYTES: usize = 32;
-pub const DJ_LINK_MAX_CAPABILITIES: usize = 32;
 pub const DJ_LINK_MAX_MAPPINGS: usize = 128;
 pub const DJ_LINK_MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 pub const DJ_LINK_BEATS_PER_BAR: u8 = 4;
+/// Exact capability strings every HELLO must advertise. The list must be
+/// complete, duplicate-free, and carry no extras; partial capability
+/// negotiation does not exist on this wire revision.
+pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 8] = [
+    "DJ_MASTER_TRACK_ACTIVE",
+    "DJ_MASTER_TRACK_SYNC",
+    "DJ_LOOP_STATE",
+    "DJ_RELEASE",
+    "DJ_TIMELINE_BEAT_JUMP",
+    "DJ_TIMELINE_LOOP_SET",
+    "DJ_TIMELINE_STATE_REQUEST",
+    "DJ_STATE_SYNC",
+];
+/// Mandatory source discriminator of every measured loop report.
+pub const DJ_LINK_MEASURED_LOOP_SOURCE: &str = "rekordbox-hook-measured";
+pub const DJ_LINK_MAX_BPM: f64 = 1000.0;
+pub const DJ_LINK_MAX_POSITION_AT_SEND_SEC: f64 = 7200.0;
+pub const DJ_LINK_MAX_SAMPLE_AGE_MS: u64 = 1500;
+/// Inclusive consistency tolerance between `lengthBeats` and the reported
+/// beat span of an active measured loop.
+pub const DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS: f64 = 0.001;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -7941,10 +8016,10 @@ pub enum DjLinkMessageType {
     Hello,
     #[serde(rename = "DJ_HEARTBEAT")]
     Heartbeat,
-    #[serde(rename = "DJ_MASTER_CHANGED")]
-    MasterChanged,
     #[serde(rename = "DJ_MASTER_TRACK_ACTIVE")]
     MasterTrackActive,
+    #[serde(rename = "DJ_MASTER_TRACK_SYNC")]
+    MasterTrackSync,
     #[serde(rename = "DJ_LOOP_STATE")]
     LoopState,
     #[serde(rename = "DJ_RELEASE")]
@@ -7981,84 +8056,101 @@ pub struct DjLinkHelloPayload {
     #[serde(rename = "authToken")]
     pub auth_token: String,
     pub version: u8,
-    #[serde(default)]
     pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct DjLinkHeartbeatPayload {
-    #[serde(default)]
-    pub at: Option<String>,
+pub struct DjLinkHeartbeatPayload {}
+
+/// Exact measured-loop report shared by `DJ_MASTER_TRACK_ACTIVE`,
+/// `DJ_MASTER_TRACK_SYNC`, and the prefixed external `DJ_LOOP_STATE` frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkMeasuredLoop {
+    pub active: bool,
+    #[serde(rename = "startBeat")]
+    pub start_beat: Option<f64>,
+    #[serde(rename = "endBeat")]
+    pub end_beat: Option<f64>,
+    #[serde(rename = "lengthBeats")]
+    pub length_beats: Option<f64>,
+    pub revision: u64,
+    #[serde(rename = "sampleAgeMs")]
+    pub sample_age_ms: u64,
+    pub source: String,
 }
 
+/// Strict master-track report used by both ACTIVE and SYNC events. Every
+/// listed field is required exactly once; identity is either a nonempty
+/// `contentId` alone or both `title` and `artist` together.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkMasterTrackPayload {
-    #[serde(default, rename = "contentId")]
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(rename = "masterDeckRevision")]
+    pub master_deck_revision: u64,
+    #[serde(rename = "contentId")]
     pub content_id: Option<String>,
-    #[serde(default)]
     pub title: Option<String>,
-    #[serde(default)]
     pub artist: Option<String>,
-    /// Deck identity is required for a track-active event. A string keeps
-    /// peer/device identifiers opaque and bounded instead of guessing a
-    /// numeric deck mapping.
-    pub deck: String,
-    #[serde(default, rename = "deckId")]
-    pub deck_id: Option<String>,
-    #[serde(default, rename = "trackBpm")]
+    #[serde(rename = "trackBpm")]
     pub track_bpm: Option<f64>,
-    #[serde(default, rename = "positionSec")]
-    pub position_sec: Option<f64>,
-    #[serde(default, rename = "startedAt")]
-    pub started_at: Option<String>,
+    #[serde(rename = "positionAtSendSec")]
+    pub position_at_send_sec: f64,
+    #[serde(rename = "effectiveBpm")]
+    pub effective_bpm: f64,
+    #[serde(rename = "positionRevision")]
+    pub position_revision: u64,
+    #[serde(rename = "sampleAgeMs")]
+    pub sample_age_ms: u64,
+    #[serde(rename = "isPlaying")]
+    pub is_playing: bool,
+    pub master: bool,
+    #[serde(rename = "startedAt")]
+    pub started_at: String,
     #[serde(rename = "playSessionId")]
     pub play_session_id: String,
-    #[serde(rename = "isPlaying", alias = "playing")]
-    pub playing: bool,
-    #[serde(default = "default_true")]
-    pub master: bool,
+    #[serde(rename = "loop")]
+    pub loop_state: Option<DjLinkMeasuredLoop>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkMasterChangedPayload {
-    #[serde(default, rename = "masterDeck")]
-    pub master_deck: Option<String>,
-    #[serde(default)]
-    pub deck: Option<String>,
-    #[serde(default, rename = "isPlaying", alias = "playing")]
-    pub playing: bool,
-    #[serde(default = "default_true")]
-    pub master: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkLoopStatePayload {
-    pub division: u8,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkReleasePayload {
-    #[serde(default)]
-    pub state: Option<String>,
-}
-
+/// External measured-loop event. The loop body is prefixed with the deck
+/// context that produced it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct DjLinkLoopStatePayload {
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(rename = "masterDeckRevision")]
+    pub master_deck_revision: u64,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    #[serde(rename = "loop")]
+    pub loop_state: DjLinkMeasuredLoop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkReleasePayload {
+    pub state: String,
+    #[serde(rename = "timelineId")]
+    pub timeline_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DjLinkStateSyncPayload {
-    #[serde(default, rename = "loopDivision")]
-    pub loop_division: Option<u8>,
     pub released: bool,
-    #[serde(default, rename = "masterDeck")]
-    pub master_deck: Option<String>,
-    #[serde(default, rename = "masterTrack")]
-    pub master_track: Option<DjLinkMasterTrackStatePayload>,
+    #[serde(rename = "masterDeck")]
+    pub master_deck: Option<u8>,
+    #[serde(rename = "activePlaySessionId")]
+    pub active_play_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -8071,6 +8163,8 @@ pub struct DjLinkTimelineBeatJumpPayload {
     pub bars: i8,
     #[serde(rename = "timelineId")]
     pub timeline_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8079,6 +8173,8 @@ pub struct DjLinkTimelineLoopSetPayload {
     pub active: bool,
     #[serde(rename = "timelineId")]
     pub timeline_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -8106,6 +8202,12 @@ pub struct DjLinkTimelineState {
     pub timeline_id: String,
     #[serde(rename = "positionBars")]
     pub position_bars: u64,
+    #[serde(rename = "playSessionId", default)]
+    pub play_session_id: Option<String>,
+    #[serde(rename = "pedalOwner", default)]
+    pub pedal_owner: Option<String>,
+    #[serde(rename = "releaseEventId", default)]
+    pub release_event_id: Option<String>,
 }
 
 impl DjLinkTimelineState {
@@ -8118,159 +8220,17 @@ impl DjLinkTimelineState {
             return Err("DJ timeline state sequence must be a positive safe integer".to_string());
         }
         validate_dj_link_string(&self.timeline_id, "timelineId")?;
+        for (value, label) in [
+            (self.play_session_id.as_deref(), "playSessionId"),
+            (self.pedal_owner.as_deref(), "pedalOwner"),
+            (self.release_event_id.as_deref(), "releaseEventId"),
+        ] {
+            if let Some(value) = value {
+                validate_dj_link_string(value, label)?;
+            }
+        }
         Ok(())
     }
-}
-
-/// The peer's final generic-json adapter is deliberately flat: only HELLO
-/// carries the adapter protocol and token, while event payload fields live at
-/// the envelope root. The older v1 `{v,agentId,sessionId,payload}` envelope is
-/// kept separately for compatibility and is never used as a silent fallback
-/// for an unknown flat protocol.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DjLinkFlatFrame {
-    #[serde(rename = "type")]
-    pub message_type: String,
-    #[serde(rename = "eventId")]
-    pub event_id: String,
-    pub sequence: u64,
-    #[serde(default)]
-    pub protocol: Option<String>,
-    #[serde(default)]
-    pub token: Option<String>,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    #[serde(flatten)]
-    pub payload: serde_json::Map<String, serde_json::Value>,
-}
-
-impl DjLinkFlatFrame {
-    pub fn parse_json(text: &str) -> Result<Self, String> {
-        if text.len() > DJ_LINK_MAX_FRAME_BYTES {
-            return Err("DJ Link frame exceeds the bounded size".to_string());
-        }
-        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        let field_names = value
-            .as_object()
-            .ok_or_else(|| "DJ Link flat frame must be an object".to_string())?
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let frame: Self = serde_json::from_value(value).map_err(|e| e.to_string())?;
-        validate_dj_link_string(&frame.message_type, "type")?;
-        validate_dj_link_string(&frame.event_id, "eventId")?;
-        if frame.sequence == 0 || frame.sequence > DJ_LINK_MAX_SEQUENCE {
-            return Err("DJ Link sequence must be a positive safe integer".to_string());
-        }
-        let known = matches!(
-            frame.message_type.as_str(),
-            "DJ_AGENT_HELLO"
-                | "DJ_AGENT_HEARTBEAT"
-                | "DJ_HEARTBEAT"
-                | "DJ_MASTER_CHANGED"
-                | "DJ_MASTER_TRACK_ACTIVE"
-                | "DJ_LOOP_STATE"
-                | "DJ_RELEASE"
-                | "DJ_STATE_SYNC"
-                | "DJ_TIMELINE_STATE_REQUEST"
-                | "DJ_TIMELINE_BEAT_JUMP"
-                | "DJ_TIMELINE_LOOP_SET"
-        );
-        if !known {
-            return Err(format!(
-                "unknown DJ Link flat message type {}",
-                frame.message_type
-            ));
-        }
-        if frame.message_type == "DJ_AGENT_HELLO" {
-            if frame.protocol.as_deref() != Some("generic-json") {
-                return Err("DJ Link HELLO protocol must be generic-json".to_string());
-            }
-            let token = frame
-                .token
-                .as_deref()
-                .ok_or_else(|| "DJ Link HELLO token is required".to_string())?;
-            if token.len() < DJ_LINK_MIN_TOKEN_BYTES || token.len() > DJ_LINK_MAX_STRING_BYTES {
-                return Err("DJ Link HELLO token length is invalid".to_string());
-            }
-            for capability in &frame.capabilities {
-                validate_dj_link_string(capability, "capability")?;
-            }
-        }
-        for key in &field_names {
-            validate_dj_link_string(key, "field name")?;
-        }
-        Ok(frame)
-    }
-
-    pub fn is_hello(&self) -> bool {
-        self.message_type == "DJ_AGENT_HELLO"
-    }
-
-    pub fn to_envelope(&self, agent_id: &str, session_id: &str) -> Result<DjLinkEnvelope, String> {
-        validate_dj_link_string(agent_id, "agentId")?;
-        validate_dj_link_string(session_id, "sessionId")?;
-        let message_type = match self.message_type.as_str() {
-            "DJ_AGENT_HELLO" => DjLinkMessageType::Hello,
-            "DJ_AGENT_HEARTBEAT" | "DJ_HEARTBEAT" => DjLinkMessageType::Heartbeat,
-            "DJ_MASTER_CHANGED" => DjLinkMessageType::MasterChanged,
-            "DJ_MASTER_TRACK_ACTIVE" => DjLinkMessageType::MasterTrackActive,
-            "DJ_LOOP_STATE" => DjLinkMessageType::LoopState,
-            "DJ_RELEASE" => DjLinkMessageType::Release,
-            "DJ_STATE_SYNC" => DjLinkMessageType::StateSync,
-            "DJ_TIMELINE_STATE_REQUEST" => DjLinkMessageType::TimelineStateRequest,
-            "DJ_TIMELINE_BEAT_JUMP" => DjLinkMessageType::TimelineBeatJump,
-            "DJ_TIMELINE_LOOP_SET" => DjLinkMessageType::TimelineLoopSet,
-            _ => return Err("unknown DJ Link flat message type".to_string()),
-        };
-        let mut payload = self.payload.clone();
-        if self.is_hello() {
-            let token = self
-                .token
-                .clone()
-                .ok_or_else(|| "DJ Link HELLO token is required".to_string())?;
-            payload.insert("authToken".to_string(), serde_json::Value::String(token));
-            payload.insert("version".to_string(), serde_json::Value::from(1u8));
-            payload.insert(
-                "capabilities".to_string(),
-                serde_json::to_value(&self.capabilities).map_err(|e| e.to_string())?,
-            );
-        }
-        let envelope = DjLinkEnvelope {
-            v: DJ_LINK_PROTOCOL_VERSION,
-            message_type,
-            agent_id: agent_id.to_string(),
-            session_id: session_id.to_string(),
-            sequence: self.sequence,
-            event_id: self.event_id.clone(),
-            payload: serde_json::Value::Object(payload),
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkMasterTrackStatePayload {
-    #[serde(default, rename = "contentId")]
-    pub content_id: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub artist: Option<String>,
-    #[serde(rename = "isPlaying", alias = "playing")]
-    pub playing: bool,
-    #[serde(default, rename = "playSessionId")]
-    pub play_session_id: Option<String>,
-    #[serde(default, rename = "trackBpm")]
-    pub track_bpm: Option<f64>,
-    #[serde(default, rename = "positionSec")]
-    pub position_sec: Option<f64>,
-    #[serde(default, rename = "startedAt")]
-    pub started_at: Option<String>,
-    #[serde(default, rename = "deckId")]
-    pub deck_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -8283,6 +8243,8 @@ pub enum DjLinkAckOutcome {
     Busy,
 }
 
+/// Exact non-envelope ACK frame. The serialized shape is exactly
+/// `{v,type,eventId,sequence,outcome,code,stateGeneration}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkAck {
@@ -8296,12 +8258,6 @@ pub struct DjLinkAck {
     pub code: Option<String>,
     #[serde(rename = "stateGeneration")]
     pub state_generation: u64,
-    /// Additive handoff-compatible ACK fields. Existing v1 consumers use the
-    /// outcome/code fields; timeline-control peers consume ok/message.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ok: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -8459,11 +8415,29 @@ fn validate_dj_link_string(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A session fence is an exact opaque identity, not display text. Preserve
+/// meaningful interior whitespace on the wire, but reject any representation
+/// that could normalize to the same identity after transport or UI handling.
+fn validate_dj_link_required_identity(value: &str, label: &str) -> Result<(), String> {
+    validate_dj_link_string(value, label)?;
+    if value.trim().is_empty() || value != value.trim() {
+        return Err(format!(
+            "DJ Link {label} must be non-empty and have no leading or trailing whitespace"
+        ));
+    }
+    Ok(())
+}
+
 impl DjLinkEnvelope {
+    /// Ingress is exact-only. The raw text is first scanned for duplicate
+    /// object keys at every nesting level (serde alone would silently keep
+    /// the last occurrence), then deserialized into the exact v2 envelope
+    /// shape with unknown-field rejection, then fully payload-validated.
     pub fn parse_json(text: &str) -> Result<Self, String> {
         if text.len() > DJ_LINK_MAX_FRAME_BYTES {
             return Err("DJ Link frame exceeds the bounded size".to_string());
         }
+        reject_duplicate_json_keys(text)?;
         let envelope: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
         envelope.validate()?;
         Ok(envelope)
@@ -8473,7 +8447,9 @@ impl DjLinkEnvelope {
         if self.v != DJ_LINK_PROTOCOL_VERSION {
             return Err("unsupported DJ Link protocol version".to_string());
         }
-        validate_dj_link_string(&self.agent_id, "agentId")?;
+        if self.agent_id != DJ_LINK_AGENT_ID {
+            return Err("DJ Link agentId is not the accepted peer identity".to_string());
+        }
         validate_dj_link_string(&self.session_id, "sessionId")?;
         validate_dj_link_string(&self.event_id, "eventId")?;
         if self.sequence == 0 || self.sequence > DJ_LINK_MAX_SEQUENCE {
@@ -8485,73 +8461,46 @@ impl DjLinkEnvelope {
         match self.message_type {
             DjLinkMessageType::Hello => {
                 let hello: DjLinkHelloPayload = parse_dj_link_payload(&self.payload)?;
-                if hello.version != DJ_LINK_PROTOCOL_VERSION
-                    || hello.auth_token.len() < DJ_LINK_MIN_TOKEN_BYTES
-                    || hello.auth_token.len() > DJ_LINK_MAX_STRING_BYTES
-                    || hello.capabilities.len() > DJ_LINK_MAX_CAPABILITIES
-                {
-                    return Err(
-                        "DJ Link HELLO authentication/version/capabilities are invalid".to_string(),
-                    );
+                if hello.version != DJ_LINK_PROTOCOL_VERSION {
+                    return Err("DJ Link HELLO version must equal the protocol version".to_string());
                 }
-                for capability in hello.capabilities {
-                    validate_dj_link_string(&capability, "capability")?;
-                }
+                validate_dj_link_token(&hello.auth_token)?;
+                validate_dj_link_capability_set(&hello.capabilities)?;
             }
             DjLinkMessageType::Heartbeat => {
                 let _: DjLinkHeartbeatPayload = parse_dj_link_payload(&self.payload)?;
             }
-            DjLinkMessageType::MasterChanged => {
-                let payload: DjLinkMasterChangedPayload = parse_dj_link_payload(&self.payload)?;
-                if let Some(deck) = payload.master_deck.as_deref().or(payload.deck.as_deref()) {
-                    validate_dj_link_string(deck, "masterDeck")?;
-                }
-            }
-            DjLinkMessageType::MasterTrackActive => {
+            DjLinkMessageType::MasterTrackActive | DjLinkMessageType::MasterTrackSync => {
                 let payload: DjLinkMasterTrackPayload = parse_dj_link_payload(&self.payload)?;
                 validate_dj_link_track_payload(&payload)?;
             }
             DjLinkMessageType::LoopState => {
                 let payload: DjLinkLoopStatePayload = parse_dj_link_payload(&self.payload)?;
-                if payload.division > 63 {
-                    return Err("DJ Link loop division exceeds the safe bound".to_string());
+                validate_dj_link_deck(payload.deck)?;
+                if payload.deck_id != dj_link_deck_id(payload.deck) {
+                    return Err("deckId must be rekordbox-deck-N matching deck".to_string());
                 }
+                if payload.master_deck_revision == 0 {
+                    return Err("masterDeckRevision must be a positive safe integer".to_string());
+                }
+                validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
+                payload.loop_state.validate()?;
             }
             DjLinkMessageType::Release => {
                 let payload: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
-                if let Some(state) = payload.state.as_deref() {
-                    validate_dj_link_string(state, "state")?;
+                if payload.state != "released" {
+                    return Err("DJ release state must be exactly released".to_string());
                 }
+                validate_dj_link_string(&payload.timeline_id, "timelineId")?;
+                validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
             }
             DjLinkMessageType::StateSync => {
                 let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
-                if let Some(deck) = payload.master_deck.as_deref() {
-                    validate_dj_link_string(deck, "masterDeck")?;
+                if let Some(deck) = payload.master_deck {
+                    validate_dj_link_deck(deck)?;
                 }
-                if let Some(loop_division) = payload.loop_division {
-                    if loop_division > 63 {
-                        return Err("DJ Link loop division exceeds the safe bound".to_string());
-                    }
-                }
-                if let Some(track) = payload.master_track {
-                    for (value, label) in [
-                        (track.content_id.as_deref(), "contentId"),
-                        (track.title.as_deref(), "title"),
-                        (track.artist.as_deref(), "artist"),
-                        (track.play_session_id.as_deref(), "playSessionId"),
-                    ] {
-                        if let Some(value) = value {
-                            validate_dj_link_string(value, label)?;
-                        }
-                    }
-                    if track.track_bpm.is_some_and(|value| {
-                        !value.is_finite() || !(0.0..=1_000.0).contains(&value)
-                    }) || track
-                        .position_sec
-                        .is_some_and(|value| !value.is_finite() || value < 0.0)
-                    {
-                        return Err("DJ Link state sync numeric fields are invalid".to_string());
-                    }
+                if let Some(session) = payload.active_play_session_id.as_deref() {
+                    validate_dj_link_string(session, "activePlaySessionId")?;
                 }
             }
             DjLinkMessageType::TimelineStateRequest => {
@@ -8563,10 +8512,12 @@ impl DjLinkEnvelope {
                     return Err("DJ timeline beat jump must be exactly -4 or 4 bars".to_string());
                 }
                 validate_dj_link_string(&payload.timeline_id, "timelineId")?;
+                validate_dj_link_required_identity(&payload.play_session_id, "playSessionId")?;
             }
             DjLinkMessageType::TimelineLoopSet => {
                 let payload: DjLinkTimelineLoopSetPayload = parse_dj_link_payload(&self.payload)?;
                 validate_dj_link_string(&payload.timeline_id, "timelineId")?;
+                validate_dj_link_required_identity(&payload.play_session_id, "playSessionId")?;
             }
         }
         Ok(())
@@ -8587,46 +8538,442 @@ where
     serde_json::from_value(payload.clone()).map_err(|error| error.to_string())
 }
 
-fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
-    validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
-    validate_dj_link_string(&payload.deck, "deck")?;
-    for (value, label) in [
-        (payload.content_id.as_deref(), "contentId"),
-        (payload.title.as_deref(), "title"),
-        (payload.artist.as_deref(), "artist"),
-    ] {
-        if let Some(value) = value {
-            validate_dj_link_string(value, label)?;
+pub fn validate_dj_link_token(value: &str) -> Result<(), String> {
+    if value.len() < DJ_LINK_MIN_TOKEN_BYTES || value.len() > DJ_LINK_MAX_STRING_BYTES {
+        return Err("DJ Link auth token length is outside 32..256 UTF-8 bytes".to_string());
+    }
+    if value
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err("DJ Link auth token contains whitespace or control characters".to_string());
+    }
+    Ok(())
+}
+
+fn validate_dj_link_capability_set(capabilities: &[String]) -> Result<(), String> {
+    if capabilities.len() != DJ_LINK_REQUIRED_CAPABILITIES.len() {
+        return Err(
+            "DJ Link HELLO capabilities must list exactly the required capability set".to_string(),
+        );
+    }
+    let mut seen = BTreeSet::new();
+    for capability in capabilities {
+        validate_dj_link_string(capability, "capability")?;
+        if !DJ_LINK_REQUIRED_CAPABILITIES.contains(&capability.as_str()) {
+            return Err(format!("unknown DJ Link HELLO capability {capability}"));
+        }
+        if !seen.insert(capability.as_str()) {
+            return Err(format!("duplicate DJ Link HELLO capability {capability}"));
         }
     }
-    if let Some(deck_id) = payload.deck_id.as_deref() {
-        validate_dj_link_string(deck_id, "deckId")?;
+    Ok(())
+}
+
+pub fn validate_dj_link_deck(deck: u8) -> Result<(), String> {
+    if !(1..=4).contains(&deck) {
+        return Err("DJ Link deck must be an integer 1..=4".to_string());
     }
-    if let Some(started_at) = payload.started_at.as_deref() {
-        validate_dj_link_string(started_at, "startedAt")?;
+    Ok(())
+}
+
+pub fn dj_link_deck_id(deck: u8) -> String {
+    format!("rekordbox-deck-{deck}")
+}
+
+fn validate_dj_link_bpm(value: f64, label: &str) -> Result<(), String> {
+    if !value.is_finite() || !(0.0..DJ_LINK_MAX_BPM).contains(&value) || value <= 0.0 {
+        return Err(format!(
+            "DJ Link {label} must be positive and <= {DJ_LINK_MAX_BPM}"
+        ));
     }
-    if payload
-        .track_bpm
-        .is_some_and(|value| !value.is_finite() || !(0.0..=1_000.0).contains(&value))
-        || payload
-            .position_sec
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
+    Ok(())
+}
+
+/// Accepts RFC3339 timestamps (`YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)`),
+/// validating the calendar date including leap years.
+fn validate_dj_link_timestamp(value: &str) -> Result<(), String> {
+    let invalid = || "DJ Link startedAt must be a nonempty RFC3339 timestamp".to_string();
+    let bytes = value.as_bytes();
+    if bytes.len() < 20 {
+        return Err(invalid());
+    }
+    let digits = |slice: &[u8]| slice.iter().all(|byte| byte.is_ascii_digit());
+    let number = |slice: &[u8]| -> Option<u32> {
+        if slice.is_empty() || !digits(slice) {
+            return None;
+        }
+        std::str::from_utf8(slice)
+            .ok()
+            .and_then(|text| text.parse::<u32>().ok())
+    };
+    let year = number(&bytes[0..4]).ok_or_else(invalid)?;
+    if bytes[4] != b'-' {
+        return Err(invalid());
+    }
+    let month = number(&bytes[5..7]).ok_or_else(invalid)?;
+    if bytes[7] != b'-' {
+        return Err(invalid());
+    }
+    let day = number(&bytes[8..10]).ok_or_else(invalid)?;
+    if !(1..=12).contains(&month) {
+        return Err(invalid());
+    }
+    let leap_year = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let max_day = if month == 2 && leap_year {
+        29
+    } else {
+        days_in_month[(month - 1) as usize]
+    };
+    if !(1..=max_day).contains(&day) {
+        return Err(invalid());
+    }
+    if bytes[10] != b'T' && bytes[10] != b't' {
+        return Err(invalid());
+    }
+    let rest = &bytes[11..];
+    if rest.len() < 8 {
+        return Err(invalid());
+    }
+    let hour = number(&rest[0..2]).ok_or_else(invalid)?;
+    if rest[2] != b':' {
+        return Err(invalid());
+    }
+    let minute = number(&rest[3..5]).ok_or_else(invalid)?;
+    if rest[5] != b':' {
+        return Err(invalid());
+    }
+    let second = number(&rest[6..8]).ok_or_else(invalid)?;
+    if hour > 23 || minute > 59 || second > 60 {
+        return Err(invalid());
+    }
+    let mut tail = &rest[8..];
+    if !tail.is_empty() && tail[0] == b'.' {
+        let mut fraction = 1usize;
+        while fraction < tail.len() && tail[fraction].is_ascii_digit() {
+            fraction += 1;
+        }
+        if fraction == 1 {
+            return Err(invalid());
+        }
+        tail = &tail[fraction..];
+    }
+    match tail {
+        [b'Z'] | [b'z'] => {}
+        [sign, h0, h1, b':', m0, m1] => {
+            if *sign != b'+' && *sign != b'-' {
+                return Err(invalid());
+            }
+            let offset_hour = number(&[*h0, *h1]).ok_or_else(invalid)?;
+            let offset_minute = number(&[*m0, *m1]).ok_or_else(invalid)?;
+            if offset_hour > 23 || offset_minute > 59 {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
+impl DjLinkMeasuredLoop {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.revision == 0 {
+            return Err("measured loop revision must be a positive safe integer".to_string());
+        }
+        if self.source != DJ_LINK_MEASURED_LOOP_SOURCE {
+            return Err(format!(
+                "measured loop source must be exactly {DJ_LINK_MEASURED_LOOP_SOURCE}"
+            ));
+        }
+        for (value, label) in [
+            (self.start_beat, "startBeat"),
+            (self.end_beat, "endBeat"),
+            (self.length_beats, "lengthBeats"),
+        ] {
+            if let Some(value) = value {
+                if !value.is_finite() {
+                    return Err(format!("measured loop {label} must be finite"));
+                }
+            }
+        }
+        let span_consistent = |start: f64,
+                               end: f64,
+                               length: Option<f64>,
+                               label: &'static str|
+         -> Result<(), String> {
+            if end <= start {
+                return Err(format!(
+                    "measured loop {label} requires endBeat > startBeat"
+                ));
+            }
+            if let Some(length) = length {
+                if length <= 0.0 {
+                    return Err("measured loop lengthBeats must be > 0 when present".to_string());
+                }
+                if (length - (end - start)).abs() > DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
+                    return Err(
+                        "measured loop lengthBeats exceeds the beat-span tolerance".to_string()
+                    );
+                }
+            }
+            Ok(())
+        };
+        match (self.start_beat, self.end_beat, self.length_beats) {
+            (Some(start), Some(end), length) => {
+                span_consistent(start, end, length, "span")?;
+            }
+            (None, None, None) => {}
+            (None, None, Some(length)) => {
+                if length <= 0.0 {
+                    return Err("measured loop lengthBeats must be > 0 when present".to_string());
+                }
+            }
+            _ => {}
+        }
+        if self.active
+            && matches!(
+                (self.start_beat, self.end_beat, self.length_beats),
+                (None, _, _) | (_, None, _) | (_, _, None)
+            )
+        {
+            return Err(
+                "an active measured loop requires non-null startBeat,endBeat,lengthBeats"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
+    validate_dj_link_deck(payload.deck)?;
+    if payload.deck_id != dj_link_deck_id(payload.deck) {
+        return Err("deckId must be rekordbox-deck-N matching deck".to_string());
+    }
+    if payload.master_deck_revision == 0 || payload.position_revision == 0 {
+        return Err("track revisions must be positive safe integers".to_string());
+    }
+    match (
+        payload.content_id.as_deref(),
+        payload.title.as_deref(),
+        payload.artist.as_deref(),
+    ) {
+        (Some(content_id), None, None) => validate_dj_link_string(content_id, "contentId")?,
+        (None, Some(title), Some(artist)) => {
+            validate_dj_link_string(title, "title")?;
+            validate_dj_link_string(artist, "artist")?;
+        }
+        _ => {
+            return Err(
+                "track identity must be exactly one nonempty contentId or both title and artist"
+                    .to_string(),
+            )
+        }
+    }
+    if let Some(track_bpm) = payload.track_bpm {
+        validate_dj_link_bpm(track_bpm, "trackBpm")?;
+    }
+    validate_dj_link_bpm(payload.effective_bpm, "effectiveBpm")?;
+    if !payload.position_at_send_sec.is_finite()
+        || !(0.0..=DJ_LINK_MAX_POSITION_AT_SEND_SEC).contains(&payload.position_at_send_sec)
     {
-        return Err("DJ Link track numeric fields are invalid".to_string());
+        return Err(format!(
+            "positionAtSendSec must be finite within 0..={DJ_LINK_MAX_POSITION_AT_SEND_SEC}"
+        ));
     }
-    if !payload.playing {
-        return Err("DJ Link track event must identify a playing master track".to_string());
+    if payload.sample_age_ms > DJ_LINK_MAX_SAMPLE_AGE_MS {
+        return Err(format!(
+            "sampleAgeMs must be within 0..={DJ_LINK_MAX_SAMPLE_AGE_MS}"
+        ));
     }
-    if payload.master
-        && payload
-            .content_id
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        && payload.title.as_deref().unwrap_or("").trim().is_empty()
-    {
-        return Err("DJ Link master track event has no track identity".to_string());
+    if !payload.is_playing {
+        return Err("isPlaying must be true on track events".to_string());
+    }
+    if !payload.master {
+        return Err("master must be true on master-track events".to_string());
+    }
+    validate_dj_link_timestamp(&payload.started_at)?;
+    validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
+    if let Some(loop_state) = payload.loop_state.as_ref() {
+        loop_state.validate()?;
+    }
+    Ok(())
+}
+
+/// Detects duplicate JSON object keys at every nesting level before serde can
+/// silently collapse them. Escape sequences are decoded so `\u0041gent` and
+/// `agent` compare as the same key.
+fn reject_duplicate_json_keys(text: &str) -> Result<(), String> {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    #[derive(Debug)]
+    enum Container {
+        Object {
+            keys: BTreeSet<String>,
+            expecting_key: bool,
+        },
+        Array,
+    }
+    let mut stack: Vec<Container> = Vec::new();
+
+    fn skip_whitespace(bytes: &[u8], index: &mut usize) {
+        while *index < bytes.len() && matches!(bytes[*index], b' ' | b'\t' | b'\n' | b'\r') {
+            *index += 1;
+        }
+    }
+
+    fn decode_escape(bytes: &[u8], index: &mut usize) -> Result<String, String> {
+        *index += 1;
+        if *index >= bytes.len() {
+            return Err("truncated escape sequence in JSON string".to_string());
+        }
+        let escape = bytes[*index];
+        *index += 1;
+        let simple = match escape {
+            b'"' => Some('"'),
+            b'\\' => Some('\\'),
+            b'/' => Some('/'),
+            b'b' => Some('\u{0008}'),
+            b'f' => Some('\u{000C}'),
+            b'n' => Some('\n'),
+            b'r' => Some('\r'),
+            b't' => Some('\t'),
+            _ => None,
+        };
+        if let Some(character) = simple {
+            return Ok(character.to_string());
+        }
+        if escape != b'u' || *index + 4 > bytes.len() {
+            return Err("invalid escape sequence in JSON string".to_string());
+        }
+        let hex = std::str::from_utf8(&bytes[*index..*index + 4])
+            .map_err(|_| "invalid \\u escape".to_string())?;
+        let code = u16::from_str_radix(hex, 16).map_err(|_| "invalid \\u escape".to_string())?;
+        *index += 4;
+        if (0xD800..0xDC00).contains(&code) {
+            if *index + 6 <= bytes.len() && bytes[*index] == b'\\' && bytes[*index + 1] == b'u' {
+                let low_hex = std::str::from_utf8(&bytes[*index + 2..*index + 6])
+                    .map_err(|_| "invalid surrogate pair".to_string())?;
+                let low = u16::from_str_radix(low_hex, 16)
+                    .map_err(|_| "invalid surrogate pair".to_string())?;
+                *index += 6;
+                if (0xDC00..0xE000).contains(&low) {
+                    let combined =
+                        0x1_0000 + ((u32::from(code) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+                    return char::from_u32(combined)
+                        .map(|character| character.to_string())
+                        .ok_or_else(|| "invalid surrogate pair".to_string());
+                }
+            }
+            return Ok('\u{FFFD}'.to_string());
+        }
+        if (0xDC00..0xE000).contains(&code) {
+            return Ok('\u{FFFD}'.to_string());
+        }
+        char::from_u32(u32::from(code))
+            .map(|character| character.to_string())
+            .ok_or_else(|| "invalid \\u escape".to_string())
+    }
+
+    fn parse_json_string(bytes: &[u8], index: &mut usize) -> Result<String, String> {
+        *index += 1;
+        let mut decoded = String::new();
+        while *index < bytes.len() {
+            match bytes[*index] {
+                b'"' => {
+                    *index += 1;
+                    return Ok(decoded);
+                }
+                b'\\' => decoded.push_str(&decode_escape(bytes, index)?),
+                _ => {
+                    let start = *index;
+                    *index += 1;
+                    while *index < bytes.len() && (bytes[*index] & 0xC0) == 0x80 {
+                        *index += 1;
+                    }
+                    let chunk = std::str::from_utf8(&bytes[start..*index])
+                        .map_err(|_| "invalid UTF-8 in JSON string".to_string())?;
+                    decoded.push_str(chunk);
+                }
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+
+    skip_whitespace(bytes, &mut index);
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match byte {
+            b'{' => {
+                stack.push(Container::Object {
+                    keys: BTreeSet::new(),
+                    expecting_key: true,
+                });
+                index += 1;
+            }
+            b'[' => {
+                stack.push(Container::Array);
+                index += 1;
+            }
+            b'}' => {
+                if !matches!(stack.pop(), Some(Container::Object { .. })) {
+                    return Err("unbalanced JSON object".to_string());
+                }
+                index += 1;
+            }
+            b']' => {
+                if !matches!(stack.pop(), Some(Container::Array)) {
+                    return Err("unbalanced JSON array".to_string());
+                }
+                index += 1;
+            }
+            b',' => {
+                if let Some(Container::Object { expecting_key, .. }) = stack.last_mut() {
+                    *expecting_key = true;
+                }
+                index += 1;
+            }
+            b':' => {
+                match stack.last() {
+                    Some(Container::Object {
+                        expecting_key: false,
+                        ..
+                    }) => {}
+                    _ => return Err("unexpected ':' outside a JSON object pair".to_string()),
+                }
+                index += 1;
+            }
+            b'"' => {
+                let decoded = parse_json_string(bytes, &mut index)?;
+                if let Some(Container::Object {
+                    keys,
+                    expecting_key,
+                }) = stack.last_mut()
+                {
+                    if *expecting_key {
+                        if !keys.insert(decoded.clone()) {
+                            return Err(format!("duplicate JSON key {decoded}"));
+                        }
+                        *expecting_key = false;
+                    }
+                }
+            }
+            _ => {
+                while index < bytes.len()
+                    && !matches!(
+                        bytes[index],
+                        b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'
+                    )
+                {
+                    index += 1;
+                }
+            }
+        }
+        skip_whitespace(bytes, &mut index);
+    }
+    if !stack.is_empty() {
+        return Err("unterminated JSON container".to_string());
     }
     Ok(())
 }
@@ -8959,6 +9306,2841 @@ pub struct EngineSnapshot {
     pub telemetry: EngineTelemetry,
 }
 
+/// Which persisted video image owns authored project references after a
+/// successful current-schema integrity check.
+///
+/// This is deliberately returned to the caller instead of silently applying
+/// `authored_video.unwrap_or(video)`: a caller must make the authority choice
+/// visible at its project-load boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectVideoAuthority {
+    Video,
+    AuthoredVideo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectAuthoredVideoConflictKind {
+    RuntimeProjectionDeclaration,
+    IdentitySetMismatch,
+    ReferenceTopologyMismatch,
+}
+
+/// A reference registry that snapshot-level validation cannot reach because
+/// its authoritative table lives outside `EngineSnapshot`.
+///
+/// The report names the boundary explicitly so a caller can never mistake a
+/// successful snapshot check for complete `ProjectFile` validation. Use
+/// [`validate_project_file_reference_integrity`] at a `ProjectFile` boundary
+/// to also validate the named registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectExternalRegistryBoundary {
+    /// Reference domain carried inside `EngineSnapshot` without its registry.
+    pub domain: &'static str,
+    /// Where the authoritative registry table actually lives.
+    pub registry_location: &'static str,
+}
+
+impl ProjectExternalRegistryBoundary {
+    /// Lighting fixture groups are referenced by string id from
+    /// `target_group_ids`/`group_ids`, but the first-class group table is
+    /// `ProjectFile.fixture_groups`, which is not part of `EngineSnapshot`.
+    pub const LIGHTING_FIXTURE_GROUPS: Self = Self {
+        domain: "lighting fixture group",
+        registry_location: "ProjectFile.fixture_groups",
+    };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectReferenceIntegrityReport {
+    pub video_authority: ProjectVideoAuthority,
+    /// Registries this validation deliberately did not check because their
+    /// tables live outside the validated input. `None` means every referenced
+    /// registry was reachable and validated.
+    pub unvalidated_external_registry: Option<ProjectExternalRegistryBoundary>,
+}
+
+/// Typed, deterministic project-reference rejection.  No variant performs a
+/// migration, synthesizes a host, drops a dangling entity, or chooses between
+/// competing authorities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectReferenceIntegrityError {
+    ZeroId {
+        domain: &'static str,
+        owner: String,
+    },
+    DuplicateId {
+        domain: &'static str,
+        id: u64,
+    },
+    MissingReference {
+        owner: String,
+        target_domain: &'static str,
+        target_id: u64,
+    },
+    ReferenceMismatch {
+        owner: String,
+        detail: String,
+    },
+    ReferenceCycle {
+        domain: &'static str,
+        path: Vec<u64>,
+    },
+    /// The decoded snapshot declares the current multi-Timeline schema (or is
+    /// being gated as such) but carries no Timeline bank at all. This is its
+    /// own deterministic rejection, distinct from a genuine projection
+    /// conflict between an active Timeline and its bank entry.
+    RequiredTimelineBankEmpty {
+        active_timeline_id: TimelineId,
+    },
+    /// String-keyed counterpart of [`ProjectReferenceIntegrityError::MissingReference`]
+    /// for lighting fixture groups, whose identity is an authored label
+    /// rather than a numeric id.
+    MissingGroupReference {
+        owner: String,
+        group_id: String,
+    },
+    /// String-keyed counterpart of [`ProjectReferenceIntegrityError::DuplicateId`].
+    DuplicateGroupIdentity {
+        registry_owner: String,
+        group_id: String,
+    },
+    ActiveTimelineProjectionConflict {
+        timeline_id: TimelineId,
+        detail: String,
+    },
+    AuthoredVideoConflict {
+        kind: ProjectAuthoredVideoConflictKind,
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for ProjectReferenceIntegrityError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroId { domain, owner } => {
+                write!(formatter, "{owner} has zero {domain} identity")
+            }
+            Self::DuplicateId { domain, id } => {
+                write!(formatter, "{domain} identity {id} is duplicated")
+            }
+            Self::MissingReference {
+                owner,
+                target_domain,
+                target_id,
+            } => write!(
+                formatter,
+                "{owner} references missing {target_domain} {target_id}"
+            ),
+            Self::ReferenceMismatch { owner, detail } => {
+                write!(formatter, "{owner} has inconsistent reference: {detail}")
+            }
+            Self::ReferenceCycle { domain, path } => {
+                write!(formatter, "{domain} reference cycle: {path:?}")
+            }
+            Self::RequiredTimelineBankEmpty { active_timeline_id } => write!(
+                formatter,
+                "current schema requires a non-empty Timeline bank; \
+                 active Timeline {} has no bank entries",
+                active_timeline_id.0
+            ),
+            Self::MissingGroupReference { owner, group_id } => write!(
+                formatter,
+                "{owner} references lighting fixture group {group_id:?} with no member fixtures"
+            ),
+            Self::DuplicateGroupIdentity {
+                registry_owner,
+                group_id,
+            } => write!(
+                formatter,
+                "{registry_owner} declares lighting fixture group {group_id:?} more than once"
+            ),
+            Self::ActiveTimelineProjectionConflict {
+                timeline_id,
+                detail,
+            } => write!(
+                formatter,
+                "active Timeline {} projection conflicts with its bank entry: {detail}",
+                timeline_id.0
+            ),
+            Self::AuthoredVideoConflict { kind, detail } => {
+                write!(
+                    formatter,
+                    "authored_video/video conflict ({kind:?}): {detail}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProjectReferenceIntegrityError {}
+
+fn project_zero_id(
+    domain: &'static str,
+    owner: impl Into<String>,
+) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::ZeroId {
+        domain,
+        owner: owner.into(),
+    }
+}
+
+fn project_duplicate_id(domain: &'static str, id: u64) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::DuplicateId { domain, id }
+}
+
+fn project_missing_reference(
+    owner: impl Into<String>,
+    target_domain: &'static str,
+    target_id: u64,
+) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::MissingReference {
+        owner: owner.into(),
+        target_domain,
+        target_id,
+    }
+}
+
+fn project_reference_mismatch(
+    owner: impl Into<String>,
+    detail: impl Into<String>,
+) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::ReferenceMismatch {
+        owner: owner.into(),
+        detail: detail.into(),
+    }
+}
+
+/// Validate a raw, already-decoded current-schema `EngineSnapshot` before any
+/// legacy normalization, sanitization, allocator reservation, or runtime
+/// installation. This API intentionally does not call the older permissive
+/// project-load validators: their compatibility transforms are outside this
+/// clean-break boundary.
+///
+/// Runtime-only Timeline transport fields are excluded from the active-bank
+/// authored projection comparison. Likewise, rendered-only video layers are
+/// accepted only when their exact IDs are declared by the runtime-only
+/// `timeline_video_projection_layer_ids` fence.
+///
+/// Every snapshot field that carries entity references is validated,
+/// including the runtime-published programmer values, active fade, direct
+/// child Timeline transports, and latched scene live-modifier overrides; a
+/// hostile file cannot hide dangling references behind runtime-only lists.
+/// The lighting fixture-group registry is the one reference domain outside
+/// this input, and the returned report names that boundary explicitly.
+pub fn validate_current_engine_snapshot_reference_integrity(
+    snapshot: &EngineSnapshot,
+) -> Result<ProjectReferenceIntegrityReport, ProjectReferenceIntegrityError> {
+    let cue_lists = project_index_nonzero_u64(
+        snapshot
+            .cue_lists
+            .iter()
+            .map(|cue_list| (cue_list.id, cue_list)),
+        "Cue List",
+    )?;
+    let cues = project_index_nonzero_u64(snapshot.cues.iter().map(|cue| (cue.id, cue)), "Cue")?;
+    let fixtures = project_index_nonzero_u64(
+        snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| (fixture.id, fixture)),
+        "fixture",
+    )?;
+    let palettes = project_index_nonzero_u64(
+        snapshot
+            .palettes
+            .iter()
+            .map(|palette| (palette.id, palette)),
+        "palette",
+    )?;
+    let effects = project_index_nonzero_u64(
+        snapshot.effects.iter().map(|effect| (effect.id, effect)),
+        "lighting effect",
+    )?;
+    let node_graphs = project_index_nonzero_u64(
+        snapshot.node_graphs.iter().map(|graph| (graph.id, graph)),
+        "node graph",
+    )?;
+
+    if snapshot.timeline_bank.is_empty() {
+        return Err(ProjectReferenceIntegrityError::RequiredTimelineBankEmpty {
+            active_timeline_id: snapshot.timeline.id,
+        });
+    }
+    let timelines = project_index_nonzero_u64(
+        snapshot
+            .timeline_bank
+            .iter()
+            .map(|timeline| (timeline.id.0, timeline)),
+        "Timeline",
+    )?;
+    let active_bank_timeline = timelines.get(&snapshot.timeline.id.0).ok_or_else(|| {
+        ProjectReferenceIntegrityError::ActiveTimelineProjectionConflict {
+            timeline_id: snapshot.timeline.id,
+            detail: "active Timeline identity is absent from the Timeline bank".to_string(),
+        }
+    })?;
+    if !timeline_authored_projection_matches(&snapshot.timeline, active_bank_timeline) {
+        return Err(
+            ProjectReferenceIntegrityError::ActiveTimelineProjectionConflict {
+                timeline_id: snapshot.timeline.id,
+                detail:
+                    "authored fields differ; runtime transport fields are intentionally ignored"
+                        .to_string(),
+            },
+        );
+    }
+
+    let (video, video_authority) = match snapshot.authored_video.as_ref() {
+        Some(authored) => {
+            validate_authored_video_reference_projection(snapshot, authored)?;
+            (authored, ProjectVideoAuthority::AuthoredVideo)
+        }
+        None => (&snapshot.video, ProjectVideoAuthority::Video),
+    };
+    let video_catalog = validate_video_project_references(video, &timelines)?;
+
+    validate_active_cue_references(snapshot, &cue_lists, &cues)?;
+    let fixture_attributes = fixture_attribute_catalog(&fixtures);
+    validate_runtime_reference_fields(snapshot, &cues, &fixtures, &fixture_attributes)?;
+    validate_cue_project_references(
+        snapshot,
+        CueProjectReferenceContext {
+            cue_lists: &cue_lists,
+            fixtures: &fixtures,
+            fixture_attributes: &fixture_attributes,
+            palettes: &palettes,
+            effects: &effects,
+            node_graphs: &node_graphs,
+            video: &video_catalog,
+        },
+    )?;
+    validate_effect_and_node_graph_references(
+        snapshot,
+        &fixtures,
+        &fixture_attributes,
+        &video_catalog,
+    )?;
+
+    for (index, timeline) in snapshot.timeline_bank.iter().enumerate() {
+        validate_timeline_project_references(
+            &format!("Timeline {}", timeline.id.0),
+            TimelineProjectReferenceInput {
+                layers: &timeline.layers,
+                events: &timeline.events,
+                automations: &timeline.automations,
+                video_automations: &timeline.video_automations,
+                audio_clips: &timeline.audio_clips,
+                video_clips: &timeline.video_clips,
+                item_groups: &timeline.item_groups,
+                cues: &cues,
+                fixtures: &fixtures,
+                fixture_attributes: &fixture_attributes,
+                video: &video_catalog,
+            },
+        )?;
+        if let Some(follow) = &timeline.follow {
+            if !timelines.contains_key(&follow.next_timeline_id.0) {
+                return Err(project_missing_reference(
+                    format!("Timeline {} Follow", timeline.id.0),
+                    "Timeline",
+                    follow.next_timeline_id.0,
+                ));
+            }
+            if follow.enabled {
+                let expected = snapshot.timeline_bank.get(index + 1).ok_or_else(|| {
+                    project_reference_mismatch(
+                        format!("Timeline {} Follow", timeline.id.0),
+                        "enabled Follow has no next bank entry",
+                    )
+                })?;
+                if follow.next_timeline_id != expected.id {
+                    return Err(project_reference_mismatch(
+                        format!("Timeline {} Follow", timeline.id.0),
+                        format!(
+                            "target {} is not the next bank Timeline {}",
+                            follow.next_timeline_id.0, expected.id.0
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    validate_timeline_follow_cycles(&snapshot.timeline_bank)?;
+
+    for cue in &snapshot.cues {
+        let Some(child) = &cue.child_timeline else {
+            continue;
+        };
+        validate_timeline_project_references(
+            &format!("Cue {} child Timeline", cue.id),
+            TimelineProjectReferenceInput {
+                layers: &child.layers,
+                events: &child.events,
+                automations: &child.automations,
+                video_automations: &child.video_automations,
+                audio_clips: &child.audio_clips,
+                video_clips: &[],
+                item_groups: &[],
+                cues: &cues,
+                fixtures: &fixtures,
+                fixture_attributes: &fixture_attributes,
+                video: &video_catalog,
+            },
+        )?;
+    }
+    validate_child_timeline_reference_cycles(&snapshot.cues)?;
+
+    // Lighting fixture groups are referenced by string identity throughout
+    // this snapshot, but the first-class group registry is
+    // `ProjectFile.fixture_groups`, which lives outside `EngineSnapshot`.
+    // Report that boundary explicitly instead of implying complete
+    // ProjectFile validation; `validate_project_file_reference_integrity`
+    // closes it.
+    Ok(ProjectReferenceIntegrityReport {
+        video_authority,
+        unvalidated_external_registry: Some(
+            ProjectExternalRegistryBoundary::LIGHTING_FIXTURE_GROUPS,
+        ),
+    })
+}
+
+/// Validate every persisted or runtime-published `EngineSnapshot` field that
+/// carries entity references but sits outside the authored cue/timeline
+/// tables: programmer values, the active fade's Cue, direct child Timeline
+/// transports, and latched scene live-modifier overrides.
+///
+/// The live-modifier and transport lists are stripped by persistence, so a
+/// decoded project normally carries them empty; a hostile or hand-edited file
+/// can still inject them, and they are rejected here exactly like any other
+/// dangling reference instead of being silently ignored.
+fn validate_runtime_reference_fields(
+    snapshot: &EngineSnapshot,
+    cues: &BTreeMap<u64, &CueSummary>,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for value in &snapshot.programmer.values {
+        validate_fixture_attribute_reference(
+            "programmer value",
+            value.fixture_id,
+            &value.attribute,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(fade) = &snapshot.active_fade {
+        if !cues.contains_key(&fade.cue_id) {
+            return Err(project_missing_reference("active fade", "Cue", fade.cue_id));
+        }
+    }
+    for transport in &snapshot.direct_child_timeline_transports {
+        if !cues.contains_key(&transport.cue_id) {
+            return Err(project_missing_reference(
+                "direct child Timeline transport",
+                "Cue",
+                transport.cue_id,
+            ));
+        }
+    }
+    for modifier in &snapshot.cue_live_modifiers {
+        if !cues.contains_key(&modifier.cue_id) {
+            return Err(project_missing_reference(
+                "scene live modifier",
+                "Cue",
+                modifier.cue_id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Complete clean-break reference-integrity gate for a decoded
+/// [`ProjectFile`].
+///
+/// This runs the full snapshot-level validation of
+/// [`validate_current_engine_snapshot_reference_integrity`] *and* validates
+/// the lighting fixture-group registry that lives outside
+/// `EngineSnapshot`: registry identity, fixture membership well-formedness,
+/// and resolvability of every lighting-effect `target_group_ids` reference
+/// (including embedded request payloads) against actual fixture membership.
+///
+/// Use this at `ProjectFile` boundaries; the snapshot-level API alone cannot
+/// see the group registry, and its report says so explicitly instead of
+/// implying complete project validation.
+pub fn validate_project_file_reference_integrity(
+    project: &ProjectFile,
+) -> Result<ProjectReferenceIntegrityReport, ProjectReferenceIntegrityError> {
+    let mut report = validate_current_engine_snapshot_reference_integrity(&project.snapshot)?;
+    validate_project_file_fixture_group_registry(project)?;
+    // Every registry referenced by the snapshot was reachable here and has
+    // now been validated, so the boundary statement is cleared.
+    report.unvalidated_external_registry = None;
+    Ok(report)
+}
+
+/// Validate the lighting fixture-group surfaces whose authoritative truth is
+/// reachable only from a [`ProjectFile`]:
+///
+/// 1. `fixture_groups` registry entries are unique and well-formed.
+/// 2. Every fixture's own `group_ids` membership strings are well-formed;
+///    they remain the authoritative membership truth.
+/// 3. Every lighting-effect `target_group_ids` reference (summary plus each
+///    embedded request payload, including Chaser steps) is well-formed and
+///    resolves to at least one fixture membership under the engine's
+///    hierarchical prefix rule, so an effect can never persistently target a
+///    group no fixture belongs to.
+///
+/// Malformed input is rejected, never normalized or repaired.
+pub fn validate_project_file_fixture_group_registry(
+    project: &ProjectFile,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let mut registered = BTreeSet::new();
+    for group in &project.fixture_groups {
+        validate_lighting_group_id_shape("ProjectFile fixture group registry", &group.id)?;
+        if !registered.insert(normalized_lighting_group_id(&group.id)) {
+            return Err(ProjectReferenceIntegrityError::DuplicateGroupIdentity {
+                registry_owner: ProjectExternalRegistryBoundary::LIGHTING_FIXTURE_GROUPS
+                    .registry_location
+                    .to_string(),
+                group_id: group.id.clone(),
+            });
+        }
+    }
+
+    let mut memberships = BTreeSet::new();
+    for fixture in &project.snapshot.fixtures {
+        for group_id in &fixture.group_ids {
+            let owner = format!("fixture {} group membership", fixture.id);
+            validate_lighting_group_id_shape(&owner, group_id)?;
+            memberships.insert(normalized_lighting_group_id(group_id));
+        }
+    }
+
+    let mut references = Vec::new();
+    for effect in &project.snapshot.effects {
+        references.push((
+            format!("lighting effect {} targets", effect.id),
+            effect.target_group_ids.as_slice(),
+        ));
+        if let Some(request) = &effect.lfo {
+            references.push((
+                format!("lighting effect {} LFO request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+        if let Some(request) = &effect.chaser {
+            for (step_index, step) in request.steps.iter().enumerate() {
+                references.push((
+                    format!("lighting effect {} Chaser step {step_index}", effect.id),
+                    step.target_group_ids.as_slice(),
+                ));
+            }
+        }
+        if let Some(request) = &effect.move_effect {
+            references.push((
+                format!("lighting effect {} Move request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+        if let Some(request) = &effect.value {
+            references.push((
+                format!("lighting effect {} Value request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+        if let Some(request) = &effect.curve {
+            references.push((
+                format!("lighting effect {} Curve request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+        if let Some(request) = &effect.mapping {
+            references.push((
+                format!("lighting effect {} Mapping request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+        if let Some(request) = &effect.color_mapping {
+            references.push((
+                format!("lighting effect {} ColorMapping request", effect.id),
+                request.target_group_ids.as_slice(),
+            ));
+        }
+    }
+    for (owner, group_ids) in references {
+        for group_id in group_ids {
+            validate_lighting_group_id_shape(&owner, group_id)?;
+            if !membership_resolves(&memberships, group_id) {
+                return Err(project_missing_reference_for_group(&owner, group_id));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Well-formedness rule mirroring the engine's own group-id acceptance: the
+/// trimmed identifier is non-empty and contains no empty `/` path segment.
+fn validate_lighting_group_id_shape(
+    owner: &str,
+    group_id: &str,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let trimmed = group_id.trim();
+    let malformed =
+        trimmed.is_empty() || trimmed.split('/').any(|segment| segment.trim().is_empty());
+    if malformed {
+        return Err(project_reference_mismatch(
+            owner,
+            format!("group id {group_id:?} is empty or has an empty path segment"),
+        ));
+    }
+    Ok(())
+}
+
+fn normalized_lighting_group_id(group_id: &str) -> String {
+    group_id
+        .split('/')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Engine resolution rule: a requested group matches a fixture membership
+/// when they are equal or the membership is a deeper path below the request.
+fn membership_resolves(memberships: &BTreeSet<String>, requested: &str) -> bool {
+    let requested = normalized_lighting_group_id(requested);
+    memberships.iter().any(|member| {
+        member == &requested
+            || member
+                .strip_prefix(requested.as_str())
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
+fn project_missing_reference_for_group(
+    owner: &str,
+    group_id: &str,
+) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::MissingGroupReference {
+        owner: owner.to_string(),
+        group_id: group_id.to_string(),
+    }
+}
+
+fn project_index_nonzero_u64<'a, T>(
+    values: impl Iterator<Item = (u64, &'a T)>,
+    domain: &'static str,
+) -> Result<BTreeMap<u64, &'a T>, ProjectReferenceIntegrityError> {
+    let mut indexed = BTreeMap::new();
+    for (id, value) in values {
+        if id == 0 {
+            return Err(project_zero_id(domain, domain));
+        }
+        if indexed.insert(id, value).is_some() {
+            return Err(project_duplicate_id(domain, id));
+        }
+    }
+    Ok(indexed)
+}
+
+fn timeline_authored_projection_matches(
+    active: &TimelineSnapshot,
+    bank: &TimelineSnapshot,
+) -> bool {
+    active.id == bank.id
+        && active.label == bank.label
+        && active.layers == bank.layers
+        && active.events == bank.events
+        && active.automations == bank.automations
+        && active.video_automations == bank.video_automations
+        && active.audio == bank.audio
+        && active.audio_clips == bank.audio_clips
+        && active.video_clips == bank.video_clips
+        && active.phases == bank.phases
+        && active.item_groups == bank.item_groups
+        && active.loop_region == bank.loop_region
+        && active.follow == bank.follow
+        && active.guide_enabled == bank.guide_enabled
+        && active.audio_offset_ms == bank.audio_offset_ms
+        && active.audio_muted == bank.audio_muted
+        && active.metronome_enabled == bank.metronome_enabled
+        && active.count_in_beats == bank.count_in_beats
+        && active.tempo_meter_map == bank.tempo_meter_map
+        && active.tempo_meter_map_version == bank.tempo_meter_map_version
+        && active.duration_ms == bank.duration_ms
+    // Excluded deliberately: count-in/audio transport revisions, transport
+    // epoch/generation, child transports, loop/follow runtime, guide/click
+    // queues, playing, and position_ms.
+}
+
+struct ProjectVideoCatalog<'a> {
+    layers: BTreeMap<VideoLayerId, &'a VideoLayerSummary>,
+    media_assets: BTreeMap<MediaAssetId, &'a MediaAssetSummary>,
+    outputs: BTreeMap<VideoOutputId, &'a VideoOutputSummary>,
+}
+
+fn validate_video_project_references<'a>(
+    video: &'a VideoSnapshot,
+    timelines: &BTreeMap<u64, &TimelineSnapshot>,
+) -> Result<ProjectVideoCatalog<'a>, ProjectReferenceIntegrityError> {
+    let layers = project_index_nonzero_u64(
+        video.layers.iter().map(|layer| (layer.id, layer)),
+        "video layer",
+    )?;
+    let media_assets = project_index_nonzero_u64(
+        video.media_assets.iter().map(|asset| (asset.id, asset)),
+        "MediaAsset",
+    )?;
+    let compositions = project_index_nonzero_u64(
+        video
+            .compositions
+            .iter()
+            .map(|composition| (composition.id, composition)),
+        "video composition",
+    )?;
+    let outputs = project_index_nonzero_u64(
+        video.outputs.iter().map(|output| (output.id, output)),
+        "video output",
+    )?;
+    let groups = project_index_nonzero_u64(
+        video.layer_groups.iter().map(|group| (group.id.0, group)),
+        "video layer group",
+    )?;
+    let buses = project_index_nonzero_u64(
+        video.transition_buses.iter().map(|bus| (bus.id.0, bus)),
+        "video transition bus",
+    )?;
+
+    let mut slot_ids = BTreeSet::new();
+    for layer in &video.layers {
+        let owner = format!("video layer {}", layer.id);
+        if let Some(asset_id) = layer.media_asset_id {
+            if !media_assets.contains_key(&asset_id) {
+                return Err(project_missing_reference(&owner, "MediaAsset", asset_id));
+            }
+        }
+        let mut local_slots = BTreeSet::new();
+        for slot in &layer.clip_slots {
+            if slot.id.0 == 0 {
+                return Err(project_zero_id("video clip slot", &owner));
+            }
+            if !slot_ids.insert(slot.id) {
+                return Err(project_duplicate_id("video clip slot", slot.id.0));
+            }
+            local_slots.insert(slot.id);
+            if !media_assets.contains_key(&slot.media_asset_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} clip slot {}", slot.id.0),
+                    "MediaAsset",
+                    slot.media_asset_id,
+                ));
+            }
+        }
+        if let Some(default_slot_id) = layer.default_clip_slot_id {
+            if !local_slots.contains(&default_slot_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} default clip slot"),
+                    "video clip slot",
+                    default_slot_id.0,
+                ));
+            }
+        }
+    }
+
+    let mut layer_memberships = BTreeMap::<VideoLayerId, usize>::new();
+    for composition in &video.compositions {
+        let mut own_layers = BTreeSet::new();
+        for layer_id in &composition.layer_ids {
+            if !own_layers.insert(*layer_id) {
+                return Err(project_reference_mismatch(
+                    format!("video composition {}", composition.id),
+                    format!("contains video layer {layer_id} more than once"),
+                ));
+            }
+            if !layers.contains_key(layer_id) {
+                return Err(project_missing_reference(
+                    format!("video composition {}", composition.id),
+                    "video layer",
+                    *layer_id,
+                ));
+            }
+            *layer_memberships.entry(*layer_id).or_default() += 1;
+        }
+        let mut own_outputs = BTreeSet::new();
+        for output_id in &composition.output_ids {
+            if !own_outputs.insert(*output_id) {
+                return Err(project_reference_mismatch(
+                    format!("video composition {}", composition.id),
+                    format!("contains video output {output_id} more than once"),
+                ));
+            }
+            let output = outputs.get(output_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("video composition {}", composition.id),
+                    "video output",
+                    *output_id,
+                )
+            })?;
+            if output.composition_id != composition.id {
+                return Err(project_reference_mismatch(
+                    format!("video composition {}", composition.id),
+                    format!(
+                        "output {output_id} points back to composition {}",
+                        output.composition_id
+                    ),
+                ));
+            }
+        }
+    }
+    for layer_id in layers.keys() {
+        if !layer_memberships.contains_key(layer_id) {
+            return Err(project_reference_mismatch(
+                format!("video layer {layer_id}"),
+                "is not hosted by any composition",
+            ));
+        }
+    }
+    for output in &video.outputs {
+        let composition = compositions.get(&output.composition_id).ok_or_else(|| {
+            project_missing_reference(
+                format!("video output {}", output.id),
+                "video composition",
+                output.composition_id,
+            )
+        })?;
+        if !composition.output_ids.contains(&output.id) {
+            return Err(project_reference_mismatch(
+                format!("video output {}", output.id),
+                format!(
+                    "owning composition {} omits the reverse output reference",
+                    output.composition_id
+                ),
+            ));
+        }
+    }
+
+    let mut grouped_layers = BTreeSet::new();
+    for group in &video.layer_groups {
+        let composition = compositions.get(&group.composition_id).ok_or_else(|| {
+            project_missing_reference(
+                format!("video layer group {}", group.id.0),
+                "video composition",
+                group.composition_id,
+            )
+        })?;
+        let mut own_layers = BTreeSet::new();
+        for layer_id in &group.layer_ids {
+            if !own_layers.insert(*layer_id) || !grouped_layers.insert(*layer_id) {
+                return Err(project_reference_mismatch(
+                    format!("video layer group {}", group.id.0),
+                    format!("video layer {layer_id} has ambiguous group ownership"),
+                ));
+            }
+            if !layers.contains_key(layer_id) {
+                return Err(project_missing_reference(
+                    format!("video layer group {}", group.id.0),
+                    "video layer",
+                    *layer_id,
+                ));
+            }
+            if !composition.layer_ids.contains(layer_id) {
+                return Err(project_reference_mismatch(
+                    format!("video layer group {}", group.id.0),
+                    format!(
+                        "member layer {layer_id} is outside composition {}",
+                        group.composition_id
+                    ),
+                ));
+            }
+        }
+    }
+
+    for bus in &video.transition_buses {
+        let composition = compositions.get(&bus.composition_id).ok_or_else(|| {
+            project_missing_reference(
+                format!("video transition bus {}", bus.id.0),
+                "video composition",
+                bus.composition_id,
+            )
+        })?;
+        let mut members = BTreeSet::new();
+        for target in &bus.members {
+            if !members.insert(target.clone()) {
+                return Err(project_reference_mismatch(
+                    format!("video transition bus {}", bus.id.0),
+                    "contains duplicate transition members",
+                ));
+            }
+            validate_video_transition_target_reference(
+                target,
+                bus.id,
+                composition,
+                &layers,
+                &groups,
+            )?;
+        }
+        for (role, target) in [
+            ("default_from", Some(&bus.default_from)),
+            ("default_to", Some(&bus.default_to)),
+            ("matte_source", bus.matte_source.as_ref()),
+        ] {
+            let Some(target) = target else { continue };
+            validate_video_transition_target_reference(
+                target,
+                bus.id,
+                composition,
+                &layers,
+                &groups,
+            )?;
+            if role != "matte_source" && !members.contains(target) {
+                return Err(project_reference_mismatch(
+                    format!("video transition bus {} {role}", bus.id.0),
+                    "target is not a member of the transition bus",
+                ));
+            }
+        }
+    }
+
+    let mut chain_ids = BTreeSet::new();
+    let mut stage_ids = BTreeSet::new();
+    let mut effect_ids = BTreeSet::new();
+    let mut scopes = BTreeSet::new();
+    for chain in &video.effect_chains {
+        if chain.id.0 == 0 {
+            return Err(project_zero_id("video effect chain", "video effect chain"));
+        }
+        if !chain_ids.insert(chain.id) {
+            return Err(project_duplicate_id("video effect chain", chain.id.0));
+        }
+        if !scopes.insert(chain.scope.clone()) {
+            return Err(project_reference_mismatch(
+                format!("video effect chain {}", chain.id.0),
+                "duplicates an existing effect scope",
+            ));
+        }
+        validate_video_effect_scope_reference(
+            &chain.scope,
+            VideoEffectScopeReferenceContext {
+                layers: &layers,
+                outputs: &outputs,
+                compositions: &compositions,
+                groups: &groups,
+                buses: &buses,
+                timelines,
+            },
+        )?;
+        for stage in &chain.stages {
+            if stage.id.0 == 0 {
+                return Err(project_zero_id(
+                    "video effect stage",
+                    format!("video effect chain {}", chain.id.0),
+                ));
+            }
+            if !stage_ids.insert(stage.id) {
+                return Err(project_duplicate_id("video effect stage", stage.id.0));
+            }
+            if stage.effect.id.0 == 0 {
+                return Err(project_zero_id(
+                    "video effect",
+                    format!("video effect stage {}", stage.id.0),
+                ));
+            }
+            if !effect_ids.insert(stage.effect.id) {
+                return Err(project_duplicate_id("video effect", stage.effect.id.0));
+            }
+        }
+    }
+    let mut preset_ids = BTreeSet::new();
+    for preset in &video.effect_presets {
+        if preset.id.0 == 0 {
+            return Err(project_zero_id(
+                "video effect preset",
+                "video effect preset",
+            ));
+        }
+        if !preset_ids.insert(preset.id) {
+            return Err(project_duplicate_id("video effect preset", preset.id.0));
+        }
+    }
+    for layer in &video.layers {
+        for slot in &layer.clip_slots {
+            for effect_override in &slot.effect_overrides {
+                if let Some(effect_id) = effect_override.effect_id {
+                    if !effect_ids.contains(&effect_id) {
+                        return Err(project_missing_reference(
+                            format!(
+                                "video layer {} clip slot {} effect override",
+                                layer.id, slot.id.0
+                            ),
+                            "video effect",
+                            effect_id.0,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut eligible = BTreeSet::new();
+    for layer_id in &video.auto_vj.config.eligible_layer_ids {
+        if !eligible.insert(*layer_id) {
+            return Err(project_reference_mismatch(
+                "Auto VJ eligible layer list",
+                format!("contains video layer {layer_id} more than once"),
+            ));
+        }
+        if !layers.contains_key(layer_id) {
+            return Err(project_missing_reference(
+                "Auto VJ eligible layer list",
+                "video layer",
+                *layer_id,
+            ));
+        }
+    }
+
+    Ok(ProjectVideoCatalog {
+        layers,
+        media_assets,
+        outputs,
+    })
+}
+
+fn validate_video_transition_target_reference(
+    target: &VideoLayerTransitionTarget,
+    bus_id: VideoTransitionBusId,
+    composition: &CompositionSummary,
+    layers: &BTreeMap<u64, &VideoLayerSummary>,
+    groups: &BTreeMap<u64, &VideoLayerGroupSummary>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    match target {
+        VideoLayerTransitionTarget::Layer { layer_id } => {
+            if !layers.contains_key(layer_id) {
+                return Err(project_missing_reference(
+                    format!("video transition bus {}", bus_id.0),
+                    "video layer",
+                    *layer_id,
+                ));
+            }
+            if !composition.layer_ids.contains(layer_id) {
+                return Err(project_reference_mismatch(
+                    format!("video transition bus {}", bus_id.0),
+                    format!("layer {layer_id} is outside composition {}", composition.id),
+                ));
+            }
+        }
+        VideoLayerTransitionTarget::Group { group_id } => {
+            let group = groups.get(&group_id.0).ok_or_else(|| {
+                project_missing_reference(
+                    format!("video transition bus {}", bus_id.0),
+                    "video layer group",
+                    group_id.0,
+                )
+            })?;
+            if group.composition_id != composition.id {
+                return Err(project_reference_mismatch(
+                    format!("video transition bus {}", bus_id.0),
+                    format!(
+                        "group {} belongs to composition {} instead of {}",
+                        group_id.0, group.composition_id, composition.id
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+struct VideoEffectScopeReferenceContext<'maps, 'snapshot> {
+    layers: &'maps BTreeMap<u64, &'snapshot VideoLayerSummary>,
+    outputs: &'maps BTreeMap<u64, &'snapshot VideoOutputSummary>,
+    compositions: &'maps BTreeMap<u64, &'snapshot CompositionSummary>,
+    groups: &'maps BTreeMap<u64, &'snapshot VideoLayerGroupSummary>,
+    buses: &'maps BTreeMap<u64, &'snapshot VideoLayerTransitionBusSummary>,
+    timelines: &'maps BTreeMap<u64, &'snapshot TimelineSnapshot>,
+}
+
+fn validate_video_effect_scope_reference<'maps, 'snapshot>(
+    scope: &VideoEffectScope,
+    context: VideoEffectScopeReferenceContext<'maps, 'snapshot>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let VideoEffectScopeReferenceContext {
+        layers,
+        outputs,
+        compositions,
+        groups,
+        buses,
+        timelines,
+    } = context;
+    let owner = format!("video effect scope {scope:?}");
+    match scope {
+        VideoEffectScope::Clip { layer_id, slot_id } => {
+            let layer = layers
+                .get(layer_id)
+                .ok_or_else(|| project_missing_reference(&owner, "video layer", *layer_id))?;
+            if !layer.clip_slots.iter().any(|slot| slot.id == *slot_id) {
+                return Err(project_missing_reference(
+                    owner,
+                    "video clip slot",
+                    slot_id.0,
+                ));
+            }
+        }
+        VideoEffectScope::Layer { layer_id }
+        | VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::ClipTake { layer_id },
+        } => {
+            if !layers.contains_key(layer_id) {
+                return Err(project_missing_reference(owner, "video layer", *layer_id));
+            }
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::LayerBus { bus_id },
+        } => {
+            if !buses.contains_key(&bus_id.0) {
+                return Err(project_missing_reference(
+                    owner,
+                    "video transition bus",
+                    bus_id.0,
+                ));
+            }
+        }
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+        } => {
+            if !timelines.contains_key(&source_timeline_id.0) {
+                return Err(project_missing_reference(
+                    owner,
+                    "Timeline",
+                    source_timeline_id.0,
+                ));
+            }
+        }
+        VideoEffectScope::Composition { composition_id } => {
+            if !compositions.contains_key(composition_id) {
+                return Err(project_missing_reference(
+                    owner,
+                    "video composition",
+                    *composition_id,
+                ));
+            }
+        }
+        VideoEffectScope::Group { group_id } => {
+            if !groups.contains_key(&group_id.0) {
+                return Err(project_missing_reference(
+                    owner,
+                    "video layer group",
+                    group_id.0,
+                ));
+            }
+        }
+        VideoEffectScope::Output { output_id } => {
+            if !outputs.contains_key(output_id) {
+                return Err(project_missing_reference(owner, "video output", *output_id));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn authored_video_conflict(
+    kind: ProjectAuthoredVideoConflictKind,
+    detail: impl Into<String>,
+) -> ProjectReferenceIntegrityError {
+    ProjectReferenceIntegrityError::AuthoredVideoConflict {
+        kind,
+        detail: detail.into(),
+    }
+}
+
+fn validate_authored_video_reference_projection(
+    snapshot: &EngineSnapshot,
+    authored: &VideoSnapshot,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let rendered = &snapshot.video;
+    let authored_layer_ids = project_unique_id_set(
+        authored.layers.iter().map(|layer| layer.id),
+        "authored video layer",
+    )?;
+    let rendered_layer_ids = project_unique_id_set(
+        rendered.layers.iter().map(|layer| layer.id),
+        "rendered video layer",
+    )?;
+    let mut runtime_projection_ids = BTreeSet::new();
+    for layer_id in &snapshot
+        .video_clip_runtime
+        .timeline_video_projection_layer_ids
+    {
+        if *layer_id == 0 || !runtime_projection_ids.insert(*layer_id) {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::RuntimeProjectionDeclaration,
+                format!("runtime projection layer ID {layer_id} is zero or duplicated"),
+            ));
+        }
+        if authored_layer_ids.contains(layer_id) || !rendered_layer_ids.contains(layer_id) {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::RuntimeProjectionDeclaration,
+                format!(
+                    "runtime projection layer {layer_id} is authored or absent from rendered video"
+                ),
+            ));
+        }
+    }
+    let expected_rendered_layers = authored_layer_ids
+        .union(&runtime_projection_ids)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if rendered_layer_ids != expected_rendered_layers {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "rendered layer IDs are not exactly authored IDs plus declared runtime projections",
+        ));
+    }
+
+    let authored_assets = project_unique_id_set(
+        authored.media_assets.iter().map(|asset| asset.id),
+        "authored MediaAsset",
+    )?;
+    let rendered_assets = project_unique_id_set(
+        rendered.media_assets.iter().map(|asset| asset.id),
+        "rendered MediaAsset",
+    )?;
+    if authored_assets != rendered_assets {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "MediaAsset identity sets differ",
+        ));
+    }
+
+    for authored_layer in &authored.layers {
+        let rendered_layer = rendered
+            .layers
+            .iter()
+            .find(|layer| layer.id == authored_layer.id)
+            .ok_or_else(|| {
+                authored_video_conflict(
+                    ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+                    format!(
+                        "authored layer {} is absent from rendered video",
+                        authored_layer.id
+                    ),
+                )
+            })?;
+        let authored_slots = authored_layer
+            .clip_slots
+            .iter()
+            .map(|slot| (slot.id, slot.media_asset_id))
+            .collect::<Vec<_>>();
+        let rendered_slots = rendered_layer
+            .clip_slots
+            .iter()
+            .map(|slot| (slot.id, slot.media_asset_id))
+            .collect::<Vec<_>>();
+        if authored_layer.default_clip_slot_id != rendered_layer.default_clip_slot_id
+            || authored_slots != rendered_slots
+        {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!("layer {} clip-bank topology differs", authored_layer.id),
+            ));
+        }
+    }
+
+    let authored_compositions = project_unique_id_set(
+        authored
+            .compositions
+            .iter()
+            .map(|composition| composition.id),
+        "authored video composition",
+    )?;
+    let rendered_compositions = project_unique_id_set(
+        rendered
+            .compositions
+            .iter()
+            .map(|composition| composition.id),
+        "rendered video composition",
+    )?;
+    if authored_compositions != rendered_compositions {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video composition identity sets differ",
+        ));
+    }
+    for authored_composition in &authored.compositions {
+        let rendered_composition = rendered
+            .compositions
+            .iter()
+            .find(|composition| composition.id == authored_composition.id)
+            .expect("matching composition identity set was checked");
+        let rendered_authored_layers = rendered_composition
+            .layer_ids
+            .iter()
+            .filter(|layer_id| !runtime_projection_ids.contains(layer_id))
+            .copied()
+            .collect::<Vec<_>>();
+        if rendered_authored_layers != authored_composition.layer_ids
+            || rendered_composition.output_ids != authored_composition.output_ids
+        {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!(
+                    "composition {} layer/output topology differs",
+                    authored_composition.id
+                ),
+            ));
+        }
+    }
+
+    let authored_outputs = project_unique_id_set(
+        authored.outputs.iter().map(|output| output.id),
+        "authored video output",
+    )?;
+    let rendered_outputs = project_unique_id_set(
+        rendered.outputs.iter().map(|output| output.id),
+        "rendered video output",
+    )?;
+    if authored_outputs != rendered_outputs {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video output identity sets differ",
+        ));
+    }
+    for authored_output in &authored.outputs {
+        let rendered_output = rendered
+            .outputs
+            .iter()
+            .find(|output| output.id == authored_output.id)
+            .expect("matching output identity set was checked");
+        if authored_output.composition_id != rendered_output.composition_id {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!("output {} composition host differs", authored_output.id),
+            ));
+        }
+    }
+
+    compare_authored_video_group_topology(authored, rendered)?;
+    compare_authored_video_bus_topology(authored, rendered)?;
+    compare_authored_video_effect_topology(authored, rendered)?;
+    compare_authored_video_persisted_state(authored, rendered)?;
+    Ok(())
+}
+
+/// Exact fences over the remaining persisted `VideoSnapshot` state.
+///
+/// These fields are authored project state, not runtime-only render output:
+/// the engine derives `authored_video` from the same source image it renders
+/// from, so a divergence between the two images means the persisted file is
+/// internally inconsistent and is rejected instead of silently picking one
+/// side. `auto_vj.status` is deliberately excluded: Auto VJ runtime status is
+/// reset on every project load and never participates in authored authority.
+fn compare_authored_video_persisted_state(
+    authored: &VideoSnapshot,
+    rendered: &VideoSnapshot,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    if authored.mapping_presets != rendered.mapping_presets {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+            "video output mapping presets differ between authored and rendered video",
+        ));
+    }
+    if authored.master_opacity != rendered.master_opacity {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+            "video master opacity differs between authored and rendered video",
+        ));
+    }
+    if authored.blackout != rendered.blackout {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+            "authored blackout bit differs between authored and rendered video",
+        ));
+    }
+    if authored.auto_vj.config != rendered.auto_vj.config {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+            "Auto VJ config (including eligible layer list) differs between \
+             authored and rendered video",
+        ));
+    }
+    Ok(())
+}
+
+fn project_unique_id_set(
+    values: impl Iterator<Item = u64>,
+    domain: &'static str,
+) -> Result<BTreeSet<u64>, ProjectReferenceIntegrityError> {
+    let mut ids = BTreeSet::new();
+    for id in values {
+        if id == 0 {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+                format!("{domain} contains ID zero"),
+            ));
+        }
+        if !ids.insert(id) {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+                format!("{domain} contains duplicate ID {id}"),
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn compare_authored_video_group_topology(
+    authored: &VideoSnapshot,
+    rendered: &VideoSnapshot,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let authored_ids = project_unique_id_set(
+        authored.layer_groups.iter().map(|group| group.id.0),
+        "authored video layer group",
+    )?;
+    let rendered_ids = project_unique_id_set(
+        rendered.layer_groups.iter().map(|group| group.id.0),
+        "rendered video layer group",
+    )?;
+    if authored_ids != rendered_ids {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video layer-group identity sets differ",
+        ));
+    }
+    for group in &authored.layer_groups {
+        let peer = rendered
+            .layer_groups
+            .iter()
+            .find(|peer| peer.id == group.id)
+            .expect("matching group identity set was checked");
+        if group.composition_id != peer.composition_id || group.layer_ids != peer.layer_ids {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!("video layer group {} topology differs", group.id.0),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compare_authored_video_bus_topology(
+    authored: &VideoSnapshot,
+    rendered: &VideoSnapshot,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let authored_ids = project_unique_id_set(
+        authored.transition_buses.iter().map(|bus| bus.id.0),
+        "authored video transition bus",
+    )?;
+    let rendered_ids = project_unique_id_set(
+        rendered.transition_buses.iter().map(|bus| bus.id.0),
+        "rendered video transition bus",
+    )?;
+    if authored_ids != rendered_ids {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video transition-bus identity sets differ",
+        ));
+    }
+    for bus in &authored.transition_buses {
+        let peer = rendered
+            .transition_buses
+            .iter()
+            .find(|peer| peer.id == bus.id)
+            .expect("matching transition-bus identity set was checked");
+        if bus.composition_id != peer.composition_id
+            || bus.members != peer.members
+            || bus.default_from != peer.default_from
+            || bus.default_to != peer.default_to
+            || bus.matte_source != peer.matte_source
+        {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!("video transition bus {} topology differs", bus.id.0),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compare_authored_video_effect_topology(
+    authored: &VideoSnapshot,
+    rendered: &VideoSnapshot,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let authored_ids = project_unique_id_set(
+        authored.effect_chains.iter().map(|chain| chain.id.0),
+        "authored video effect chain",
+    )?;
+    let rendered_ids = project_unique_id_set(
+        rendered.effect_chains.iter().map(|chain| chain.id.0),
+        "rendered video effect chain",
+    )?;
+    if authored_ids != rendered_ids {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video effect-chain identity sets differ",
+        ));
+    }
+    for chain in &authored.effect_chains {
+        let peer = rendered
+            .effect_chains
+            .iter()
+            .find(|peer| peer.id == chain.id)
+            .expect("matching effect-chain identity set was checked");
+        let stages = chain
+            .stages
+            .iter()
+            .map(|stage| (stage.id, stage.effect.id))
+            .collect::<Vec<_>>();
+        let peer_stages = peer
+            .stages
+            .iter()
+            .map(|stage| (stage.id, stage.effect.id))
+            .collect::<Vec<_>>();
+        if chain.scope != peer.scope || stages != peer_stages {
+            return Err(authored_video_conflict(
+                ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                format!("video effect chain {} topology differs", chain.id.0),
+            ));
+        }
+    }
+    let authored_presets = project_unique_id_set(
+        authored.effect_presets.iter().map(|preset| preset.id.0),
+        "authored video effect preset",
+    )?;
+    let rendered_presets = project_unique_id_set(
+        rendered.effect_presets.iter().map(|preset| preset.id.0),
+        "rendered video effect preset",
+    )?;
+    if authored_presets != rendered_presets {
+        return Err(authored_video_conflict(
+            ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+            "video effect-preset identity sets differ",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_active_cue_references(
+    snapshot: &EngineSnapshot,
+    cue_lists: &BTreeMap<u64, &CueListSummary>,
+    cues: &BTreeMap<u64, &CueSummary>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for cue in &snapshot.cues {
+        if !cue_lists.contains_key(&cue.cue_list_id) {
+            return Err(project_missing_reference(
+                format!("Cue {}", cue.id),
+                "Cue List",
+                cue.cue_list_id,
+            ));
+        }
+    }
+    for cue_list in &snapshot.cue_lists {
+        let Some(active_cue_id) = cue_list.active_cue_id else {
+            continue;
+        };
+        let cue = cues.get(&active_cue_id).ok_or_else(|| {
+            project_missing_reference(
+                format!("Cue List {} active Cue", cue_list.id),
+                "Cue",
+                active_cue_id,
+            )
+        })?;
+        if cue.cue_list_id != cue_list.id {
+            return Err(project_reference_mismatch(
+                format!("Cue List {} active Cue", cue_list.id),
+                format!(
+                    "Cue {active_cue_id} belongs to Cue List {}",
+                    cue.cue_list_id
+                ),
+            ));
+        }
+    }
+    if let Some(active_cue_id) = snapshot.active_cue_id {
+        let cue = cues.get(&active_cue_id).ok_or_else(|| {
+            project_missing_reference("snapshot active Cue", "Cue", active_cue_id)
+        })?;
+        let cue_list = cue_lists
+            .get(&cue.cue_list_id)
+            .expect("Cue membership was validated above");
+        if cue_list.active_cue_id != Some(active_cue_id) {
+            return Err(project_reference_mismatch(
+                "snapshot active Cue",
+                format!(
+                    "Cue {active_cue_id} is not the active Cue of its Cue List {}",
+                    cue.cue_list_id
+                ),
+            ));
+        }
+        if let Some(group_id) = &cue.group_id {
+            if snapshot.active_group_cue_ids.get(group_id) != Some(&active_cue_id) {
+                return Err(project_reference_mismatch(
+                    "snapshot active Cue",
+                    format!("group {group_id:?} does not point back to Cue {active_cue_id}"),
+                ));
+            }
+        }
+    }
+    for (group_id, cue_id) in &snapshot.active_group_cue_ids {
+        let cue = cues.get(cue_id).ok_or_else(|| {
+            project_missing_reference(format!("active Cue group {group_id:?}"), "Cue", *cue_id)
+        })?;
+        if cue.group_id.as_deref() != Some(group_id.as_str()) {
+            return Err(project_reference_mismatch(
+                format!("active Cue group {group_id:?}"),
+                format!("Cue {cue_id} is authored for group {:?}", cue.group_id),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn fixture_attribute_catalog(
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+) -> BTreeMap<FixtureId, BTreeSet<String>> {
+    fixtures
+        .iter()
+        .map(|(fixture_id, fixture)| {
+            let attributes = fixture
+                .controls
+                .iter()
+                .map(|control| control.attribute.clone())
+                .chain(
+                    fixture
+                        .attribute_values
+                        .iter()
+                        .map(|value| value.attribute.clone()),
+                )
+                .collect::<BTreeSet<_>>();
+            (*fixture_id, attributes)
+        })
+        .collect()
+}
+
+fn validate_fixture_attribute_reference(
+    owner: impl Into<String>,
+    fixture_id: FixtureId,
+    attribute: &str,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let owner = owner.into();
+    if !fixtures.contains_key(&fixture_id) {
+        return Err(project_missing_reference(owner, "fixture", fixture_id));
+    }
+    if attribute.trim().is_empty()
+        || !fixture_attributes
+            .get(&fixture_id)
+            .is_some_and(|attributes| attributes.contains(attribute))
+    {
+        return Err(project_reference_mismatch(
+            owner,
+            format!("fixture {fixture_id} has no attribute {attribute:?}"),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MoveReferenceAxis {
+    Pan,
+    Tilt,
+}
+
+/// Keep static project validation byte-for-byte aligned with the engine's
+/// movement-axis classifier: ASCII alphanumeric normalization, Tilt taking
+/// precedence over Pan, and substring matching for profile-specific aliases.
+fn move_reference_axis(attribute: &str) -> Option<MoveReferenceAxis> {
+    let normalized = attribute
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_lowercase())
+        .collect::<String>();
+    if normalized.contains("tilt") {
+        Some(MoveReferenceAxis::Tilt)
+    } else if normalized.contains("pan") {
+        Some(MoveReferenceAxis::Pan)
+    } else {
+        None
+    }
+}
+
+/// Mirror the runtime's indexed Pan/Tilt pairing. A missing axis deliberately
+/// leaves a hole instead of falling back to another control or beam.
+fn move_reference_attribute_pairs(fixture: &PatchedFixtureSummary) -> Vec<Option<(&str, &str)>> {
+    let pan_controls = fixture
+        .controls
+        .iter()
+        .filter(|control| move_reference_axis(&control.attribute) == Some(MoveReferenceAxis::Pan))
+        .collect::<Vec<_>>();
+    let tilt_controls = fixture
+        .controls
+        .iter()
+        .filter(|control| move_reference_axis(&control.attribute) == Some(MoveReferenceAxis::Tilt))
+        .collect::<Vec<_>>();
+    let pair_count = pan_controls.len().max(tilt_controls.len());
+    (0..pair_count)
+        .map(|index| {
+            let (Some(pan), Some(tilt)) = (pan_controls.get(index), tilt_controls.get(index))
+            else {
+                return None;
+            };
+            Some((pan.attribute.as_str(), tilt.attribute.as_str()))
+        })
+        .collect()
+}
+
+struct CueProjectReferenceContext<'maps, 'snapshot> {
+    cue_lists: &'maps BTreeMap<u64, &'snapshot CueListSummary>,
+    fixtures: &'maps BTreeMap<u64, &'snapshot PatchedFixtureSummary>,
+    fixture_attributes: &'maps BTreeMap<FixtureId, BTreeSet<String>>,
+    palettes: &'maps BTreeMap<u64, &'snapshot ReferencePaletteSummary>,
+    effects: &'maps BTreeMap<u64, &'snapshot EffectSummary>,
+    node_graphs: &'maps BTreeMap<u64, &'snapshot NodeGraphSummary>,
+    video: &'maps ProjectVideoCatalog<'snapshot>,
+}
+
+fn validate_cue_project_references<'maps, 'snapshot>(
+    snapshot: &EngineSnapshot,
+    context: CueProjectReferenceContext<'maps, 'snapshot>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let CueProjectReferenceContext {
+        cue_lists,
+        fixtures,
+        fixture_attributes,
+        palettes,
+        effects,
+        node_graphs,
+        video,
+    } = context;
+    let mut executor_ids = BTreeSet::new();
+    for executor in &snapshot.playback_executors {
+        if executor.id == 0 {
+            return Err(project_zero_id("playback executor", "playback executor"));
+        }
+        if !executor_ids.insert(executor.id) {
+            return Err(project_duplicate_id("playback executor", executor.id));
+        }
+        if !cue_lists.contains_key(&executor.cue_list_id) {
+            return Err(project_missing_reference(
+                format!("playback executor {}", executor.id),
+                "Cue List",
+                executor.cue_list_id,
+            ));
+        }
+    }
+    for cue in &snapshot.cues {
+        let cue_owner = format!("Cue {}", cue.id);
+        let mut target_fixtures = BTreeSet::new();
+        for target in &cue.targets {
+            if !target_fixtures.insert(target.fixture_id) {
+                return Err(project_reference_mismatch(
+                    &cue_owner,
+                    format!("fixture {} is targeted more than once", target.fixture_id),
+                ));
+            }
+            for value in &target.values {
+                validate_fixture_attribute_reference(
+                    format!("{cue_owner} fixture target"),
+                    target.fixture_id,
+                    &value.attribute,
+                    fixtures,
+                    fixture_attributes,
+                )?;
+            }
+        }
+        for (step_index, step) in cue.steps.iter().enumerate() {
+            for target in &step.values {
+                for value in &target.values {
+                    validate_fixture_attribute_reference(
+                        format!("{cue_owner} step {step_index}"),
+                        target.fixture_id,
+                        &value.attribute,
+                        fixtures,
+                        fixture_attributes,
+                    )?;
+                }
+            }
+        }
+        for fixture_id in &cue.mib_fixture_ids {
+            if !fixtures.contains_key(fixture_id) {
+                return Err(project_missing_reference(
+                    format!("{cue_owner} MIB fixture"),
+                    "fixture",
+                    *fixture_id,
+                ));
+            }
+        }
+        for part in &cue.parts {
+            for fixture_id in &part.fixture_ids {
+                if !fixtures.contains_key(fixture_id) {
+                    return Err(project_missing_reference(
+                        format!("{cue_owner} part {}", part.number),
+                        "fixture",
+                        *fixture_id,
+                    ));
+                }
+            }
+            for layer_id in &part.video_layer_ids {
+                if !video.layers.contains_key(layer_id) {
+                    return Err(project_missing_reference(
+                        format!("{cue_owner} part {}", part.number),
+                        "video layer",
+                        *layer_id,
+                    ));
+                }
+            }
+            for output_id in &part.video_output_ids {
+                if !video.outputs.contains_key(output_id) {
+                    return Err(project_missing_reference(
+                        format!("{cue_owner} part {}", part.number),
+                        "video output",
+                        *output_id,
+                    ));
+                }
+            }
+        }
+        for palette_target in &cue.palette_targets {
+            let palette = palettes.get(&palette_target.palette_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("{cue_owner} palette target"),
+                    "palette",
+                    palette_target.palette_id,
+                )
+            })?;
+            for fixture_id in &palette_target.fixture_ids {
+                for value in &palette.values {
+                    validate_fixture_attribute_reference(
+                        format!("{cue_owner} palette {}", palette.id),
+                        *fixture_id,
+                        &value.attribute,
+                        fixtures,
+                        fixture_attributes,
+                    )?;
+                }
+            }
+        }
+        for target in &cue.video_targets {
+            if !video.layers.contains_key(&target.layer_id) {
+                return Err(project_missing_reference(
+                    &cue_owner,
+                    "video layer",
+                    target.layer_id,
+                ));
+            }
+        }
+        for target in &cue.video_output_targets {
+            if !video.outputs.contains_key(&target.output_id) {
+                return Err(project_missing_reference(
+                    &cue_owner,
+                    "video output",
+                    target.output_id,
+                ));
+            }
+        }
+        for target in &cue.effect_targets {
+            if !effects.contains_key(&target.effect_id) {
+                return Err(project_missing_reference(
+                    &cue_owner,
+                    "lighting effect",
+                    target.effect_id,
+                ));
+            }
+            if let Some(params) = &target.params {
+                validate_effect_params_snapshot_references(
+                    format!("{cue_owner} owned effect {} request", target.effect_id),
+                    params,
+                    fixtures,
+                    fixture_attributes,
+                )?;
+            }
+        }
+        for target in &cue.node_graph_targets {
+            if !node_graphs.contains_key(&target.graph_id) {
+                return Err(project_missing_reference(
+                    &cue_owner,
+                    "node graph",
+                    target.graph_id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_effect_and_node_graph_references(
+    snapshot: &EngineSnapshot,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+    video: &ProjectVideoCatalog<'_>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for effect in &snapshot.effects {
+        if effect.effect_type == EffectKind::Move && effect.attribute != "Pan/Tilt" {
+            return Err(project_reference_mismatch(
+                format!("lighting effect {}", effect.id),
+                format!(
+                    "Move summary attribute must be the exact virtual attribute \"Pan/Tilt\", got {:?}",
+                    effect.attribute
+                ),
+            ));
+        }
+        for fixture_id in &effect.fixture_ids {
+            if effect.effect_type == EffectKind::Move {
+                if !fixtures.contains_key(fixture_id) {
+                    return Err(project_missing_reference(
+                        format!("lighting effect {}", effect.id),
+                        "fixture",
+                        *fixture_id,
+                    ));
+                }
+            } else {
+                validate_fixture_attribute_reference(
+                    format!("lighting effect {}", effect.id),
+                    *fixture_id,
+                    &effect.attribute,
+                    fixtures,
+                    fixture_attributes,
+                )?;
+            }
+        }
+        validate_effect_summary_payload_references(effect, fixtures, fixture_attributes)?;
+        for target in &effect.video_targets {
+            for layer_id in &target.layer_ids {
+                if !video.layers.contains_key(layer_id) {
+                    return Err(project_missing_reference(
+                        format!("lighting effect {} video target", effect.id),
+                        "video layer",
+                        *layer_id,
+                    ));
+                }
+            }
+        }
+    }
+    for graph in &snapshot.node_graphs {
+        let mut node_ids = BTreeSet::new();
+        for node in &graph.nodes {
+            if node.id == 0 {
+                return Err(project_zero_id(
+                    "node graph node",
+                    format!("node graph {}", graph.id),
+                ));
+            }
+            if !node_ids.insert(node.id) {
+                return Err(project_duplicate_id("node graph node", node.id));
+            }
+            if let Some(output) = &node.output {
+                for fixture_id in &output.fixture_ids {
+                    validate_fixture_attribute_reference(
+                        format!("node graph {} node {}", graph.id, node.id),
+                        *fixture_id,
+                        &output.attribute,
+                        fixtures,
+                        fixture_attributes,
+                    )?;
+                }
+                for target in &output.video_targets {
+                    for layer_id in &target.layer_ids {
+                        if !video.layers.contains_key(layer_id) {
+                            return Err(project_missing_reference(
+                                format!("node graph {} node {}", graph.id, node.id),
+                                "video layer",
+                                *layer_id,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        for edge in &graph.edges {
+            for (role, node_id) in [("from", edge.from_node), ("to", edge.to_node)] {
+                if !node_ids.contains(&node_id) {
+                    return Err(project_missing_reference(
+                        format!("node graph {} edge {role}", graph.id),
+                        "node graph node",
+                        node_id,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate every fixture/attribute reference embedded in one `EffectSummary`
+/// request payload, independently of the summary mirrors. The summary fields
+/// are checked separately; a hostile file must not be able to smuggle a
+/// dangling fixture or unsupported attribute through an embedded request just
+/// because the mirrored summary happens to be consistent.
+fn validate_effect_summary_payload_references(
+    effect: &EffectSummary,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    if let Some(request) = &effect.lfo {
+        validate_lfo_request_payload(
+            &format!("lighting effect {} LFO request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.color {
+        validate_color_request_payload(
+            &format!("lighting effect {} Color request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.chaser {
+        validate_chaser_request_payload(
+            &format!("lighting effect {} Chaser request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.move_effect {
+        validate_move_request_payload(
+            &format!("lighting effect {} Move request", effect.id),
+            request,
+            fixtures,
+        )?;
+    }
+    if let Some(request) = &effect.value {
+        validate_value_request_payload(
+            &format!("lighting effect {} Value request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.curve {
+        validate_curve_request_payload(
+            &format!("lighting effect {} Curve request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.mapping {
+        validate_mapping_request_payload(
+            &format!("lighting effect {} Mapping request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    if let Some(request) = &effect.color_mapping {
+        validate_color_mapping_request_payload(
+            &format!("lighting effect {} ColorMapping request", effect.id),
+            request,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    Ok(())
+}
+
+/// Validate the Cue-owned embedded effect request of a Cue effect target.
+fn validate_effect_params_snapshot_references(
+    owner: String,
+    params: &EffectParamsSnapshot,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    match params {
+        EffectParamsSnapshot::Lfo(request) => {
+            validate_lfo_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::PositionWave(request) => {
+            validate_position_wave_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::Color(request) => {
+            validate_color_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::Chaser(request) => {
+            validate_chaser_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::Move(request) => {
+            validate_move_request_payload(&owner, request, fixtures)
+        }
+        EffectParamsSnapshot::Value(request) => {
+            validate_value_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::Curve(request) => {
+            validate_curve_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::Mapping(request) => {
+            validate_mapping_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+        EffectParamsSnapshot::ColorMapping(request) => {
+            validate_color_mapping_request_payload(&owner, request, fixtures, fixture_attributes)
+        }
+    }
+}
+
+/// Every listed fixture must exist and support `attribute` exactly.
+fn validate_payload_attribute_targets(
+    owner: &str,
+    fixture_ids: &[FixtureId],
+    attribute: &str,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for fixture_id in fixture_ids {
+        validate_fixture_attribute_reference(
+            owner,
+            *fixture_id,
+            attribute,
+            fixtures,
+            fixture_attributes,
+        )?;
+    }
+    Ok(())
+}
+
+/// Every listed fixture must exist. Used by families whose fixture list does
+/// not itself carry an attribute reference.
+fn validate_payload_fixture_existence(
+    owner: &str,
+    fixture_ids: &[FixtureId],
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for fixture_id in fixture_ids {
+        if !fixtures.contains_key(fixture_id) {
+            return Err(project_missing_reference(owner, "fixture", *fixture_id));
+        }
+    }
+    Ok(())
+}
+
+/// A feature attribute applies to whichever targeted fixtures support it, so
+/// the deterministic acceptance rule mirrors the engine's resolution
+/// semantics: at least one explicit target fixture must support it. When a
+/// family targets groups only, membership lives behind the external group
+/// registry boundary and cannot be decided here.
+fn validate_payload_feature_attribute_resolves(
+    owner: &str,
+    attribute: &str,
+    candidate_fixture_ids: impl IntoIterator<Item = FixtureId>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let mut candidates = candidate_fixture_ids.into_iter().collect::<Vec<_>>();
+    candidates.sort_unstable();
+    candidates.dedup();
+    let resolves = candidates.iter().any(|fixture_id| {
+        fixture_attributes
+            .get(fixture_id)
+            .is_some_and(|attributes| attributes.contains(attribute))
+    });
+    if !resolves && !candidates.is_empty() {
+        return Err(project_reference_mismatch(
+            owner,
+            format!(
+                "feature attribute {attribute:?} is supported by none of the explicit target fixtures"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_effect_beam_target(
+    owner: &str,
+    target: &EffectBeamTarget,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_fixture_attribute_reference(
+        format!("{owner} beam target"),
+        target.fixture_id,
+        &target.feature_attribute,
+        fixtures,
+        fixture_attributes,
+    )
+}
+
+fn validate_color_effect_beam_target(
+    owner: &str,
+    target: &ColorEffectBeamTarget,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    if !fixtures.contains_key(&target.fixture_id) {
+        return Err(project_missing_reference(
+            format!("{owner} beam target"),
+            "fixture",
+            target.fixture_id,
+        ));
+    }
+    if let Some(feature_attribute) = &target.feature_attribute {
+        return validate_fixture_attribute_reference(
+            format!("{owner} beam target"),
+            target.fixture_id,
+            feature_attribute,
+            fixtures,
+            fixture_attributes,
+        );
+    }
+    Ok(())
+}
+
+fn validate_color_spatial_pattern_payload(
+    owner: &str,
+    pattern: &ColorEffectSpatialPattern,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for target in &pattern.beam_targets {
+        validate_color_effect_beam_target(owner, target, fixtures, fixture_attributes)?;
+    }
+    if let Some(placement) = &pattern.placement {
+        for coordinate in &placement.target_coordinates {
+            if !fixtures.contains_key(&coordinate.fixture_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} placement target"),
+                    "fixture",
+                    coordinate.fixture_id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_lfo_request_payload(
+    owner: &str,
+    request: &LfoEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_attribute_targets(
+        owner,
+        &request.fixture_ids,
+        &request.attribute,
+        fixtures,
+        fixture_attributes,
+    )?;
+    for target in &request.beam_targets {
+        validate_effect_beam_target(owner, target, fixtures, fixture_attributes)?;
+    }
+    Ok(())
+}
+
+fn validate_position_wave_request_payload(
+    owner: &str,
+    request: &PositionWaveEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_attribute_targets(
+        owner,
+        &request.fixture_ids,
+        &request.attribute,
+        fixtures,
+        fixture_attributes,
+    )
+}
+
+fn validate_color_request_payload(
+    owner: &str,
+    request: &ColorEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_fixture_existence(owner, &request.fixture_ids, fixtures)?;
+    if let Some(pattern) = &request.spatial_pattern {
+        validate_color_spatial_pattern_payload(owner, pattern, fixtures, fixture_attributes)?;
+    }
+    Ok(())
+}
+
+fn validate_chaser_request_payload(
+    owner: &str,
+    request: &ChaserEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let mut explicit_targets = BTreeSet::new();
+    for (step_index, step) in request.steps.iter().enumerate() {
+        let step_owner = format!("{owner} step {step_index}");
+        validate_payload_fixture_existence(&step_owner, &step.fixture_ids, fixtures)?;
+        explicit_targets.extend(step.fixture_ids.iter().copied());
+        for target in &step.beam_targets {
+            validate_effect_beam_target(&step_owner, target, fixtures, fixture_attributes)?;
+            explicit_targets.insert(target.fixture_id);
+        }
+    }
+    for feature in &request.features {
+        validate_payload_feature_attribute_resolves(
+            &format!("{owner} feature"),
+            &feature.attribute,
+            explicit_targets.iter().copied(),
+            fixture_attributes,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_move_request_payload(
+    owner: &str,
+    request: &MoveEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_fixture_existence(owner, &request.fixture_ids, fixtures)?;
+    if !request.beam_targets.is_empty() && !request.target_group_ids.is_empty() {
+        return Err(project_reference_mismatch(
+            owner,
+            "Move beam targets cannot be combined with group targets".to_string(),
+        ));
+    }
+    if request.beam_targets.is_empty() {
+        for fixture_id in &request.fixture_ids {
+            let fixture = fixtures
+                .get(fixture_id)
+                .expect("fixture existence was validated above");
+            let pairs = move_reference_attribute_pairs(fixture);
+            if pairs.len() != 1 || pairs[0].is_none() {
+                return Err(project_reference_mismatch(
+                    owner,
+                    format!(
+                        "fixture {fixture_id} must expose exactly one indexed Pan/Tilt pair when no Move beam target is authored"
+                    ),
+                ));
+            }
+        }
+    } else {
+        for target in &request.beam_targets {
+            let Some(fixture) = fixtures.get(&target.fixture_id) else {
+                return Err(project_missing_reference(
+                    format!("{owner} beam target"),
+                    "fixture",
+                    target.fixture_id,
+                ));
+            };
+            let fixture_is_targeted = request.fixture_ids.contains(&target.fixture_id);
+            if !fixture_is_targeted {
+                return Err(project_reference_mismatch(
+                    format!("{owner} beam target"),
+                    format!(
+                        "fixture {} is not present in the resolved fixture targets",
+                        target.fixture_id
+                    ),
+                ));
+            }
+            let pairs = move_reference_attribute_pairs(fixture);
+            if !pairs
+                .get(target.beam_index as usize)
+                .is_some_and(Option::is_some)
+            {
+                return Err(project_reference_mismatch(
+                    format!("{owner} beam target"),
+                    format!(
+                        "fixture {} has no paired Pan/Tilt beam {}",
+                        target.fixture_id, target.beam_index
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_value_request_payload(
+    owner: &str,
+    request: &ValueEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_fixture_existence(owner, &request.fixture_ids, fixtures)?;
+    if request.features.is_empty() {
+        validate_payload_attribute_targets(
+            owner,
+            &request.fixture_ids,
+            &request.attribute,
+            fixtures,
+            fixture_attributes,
+        )?;
+    } else {
+        for feature in &request.features {
+            validate_payload_feature_attribute_resolves(
+                &format!("{owner} feature"),
+                &feature.attribute,
+                request.fixture_ids.iter().copied(),
+                fixture_attributes,
+            )?;
+        }
+    }
+    if let Some(pattern) = &request.spatial_pattern {
+        validate_color_spatial_pattern_payload(owner, pattern, fixtures, fixture_attributes)?;
+    }
+    Ok(())
+}
+
+fn validate_curve_or_mapping_request_payload(
+    owner: &str,
+    fixture_ids: &[FixtureId],
+    attribute: &str,
+    features: &[ChaserFeature],
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_fixture_existence(owner, fixture_ids, fixtures)?;
+    if features.is_empty() {
+        validate_payload_attribute_targets(
+            owner,
+            fixture_ids,
+            attribute,
+            fixtures,
+            fixture_attributes,
+        )?;
+    } else {
+        for feature in features {
+            validate_payload_feature_attribute_resolves(
+                &format!("{owner} feature"),
+                &feature.attribute,
+                fixture_ids.iter().copied(),
+                fixture_attributes,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_curve_request_payload(
+    owner: &str,
+    request: &CurveEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_curve_or_mapping_request_payload(
+        owner,
+        &request.fixture_ids,
+        &request.attribute,
+        &request.features,
+        fixtures,
+        fixture_attributes,
+    )
+}
+
+fn validate_mapping_request_payload(
+    owner: &str,
+    request: &MappingEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_curve_or_mapping_request_payload(
+        owner,
+        &request.fixture_ids,
+        &request.attribute,
+        &request.features,
+        fixtures,
+        fixture_attributes,
+    )
+}
+
+fn validate_color_mapping_request_payload(
+    owner: &str,
+    request: &ColorMappingEffectRequest,
+    fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
+    fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    validate_payload_fixture_existence(owner, &request.fixture_ids, fixtures)?;
+    for cell in &request.cells {
+        if !fixtures.contains_key(&cell.fixture_id) {
+            return Err(project_missing_reference(
+                format!("{owner} cell target"),
+                "fixture",
+                cell.fixture_id,
+            ));
+        }
+        if let Some(feature_attribute) = &cell.feature_attribute {
+            validate_fixture_attribute_reference(
+                format!("{owner} cell target"),
+                cell.fixture_id,
+                feature_attribute,
+                fixtures,
+                fixture_attributes,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+struct TimelineProjectReferenceInput<'input, 'snapshot> {
+    layers: &'input [TimelineLayerSummary],
+    events: &'input [TimelineCueEventSummary],
+    automations: &'input [TimelineAutomationSummary],
+    video_automations: &'input [TimelineVideoAutomationSummary],
+    audio_clips: &'input [TimelineAudioClipSummary],
+    video_clips: &'input [TimelineVideoClipSummary],
+    item_groups: &'input [TimelineItemGroupSummary],
+    cues: &'input BTreeMap<u64, &'snapshot CueSummary>,
+    fixtures: &'input BTreeMap<u64, &'snapshot PatchedFixtureSummary>,
+    fixture_attributes: &'input BTreeMap<FixtureId, BTreeSet<String>>,
+    video: &'input ProjectVideoCatalog<'snapshot>,
+}
+
+fn validate_timeline_project_references<'input, 'snapshot>(
+    owner: &str,
+    input: TimelineProjectReferenceInput<'input, 'snapshot>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let TimelineProjectReferenceInput {
+        layers,
+        events,
+        automations,
+        video_automations,
+        audio_clips,
+        video_clips,
+        item_groups,
+        cues,
+        fixtures,
+        fixture_attributes,
+        video,
+    } = input;
+    let mut layer_by_id = BTreeMap::new();
+    for layer in layers {
+        // Layer 0 remains the explicit legacy lane identity in the current
+        // data model. Unlike video graph IDs, it is therefore not rejected.
+        if layer_by_id.insert(layer.id, layer).is_some() {
+            return Err(project_duplicate_id("Timeline layer", u64::from(layer.id)));
+        }
+    }
+    let mut event_ids = BTreeSet::new();
+    for event in events {
+        if event.id == 0 {
+            return Err(project_zero_id("Timeline event", owner));
+        }
+        if !event_ids.insert(event.id) {
+            return Err(project_duplicate_id("Timeline event", event.id));
+        }
+        if !cues.contains_key(&event.cue_id) {
+            return Err(project_missing_reference(
+                format!("{owner} event {}", event.id),
+                "Cue",
+                event.cue_id,
+            ));
+        }
+        if let Some(layer_id) = event.layer_id {
+            let layer = layer_by_id.get(&layer_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("{owner} event {}", event.id),
+                    "Timeline layer",
+                    u64::from(layer_id),
+                )
+            })?;
+            let expected = TimelineLayerKind::from(&event.track);
+            if layer.kind != expected {
+                return Err(project_reference_mismatch(
+                    format!("{owner} event {}", event.id),
+                    format!(
+                        "Timeline layer {layer_id} kind {:?} does not match {:?}",
+                        layer.kind, event.track
+                    ),
+                ));
+            }
+        }
+    }
+    for event in events {
+        if let Some(target_id) = event.jump_to_event_id {
+            if !event_ids.contains(&target_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} event {} jump", event.id),
+                    "Timeline event",
+                    target_id,
+                ));
+            }
+        }
+    }
+
+    let mut automation_ids = BTreeSet::new();
+    for automation in automations {
+        if automation.id == 0 {
+            return Err(project_zero_id("Timeline automation", owner));
+        }
+        if !automation_ids.insert(automation.id) {
+            return Err(project_duplicate_id("Timeline automation", automation.id));
+        }
+        validate_fixture_attribute_reference(
+            format!("{owner} lighting automation {}", automation.id),
+            automation.fixture_id,
+            &automation.attribute,
+            fixtures,
+            fixture_attributes,
+        )?;
+        if !matches!(automation.track, TimelineTrackKind::Lighting) {
+            return Err(project_reference_mismatch(
+                format!("{owner} lighting automation {}", automation.id),
+                "track is not Lighting",
+            ));
+        }
+        if let Some(layer_id) = automation.timeline_layer_id {
+            let layer = layer_by_id.get(&layer_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("{owner} lighting automation {}", automation.id),
+                    "Timeline layer",
+                    u64::from(layer_id),
+                )
+            })?;
+            if !matches!(layer.kind, TimelineLayerKind::Lighting) {
+                return Err(project_reference_mismatch(
+                    format!("{owner} lighting automation {}", automation.id),
+                    format!("Timeline layer {layer_id} is not Lighting"),
+                ));
+            }
+        }
+    }
+    for automation in video_automations {
+        if automation.id == 0 {
+            return Err(project_zero_id("Timeline automation", owner));
+        }
+        if !automation_ids.insert(automation.id) {
+            return Err(project_duplicate_id("Timeline automation", automation.id));
+        }
+        if !video.layers.contains_key(&automation.layer_id) {
+            return Err(project_missing_reference(
+                format!("{owner} video automation {}", automation.id),
+                "video layer",
+                automation.layer_id,
+            ));
+        }
+        if !matches!(automation.track, TimelineTrackKind::Video) {
+            return Err(project_reference_mismatch(
+                format!("{owner} video automation {}", automation.id),
+                "track is not Video",
+            ));
+        }
+        if let Some(layer_id) = automation.timeline_layer_id {
+            let layer = layer_by_id.get(&layer_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("{owner} video automation {}", automation.id),
+                    "Timeline layer",
+                    u64::from(layer_id),
+                )
+            })?;
+            if !matches!(layer.kind, TimelineLayerKind::Video) {
+                return Err(project_reference_mismatch(
+                    format!("{owner} video automation {}", automation.id),
+                    format!("Timeline layer {layer_id} is not Video"),
+                ));
+            }
+        }
+    }
+
+    let mut audio_clip_ids = BTreeSet::new();
+    for clip in audio_clips {
+        // Rejected with the same taxonomy as Timeline video clips; zero is no
+        // more a valid audio clip identity than a video clip identity.
+        if clip.id == 0 {
+            return Err(project_zero_id("Timeline audio clip", owner));
+        }
+        if !audio_clip_ids.insert(clip.id) {
+            return Err(project_duplicate_id("Timeline audio clip", clip.id));
+        }
+        if let Some(asset_id) = clip.media_asset_id {
+            if !video.media_assets.contains_key(&asset_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} audio clip {}", clip.id),
+                    "MediaAsset",
+                    asset_id,
+                ));
+            }
+        }
+        if clip.layer_id != 0 {
+            let layer = layer_by_id.get(&clip.layer_id).ok_or_else(|| {
+                project_missing_reference(
+                    format!("{owner} audio clip {}", clip.id),
+                    "Timeline layer",
+                    u64::from(clip.layer_id),
+                )
+            })?;
+            if !matches!(layer.kind, TimelineLayerKind::Audio) {
+                return Err(project_reference_mismatch(
+                    format!("{owner} audio clip {}", clip.id),
+                    format!("Timeline layer {} is not Audio", clip.layer_id),
+                ));
+            }
+        }
+    }
+
+    let mut video_clip_ids = BTreeSet::new();
+    for clip in video_clips {
+        if clip.id.0 == 0 {
+            return Err(project_zero_id("Timeline video clip", owner));
+        }
+        if !video_clip_ids.insert(clip.id) {
+            return Err(project_duplicate_id("Timeline video clip", clip.id.0));
+        }
+        let layer = layer_by_id.get(&clip.layer_id).ok_or_else(|| {
+            project_missing_reference(
+                format!("{owner} video clip {}", clip.id.0),
+                "Timeline layer",
+                u64::from(clip.layer_id),
+            )
+        })?;
+        if !matches!(layer.kind, TimelineLayerKind::Video) {
+            return Err(project_reference_mismatch(
+                format!("{owner} video clip {}", clip.id.0),
+                format!("Timeline layer {} is not Video", clip.layer_id),
+            ));
+        }
+        if !video.media_assets.contains_key(&clip.media_asset_id) {
+            return Err(project_missing_reference(
+                format!("{owner} video clip {}", clip.id.0),
+                "MediaAsset",
+                clip.media_asset_id,
+            ));
+        }
+    }
+
+    let mut grouped_items = BTreeSet::new();
+    let mut item_group_ids = BTreeSet::new();
+    for group in item_groups {
+        if group.id.0 == 0 {
+            return Err(project_zero_id("Timeline item group", owner));
+        }
+        if !item_group_ids.insert(group.id) {
+            return Err(project_duplicate_id("Timeline item group", group.id.0));
+        }
+        for member in &group.members {
+            if !grouped_items.insert(*member) {
+                return Err(project_reference_mismatch(
+                    format!("{owner} item group {}", group.id.0),
+                    "an item belongs to more than one group or is duplicated",
+                ));
+            }
+            let exists = match member {
+                TimelineItemRef::LightingEvent { event_id } => event_ids.contains(event_id),
+                TimelineItemRef::VideoClip { clip_id } => video_clip_ids.contains(clip_id),
+                TimelineItemRef::AudioClip { clip_id } => {
+                    *clip_id != 0 && audio_clip_ids.contains(clip_id)
+                }
+                TimelineItemRef::LightingAutomation { automation_id } => automations
+                    .iter()
+                    .any(|automation| automation.id == *automation_id),
+                TimelineItemRef::VideoAutomation { automation_id } => video_automations
+                    .iter()
+                    .any(|automation| automation.id == *automation_id),
+            };
+            if !exists {
+                return Err(project_reference_mismatch(
+                    format!("{owner} item group {}", group.id.0),
+                    format!("contains missing item {member:?}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_child_timeline_reference_cycles(
+    cues: &[CueSummary],
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let adjacency = cues
+        .iter()
+        .map(|cue| {
+            let children = cue
+                .child_timeline
+                .as_ref()
+                .map(|child| child.events.iter().map(|event| event.cue_id).collect())
+                .unwrap_or_default();
+            (cue.id, children)
+        })
+        .collect::<BTreeMap<CueId, Vec<CueId>>>();
+    validate_u64_reference_cycles("Cue child Timeline", &adjacency)
+}
+
+fn validate_timeline_follow_cycles(
+    timelines: &[TimelineSnapshot],
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let adjacency = timelines
+        .iter()
+        .map(|timeline| {
+            (
+                timeline.id.0,
+                timeline
+                    .follow
+                    .as_ref()
+                    .map(|follow| vec![follow.next_timeline_id.0])
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<BTreeMap<u64, Vec<u64>>>();
+    validate_u64_reference_cycles("Timeline Follow", &adjacency)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CycleVisitState {
+    Unvisited,
+    InProgress,
+    Done,
+}
+
+/// Iterative, bounded, deterministic cycle detection.
+///
+/// Traversal order is fixed by the `BTreeMap` key order plus each node's
+/// authored child list, so the reported cycle path is a pure function of the
+/// input. The explicit work stack replaces recursion: memory grows with the
+/// graph size (each node is visited at most once per state), never with
+/// unbounded call depth, so a hostile deep chain returns a typed failure or
+/// completes instead of aborting the process on stack exhaustion.
+fn validate_u64_reference_cycles(
+    domain: &'static str,
+    adjacency: &BTreeMap<u64, Vec<u64>>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    let mut state: BTreeMap<u64, CycleVisitState> = BTreeMap::new();
+    // Path of nodes currently being explored, root-first. Its top always
+    // matches the node of the most recently discovered unfinished frame.
+    let mut path: Vec<u64> = Vec::new();
+    // Explicit DFS frames: (node, index of the next child to visit).
+    let mut work: Vec<(u64, usize)> = Vec::new();
+
+    for root in adjacency.keys() {
+        if state
+            .get(root)
+            .copied()
+            .unwrap_or(CycleVisitState::Unvisited)
+            != CycleVisitState::Unvisited
+        {
+            continue;
+        }
+        state.insert(*root, CycleVisitState::InProgress);
+        path.push(*root);
+        work.push((*root, 0));
+        while let Some((node, child_index)) = work.pop() {
+            let children = adjacency.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            if child_index >= children.len() {
+                state.insert(node, CycleVisitState::Done);
+                path.pop();
+                continue;
+            }
+            // Revisit this frame after the child subtree finishes; the path
+            // top is still `node` at that point because finished children
+            // restore it exactly.
+            work.push((node, child_index + 1));
+            let child = &children[child_index];
+            match state
+                .get(child)
+                .copied()
+                .unwrap_or(CycleVisitState::Unvisited)
+            {
+                CycleVisitState::Done => {}
+                CycleVisitState::InProgress => {
+                    let start = path.iter().position(|candidate| candidate == child);
+                    let start = start.unwrap_or(0);
+                    let mut cycle_path = path[start..].to_vec();
+                    cycle_path.push(*child);
+                    return Err(ProjectReferenceIntegrityError::ReferenceCycle {
+                        domain,
+                        path: cycle_path,
+                    });
+                }
+                CycleVisitState::Unvisited => {
+                    state.insert(*child, CycleVisitState::InProgress);
+                    path.push(*child);
+                    work.push((*child, 0));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Default for EngineSnapshot {
     fn default() -> Self {
         Self {
@@ -9012,10 +12194,10 @@ mod tests {
     use super::{
         canonical_video_output_mapping_field, set_video_output_mapping_field_value,
         validate_timeline_tempo_meter_map, video_output_mapping_field_value, AudioSpectrumBand,
-        AudioSpectrumSource, ChildTimelineSummary, CueListSummary, NodeGraphAudioNode,
-        PlaybackExecutorSummary, TimelineSnapshot, TimelineTempoInterpolation,
-        TimelineTempoMeterPoint, VideoOutputMapping, DEFAULT_CUE_LIST_ID,
-        TIMELINE_TEMPO_METER_MAP_VERSION,
+        AudioSpectrumSource, ChildTimelineSummary, CueListSummary, DmxControlMapping,
+        MidiControlMapping, NodeGraphAudioNode, OscControlMapping, PlaybackExecutorSummary,
+        TimelineSnapshot, TimelineTempoInterpolation, TimelineTempoMeterPoint, VideoOutputMapping,
+        DEFAULT_CUE_LIST_ID, TIMELINE_TEMPO_METER_MAP_VERSION,
     };
 
     #[test]
@@ -14077,112 +17259,584 @@ mod tests {
 
     #[test]
     fn dj_link_envelope_is_strict_and_canonical() {
-        let text = r#"{"v":1,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rekordbox","sessionId":"s1","sequence":1,"eventId":"e1","payload":{"contentId":"abc","playSessionId":"p1","isPlaying":true,"master":true,"deck":"A","deckId":"deck-a","trackBpm":128.0,"positionSec":1.25,"startedAt":"2026-08-21T00:00:00Z"}}"#;
-        let envelope = super::DjLinkEnvelope::parse_json(text).unwrap();
+        fn envelope_text(message_type: &str, payload: &serde_json::Value) -> String {
+            format!(
+                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+            )
+        }
+        let active = envelope_text(
+            "DJ_MASTER_TRACK_ACTIVE",
+            &serde_json::json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 3,
+                "contentId": "abc",
+                "trackBpm": 128.0,
+                "positionAtSendSec": 1.25,
+                "effectiveBpm": 128.5,
+                "positionRevision": 7,
+                "sampleAgeMs": 42,
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-21T00:00:00Z",
+                "playSessionId": "p1",
+            }),
+        );
+        let envelope = super::DjLinkEnvelope::parse_json(&active).unwrap();
         assert_eq!(
             envelope.message_type,
             super::DjLinkMessageType::MasterTrackActive
         );
+        assert_eq!(envelope.agent_id, super::DJ_LINK_AGENT_ID);
         let shape = envelope.canonical_shape().unwrap();
         assert!(shape.contains("DJ_MASTER_TRACK_ACTIVE"));
+        assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":2", "\"v\":1")).is_err());
         assert!(super::DjLinkEnvelope::parse_json(
-            &text.replace("\"sequence\":1", "\"sequence\":0")
+            &active.replace("rb-output-dj-agent", "other-agent")
         )
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(
-            &text.replace("\"payload\":", "\"extra\":1,\"payload\":")
+            &active.replace("\"sequence\":1", "\"sequence\":0")
         )
         .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(
+            &active.replace("\"payload\":", "\"extra\":1,\"payload\":")
+        )
+        .is_err());
+        let mut missing = serde_json::from_str::<serde_json::Value>(&active).unwrap();
+        missing.as_object_mut().unwrap().remove("eventId").unwrap();
+        assert!(super::DjLinkEnvelope::parse_json(&missing.to_string()).is_err());
     }
-
     #[test]
     fn dj_link_peer_wire_fixtures_are_strict_and_distinct() {
-        let hello = r#"{"v":1,"type":"DJ_AGENT_HELLO","agentId":"rekordbox","sessionId":"s1","sequence":1,"eventId":"hello-1","payload":{"authToken":"0123456789abcdef0123456789abcdef","version":1,"capabilities":["track","loop"]}}"#;
+        fn envelope_text(message_type: &str, payload: &serde_json::Value) -> String {
+            format!(
+                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+            )
+        }
+        let hello = envelope_text(
+            "DJ_AGENT_HELLO",
+            &serde_json::json!({
+                "authToken": "0123456789abcdef0123456789abcdef",
+                "version": 2,
+                "capabilities": [
+                    "DJ_MASTER_TRACK_ACTIVE",
+                    "DJ_MASTER_TRACK_SYNC",
+                    "DJ_LOOP_STATE",
+                    "DJ_RELEASE",
+                    "DJ_TIMELINE_BEAT_JUMP",
+                    "DJ_TIMELINE_LOOP_SET",
+                    "DJ_TIMELINE_STATE_REQUEST",
+                    "DJ_STATE_SYNC",
+                ],
+            }),
+        );
         assert_eq!(
-            super::DjLinkEnvelope::parse_json(hello)
+            super::DjLinkEnvelope::parse_json(&hello)
                 .unwrap()
                 .message_type,
             super::DjLinkMessageType::Hello
         );
-        let sync = r#"{"v":1,"type":"DJ_STATE_SYNC","agentId":"rekordbox","sessionId":"s1","sequence":2,"eventId":"sync-1","payload":{"loopDivision":2,"released":false,"masterDeck":"A","masterTrack":{"contentId":"abc","title":"Track","artist":"Artist","isPlaying":true}}}"#;
-        let sync_envelope = super::DjLinkEnvelope::parse_json(sync).unwrap();
+        let sync = envelope_text(
+            "DJ_STATE_SYNC",
+            &serde_json::json!({
+                "released": false,
+                "masterDeck": 2,
+                "activePlaySessionId": "play-1",
+            }),
+        );
+        let sync_envelope = super::DjLinkEnvelope::parse_json(&sync).unwrap();
         assert_eq!(
             sync_envelope.message_type,
             super::DjLinkMessageType::StateSync
         );
-        let changed = r#"{"v":1,"type":"DJ_MASTER_CHANGED","agentId":"rekordbox","sessionId":"s1","sequence":3,"eventId":"master-1","payload":{"masterDeck":"B","master":true}}"#;
+        let release = envelope_text(
+            "DJ_RELEASE",
+            &serde_json::json!({"state":"released","timelineId":"show-1","playSessionId":"p1"}),
+        );
         assert_eq!(
-            super::DjLinkEnvelope::parse_json(changed)
+            super::DjLinkEnvelope::parse_json(&release)
                 .unwrap()
                 .message_type,
-            super::DjLinkMessageType::MasterChanged
+            super::DjLinkMessageType::Release
+        );
+        let loop_state = envelope_text(
+            "DJ_LOOP_STATE",
+            &serde_json::json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 3,
+                "playSessionId": "p1",
+                "loop": {
+                    "active": true,
+                    "startBeat": 16.0,
+                    "endBeat": 32.0,
+                    "lengthBeats": 16.0,
+                    "revision": 1,
+                    "sampleAgeMs": 30,
+                    "source": "rekordbox-hook-measured",
+                },
+            }),
+        );
+        assert_eq!(
+            super::DjLinkEnvelope::parse_json(&loop_state)
+                .unwrap()
+                .message_type,
+            super::DjLinkMessageType::LoopState
         );
         assert!(
             super::DjLinkEnvelope::parse_json(&hello.replace("DJ_AGENT_HELLO", "HELLO")).is_err()
         );
+        assert!(super::DjLinkEnvelope::parse_json(
+            &hello.replace("rb-output-dj-agent", "generic-json")
+        )
+        .is_err());
     }
 
     #[test]
-    fn dj_link_flat_generic_json_cross_fixture_is_strict_and_canonical() {
-        let hello = r#"{"type":"DJ_AGENT_HELLO","eventId":"hello-flat","sequence":1,"protocol":"generic-json","token":"0123456789abcdef0123456789abcdef","capabilities":["DJ_STATE_SYNC","DJ_TIMELINE_STATE_REQUEST"]}"#;
-        let frame = super::DjLinkFlatFrame::parse_json(hello).unwrap();
-        assert!(frame.is_hello());
-        let envelope = frame
-            .to_envelope("generic-json", "socket-hello-flat")
+    fn dj_link_timeline_pedal_commands_require_exact_play_session_fence() {
+        fn envelope_text(message_type: &str, payload: serde_json::Value) -> String {
+            format!(
+                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+            )
+        }
+
+        let cases = [
+            (
+                "DJ_TIMELINE_BEAT_JUMP",
+                serde_json::json!({
+                    "bars": 4,
+                    "timelineId": "show-1",
+                    "playSessionId": "play-1",
+                }),
+            ),
+            (
+                "DJ_TIMELINE_LOOP_SET",
+                serde_json::json!({
+                    "active": true,
+                    "timelineId": "show-1",
+                    "playSessionId": "play-1",
+                }),
+            ),
+        ];
+
+        for (message_type, valid_payload) in cases {
+            let canonical = super::DjLinkEnvelope::parse_json(&envelope_text(
+                message_type,
+                valid_payload.clone(),
+            ))
+            .unwrap()
+            .canonical_shape()
             .unwrap();
-        assert_eq!(envelope.message_type, super::DjLinkMessageType::Hello);
-        assert_eq!(envelope.agent_id, "generic-json");
+            assert!(canonical.contains(r#""playSessionId":"play-1""#));
+
+            let mut missing = valid_payload.clone();
+            missing
+                .as_object_mut()
+                .unwrap()
+                .remove("playSessionId")
+                .unwrap();
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_text(message_type, missing)).is_err()
+            );
+
+            let mut empty = valid_payload.clone();
+            empty["playSessionId"] = serde_json::json!("");
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_text(message_type, empty)).is_err()
+            );
+
+            for invalid_session_id in ["   ", " play-1", "play-1 ", "\u{2003}play-1"] {
+                let mut noncanonical = valid_payload.clone();
+                noncanonical["playSessionId"] = serde_json::json!(invalid_session_id);
+                assert!(
+                    super::DjLinkEnvelope::parse_json(&envelope_text(message_type, noncanonical))
+                        .is_err(),
+                    "{message_type} must reject noncanonical playSessionId {invalid_session_id:?}"
+                );
+            }
+
+            let mut interior_whitespace = valid_payload.clone();
+            interior_whitespace["playSessionId"] = serde_json::json!("play 1");
+            let preserved = super::DjLinkEnvelope::parse_json(&envelope_text(
+                message_type,
+                interior_whitespace,
+            ))
+            .unwrap()
+            .canonical_shape()
+            .unwrap();
+            assert!(preserved.contains(r#""playSessionId":"play 1""#));
+
+            let mut legacy_alias = valid_payload.clone();
+            let session = legacy_alias
+                .as_object_mut()
+                .unwrap()
+                .remove("playSessionId")
+                .unwrap();
+            legacy_alias["play_session_id"] = session;
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_text(message_type, legacy_alias,))
+                    .is_err()
+            );
+
+            let mut unknown = valid_payload;
+            unknown["legacyPedalCommand"] = serde_json::json!(true);
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_text(message_type, unknown)).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn dj_link_duplicate_keys_are_rejected_before_serde_at_every_level() {
+        let base = |payload: &str| {
+            format!(
+                r#"{{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1",{payload}"sequence":1,"eventId":"e1","payload":{{}}}}"#
+            )
+        };
+        assert!(super::DjLinkEnvelope::parse_json(&base("")).is_ok());
         assert!(
-            super::DjLinkFlatFrame::parse_json(&hello.replace("generic-json", "unknown")).is_err()
+            super::DjLinkEnvelope::parse_json(&base(r#""sequence":9, "#))
+                .err()
+                .is_some_and(|error| error.contains("duplicate")),
+            "root-level duplicate must be detected before serde"
         );
-        assert!(super::DjLinkFlatFrame::parse_json(&hello.replace(
-            "\"token\":\"0123456789abcdef0123456789abcdef\"",
-            "\"token\":\"short\""
+
+        let nested = format!(
+            r#"{{"v":2,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"released":false,"released":true,"masterDeck":null,"activePlaySessionId":null}}}}"#
+        );
+        assert!(super::DjLinkEnvelope::parse_json(&nested)
+            .err()
+            .is_some_and(|error| error.contains("duplicate")));
+
+        let deep = format!(
+            r#"{{"v":2,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":1,"contentId":"c","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00Z","playSessionId":"p1","loop":{{"active":false,"startBeat":null,"endBeat":null,"lengthBeats":null,"revision":1,"revision":2,"sampleAgeMs":0,"source":"rekordbox-hook-measured"}}}}}}"#
+        );
+        assert!(super::DjLinkEnvelope::parse_json(&deep)
+            .err()
+            .is_some_and(|error| error.contains("duplicate")));
+
+        let escaped = format!(
+            r#"{{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","agentId":"other","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+        );
+        assert!(super::DjLinkEnvelope::parse_json(&escaped).is_err());
+        let unicode_escaped = format!(
+            r#"{{"v":2,"\u0074ype":"DJ_HEARTBEAT","type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+        );
+        assert!(super::DjLinkEnvelope::parse_json(&unicode_escaped).is_err());
+    }
+
+    #[test]
+    fn dj_link_track_payload_bounds_and_identity_are_fail_closed() {
+        let payload = serde_json::json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 3,
+            "contentId": "abc",
+            "trackBpm": 128.0,
+            "positionAtSendSec": 1.25,
+            "effectiveBpm": 128.5,
+            "positionRevision": 7,
+            "sampleAgeMs": 42,
+            "isPlaying": true,
+            "master": true,
+            "startedAt": "2026-08-21T00:00:00Z",
+            "playSessionId": "p1",
+        });
+        let envelope = |payload: &serde_json::Value| {
+            format!(
+                r#"{{"v":2,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+            )
+        };
+        assert!(super::DjLinkEnvelope::parse_json(&envelope(&payload)).is_ok());
+
+        let reject = |mutant: serde_json::Value| {
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope(&mutant)).is_err(),
+                "expected rejection for {mutant}"
+            );
+        };
+        let mut variant = payload.clone();
+        variant["contentId"] = serde_json::json!("abc");
+        variant["title"] = serde_json::json!("Title");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant
+            .as_object_mut()
+            .unwrap()
+            .remove("contentId")
+            .unwrap();
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["title"] = serde_json::json!("Title");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["sampleAgeMs"] = serde_json::json!(1501);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["trackBpm"] = serde_json::json!(1000.5);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["effectiveBpm"] = serde_json::json!(0);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["positionAtSendSec"] = serde_json::json!(7200.5);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["positionAtSendSec"] = serde_json::json!(-0.5);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["deckId"] = serde_json::json!("rekordbox-deck-2");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["deck"] = serde_json::json!(5);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["isPlaying"] = serde_json::json!(false);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["master"] = serde_json::json!(false);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["startedAt"] = serde_json::json!("not-a-timestamp");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["masterDeckRevision"] = serde_json::json!(0);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["unknownField"] = serde_json::json!(1);
+        reject(variant);
+
+        let mut accepted = payload.clone();
+        accepted
+            .as_object_mut()
+            .unwrap()
+            .remove("contentId")
+            .unwrap();
+        accepted["title"] = serde_json::json!("Title");
+        accepted["artist"] = serde_json::json!("Artist");
+        assert!(super::DjLinkEnvelope::parse_json(&envelope(&accepted)).is_ok());
+    }
+
+    #[test]
+    fn dj_link_measured_loop_rules_are_exact() {
+        let loop_of = |loop_payload: serde_json::Value| {
+            format!(
+                r#"{{"v":2,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":3,"contentId":"abc","trackBpm":null,"positionAtSendSec":10,"effectiveBpm":120,"positionRevision":7,"sampleAgeMs":20,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00+09:00","playSessionId":"p1","loop":{loop_payload}}}}}"#
+            )
+        };
+        let valid_active = serde_json::json!({
+            "active": true,
+            "startBeat": 16.0,
+            "endBeat": 32.0,
+            "lengthBeats": 16.0,
+            "revision": 2,
+            "sampleAgeMs": 11,
+            "source": "rekordbox-hook-measured",
+        });
+        assert!(super::DjLinkEnvelope::parse_json(&loop_of(valid_active.clone())).is_ok());
+        let valid_inactive = serde_json::json!({
+            "active": false,
+            "startBeat": null,
+            "endBeat": null,
+            "lengthBeats": null,
+            "revision": 2,
+            "sampleAgeMs": 11,
+            "source": "rekordbox-hook-measured",
+        });
+        assert!(super::DjLinkEnvelope::parse_json(&loop_of(valid_inactive.clone())).is_ok());
+
+        let reject = |loop_payload: serde_json::Value| {
+            assert!(
+                super::DjLinkEnvelope::parse_json(&loop_of(loop_payload.clone())).is_err(),
+                "expected rejection for {loop_payload}"
+            );
+        };
+        let mut variant = valid_inactive.clone();
+        variant["active"] = serde_json::json!(true);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["endBeat"] = serde_json::json!(16.0);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["lengthBeats"] = serde_json::json!(17.0);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["lengthBeats"] = serde_json::json!(16.002);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["source"] = serde_json::json!("guessed");
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["revision"] = serde_json::json!(0);
+        reject(variant);
+        let boundary = valid_active.clone();
+        let mut variant = boundary;
+        variant["lengthBeats"] = serde_json::json!(16.0005);
+        assert!(super::DjLinkEnvelope::parse_json(&loop_of(variant)).is_ok());
+    }
+
+    #[test]
+    fn dj_link_hello_token_version_and_capabilities_are_exact() {
+        let hello = |token: &str, version: u8, capabilities: &[&str]| {
+            format!(
+                r#"{{"v":2,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"authToken":"{token}","version":{version},"capabilities":[{}]}}}}"#,
+                capabilities
+                    .iter()
+                    .map(|capability| format!(r#""{capability}""#))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
+        let full_set: [&str; 8] = [
+            "DJ_MASTER_TRACK_ACTIVE",
+            "DJ_MASTER_TRACK_SYNC",
+            "DJ_LOOP_STATE",
+            "DJ_RELEASE",
+            "DJ_TIMELINE_BEAT_JUMP",
+            "DJ_TIMELINE_LOOP_SET",
+            "DJ_TIMELINE_STATE_REQUEST",
+            "DJ_STATE_SYNC",
+        ];
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            2,
+            &full_set
+        ))
+        .is_ok());
+        assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 2, &full_set)).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 2, &full_set)).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef 0123456789abcdef",
+            2,
+            &full_set
         ))
         .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef\t0123456789abcdef",
+            2,
+            &full_set
+        ))
+        .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            1,
+            &full_set
+        ))
+        .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            2,
+            &full_set[..7]
+        ))
+        .is_err());
+        let mut extra = full_set.to_vec();
+        extra.push("DJ_EXTRA");
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            2,
+            &extra
+        ))
+        .is_err());
+        let mut duplicated = full_set.to_vec();
+        duplicated[7] = duplicated[0];
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            2,
+            &duplicated
+        ))
+        .is_err());
+    }
 
-        let sync = r#"{"type":"DJ_STATE_SYNC","eventId":"sync-flat","sequence":2,"loopDivision":2,"released":false,"masterDeck":"A","masterTrack":{"contentId":"abc","title":"Track","artist":"Artist","trackBpm":128.0,"isPlaying":true}}"#;
-        let sync_frame = super::DjLinkFlatFrame::parse_json(sync).unwrap();
-        let sync_envelope = sync_frame
-            .to_envelope("generic-json", "socket-hello-flat")
-            .unwrap();
-        assert_eq!(
-            sync_envelope.message_type,
-            super::DjLinkMessageType::StateSync
-        );
-        assert_eq!(
-            sync_envelope
-                .payload
-                .get("masterTrack")
-                .and_then(|value| value.get("trackBpm"))
-                .and_then(serde_json::Value::as_f64),
-            Some(128.0)
-        );
+    #[test]
+    fn dj_link_empty_payload_types_reject_extra_keys_and_ack_wire_is_exact() {
+        for message_type in ["DJ_HEARTBEAT", "DJ_TIMELINE_STATE_REQUEST"] {
+            let empty = format!(
+                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+            );
+            assert!(
+                super::DjLinkEnvelope::parse_json(&empty).is_ok(),
+                "{message_type}"
+            );
+            let extra = format!(
+                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"at":"now"}}}}"#
+            );
+            assert!(
+                super::DjLinkEnvelope::parse_json(&extra).is_err(),
+                "{message_type}"
+            );
+        }
 
-        let request =
-            r#"{"type":"DJ_TIMELINE_STATE_REQUEST","eventId":"request-flat","sequence":3}"#;
-        let request_envelope = super::DjLinkFlatFrame::parse_json(request)
-            .unwrap()
-            .to_envelope("generic-json", "socket-hello-flat")
-            .unwrap();
+        let ack = super::DjLinkAck {
+            v: super::DJ_LINK_PROTOCOL_VERSION,
+            message_type: "ACK".to_string(),
+            event_id: "ack-event".to_string(),
+            sequence: 9,
+            outcome: super::DjLinkAckOutcome::Busy,
+            code: Some("in_flight".to_string()),
+            state_generation: 17,
+        };
+        let wire: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
         assert_eq!(
-            request_envelope.message_type,
-            super::DjLinkMessageType::TimelineStateRequest
+            wire,
+            serde_json::json!({
+                "v": 2,
+                "type": "ACK",
+                "eventId": "ack-event",
+                "sequence": 9,
+                "outcome": "busy",
+                "code": "in_flight",
+                "stateGeneration": 17,
+            })
         );
+        let accepted = super::DjLinkAck {
+            outcome: super::DjLinkAckOutcome::Accepted,
+            code: None,
+            ..ack
+        };
+        let wire: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&accepted).unwrap()).unwrap();
+        assert_eq!(wire["code"], serde_json::json!(null));
+        assert_eq!(
+            wire.as_object().unwrap().len(),
+            7,
+            "ACK wire shape must be exactly seven keys"
+        );
+    }
+
+    #[test]
+    fn dj_link_timeline_state_output_envelope_is_exact_v2() {
         let state = super::DjLinkTimelineState {
             message_type: "DJ_TIMELINE_STATE".to_string(),
-            event_id: "request-flat".to_string(),
+            event_id: "state-event".to_string(),
             sequence: 3,
             state: super::DjLinkTimelineStateValue::Running,
             loop_active: false,
             timeline_id: "show-1".to_string(),
             position_bars: 16,
+            play_session_id: Some("play-1".to_string()),
+            pedal_owner: None,
+            release_event_id: None,
         };
         state.validate().unwrap();
         let wire = serde_json::to_value(&state).unwrap();
-        assert_eq!(wire["type"], "DJ_TIMELINE_STATE");
-        assert_eq!(wire["timelineId"], "show-1");
-        assert_eq!(wire["positionBars"], 16);
+        let keys = wire.as_object().unwrap();
+        for key in [
+            "type",
+            "eventId",
+            "sequence",
+            "state",
+            "loopActive",
+            "timelineId",
+            "positionBars",
+            "playSessionId",
+            "pedalOwner",
+            "releaseEventId",
+        ] {
+            assert!(keys.contains_key(key), "missing output key {key}");
+        }
+        assert_eq!(wire["pedalOwner"], serde_json::json!(null));
     }
 
     #[test]
@@ -14203,6 +17857,83 @@ mod tests {
             serde_json::json!("renderer-selected-token-that-must-be-ignored");
         let decoded: super::RemoteControlConfig = serde_json::from_value(incoming).unwrap();
         assert!(decoded.dj_link_token.is_none());
+    }
+
+    #[test]
+    fn remote_control_config_legacy_defaults_web_remote_enabled() {
+        // A legacy/current config payload predating the switch must keep the
+        // generic Web Remote enabled.
+        let legacy = serde_json::json!({
+            "bind_ip": "127.0.0.1",
+            "port": 9_100,
+            "pairing_pin": "123456",
+            "allow_lan": false,
+            "dj_link_enabled": false,
+        });
+        let decoded: super::RemoteControlConfig = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.web_remote_enabled);
+        assert!(super::RemoteControlConfig::default().web_remote_enabled);
+
+        let explicit = serde_json::json!({
+            "bind_ip": "127.0.0.1",
+            "port": 9_100,
+            "web_remote_enabled": false,
+            "dj_link_enabled": true,
+        });
+        let decoded: super::RemoteControlConfig = serde_json::from_value(explicit).unwrap();
+        assert!(!decoded.web_remote_enabled);
+        assert!(decoded.dj_link_enabled);
+        let encoded = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(encoded["web_remote_enabled"], serde_json::json!(false));
+
+        // Status is additive too: legacy payloads missing the mode field load
+        // as stopped/disabled rather than inheriting a stale default of true.
+        let status: super::RemoteControlStatus = serde_json::from_value(serde_json::json!({
+            "running": false,
+            "active_connections": 0,
+            "rejected_connections": 0,
+            "clients": [],
+        }))
+        .unwrap();
+        assert!(!status.web_remote_enabled);
+        assert!(!super::RemoteControlStatus::default().web_remote_enabled);
+        let running: super::RemoteControlStatus = serde_json::from_value(serde_json::json!({
+            "running": true,
+            "active_connections": 0,
+            "rejected_connections": 0,
+            "clients": [],
+            "web_remote_enabled": true,
+        }))
+        .unwrap();
+        assert!(running.web_remote_enabled);
+    }
+
+    #[test]
+    fn remote_control_config_debug_redacts_credentials() {
+        let pin = "429913";
+        let token = "secret-dj-link-token-0123456789abcdef";
+        let config = super::RemoteControlConfig {
+            pairing_pin: pin.to_string(),
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            dj_link_token: Some(token.to_string()),
+            ..super::RemoteControlConfig::default()
+        };
+        for rendered in [format!("{config:?}"), format!("{config:#?}")] {
+            assert!(!rendered.contains(pin), "Debug leaked pairing PIN");
+            assert!(!rendered.contains(token), "Debug leaked DJ Link token");
+            assert!(rendered.contains("RemoteControlConfig"));
+        }
+        let compact = format!("{config:?}");
+        // Presence-safe rendering only: set credentials appear as a stable
+        // redaction marker, unset ones as an explicit absence marker.
+        assert!(compact.contains("pairing_pin: \"redacted\""));
+        assert!(compact.contains("dj_link_token: \"redacted\""));
+
+        let empty = super::RemoteControlConfig::default();
+        let rendered = format!("{empty:?}");
+        assert!(rendered.contains("pairing_pin: \"unset\""));
+        assert!(rendered.contains("dj_link_token: \"unset\""));
     }
 
     #[test]
@@ -14412,5 +18143,1998 @@ mod tests {
             },
         ];
         validate_timeline_tempo_meter_map(1, &tempo_only_mid_measure).unwrap();
+    }
+
+    #[test]
+    fn osc_control_mapping_rejects_unknown_keys_and_roundtrips_canonical_v1() {
+        let canonical = r#"{"address":"/main/fader","action":"LightingMaster","fixture_id":null,"attribute":null,"group_id":"all","cue_id":null,"layer_id":3,"output_id":2,"video_param":null,"cue_point_index":null,"duration_ms":250,"low":0.0,"high":1.0}"#;
+        let mapping: OscControlMapping = serde_json::from_str(canonical).unwrap();
+        assert_eq!(serde_json::to_string(&mapping).unwrap(), canonical);
+        assert_eq!(
+            serde_json::from_str::<OscControlMapping>(&serde_json::to_string(&mapping).unwrap())
+                .unwrap(),
+            mapping
+        );
+
+        let misspelled = canonical.replace(r#""group_id":"all""#, r#""group_ids":"all""#);
+        let error = serde_json::from_str::<OscControlMapping>(&misspelled)
+            .expect_err("misspelled optional key must be rejected");
+        assert!(error.to_string().contains("`group_ids`"), "{error}");
+
+        let future = canonical.replace(
+            r#""duration_ms":250"#,
+            r#""duration_ms":250,"future_param":true"#,
+        );
+        let error = serde_json::from_str::<OscControlMapping>(&future)
+            .expect_err("future key must be rejected");
+        assert!(error.to_string().contains("`future_param`"), "{error}");
+    }
+
+    #[test]
+    fn dmx_control_mapping_rejects_unknown_keys_and_roundtrips_canonical_v1() {
+        let canonical = r#"{"universe":1,"channel":12,"action":"FixtureAttribute","fixture_id":9,"attribute":"dimmer","group_id":null,"cue_id":null,"layer_id":null,"output_id":null,"video_param":null,"cue_point_index":null,"duration_ms":null,"low":0.0,"high":1.0}"#;
+        let mapping: DmxControlMapping = serde_json::from_str(canonical).unwrap();
+        assert_eq!(serde_json::to_string(&mapping).unwrap(), canonical);
+        assert_eq!(
+            serde_json::from_str::<DmxControlMapping>(&serde_json::to_string(&mapping).unwrap())
+                .unwrap(),
+            mapping
+        );
+
+        let misspelled = canonical.replace(r#""output_id":null"#, r#""outputs_id":null"#);
+        let error = serde_json::from_str::<DmxControlMapping>(&misspelled)
+            .expect_err("misspelled optional key must be rejected");
+        assert!(error.to_string().contains("`outputs_id`"), "{error}");
+
+        let future = canonical.replace(
+            r#""duration_ms":null"#,
+            r#""duration_ms":null,"future_flag":false"#,
+        );
+        let error = serde_json::from_str::<DmxControlMapping>(&future)
+            .expect_err("future key must be rejected");
+        assert!(error.to_string().contains("`future_flag`"), "{error}");
+    }
+
+    #[test]
+    fn midi_control_mapping_rejects_unknown_keys_and_roundtrips_canonical_v1() {
+        let canonical = r#"{"channel":5,"message":"ControlChange","number":74,"action":"VideoParam","fixture_id":null,"attribute":null,"group_id":null,"cue_id":null,"layer_id":2,"output_id":null,"video_param":"Opacity","cue_point_index":null,"duration_ms":null,"feedback":{"off":{"message":"NoteOn","channel":5,"number":74,"value":0},"on":{"message":"NoteOn","channel":5,"number":74,"value":127}},"low":0.0,"high":1.0}"#;
+        let mapping: MidiControlMapping = serde_json::from_str(canonical).unwrap();
+        assert_eq!(serde_json::to_string(&mapping).unwrap(), canonical);
+        assert_eq!(
+            serde_json::from_str::<MidiControlMapping>(&serde_json::to_string(&mapping).unwrap())
+                .unwrap(),
+            mapping
+        );
+
+        let misspelled = canonical.replace(r#""feedback":{"off""#, r#""feeback":{"off""#);
+        let error = serde_json::from_str::<MidiControlMapping>(&misspelled)
+            .expect_err("misspelled optional key must be rejected");
+        assert!(error.to_string().contains("`feeback`"), "{error}");
+
+        let future = canonical.replace(
+            r#""action":"VideoParam""#,
+            r#""action":"VideoParam","future_action":null"#,
+        );
+        let error = serde_json::from_str::<MidiControlMapping>(&future)
+            .expect_err("future key must be rejected");
+        assert!(error.to_string().contains("`future_action`"), "{error}");
+    }
+
+    fn reference_integrity_fixture() -> super::PatchedFixtureSummary {
+        super::PatchedFixtureSummary {
+            id: 1,
+            label: "Fixture 1".to_string(),
+            profile_source_path: "fixture.gdtf".to_string(),
+            profile_name: "Test".to_string(),
+            manufacturer: "Test".to_string(),
+            mode_name: "Mode".to_string(),
+            universe: 0,
+            address: 1,
+            group_ids: vec!["front".to_string()],
+            position: super::Vec3::default(),
+            rotation: super::Rotation3::default(),
+            geometries: Vec::new(),
+            controls: vec![super::AttributeControl {
+                attribute: "Dimmer".to_string(),
+                channel_name: "Dimmer".to_string(),
+                geometry: None,
+                offsets: vec![1],
+                resolution: super::AttributeResolution::EightBit,
+                default_value: 0,
+                functions: Vec::new(),
+            }],
+            attribute_values: vec![super::AttributeValueSummary {
+                attribute: "Dimmer".to_string(),
+                value: 0,
+            }],
+            limits: super::FixtureLimits::default(),
+            highlighted: false,
+            soloed: false,
+            parked: false,
+        }
+    }
+
+    fn reference_integrity_video() -> super::VideoSnapshot {
+        let source = super::VideoSourceSummary {
+            kind: super::VideoSourceKind::StillImage,
+            path: Some("test.png".to_string()),
+            name: None,
+            codec: None,
+            metadata: None,
+        };
+        let asset = super::MediaAssetSummary {
+            id: 1,
+            label: "Test image".to_string(),
+            source: source.clone(),
+            content_hash: None,
+            byte_size: None,
+        };
+        let layer = super::VideoLayerSummary {
+            id: 10,
+            label: "Layer 10".to_string(),
+            source,
+            media_asset_id: Some(1),
+            blend_mode: super::VideoBlendMode::Normal,
+            state: super::VideoLayerState::default(),
+            isf_effect: None,
+            clip_slots: vec![super::VideoClipSlotSummary {
+                id: super::VideoClipSlotId(20),
+                media_asset_id: 1,
+                in_point_ms: 0,
+                out_point_ms: Some(1_000),
+                loop_mode: super::VideoClipLoopMode::Once,
+                speed: 1.0,
+                cue_points: Vec::new(),
+                launch_quantization: super::VideoClipLaunchQuantization::Immediate,
+                effect_overrides: Vec::new(),
+            }],
+            default_clip_slot_id: Some(super::VideoClipSlotId(20)),
+        };
+        let output = super::VideoOutputSummary {
+            id: 30,
+            label: "Display".to_string(),
+            kind: super::VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 40,
+            fullscreen: false,
+            monitor_id: None,
+            monitor_identity: None,
+            width: 1_920,
+            height: 1_080,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: super::VideoOutputMapping::default(),
+        };
+        super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![asset],
+            compositions: vec![super::CompositionSummary {
+                id: 40,
+                label: "Main".to_string(),
+                layer_ids: vec![10],
+                output_ids: vec![30],
+            }],
+            outputs: vec![output],
+            ..super::VideoSnapshot::default()
+        }
+    }
+
+    fn reference_integrity_timeline() -> super::TimelineSnapshot {
+        super::TimelineSnapshot {
+            id: super::TimelineId(1),
+            label: "Timeline 1".to_string(),
+            layers: vec![
+                super::TimelineLayerSummary {
+                    id: 1,
+                    label: "Lighting".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Lighting,
+                },
+                super::TimelineLayerSummary {
+                    id: 2,
+                    label: "Video".to_string(),
+                    order: 1,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: true,
+                    kind: super::TimelineLayerKind::Video,
+                },
+            ],
+            events: vec![super::TimelineCueEventSummary {
+                id: 100,
+                cue_id: 1,
+                layer_id: Some(1),
+                ..super::TimelineCueEventSummary::default()
+            }],
+            automations: vec![super::TimelineAutomationSummary {
+                id: 200,
+                fixture_id: 1,
+                attribute: "Dimmer".to_string(),
+                track: super::TimelineTrackKind::Lighting,
+                timeline_layer_id: Some(1),
+                keyframes: vec![super::AutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 0,
+                    interpolation: super::AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            }],
+            video_automations: vec![super::TimelineVideoAutomationSummary {
+                id: 201,
+                layer_id: 10,
+                timeline_layer_id: Some(2),
+                param: super::VideoParam::Opacity,
+                track: super::TimelineTrackKind::Video,
+                keyframes: vec![super::VideoAutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 1.0,
+                    interpolation: super::AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            }],
+            video_clips: vec![super::TimelineVideoClipSummary {
+                id: super::TimelineVideoClipId(300),
+                layer_id: 2,
+                media_asset_id: 1,
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 1_000,
+            ..super::TimelineSnapshot::default()
+        }
+    }
+
+    fn reference_integrity_snapshot() -> super::EngineSnapshot {
+        let mut timeline = reference_integrity_timeline();
+        let bank_timeline = timeline.clone();
+        // These are runtime fields and must not participate in authored-bank
+        // equality.
+        timeline.playing = true;
+        timeline.position_ms = 500;
+        timeline.transport_epoch = 7;
+        timeline.transport_generation = 9;
+        let cue = super::CueSummary {
+            id: 1,
+            cue_list_id: 1,
+            cue_number: "1".to_string(),
+            label: "Cue 1".to_string(),
+            group_id: Some("front".to_string()),
+            targets: vec![super::CueFixtureTarget {
+                fixture_id: 1,
+                values: vec![super::AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: u16::MAX,
+                }],
+            }],
+            video_targets: vec![super::VideoLayerTarget {
+                layer_id: 10,
+                state: super::VideoLayerState::default(),
+            }],
+            video_output_targets: vec![super::VideoOutputTarget {
+                output_id: 30,
+                enabled: true,
+                opacity: 1.0,
+                blackout: false,
+            }],
+            ..super::CueSummary::default()
+        };
+        super::EngineSnapshot {
+            fixtures: vec![reference_integrity_fixture()],
+            cues: vec![cue],
+            cue_lists: vec![super::CueListSummary {
+                id: 1,
+                label: "Bank 1".to_string(),
+                active_cue_id: Some(1),
+            }],
+            active_cue_id: Some(1),
+            active_group_cue_ids: std::collections::BTreeMap::from([("front".to_string(), 1)]),
+            timeline,
+            timeline_bank: vec![bank_timeline],
+            video: reference_integrity_video(),
+            ..super::EngineSnapshot::default()
+        }
+    }
+
+    fn reference_integrity_follow(
+        target: super::TimelineId,
+        enabled: bool,
+    ) -> super::TimelineFollowSummary {
+        super::TimelineFollowSummary {
+            enabled,
+            next_timeline_id: target,
+            duration: super::VideoClipTakeDuration::milliseconds(0),
+            curve: super::VideoLayerTransitionCurve::Linear,
+            video_kind: super::VideoClipTakeKind::Cut,
+            lighting_policy: super::TimelineFollowLightingPolicy::HoldThenCut,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
+            fault_policy: super::TimelineFollowFaultPolicy::Hold,
+        }
+    }
+
+    #[test]
+    fn current_project_reference_integrity_accepts_exact_graph_and_ignores_runtime_fields() {
+        let snapshot = reference_integrity_snapshot();
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&snapshot).unwrap(),
+            super::ProjectReferenceIntegrityReport {
+                video_authority: super::ProjectVideoAuthority::Video,
+                unvalidated_external_registry: Some(
+                    super::ProjectExternalRegistryBoundary::LIGHTING_FIXTURE_GROUPS,
+                ),
+            }
+        );
+
+        let mut conflict = snapshot.clone();
+        conflict.timeline_bank[0].label = "Different authored label".to_string();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&conflict),
+            Err(
+                super::ProjectReferenceIntegrityError::ActiveTimelineProjectionConflict {
+                    timeline_id: super::TimelineId(1),
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn current_project_reference_integrity_rejects_active_and_timeline_hostile_refs() {
+        let mut missing_active = reference_integrity_snapshot();
+        missing_active.cue_lists[0].active_cue_id = Some(99);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_active),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "Cue",
+                target_id: 99,
+                ..
+            })
+        ));
+
+        let mut wrong_group = reference_integrity_snapshot();
+        wrong_group.active_group_cue_ids =
+            std::collections::BTreeMap::from([("other".to_string(), 1)]);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&wrong_group),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut wrong_bank_membership = reference_integrity_snapshot();
+        wrong_bank_membership.cue_lists.push(super::CueListSummary {
+            id: 2,
+            label: "Bank 2".to_string(),
+            active_cue_id: None,
+        });
+        wrong_bank_membership.cues[0].cue_list_id = 2;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&wrong_bank_membership),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut inactive_bank = reference_integrity_snapshot();
+        let mut second = inactive_bank.timeline_bank[0].clone();
+        second.id = super::TimelineId(2);
+        second.label = "Inactive hostile".to_string();
+        second.events[0].cue_id = 999;
+        inactive_bank.timeline_bank.push(second);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&inactive_bank),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "Cue",
+                target_id: 999,
+                ..
+            })
+        ));
+
+        let mut missing_jump = reference_integrity_snapshot();
+        missing_jump.timeline.events[0].jump_to_event_id = Some(999);
+        missing_jump.timeline_bank[0] = missing_jump.timeline.clone();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_jump),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "Timeline event",
+                target_id: 999,
+                ..
+            })
+        ));
+
+        let mut missing_attribute = reference_integrity_snapshot();
+        missing_attribute.timeline.automations[0].attribute = "Pan".to_string();
+        missing_attribute.timeline_bank[0] = missing_attribute.timeline.clone();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_attribute),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut missing_media = reference_integrity_snapshot();
+        missing_media.timeline.video_clips[0].media_asset_id = 999;
+        missing_media.timeline_bank[0] = missing_media.timeline.clone();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_media),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "MediaAsset",
+                target_id: 999,
+                ..
+            })
+        ));
+
+        // Reciprocal jump links are an authored routing feature, not a child
+        // Timeline recursion cycle.
+        let mut reciprocal_jumps = reference_integrity_snapshot();
+        reciprocal_jumps.timeline.events[0].jump_to_event_id = Some(101);
+        let mut second_event = reciprocal_jumps.timeline.events[0].clone();
+        second_event.id = 101;
+        second_event.jump_to_event_id = Some(100);
+        reciprocal_jumps.timeline.events.push(second_event);
+        reciprocal_jumps.timeline_bank[0] = reciprocal_jumps.timeline.clone();
+        assert!(
+            super::validate_current_engine_snapshot_reference_integrity(&reciprocal_jumps).is_ok()
+        );
+    }
+
+    #[test]
+    fn current_project_reference_integrity_rejects_child_and_follow_cycles() {
+        let mut child_cycle = reference_integrity_snapshot();
+        let mut cue_two = super::CueSummary {
+            id: 2,
+            cue_list_id: 1,
+            cue_number: "2".to_string(),
+            label: "Cue 2".to_string(),
+            ..super::CueSummary::default()
+        };
+        child_cycle.cues[0].child_timeline = Some(super::ChildTimelineSummary {
+            events: vec![super::TimelineCueEventSummary {
+                id: 400,
+                cue_id: 2,
+                ..super::TimelineCueEventSummary::default()
+            }],
+            ..super::ChildTimelineSummary::default()
+        });
+        cue_two.child_timeline = Some(super::ChildTimelineSummary {
+            events: vec![super::TimelineCueEventSummary {
+                id: 401,
+                cue_id: 1,
+                ..super::TimelineCueEventSummary::default()
+            }],
+            ..super::ChildTimelineSummary::default()
+        });
+        child_cycle.cues.push(cue_two);
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&child_cycle),
+            Err(super::ProjectReferenceIntegrityError::ReferenceCycle {
+                domain: "Cue child Timeline",
+                path: vec![1, 2, 1],
+            })
+        );
+
+        let mut follow_cycle = reference_integrity_snapshot();
+        follow_cycle.timeline.follow =
+            Some(reference_integrity_follow(super::TimelineId(2), false));
+        follow_cycle.timeline_bank[0] = follow_cycle.timeline.clone();
+        let mut second = follow_cycle.timeline_bank[0].clone();
+        second.id = super::TimelineId(2);
+        second.label = "Timeline 2".to_string();
+        second.follow = Some(reference_integrity_follow(super::TimelineId(1), false));
+        follow_cycle.timeline_bank.push(second);
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&follow_cycle),
+            Err(super::ProjectReferenceIntegrityError::ReferenceCycle {
+                domain: "Timeline Follow",
+                path: vec![1, 2, 1],
+            })
+        );
+    }
+
+    #[test]
+    fn current_project_reference_integrity_rejects_video_graph_hostile_refs() {
+        let mut duplicate_layer = reference_integrity_snapshot();
+        duplicate_layer
+            .video
+            .layers
+            .push(duplicate_layer.video.layers[0].clone());
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&duplicate_layer),
+            Err(super::ProjectReferenceIntegrityError::DuplicateId {
+                domain: "video layer",
+                id: 10,
+            })
+        ));
+
+        let mut broken_reverse = reference_integrity_snapshot();
+        broken_reverse.video.compositions[0].output_ids.clear();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&broken_reverse),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut missing_scope = reference_integrity_snapshot();
+        missing_scope
+            .video
+            .effect_chains
+            .push(super::VideoEffectChainSummary {
+                id: super::VideoEffectChainId(1),
+                scope: super::VideoEffectScope::Output { output_id: 999 },
+                bypassed: false,
+                stages: Vec::new(),
+            });
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_scope),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "video output",
+                target_id: 999,
+                ..
+            })
+        ));
+
+        let mut missing_transition_member = reference_integrity_snapshot();
+        missing_transition_member.video.transition_buses.push(
+            super::VideoLayerTransitionBusSummary {
+                id: super::VideoTransitionBusId(50),
+                label: "Bus".to_string(),
+                composition_id: 40,
+                enabled: true,
+                members: vec![
+                    super::VideoLayerTransitionTarget::Layer { layer_id: 10 },
+                    super::VideoLayerTransitionTarget::Layer { layer_id: 999 },
+                ],
+                default_from: super::VideoLayerTransitionTarget::Layer { layer_id: 10 },
+                default_to: super::VideoLayerTransitionTarget::Layer { layer_id: 999 },
+                default_kind: super::VideoClipTakeKind::Crossfade,
+                default_duration: super::VideoClipTakeDuration::milliseconds(500),
+                default_curve: super::VideoLayerTransitionCurve::Linear,
+                matte_source: None,
+            },
+        );
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_transition_member),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "video layer",
+                target_id: 999,
+                ..
+            })
+        ));
+
+        let mut zero_group = reference_integrity_snapshot();
+        zero_group
+            .video
+            .layer_groups
+            .push(super::VideoLayerGroupSummary {
+                id: super::VideoLayerGroupId(0),
+                label: "Zero".to_string(),
+                composition_id: 40,
+                layer_ids: vec![10],
+            });
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&zero_group),
+            Err(super::ProjectReferenceIntegrityError::ZeroId {
+                domain: "video layer group",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn current_project_reference_integrity_types_authored_video_conflicts_and_runtime_projection() {
+        let mut authored = reference_integrity_snapshot();
+        authored.authored_video = Some(authored.video.clone());
+        // Rendered live state may differ from authored state without changing
+        // reference authority.
+        authored.video.layers[0].state.opacity = 0.25;
+        authored.video.layers[0].media_asset_id = None;
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&authored)
+                .unwrap()
+                .video_authority,
+            super::ProjectVideoAuthority::AuthoredVideo
+        );
+
+        let mut runtime_projection = authored.clone();
+        let mut projected_layer = runtime_projection.video.layers[0].clone();
+        projected_layer.id = 99;
+        projected_layer.clip_slots.clear();
+        projected_layer.default_clip_slot_id = None;
+        runtime_projection.video.layers.push(projected_layer);
+        runtime_projection.video.compositions[0].layer_ids.push(99);
+        runtime_projection
+            .video_clip_runtime
+            .timeline_video_projection_layer_ids = vec![99];
+        assert!(
+            super::validate_current_engine_snapshot_reference_integrity(&runtime_projection)
+                .is_ok()
+        );
+
+        runtime_projection
+            .video_clip_runtime
+            .timeline_video_projection_layer_ids
+            .clear();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&runtime_projection),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::IdentitySetMismatch,
+                    ..
+                }
+            )
+        ));
+
+        let mut topology_conflict = authored;
+        topology_conflict
+            .authored_video
+            .as_mut()
+            .unwrap()
+            .compositions[0]
+            .output_ids
+            .clear();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&topology_conflict),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn required_empty_timeline_bank_has_dedicated_taxonomy() {
+        let mut empty_bank = reference_integrity_snapshot();
+        empty_bank.timeline_bank.clear();
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&empty_bank),
+            Err(
+                super::ProjectReferenceIntegrityError::RequiredTimelineBankEmpty {
+                    active_timeline_id: super::TimelineId(1)
+                }
+            )
+        );
+        assert_eq!(
+            super::ProjectReferenceIntegrityError::RequiredTimelineBankEmpty {
+                active_timeline_id: super::TimelineId(1)
+            }
+            .to_string(),
+            "current schema requires a non-empty Timeline bank; active Timeline 1 has no bank entries"
+        );
+    }
+
+    fn multi_attribute_fixture(id: super::FixtureId) -> super::PatchedFixtureSummary {
+        let mut fixture = reference_integrity_fixture();
+        fixture.id = id;
+        fixture.label = format!("Fixture {id}");
+        for (attribute, offset) in [("Pan", 2), ("Tilt", 3)] {
+            fixture.controls.push(super::AttributeControl {
+                attribute: attribute.to_string(),
+                channel_name: attribute.to_string(),
+                geometry: None,
+                offsets: vec![offset],
+                resolution: super::AttributeResolution::EightBit,
+                default_value: 0,
+                functions: Vec::new(),
+            });
+            fixture.attribute_values.push(super::AttributeValueSummary {
+                attribute: attribute.to_string(),
+                value: 0,
+            });
+        }
+        fixture
+    }
+
+    fn payload_test_snapshot() -> super::EngineSnapshot {
+        let mut snapshot = reference_integrity_snapshot();
+        snapshot.fixtures = vec![multi_attribute_fixture(1)];
+        snapshot
+    }
+
+    fn payload_effect(summary_id: u64) -> super::EffectSummary {
+        super::EffectSummary {
+            id: summary_id,
+            label: "Payload effect".to_string(),
+            effect_type: super::EffectKind::Lfo,
+            fixture_ids: vec![1],
+            target_group_ids: vec!["front".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: super::LfoShape::Sine,
+            period_ms: Some(1_000),
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            lfo: Some(payload_lfo_request()),
+            color: Some(payload_color_request()),
+            chaser: Some(payload_chaser_request()),
+            move_effect: Some(payload_move_request()),
+            value: Some(payload_value_request()),
+            curve: Some(payload_curve_request()),
+            mapping: Some(payload_mapping_request()),
+            color_mapping: Some(payload_color_mapping_request()),
+        }
+    }
+
+    fn payload_lfo_request() -> super::LfoEffectRequest {
+        super::LfoEffectRequest {
+            label: "LFO".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: vec!["front".to_string()],
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: super::LfoShape::Sine,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            beam_targets: vec![super::EffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+                feature_attribute: "Pan".to_string(),
+            }],
+            blend_mode: super::EffectBlendMode::Override,
+            daslight_curve: None,
+            daslight_custom_curve: None,
+        }
+    }
+
+    fn payload_position_wave_request() -> super::PositionWaveEffectRequest {
+        super::PositionWaveEffectRequest {
+            label: "Position wave".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: super::LfoShape::Sine,
+            origin: super::Vec3::default(),
+            direction: super::Vec3::default(),
+            speed: 1.0,
+            wavelength: 1.0,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_color_request() -> super::ColorEffectRequest {
+        super::ColorEffectRequest {
+            label: "Color".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            stops: vec![super::ColorEffectStop {
+                position: 0.0,
+                color: super::ColorEffectColor {
+                    red: 65_535,
+                    green: 0,
+                    blue: 0,
+                },
+            }],
+            algorithm: super::ColorEffectAlgorithm::Cycle,
+            interpolation: super::ColorEffectInterpolation::Rgb,
+            period_ms: 1_000,
+            clock_sync: None,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+            spatial_pattern: Some(Box::new(super::ColorEffectSpatialPattern {
+                recipe: super::ColorEffectSpatialRecipe::Sweep {
+                    grayscale: false,
+                    vertical_symmetry: false,
+                    direction_change: false,
+                },
+                parameter_model_version: 1,
+                beam_targets: vec![super::ColorEffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index: 0,
+                    selection_index: 0,
+                    feature_attribute: Some("Dimmer".to_string()),
+                }],
+                placement: Some(super::ColorEffectSpatialPlacement {
+                    source_coordinate_frame:
+                        super::ColorEffectSpatialCoordinateFrame::DaslightPatchCanvas,
+                    mapping_shape: super::ColorEffectSpatialMappingShape::Rectangle,
+                    x: 0,
+                    y: 0,
+                    sx: 1,
+                    sy: 1,
+                    mapping_angle_degrees: 0.0,
+                    sampling_rule:
+                        super::ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                    vertical_symmetry: false,
+                    horizontal_symmetry: false,
+                    raster_rotation_degrees: 0.0,
+                    target_coordinates: vec![super::ColorEffectSpatialPlacementTarget {
+                        fixture_id: 1,
+                        beam_index: 0,
+                        patch_x: 0,
+                        patch_y: 0,
+                    }],
+                }),
+            })),
+        }
+    }
+
+    fn payload_chaser_request() -> super::ChaserEffectRequest {
+        super::ChaserEffectRequest {
+            label: "Chaser".to_string(),
+            steps: vec![
+                super::ChaserStep {
+                    fixture_ids: vec![1],
+                    target_group_ids: Vec::new(),
+                    beam_targets: vec![super::EffectBeamTarget {
+                        fixture_id: 1,
+                        beam_index: 0,
+                        selection_index: 0,
+                        feature_attribute: "Dimmer".to_string(),
+                    }],
+                    level: u16::MAX,
+                },
+                super::ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
+                    level: 0,
+                },
+            ],
+            features: vec![super::ChaserFeature {
+                attribute: "Dimmer".to_string(),
+                low: 0,
+                high: u16::MAX,
+            }],
+            step_duration_ms: 250,
+            clock_sync: None,
+            direction: super::ChaserDirection::Forward,
+            wings: 1,
+            active_step_count: 1,
+            duty_cycle: 1.0,
+            overlap: 0.0,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            random_seed: 0,
+            random_cycle_count: 1,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_move_request() -> super::MoveEffectRequest {
+        super::MoveEffectRequest {
+            label: "Move".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            beam_targets: vec![super::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+            }],
+            points: vec![
+                super::MovePathPoint { x: 0.0, y: 0.0 },
+                super::MovePathPoint { x: 1.0, y: 1.0 },
+            ],
+            closed: false,
+            interpolation: super::MoveInterpolation::Line,
+            coordinate_mode: super::MoveCoordinateMode::Absolute,
+            center_x: 0.0,
+            center_y: 0.0,
+            size_x: 1.0,
+            size_y: 1.0,
+            rotation_degrees: 0.0,
+            period_ms: 1_000,
+            clock_sync: None,
+            direction: super::MoveDirection::Forward,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            symmetry: false,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_value_request() -> super::ValueEffectRequest {
+        super::ValueEffectRequest {
+            label: "Value".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            features: Vec::new(),
+            points: vec![
+                super::ValueEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                },
+                super::ValueEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                },
+            ],
+            spatial_pattern: None,
+            interpolation: super::ValueEffectInterpolation::Line,
+            mode: super::ValueEffectMode::Absolute,
+            direction: super::ValueEffectDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_curve_request() -> super::CurveEffectRequest {
+        super::CurveEffectRequest {
+            label: "Curve".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            features: Vec::new(),
+            points: vec![
+                super::CurveEffectPoint {
+                    position: 0.0,
+                    value: 0.0,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                },
+                super::CurveEffectPoint {
+                    position: 1.0,
+                    value: 1.0,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                },
+            ],
+            mode: super::ValueEffectMode::Absolute,
+            direction: super::ValueEffectDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_mapping_request() -> super::MappingEffectRequest {
+        super::MappingEffectRequest {
+            label: "Mapping".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            features: Vec::new(),
+            shape: super::LfoShape::Sine,
+            mode: super::ValueEffectMode::Absolute,
+            direction: super::MappingEffectDirection::Static,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            repetitions: 1.0,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    fn payload_color_mapping_request() -> super::ColorMappingEffectRequest {
+        super::ColorMappingEffectRequest {
+            label: "Color mapping".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            source_kind: super::ColorMappingSourceKind::Image,
+            width: 1,
+            height: 1,
+            frames: vec![super::ColorMappingFrame { pixels: vec![0] }],
+            cells: vec![super::ColorMappingCellTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+                u: 0.0,
+                v: 0.0,
+                feature_attribute: Some("Dimmer".to_string()),
+                feature_low: None,
+                feature_high: None,
+            }],
+            playback_direction: super::ColorMappingPlaybackDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            phase: 0.0,
+            offset_u: 0.0,
+            offset_v: 0.0,
+            scale_u: 1.0,
+            scale_v: 1.0,
+            rotation_degrees: 0.0,
+            wrap_mode: super::ColorMappingWrapMode::Clamp,
+            sampling: super::ColorMappingSampling::Nearest,
+            blend_mode: super::EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn fully_populated_embedded_effect_payloads_pass_reference_integrity() {
+        let mut snapshot = payload_test_snapshot();
+        snapshot.effects.push(payload_effect(500));
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&snapshot).is_ok());
+    }
+
+    #[test]
+    fn embedded_effect_payload_hostile_references_are_rejected_per_family() {
+        enum Mutation {
+            MissingFixture,
+            UnsupportedAttribute,
+            UnsupportedBeamFeature,
+            MissingBeamFixture,
+            MissingPlacementFixture,
+            UnresolvableFeature,
+        }
+
+        let cases: Vec<(&str, Mutation, Box<dyn Fn(&mut super::EngineSnapshot)>)> = vec![
+            (
+                "LFO",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].lfo.as_mut().unwrap().fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "LFO",
+                Mutation::UnsupportedAttribute,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].lfo.as_mut().unwrap().attribute = "Zoom".to_string();
+                }),
+            ),
+            (
+                "LFO",
+                Mutation::UnsupportedBeamFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].lfo.as_mut().unwrap().beam_targets[0].feature_attribute =
+                        "Zoom".to_string();
+                }),
+            ),
+            (
+                "LFO",
+                Mutation::MissingBeamFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].lfo.as_mut().unwrap().beam_targets[0].fixture_id = 99;
+                }),
+            ),
+            (
+                "Color",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].color.as_mut().unwrap().fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Color",
+                Mutation::UnsupportedBeamFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .color
+                        .as_mut()
+                        .unwrap()
+                        .spatial_pattern
+                        .as_mut()
+                        .unwrap()
+                        .beam_targets[0]
+                        .feature_attribute = Some("Zoom".to_string());
+                }),
+            ),
+            (
+                "Color",
+                Mutation::MissingBeamFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .color
+                        .as_mut()
+                        .unwrap()
+                        .spatial_pattern
+                        .as_mut()
+                        .unwrap()
+                        .beam_targets[0]
+                        .fixture_id = 99;
+                }),
+            ),
+            (
+                "Color",
+                Mutation::MissingPlacementFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .color
+                        .as_mut()
+                        .unwrap()
+                        .spatial_pattern
+                        .as_mut()
+                        .unwrap()
+                        .placement
+                        .as_mut()
+                        .unwrap()
+                        .target_coordinates[0]
+                        .fixture_id = 99;
+                }),
+            ),
+            (
+                "Chaser",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].chaser.as_mut().unwrap().steps[0].fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Chaser",
+                Mutation::UnsupportedBeamFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].chaser.as_mut().unwrap().steps[0].beam_targets[0]
+                        .feature_attribute = "Zoom".to_string();
+                }),
+            ),
+            (
+                "Chaser",
+                Mutation::UnresolvableFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].chaser.as_mut().unwrap().features[0].attribute =
+                        "Zoom".to_string();
+                }),
+            ),
+            (
+                "Move",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .move_effect
+                        .as_mut()
+                        .unwrap()
+                        .fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Move",
+                Mutation::MissingBeamFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .move_effect
+                        .as_mut()
+                        .unwrap()
+                        .beam_targets[0]
+                        .fixture_id = 99;
+                }),
+            ),
+            (
+                "Value",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].value.as_mut().unwrap().fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Value",
+                Mutation::UnsupportedAttribute,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].value.as_mut().unwrap().attribute = "Zoom".to_string();
+                }),
+            ),
+            (
+                "Value",
+                Mutation::UnresolvableFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    let value = snapshot.effects[0].value.as_mut().unwrap();
+                    value.features = vec![super::ChaserFeature {
+                        attribute: "Zoom".to_string(),
+                        low: 0,
+                        high: u16::MAX,
+                    }];
+                }),
+            ),
+            (
+                "Value",
+                Mutation::UnsupportedBeamFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    let value = snapshot.effects[0].value.as_mut().unwrap();
+                    value.spatial_pattern = Some(super::ColorEffectSpatialPattern {
+                        recipe: super::ColorEffectSpatialRecipe::Sweep {
+                            grayscale: false,
+                            vertical_symmetry: false,
+                            direction_change: false,
+                        },
+                        parameter_model_version: 1,
+                        beam_targets: vec![super::ColorEffectBeamTarget {
+                            fixture_id: 1,
+                            beam_index: 0,
+                            selection_index: 0,
+                            feature_attribute: Some("Zoom".to_string()),
+                        }],
+                        placement: None,
+                    });
+                }),
+            ),
+            (
+                "Curve",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].curve.as_mut().unwrap().fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Curve",
+                Mutation::UnsupportedAttribute,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].curve.as_mut().unwrap().attribute = "Zoom".to_string();
+                }),
+            ),
+            (
+                "Curve",
+                Mutation::UnresolvableFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    let curve = snapshot.effects[0].curve.as_mut().unwrap();
+                    curve.features = vec![super::ChaserFeature {
+                        attribute: "Zoom".to_string(),
+                        low: 0,
+                        high: u16::MAX,
+                    }];
+                }),
+            ),
+            (
+                "Mapping",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].mapping.as_mut().unwrap().fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "Mapping",
+                Mutation::UnsupportedAttribute,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].mapping.as_mut().unwrap().attribute = "Zoom".to_string();
+                }),
+            ),
+            (
+                "ColorMapping",
+                Mutation::MissingFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0]
+                        .color_mapping
+                        .as_mut()
+                        .unwrap()
+                        .fixture_ids = vec![99];
+                }),
+            ),
+            (
+                "ColorMapping",
+                Mutation::MissingBeamFixture,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].color_mapping.as_mut().unwrap().cells[0].fixture_id = 99;
+                }),
+            ),
+            (
+                "ColorMapping",
+                Mutation::UnsupportedBeamFeature,
+                Box::new(|snapshot: &mut super::EngineSnapshot| {
+                    snapshot.effects[0].color_mapping.as_mut().unwrap().cells[0]
+                        .feature_attribute = Some("Zoom".to_string());
+                }),
+            ),
+        ];
+
+        assert!(
+            cases.len() >= 25,
+            "table-driven coverage must stay exhaustive across families"
+        );
+        for (family, mutation, apply) in cases {
+            let mut snapshot = payload_test_snapshot();
+            snapshot.effects.push(payload_effect(500));
+            apply(&mut snapshot);
+            let result = super::validate_current_engine_snapshot_reference_integrity(&snapshot);
+            let error = result.expect_err(&format!("{family} hostile payload must be rejected"));
+            match mutation {
+                Mutation::MissingFixture
+                | Mutation::MissingBeamFixture
+                | Mutation::MissingPlacementFixture => assert!(
+                    matches!(
+                        error,
+                        super::ProjectReferenceIntegrityError::MissingReference {
+                            target_domain: "fixture",
+                            target_id: 99,
+                            ..
+                        }
+                    ),
+                    "{family} missing-fixture rejection mismatched: {error}"
+                ),
+                Mutation::UnsupportedAttribute | Mutation::UnsupportedBeamFeature => assert!(
+                    matches!(
+                        error,
+                        super::ProjectReferenceIntegrityError::ReferenceMismatch { .. }
+                    ),
+                    "{family} unsupported-attribute rejection mismatched: {error}"
+                ),
+                Mutation::UnresolvableFeature => assert!(
+                    matches!(
+                        error,
+                        super::ProjectReferenceIntegrityError::ReferenceMismatch { .. }
+                    ) && error.to_string().contains("supported by none"),
+                    "{family} unresolvable-feature rejection mismatched: {error}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn cue_owned_effect_params_hostile_references_are_rejected_per_family() {
+        let mut snapshot = payload_test_snapshot();
+        snapshot.effects.push(payload_effect(1));
+
+        // PositionWave has no EffectSummary slot; it embeds through Cue-owned
+        // params, which must be validated with the same rigor.
+        snapshot.cues[0]
+            .effect_targets
+            .push(super::CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+                params: Some(super::EffectParamsSnapshot::PositionWave(
+                    payload_position_wave_request(),
+                )),
+                transition_ms: None,
+            });
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&snapshot).is_ok());
+
+        let mut missing_fixture = snapshot.clone();
+        let super::EffectParamsSnapshot::PositionWave(request) = missing_fixture.cues[0]
+            .effect_targets[0]
+            .params
+            .as_mut()
+            .unwrap()
+        else {
+            panic!("params must remain PositionWave");
+        };
+        request.fixture_ids = vec![99];
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_fixture),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                target_domain: "fixture",
+                target_id: 99,
+                ..
+            })
+        ));
+
+        let mut unsupported = snapshot;
+        let super::EffectParamsSnapshot::PositionWave(request) = unsupported.cues[0].effect_targets
+            [0]
+        .params
+        .as_mut()
+        .unwrap() else {
+            panic!("params must remain PositionWave");
+        };
+        request.attribute = "Zoom".to_string();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&unsupported),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_reference_fields_carry_no_hidden_dangling_refs() {
+        let mut valid = reference_integrity_snapshot();
+        valid.programmer.values = vec![super::ProgrammerValueSummary {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: 32_768,
+        }];
+        valid.active_fade = Some(super::ActiveFadeSummary {
+            cue_id: 1,
+            progress: 0.5,
+            remaining_ms: 100,
+            paused: false,
+        });
+        valid.direct_child_timeline_transports = vec![super::DirectChildTimelineTransportSummary {
+            cue_id: 1,
+            position_ms: 10,
+            duration_ms: 100,
+            playing: true,
+            generation: 3,
+            count_in_remaining_ms: 0,
+        }];
+        valid.cue_live_modifiers = vec![super::CueLiveModifierState {
+            cue_id: 1,
+            speed: 2.0,
+            size: 1.0,
+            phase: 0.0,
+            direction: super::CueLiveDirection::Authored,
+            segment: 0,
+        }];
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&valid).is_ok());
+
+        let mut hostile_programmer = valid.clone();
+        hostile_programmer.programmer.values[0].fixture_id = 99;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&hostile_programmer),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner,
+                target_domain: "fixture",
+                target_id: 99,
+                ..
+            }) if owner == "programmer value"
+        ));
+
+        let mut hostile_programmer_attribute = valid.clone();
+        hostile_programmer_attribute.programmer.values[0].attribute = "Zoom".to_string();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(
+                &hostile_programmer_attribute
+            ),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut hostile_fade = valid.clone();
+        hostile_fade.active_fade.as_mut().unwrap().cue_id = 99;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&hostile_fade),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner,
+                target_domain: "Cue",
+                target_id: 99,
+                ..
+            }) if owner == "active fade"
+        ));
+
+        let mut hostile_transport = valid.clone();
+        hostile_transport.direct_child_timeline_transports[0].cue_id = 99;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&hostile_transport),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner,
+                target_domain: "Cue",
+                target_id: 99,
+                ..
+            }) if owner == "direct child Timeline transport"
+        ));
+
+        let mut hostile_modifier = valid;
+        hostile_modifier.cue_live_modifiers[0].cue_id = 99;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&hostile_modifier),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner,
+                target_domain: "Cue",
+                target_id: 99,
+                ..
+            }) if owner == "scene live modifier"
+        ));
+    }
+
+    #[test]
+    fn timeline_audio_clip_zero_identity_is_rejected_like_video_clips() {
+        fn audio_clip(id: super::TimelineAudioClipId) -> super::TimelineAudioClipSummary {
+            super::TimelineAudioClipSummary {
+                id,
+                // Layer 0 is the explicit legacy lane identity, so identity
+                // rejections below cannot be shadowed by lane-kind checks.
+                layer_id: 0,
+                media_asset_id: None,
+                path: String::new(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 0,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }
+        }
+
+        let mut active_hostile = reference_integrity_snapshot();
+        active_hostile.timeline.audio_clips = vec![audio_clip(0)];
+        active_hostile.timeline_bank[0] = active_hostile.timeline.clone();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&active_hostile),
+            Err(super::ProjectReferenceIntegrityError::ZeroId {
+                domain: "Timeline audio clip",
+                ..
+            })
+        ));
+
+        // An inactive bank entry is validated with the same taxonomy.
+        let mut bank_only_hostile = reference_integrity_snapshot();
+        let mut inactive = bank_only_hostile.timeline_bank[0].clone();
+        inactive.id = super::TimelineId(2);
+        inactive.label = "Inactive".to_string();
+        inactive.audio_clips = vec![audio_clip(0)];
+        bank_only_hostile.timeline_bank.push(inactive);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&bank_only_hostile),
+            Err(super::ProjectReferenceIntegrityError::ZeroId {
+                domain: "Timeline audio clip",
+                ..
+            })
+        ));
+
+        let mut child_hostile = reference_integrity_snapshot();
+        child_hostile.cues[0].child_timeline = Some(super::ChildTimelineSummary {
+            audio_clips: vec![audio_clip(0)],
+            ..super::ChildTimelineSummary::default()
+        });
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&child_hostile),
+            Err(super::ProjectReferenceIntegrityError::ZeroId {
+                domain: "Timeline audio clip",
+                ..
+            })
+        ));
+
+        let mut duplicate = reference_integrity_snapshot();
+        duplicate.timeline.audio_clips = vec![audio_clip(700), audio_clip(700)];
+        duplicate.timeline_bank[0] = duplicate.timeline.clone();
+        match super::validate_current_engine_snapshot_reference_integrity(&duplicate) {
+            Err(super::ProjectReferenceIntegrityError::DuplicateId { domain, id }) => {
+                assert_eq!(domain, "Timeline audio clip");
+                assert_eq!(id, 700);
+            }
+            other => panic!("expected Timeline audio clip DuplicateId(700), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authored_video_persisted_state_is_compared_exactly() {
+        let base = || {
+            let mut snapshot = reference_integrity_snapshot();
+            snapshot.authored_video = Some(snapshot.video.clone());
+            snapshot
+        };
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&base()).is_ok());
+
+        let mut presets = base();
+        presets.authored_video.as_mut().unwrap().mapping_presets =
+            vec![super::VideoOutputMappingPresetSummary {
+                label: "Preset".to_string(),
+                mapping: super::VideoOutputMapping::default(),
+            }];
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&presets),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                    detail
+                }
+            ) if detail.contains("mapping presets")
+        ));
+
+        let mut opacity = base();
+        opacity.authored_video.as_mut().unwrap().master_opacity = 0.25;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&opacity),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                    detail
+                }
+            ) if detail.contains("master opacity")
+        ));
+
+        let mut blackout = base();
+        blackout.authored_video.as_mut().unwrap().blackout = true;
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&blackout),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                    detail
+                }
+            ) if detail.contains("blackout")
+        ));
+
+        let mut eligible_layers = base();
+        eligible_layers
+            .authored_video
+            .as_mut()
+            .unwrap()
+            .auto_vj
+            .config
+            .eligible_layer_ids = vec![10];
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&eligible_layers),
+            Err(
+                super::ProjectReferenceIntegrityError::AuthoredVideoConflict {
+                    kind: super::ProjectAuthoredVideoConflictKind::ReferenceTopologyMismatch,
+                    detail
+                }
+            ) if detail.contains("Auto VJ config")
+        ));
+
+        // Runtime Auto VJ status is deliberately not compared.
+        let mut status_only = base();
+        status_only.video.auto_vj.status.mode = super::AutoVjMode::Running;
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&status_only).is_ok());
+    }
+
+    #[test]
+    fn reference_cycle_detection_is_iterative_bounded_and_deterministic() {
+        const DEPTH: u64 = 20_000;
+        let deep_chain = (1..=DEPTH)
+            .map(|cue_id| {
+                let next = if cue_id < DEPTH { cue_id + 1 } else { 1 };
+                super::CueSummary {
+                    id: cue_id,
+                    cue_list_id: 1,
+                    child_timeline: Some(super::ChildTimelineSummary {
+                        events: vec![super::TimelineCueEventSummary {
+                            id: 4_000 + cue_id,
+                            cue_id: next,
+                            ..super::TimelineCueEventSummary::default()
+                        }],
+                        ..super::ChildTimelineSummary::default()
+                    }),
+                    ..super::CueSummary::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut cyclic = reference_integrity_snapshot();
+        cyclic.cues = deep_chain;
+        let result = super::validate_child_timeline_reference_cycles(&cyclic.cues);
+        let mut expected_path = Vec::<u64>::new();
+        expected_path.extend(1..=DEPTH);
+        expected_path.push(1);
+        assert_eq!(
+            result,
+            Err(super::ProjectReferenceIntegrityError::ReferenceCycle {
+                domain: "Cue child Timeline",
+                path: expected_path,
+            })
+        );
+
+        // The same depth without the closing edge must complete with a typed
+        // success instead of exhausting the call stack.
+        let mut acyclic = reference_integrity_snapshot();
+        acyclic.cues = (1..=DEPTH)
+            .map(|cue_id| {
+                let next = cue_id + 1;
+                super::CueSummary {
+                    id: cue_id,
+                    cue_list_id: 1,
+                    child_timeline: (cue_id < DEPTH).then(|| super::ChildTimelineSummary {
+                        events: vec![super::TimelineCueEventSummary {
+                            id: 4_000 + cue_id,
+                            cue_id: next,
+                            ..super::TimelineCueEventSummary::default()
+                        }],
+                        ..super::ChildTimelineSummary::default()
+                    }),
+                    ..super::CueSummary::default()
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(super::validate_child_timeline_reference_cycles(&acyclic.cues).is_ok());
+
+        // A self-reference reports the minimal deterministic cycle path.
+        let mut self_cycle = reference_integrity_snapshot();
+        self_cycle.cues[0].child_timeline = Some(super::ChildTimelineSummary {
+            events: vec![super::TimelineCueEventSummary {
+                id: 400,
+                cue_id: 1,
+                ..super::TimelineCueEventSummary::default()
+            }],
+            ..super::ChildTimelineSummary::default()
+        });
+        assert_eq!(
+            super::validate_child_timeline_reference_cycles(&self_cycle.cues),
+            Err(super::ProjectReferenceIntegrityError::ReferenceCycle {
+                domain: "Cue child Timeline",
+                path: vec![1, 1],
+            })
+        );
+    }
+
+    fn move_summary_effect(summary_id: super::EffectId) -> super::EffectSummary {
+        super::EffectSummary {
+            id: summary_id,
+            label: "Move summary".to_string(),
+            effect_type: super::EffectKind::Move,
+            fixture_ids: vec![1],
+            target_group_ids: vec!["front".to_string()],
+            attribute: "Pan/Tilt".to_string(),
+            video_targets: Vec::new(),
+            shape: super::LfoShape::Sine,
+            period_ms: Some(1_000),
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: super::EffectBlendMode::Override,
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            lfo: None,
+            color: None,
+            chaser: None,
+            move_effect: Some(payload_move_request()),
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: None,
+        }
+    }
+
+    fn move_test_fixture(
+        id: super::FixtureId,
+        movement_controls: &[(&str, u16)],
+    ) -> super::PatchedFixtureSummary {
+        let mut fixture = reference_integrity_fixture();
+        fixture.id = id;
+        fixture.label = format!("Mover {id}");
+        for (attribute, offset) in movement_controls {
+            fixture.controls.push(super::AttributeControl {
+                attribute: (*attribute).to_string(),
+                channel_name: (*attribute).to_string(),
+                geometry: None,
+                offsets: vec![*offset],
+                resolution: super::AttributeResolution::SixteenBit,
+                default_value: 0,
+                functions: Vec::new(),
+            });
+        }
+        fixture
+    }
+
+    #[test]
+    fn move_summary_accepts_virtual_pan_tilt_mirror_over_distinct_controls() {
+        let mut snapshot = payload_test_snapshot();
+        snapshot.fixtures = vec![move_test_fixture(1, &[("Pan coarse", 2), ("tilt-fine", 4)])];
+        snapshot.effects.push(move_summary_effect(500));
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&snapshot).is_ok());
+    }
+
+    #[test]
+    fn move_payload_rejects_missing_or_unselected_axis_pairs() {
+        for movement_controls in [
+            vec![("Pan", 2)],
+            vec![("Tilt", 4)],
+            vec![("", 2), ("Tilt", 4)],
+        ] {
+            let mut snapshot = payload_test_snapshot();
+            snapshot.fixtures = vec![move_test_fixture(1, &movement_controls)];
+            snapshot.effects.push(move_summary_effect(500));
+            assert!(matches!(
+                super::validate_current_engine_snapshot_reference_integrity(&snapshot),
+                Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { ref owner, .. })
+                    if owner == "lighting effect 500 Move request beam target"
+            ));
+        }
+
+        let mut snapshot = payload_test_snapshot();
+        snapshot.fixtures = vec![move_test_fixture(
+            1,
+            &[("Pan 1", 2), ("Tilt 1", 4), ("Pan 2", 6), ("Tilt 2", 8)],
+        )];
+        let mut effect = move_summary_effect(500);
+        effect.move_effect.as_mut().unwrap().beam_targets[0].beam_index = 2;
+        snapshot.effects.push(effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&snapshot),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { ref owner, .. })
+                if owner == "lighting effect 500 Move request beam target"
+        ));
+    }
+
+    #[test]
+    fn move_payload_accepts_indexed_multi_beam_pair_and_rejects_ambiguous_unindexed_target() {
+        let controls = &[("Pan 1", 2), ("Tilt 1", 4), ("Pan 2", 6), ("Tilt 2", 8)];
+        let mut indexed = payload_test_snapshot();
+        indexed.fixtures = vec![move_test_fixture(1, controls)];
+        let mut indexed_effect = move_summary_effect(500);
+        indexed_effect.move_effect.as_mut().unwrap().beam_targets[0].beam_index = 1;
+        indexed.effects.push(indexed_effect);
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&indexed).is_ok());
+
+        let mut unindexed = indexed.clone();
+        unindexed.effects[0]
+            .move_effect
+            .as_mut()
+            .unwrap()
+            .beam_targets
+            .clear();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&unindexed),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { ref owner, .. })
+                if owner == "lighting effect 500 Move request"
+        ));
+    }
+
+    #[test]
+    fn move_beam_target_requires_explicit_fixture_coverage_and_rejects_group_combination() {
+        let controls = &[("Pan", 2), ("Tilt", 4)];
+        let mut rejected = payload_test_snapshot();
+        rejected.fixtures = vec![move_test_fixture(1, controls)];
+        let mut rejected_effect = move_summary_effect(500);
+        let rejected_request = rejected_effect.move_effect.as_mut().unwrap();
+        rejected_request.fixture_ids.clear();
+        rejected_request.target_group_ids.clear();
+        rejected.effects.push(rejected_effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&rejected),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch {
+                ref owner,
+                ref detail,
+            }) if owner == "lighting effect 500 Move request beam target"
+                && detail.contains("not present in the resolved fixture targets")
+        ));
+
+        let mut group_combined = rejected.clone();
+        group_combined.effects.clear();
+        let mut group_effect = move_summary_effect(501);
+        let group_request = group_effect.move_effect.as_mut().unwrap();
+        group_request.fixture_ids = vec![1];
+        group_request.target_group_ids = vec!["front".to_string()];
+        group_combined.effects.push(group_effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&group_combined),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch {
+                ref owner,
+                ref detail,
+            }) if owner == "lighting effect 501 Move request"
+                && detail == "Move beam targets cannot be combined with group targets"
+        ));
+    }
+
+    #[test]
+    fn move_summary_and_payload_references_remain_fail_closed() {
+        let mut wrong_virtual_attribute = payload_test_snapshot();
+        wrong_virtual_attribute.fixtures = vec![move_test_fixture(1, &[("Pan", 2), ("Tilt", 4)])];
+        let mut effect = move_summary_effect(500);
+        effect.attribute = "Pan".to_string();
+        wrong_virtual_attribute.effects.push(effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&wrong_virtual_attribute),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { ref owner, .. })
+                if owner == "lighting effect 500"
+        ));
+
+        let mut missing_summary = payload_test_snapshot();
+        missing_summary.fixtures = vec![move_test_fixture(1, &[("Pan", 2), ("Tilt", 4)])];
+        let mut effect = move_summary_effect(500);
+        effect.fixture_ids = vec![99];
+        missing_summary.effects.push(effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&missing_summary),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                ref owner,
+                target_domain: "fixture",
+                target_id: 99,
+                ..
+            }) if owner == "lighting effect 500"
+        ));
+
+        let mut dangling_payload = payload_test_snapshot();
+        dangling_payload.fixtures = vec![move_test_fixture(1, &[("Pan", 2), ("Tilt", 4)])];
+        let mut effect = move_summary_effect(500);
+        let request = effect.move_effect.as_mut().unwrap();
+        request.fixture_ids = vec![99];
+        request.beam_targets[0].fixture_id = 99;
+        dangling_payload.effects.push(effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&dangling_payload),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                ref owner,
+                target_domain: "fixture",
+                target_id: 99,
+                ..
+            }) if owner == "lighting effect 500 Move request"
+        ));
+    }
+
+    #[test]
+    fn non_move_pan_tilt_attribute_keeps_exact_validation() {
+        let mut snapshot = payload_test_snapshot();
+        snapshot.fixtures = vec![move_test_fixture(1, &[("Pan", 2), ("Tilt", 4)])];
+        let mut effect = move_summary_effect(500);
+        effect.effect_type = super::EffectKind::Lfo;
+        effect.move_effect = None;
+        effect.lfo = Some(payload_lfo_request());
+        snapshot.effects.push(effect);
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&snapshot),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+    }
+
+    fn registry_test_project() -> super::ProjectFile {
+        let mut project = super::ProjectFile {
+            version: 1,
+            app: "Syndocal".to_string(),
+            operator_policy: None,
+            custom_profiles: Vec::new(),
+            fixture_groups: vec![super::FixtureGroupSummary {
+                id: "front".to_string(),
+                label: "Front".to_string(),
+                color: None,
+            }],
+            snapshot: payload_test_snapshot(),
+        };
+        project.snapshot.effects.push(payload_effect(500));
+        project
+    }
+
+    #[test]
+    fn snapshot_level_report_declares_external_group_registry_boundary() {
+        let report =
+            super::validate_current_engine_snapshot_reference_integrity(&payload_test_snapshot())
+                .unwrap();
+        assert_eq!(
+            report.unvalidated_external_registry,
+            Some(super::ProjectExternalRegistryBoundary::LIGHTING_FIXTURE_GROUPS)
+        );
+        assert_eq!(
+            super::ProjectExternalRegistryBoundary::LIGHTING_FIXTURE_GROUPS.domain,
+            "lighting fixture group"
+        );
+    }
+
+    #[test]
+    fn project_file_validation_closes_the_group_registry_boundary() {
+        let project = registry_test_project();
+        let report = super::validate_project_file_reference_integrity(&project).unwrap();
+        assert_eq!(report.unvalidated_external_registry, None);
+        assert_eq!(report.video_authority, super::ProjectVideoAuthority::Video);
+        assert!(super::validate_project_file_fixture_group_registry(&project).is_ok());
+
+        let mut duplicate_registry = registry_test_project();
+        duplicate_registry
+            .fixture_groups
+            .push(super::FixtureGroupSummary {
+                id: "front".to_string(),
+                label: "Duplicate".to_string(),
+                color: None,
+            });
+        assert!(matches!(
+            super::validate_project_file_reference_integrity(&duplicate_registry),
+            Err(super::ProjectReferenceIntegrityError::DuplicateGroupIdentity { group_id, .. })
+                if group_id == "front"
+        ));
+
+        let mut malformed_membership = registry_test_project();
+        malformed_membership.snapshot.fixtures[0].group_ids = vec!["a//b".to_string()];
+        assert!(matches!(
+            super::validate_project_file_fixture_group_registry(&malformed_membership),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
+        ));
+
+        let mut unresolved_target = registry_test_project();
+        unresolved_target.snapshot.effects[0].target_group_ids = vec!["ghost".to_string()];
+        assert!(matches!(
+            super::validate_project_file_reference_integrity(&unresolved_target),
+            Err(super::ProjectReferenceIntegrityError::MissingGroupReference { group_id, .. })
+                if group_id == "ghost"
+        ));
+
+        // Hierarchical membership resolves parent group references exactly
+        // like the engine's runtime rule, while sibling memberships keep the
+        // other payload references resolvable.
+        let mut hierarchical = registry_test_project();
+        hierarchical.snapshot.fixtures[0].group_ids =
+            vec!["front".to_string(), "stage/front/left".to_string()];
+        hierarchical.fixture_groups.insert(
+            0,
+            super::FixtureGroupSummary {
+                id: "stage/front".to_string(),
+                label: "Stage front".to_string(),
+                color: None,
+            },
+        );
+        hierarchical.snapshot.effects[0].target_group_ids = vec!["stage/front".to_string()];
+        assert!(super::validate_project_file_fixture_group_registry(&hierarchical).is_ok());
     }
 }

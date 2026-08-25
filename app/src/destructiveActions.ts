@@ -1,4 +1,4 @@
-export type DestructiveActionKind = "fixture" | "cue" | "cue list" | "palette" | "playback executor" | "video output" | "effect";
+export type DestructiveActionKind = "fixture" | "cue" | "Bank" | "palette" | "playback executor" | "video output" | "effect";
 
 type ConfirmAction = (message: string) => boolean;
 

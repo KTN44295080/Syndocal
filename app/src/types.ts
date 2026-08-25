@@ -1575,9 +1575,32 @@ export interface LiveAudioInputStatus {
   queue_capacity: number;
   queue_depth_high_water: number;
   last_error?: string | null;
+  asio_selection?: LiveAudioInputAsioSelection | null;
+}
+
+/**
+ * Backend-native verdict for the machine-local persisted ASIO selection.
+ * Exact wire contract: unknown, missing, or malformed fields fail closed on
+ * the frontend; absent/null means non-ASIO or no persisted selection.
+ */
+export type LiveAudioInputAsioSelectionState = "restored" | "revalidated" | "invalid";
+
+export interface LiveAudioInputAsioSelection {
+  state: LiveAudioInputAsioSelectionState;
+  driver_id: string | null;
+  driver_name: string | null;
+  sample_rate_hz: number | null;
+  input_channels: number | null;
+  sample_format: string | null;
+  fixed_buffer_frames: number | null;
+  reason: string | null;
+  message: string;
 }
 
 export type LiveAudioInputBackendId = "wasapi_shared" | "asio";
+
+/** Exact probe classification; the authoritative availability gate for Start. */
+export type LiveAudioInputBackendAvailability = "ready" | "not_packaged" | "fault" | "unsupported";
 
 export interface LiveAudioInputBackendSummary {
   id: LiveAudioInputBackendId;
@@ -1585,6 +1608,10 @@ export interface LiveAudioInputBackendSummary {
   built: boolean;
   requires_explicit_device: boolean;
   distribution: string;
+  /** Required exact availability; never defaulted, aliased, or inferred from `built`. */
+  availability: LiveAudioInputBackendAvailability;
+  /** Optional nonblank probe detail; null when the probe adds nothing. */
+  availability_detail: string | null;
 }
 
 export interface LiveAudioInputDeviceSummary {

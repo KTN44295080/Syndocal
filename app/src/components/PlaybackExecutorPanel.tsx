@@ -1,10 +1,13 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
-import type { CueListSummary, CueSummary, PlaybackExecutorSummary } from "../types";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import {
+  bankAuthorityIssueMessage,
+  bankAuthoritySelectedCueList,
+  type FullBankAuthoritySnapshot,
+} from "../bankAuthority";
+import type { PlaybackExecutorSummary } from "../types";
 
 interface PlaybackExecutorPanelProps {
-  executors: PlaybackExecutorSummary[];
-  cueLists: CueListSummary[];
-  cues: CueSummary[];
+  bankAuthority: FullBankAuthoritySnapshot;
   playbackMaster: number;
   onCreate: (label: string, cueListId: number, page: number, slot: number) => void | Promise<void>;
   onUpdate: (executor: PlaybackExecutorSummary, patch: Partial<PlaybackExecutorSummary>) => void | Promise<void>;
@@ -14,20 +17,24 @@ interface PlaybackExecutorPanelProps {
   onTrigger: (executorId: number, direction: "next" | "previous") => void | Promise<void>;
 }
 
-const cueListDisplayLabel = (cueList: CueListSummary): string =>
-  cueList.id === 1 && cueList.label.trim().toLowerCase() === "main"
-    ? "Bank 1"
-    : cueList.label;
-
 export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
   const [page, setPage] = createSignal(1);
   const [label, setLabel] = createSignal("Playback");
-  const [cueListId, setCueListId] = createSignal(1);
-  const displayCueLists = createMemo(() => props.cueLists.map((cueList) => ({
-    ...cueList,
-    label: cueListDisplayLabel(cueList),
-  })));
-  const pageExecutors = createMemo(() => props.executors.filter((executor) => executor.page === page()));
+  const [cueListId, setCueListId] = createSignal<number | null>(null);
+  const bankAuthority = () => props.bankAuthority;
+  const displayCueLists = createMemo(() => bankAuthority().issue === null ? bankAuthority().cueLists : []);
+  const selectedCreateCueList = createMemo(() => bankAuthoritySelectedCueList(
+    bankAuthority(),
+    cueListId(),
+  ));
+  createEffect(() => {
+    if (cueListId() !== null || bankAuthority().issue !== null) return;
+    const bootstrap = bankAuthority().cueLists[0] ?? null;
+    if (bootstrap) setCueListId(bootstrap.id);
+  });
+  const pageExecutors = createMemo(() => bankAuthority().issue === null
+    ? bankAuthority().executors.filter((executor) => executor.page === page())
+    : []);
   const nextSlot = createMemo(() => {
     const used = new Set(pageExecutors().map((executor) => executor.slot));
     for (let slot = 1; slot <= 16; slot += 1) if (!used.has(slot)) return slot;
@@ -35,15 +42,31 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
   });
 
   const activeCueFor = (executor: PlaybackExecutorSummary) => {
-    const cueList = props.cueLists.find((candidate) => candidate.id === executor.cue_list_id);
-    return props.cues.find((cue) => cue.id === cueList?.active_cue_id);
+    const authority = bankAuthority();
+    if (authority.issue) return undefined;
+    const cueList = authority.cueListById.get(executor.cue_list_id);
+    return cueList?.active_cue_id == null
+      ? undefined
+      : authority.cueById.get(cueList.active_cue_id);
   };
 
   return (
     <section class="playbackExecutorPanel" aria-label="Playback executors">
+      <Show
+        when={bankAuthority().issue === null}
+        fallback={
+          <p
+            class="empty"
+            role="alert"
+            data-bank-authority-unavailable={bankAuthority().issue?.kind}
+          >
+            {bankAuthority().issue ? bankAuthorityIssueMessage(bankAuthority().issue!) : ""}
+          </p>
+        }
+      >
       <div class="programmerSummary">
         <strong>Playback</strong>
-        <span>{props.executors.length} executor(s) · Page {page()}</span>
+        <span>{bankAuthority().executors.length} executor(s) · Page {page()}</span>
         <span class="status">HTP MASTERS</span>
       </div>
       <div class="playbackMasterControl">
@@ -68,23 +91,31 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
       <div class="playbackExecutorCreate">
         <label>Label<input maxlength="64" value={label()} onInput={(event) => setLabel(event.currentTarget.value)} /></label>
         <label>
-          Cue List
-          <select value={cueListId()} onInput={(event) => setCueListId(Number(event.currentTarget.value))}>
+          Bank
+          <select
+            value={cueListId() ?? ""}
+            disabled={selectedCreateCueList() === null}
+            onInput={(event) => {
+              const id = Number(event.currentTarget.value);
+              if (bankAuthority().cueListById.has(id)) setCueListId(id);
+            }}
+          >
             <For each={displayCueLists()}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
           </select>
         </label>
         <button
-          disabled={!label().trim() || nextSlot() === null}
+          disabled={!label().trim() || nextSlot() === null || selectedCreateCueList() === null}
           onClick={() => {
             const slot = nextSlot();
-            if (slot !== null) void props.onCreate(label(), cueListId(), page(), slot);
+            const cueList = selectedCreateCueList();
+            if (slot !== null && cueList) void props.onCreate(label(), cueList.id, page(), slot);
           }}
         >
           Add Fader{nextSlot() === null ? " (Page Full)" : ` · Slot ${nextSlot()}`}
         </button>
       </div>
       <div class="playbackExecutorGrid">
-        <Show when={pageExecutors().length > 0} fallback={<p class="empty">No faders on this page. Add a Cue List assignment above.</p>}>
+        <Show when={pageExecutors().length > 0} fallback={<p class="empty">No faders on this page. Add a Bank assignment above.</p>}>
           <For each={pageExecutors()}>
             {(executor) => {
               const activeCue = () => activeCueFor(executor);
@@ -100,7 +131,7 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
                     />
                   </div>
                   <select
-                    aria-label={`Executor ${executor.slot} Cue List`}
+                    aria-label={`Executor ${executor.slot} Bank`}
                     value={executor.cue_list_id}
                     onInput={(event) => void props.onUpdate(executor, { cue_list_id: Number(event.currentTarget.value) })}
                   >
@@ -132,7 +163,8 @@ export function PlaybackExecutorPanel(props: PlaybackExecutorPanelProps) {
           </For>
         </Show>
       </div>
-      <p class="hint">Faders assigned to the same Cue List share its Back/GO position. Their levels merge HTP; Playback Master scales all Cue-origin intensity without reducing Programmer overrides.</p>
+      <p class="hint">Faders assigned to the same Bank share its Back/GO position. Their levels merge HTP; Playback Master scales all Scene-origin intensity without reducing Programmer overrides.</p>
+      </Show>
     </section>
   );
 }

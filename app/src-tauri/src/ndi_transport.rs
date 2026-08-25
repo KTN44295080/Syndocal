@@ -13,18 +13,23 @@ use std::sync::{
 };
 
 #[cfg(any(feature = "ndi", test))]
-use engine::{EngineHandle, TimelineFollowVideoRenderSnapshot};
+use engine::EngineHandle;
 #[cfg(feature = "ndi")]
 use engine::{
     OutputOwnershipActivation, OutputOwnershipCreationLease, OutputOwnershipTeardownLease,
 };
-#[cfg(any(feature = "ndi", test))]
+#[cfg(test)]
+use engine::{TimelineFollowVideoRenderSnapshot, VideoPresentationSample};
+#[cfg(test)]
 use protocol::OutputOwnershipState;
 #[cfg(any(feature = "ndi", test))]
+use protocol::TimelineFollowSettlementAckResult;
+#[cfg(test)]
+use protocol::VideoOutputId;
+#[cfg(test)]
 use protocol::{
-    TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
-    TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain, VideoEffectScope,
-    VideoOutputId, VideoTransitionEffectOwner,
+    TimelineFollowSettlementAck, TimelineFollowSettlementConsumerId,
+    TimelineFollowSettlementDomain, VideoEffectScope, VideoTransitionEffectOwner,
 };
 use protocol::{VideoLayerId, VideoSourceKind};
 
@@ -37,6 +42,21 @@ static NDI_WORKER_SPAWN_FAILURE: AtomicBool = AtomicBool::new(false);
 #[cfg(all(test, feature = "ndi"))]
 static NDI_OUTPUT_CONSTRUCTION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
+/// Serializes every test that touches the process-global worker-spawn hook
+/// statics; the Spout suite guards the identical pattern with its own lock.
+#[cfg(all(test, feature = "ndi"))]
+static NDI_TEST_HOOK_LOCK: Mutex<()> = Mutex::new(());
+
+// One shared FC-28 authority fence, bounded-settlement watchdog, and Follow
+// render/settlement source for both physical transports. Both parents include
+// the same file without a main.rs declaration; backend differences enter only
+// as parameters. See the module docs in physical_output_fence.rs.
+#[cfg(any(feature = "ndi", test))]
+#[path = "physical_output_fence.rs"]
+mod physical_output_fence;
+#[cfg(any(feature = "ndi", test))]
+use physical_output_fence::*;
+
 #[cfg(any(feature = "ndi", test))]
 fn ndi_output_effect_render_context(
     snapshot: &protocol::EngineSnapshot,
@@ -46,568 +66,6 @@ fn ndi_output_effect_render_context(
         clip_runtime: &snapshot.video_clip_runtime,
         project_render_epoch,
     }
-}
-
-#[cfg(feature = "ndi")]
-const TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL: Duration = Duration::from_secs(1);
-#[cfg(any(feature = "ndi", test))]
-const TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY: Duration = Duration::from_millis(25);
-#[cfg(any(feature = "ndi", test))]
-const TIMELINE_FOLLOW_TERMINAL_RECEIPT_RETRIES: u8 = 3;
-
-#[cfg(any(feature = "ndi", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TimelineFollowOutputFrameKey {
-    pub(crate) epoch: u64,
-    pub(crate) generation: u64,
-    pub(crate) output_id: VideoOutputId,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-/// Engine settlement identity intentionally excludes presentation size.
-/// Resizing a live output cannot create a second video consumer for a Follow
-/// generation, while a cached frame must remain size-specific.
-#[cfg(any(feature = "ndi", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TimelineFollowOutputAckKey {
-    epoch: u64,
-    generation: u64,
-    output_id: VideoOutputId,
-}
-
-#[cfg(any(feature = "ndi", test))]
-impl TimelineFollowOutputFrameKey {
-    fn ack_key(self) -> TimelineFollowOutputAckKey {
-        TimelineFollowOutputAckKey {
-            epoch: self.epoch,
-            generation: self.generation,
-            output_id: self.output_id,
-        }
-    }
-
-    fn settlement_ack(
-        self,
-        result: TimelineFollowSettlementAckResult,
-    ) -> TimelineFollowSettlementAck {
-        TimelineFollowSettlementAck {
-            epoch: self.epoch,
-            generation: self.generation,
-            domain: TimelineFollowSettlementDomain::Video,
-            consumer_id: TimelineFollowSettlementConsumerId::VideoOutput {
-                output_id: self.output_id,
-            },
-            result,
-        }
-    }
-}
-
-#[cfg(any(feature = "ndi", test))]
-#[derive(Debug, Clone)]
-struct PendingTimelineFollowSettlementAck {
-    ack: TimelineFollowSettlementAck,
-    retry_not_before: Instant,
-}
-
-/// Renderer-local continuity and acknowledgement state for one production
-/// output worker. A publication error retains the exact first result so a
-/// reply-loss retry can never change Fault into Applied for the same consumer.
-#[cfg(any(feature = "ndi", test))]
-#[derive(Debug, Default)]
-struct TimelineFollowOutputState {
-    active_ack_key: Option<TimelineFollowOutputAckKey>,
-    active_frame_key: Option<TimelineFollowOutputFrameKey>,
-    last_valid: Option<(TimelineFollowOutputFrameKey, video::VideoFrame)>,
-    pending_ack: Option<PendingTimelineFollowSettlementAck>,
-    published_ack: Option<TimelineFollowSettlementAck>,
-}
-
-#[cfg(any(feature = "ndi", test))]
-impl TimelineFollowOutputState {
-    /// Follow acknowledgement identity excludes size, but cached frames do
-    /// not. A generation/output rollover fences stale ACK retries; a resize
-    /// only retires last-valid continuity. Within one ACK identity, the first
-    /// physical terminal result remains exact for reply-loss retry.
-    fn observe_key(&mut self, key: TimelineFollowOutputFrameKey) {
-        let ack_key = key.ack_key();
-        if self.active_ack_key != Some(ack_key) {
-            self.active_ack_key = Some(ack_key);
-            self.pending_ack = None;
-            self.published_ack = None;
-        }
-        if self.active_frame_key != Some(key) {
-            self.active_frame_key = Some(key);
-            self.last_valid = None;
-        }
-    }
-
-    fn last_valid(&self, key: TimelineFollowOutputFrameKey) -> Option<&video::VideoFrame> {
-        self.last_valid
-            .as_ref()
-            .and_then(|(cached_key, frame)| (*cached_key == key).then_some(frame))
-    }
-
-    fn update_last_valid(&mut self, key: TimelineFollowOutputFrameKey, frame: video::VideoFrame) {
-        self.observe_key(key);
-        self.last_valid = Some((key, frame));
-    }
-
-    fn queue_ack(
-        &mut self,
-        key: TimelineFollowOutputFrameKey,
-        result: TimelineFollowSettlementAckResult,
-        now: Instant,
-    ) {
-        self.observe_key(key);
-        let ack = key.settlement_ack(result);
-        if self.published_for(key) || self.pending_ack.is_some() {
-            return;
-        }
-        self.pending_ack = Some(PendingTimelineFollowSettlementAck {
-            ack,
-            retry_not_before: now,
-        });
-    }
-
-    fn try_publish_ack(
-        &mut self,
-        now: Instant,
-        mut publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
-    ) -> Result<bool, String> {
-        let Some(pending) = self.pending_ack.as_mut() else {
-            return Ok(false);
-        };
-        if now < pending.retry_not_before {
-            return Ok(false);
-        }
-        let ack = pending.ack.clone();
-        match publish(&ack) {
-            Ok(()) => {
-                self.published_ack = Some(ack);
-                self.pending_ack = None;
-                Ok(true)
-            }
-            Err(error) => {
-                pending.retry_not_before = now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY;
-                Err(error)
-            }
-        }
-    }
-
-    fn published_for(&self, key: TimelineFollowOutputFrameKey) -> bool {
-        let ack_key = key.ack_key();
-        self.published_ack.as_ref().is_some_and(|ack| {
-            ack.epoch == ack_key.epoch
-                && ack.generation == ack_key.generation
-                && ack.consumer_id
-                    == (TimelineFollowSettlementConsumerId::VideoOutput {
-                        output_id: ack_key.output_id,
-                    })
-        })
-    }
-}
-
-#[cfg(any(feature = "ndi", test))]
-#[derive(Debug)]
-enum TimelineFollowOutputRenderDecision {
-    Frame {
-        key: TimelineFollowOutputFrameKey,
-        frame: video::VideoFrame,
-        result: TimelineFollowSettlementAckResult,
-    },
-    NotApplicable {
-        key: TimelineFollowOutputFrameKey,
-        reason: String,
-    },
-}
-
-#[cfg(any(feature = "ndi", test))]
-fn timeline_follow_output_config(
-    snapshot: &protocol::VideoSnapshot,
-    output_id: VideoOutputId,
-) -> Result<&protocol::VideoOutputSummary, String> {
-    snapshot
-        .outputs
-        .iter()
-        .find(|output| output.id == output_id)
-        .ok_or_else(|| format!("Timeline Follow output {output_id} was not found"))
-}
-
-#[cfg(any(feature = "ndi", test))]
-fn timeline_follow_render_fault(
-    label: &str,
-    evidence: &video::VideoOutputRenderEvidence,
-) -> Option<String> {
-    (evidence.freshness != video::VideoOutputRenderFreshness::Fresh).then(|| {
-        evidence.error.clone().unwrap_or_else(|| {
-            format!(
-                "Timeline Follow {label} output used {:?} render evidence",
-                evidence.freshness
-            )
-        })
-    })
-}
-
-/// The ownership permit prevents a transition while held, so sampling status
-/// immediately after acquisition binds the permit to its exact ownership
-/// epoch. A captured Follow frame from another epoch is never sendable.
-#[cfg(any(feature = "ndi", test))]
-fn timeline_follow_epoch_matches_ready_owner(
-    engine: &EngineHandle,
-    key: TimelineFollowOutputFrameKey,
-) -> bool {
-    if key.epoch == 0 {
-        return true;
-    }
-    let ownership = engine.output_ownership_status();
-    ownership.video_allowed
-        && ownership.state == OutputOwnershipState::Ready
-        && ownership.epoch == key.epoch
-}
-
-/// Render the exact engine-owned Follow inputs through each snapshot's full
-/// output path, then apply the one canonical Follow Transition chain. The
-/// returned settlement result is intentionally independent from physical send;
-/// callers may publish Applied only after their SDK send succeeds.
-#[cfg(any(feature = "ndi", test))]
-fn render_timeline_follow_output<P: video::VideoFrameProvider>(
-    renderer: &mut video::VideoPreviewRenderer<P>,
-    engine_snapshot: &protocol::EngineSnapshot,
-    follow: &TimelineFollowVideoRenderSnapshot,
-    output_id: VideoOutputId,
-    state: &mut TimelineFollowOutputState,
-) -> Result<TimelineFollowOutputRenderDecision, String> {
-    let outgoing_output = timeline_follow_output_config(&follow.outgoing_video, output_id)?;
-    let incoming_output = timeline_follow_output_config(&follow.incoming_video, output_id)?;
-    if outgoing_output.width != incoming_output.width
-        || outgoing_output.height != incoming_output.height
-    {
-        return Err(format!(
-            "Timeline Follow output {output_id} dimensions diverged: outgoing {}x{}, incoming {}x{}",
-            outgoing_output.width,
-            outgoing_output.height,
-            incoming_output.width,
-            incoming_output.height
-        ));
-    }
-    let key = TimelineFollowOutputFrameKey {
-        epoch: follow.epoch,
-        generation: follow.generation,
-        output_id,
-        width: outgoing_output.width,
-        height: outgoing_output.height,
-    };
-    state.observe_key(key);
-    if !outgoing_output.enabled || !incoming_output.enabled {
-        return Ok(TimelineFollowOutputRenderDecision::NotApplicable {
-            key,
-            reason: format!("Timeline Follow output {output_id} is disabled"),
-        });
-    }
-
-    let context = video::VideoEffectRenderContext {
-        clip_runtime: &engine_snapshot.video_clip_runtime,
-        project_render_epoch: follow.epoch,
-    };
-    let outgoing = renderer
-        .render_output_with_effects_and_transitions_evidenced(
-            &follow.outgoing_video,
-            context,
-            &engine_snapshot.video_transition_runtime,
-            output_id,
-        )
-        .map_err(|error| format!("Timeline Follow outgoing output render failed: {error:?}"))?;
-    let incoming = renderer
-        .render_output_with_effects_and_transitions_evidenced(
-            &follow.incoming_video,
-            context,
-            &engine_snapshot.video_transition_runtime,
-            output_id,
-        )
-        .map_err(|error| format!("Timeline Follow incoming output render failed: {error:?}"))?;
-
-    let transition_scope = VideoEffectScope::Transition {
-        owner: VideoTransitionEffectOwner::TimelineFollow {
-            source_timeline_id: follow.source_timeline_id,
-        },
-    };
-    let transition_chain = follow
-        .transition_effect_chain
-        .as_ref()
-        .map(|chain| {
-            if chain.scope != transition_scope {
-                return Err(format!(
-                    "Timeline Follow transition chain {:?} has the wrong owner",
-                    chain.id
-                ));
-            }
-            let mut catalog = protocol::VideoSnapshot::default();
-            catalog.effect_chains.push(chain.clone());
-            video::resolve_video_effect_chain(&catalog, &transition_scope)
-                .map_err(|fault| {
-                    format!(
-                        "Timeline Follow transition chain is invalid: {}",
-                        fault.message
-                    )
-                })?
-                .ok_or_else(|| "Timeline Follow transition chain did not resolve".to_string())
-        })
-        .transpose()?;
-
-    let combined = renderer
-        .render_follow_output_transition_rgba8(video::VideoFollowOutputTransitionRequest {
-            outgoing: &outgoing.frame,
-            incoming: &incoming.frame,
-            kind: follow.kind,
-            curve: follow.curve,
-            progress_millis: follow.progress_millis,
-            source_timeline_id: follow.source_timeline_id,
-            transition_chain: transition_chain.as_ref(),
-            last_valid: state.last_valid(key),
-        })
-        .map_err(|error| format!("Timeline Follow output combine failed: {error:?}"))?;
-
-    let mut faults = Vec::new();
-    if let Some(error) = timeline_follow_render_fault("outgoing", &outgoing.evidence) {
-        faults.push(error);
-    }
-    if let Some(error) = timeline_follow_render_fault("incoming", &incoming.evidence) {
-        faults.push(error);
-    }
-    if combined.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {
-        faults.push(combined.evidence.error.clone().unwrap_or_else(|| {
-            format!(
-                "Timeline Follow transition used {:?} render evidence",
-                combined.evidence.freshness
-            )
-        }));
-    }
-    let result = if faults.is_empty() {
-        state.update_last_valid(key, combined.frame.clone());
-        TimelineFollowSettlementAckResult::Applied
-    } else {
-        TimelineFollowSettlementAckResult::Fault {
-            fault: faults.join("; "),
-        }
-    };
-    Ok(TimelineFollowOutputRenderDecision::Frame {
-        key,
-        frame: combined.frame,
-        result,
-    })
-}
-
-#[cfg(feature = "ndi")]
-fn timeline_follow_output_key(
-    follow: &TimelineFollowVideoRenderSnapshot,
-    output_id: VideoOutputId,
-) -> TimelineFollowOutputFrameKey {
-    let (width, height) = follow
-        .outgoing_video
-        .outputs
-        .iter()
-        .find(|output| output.id == output_id)
-        .map(|output| (output.width, output.height))
-        .unwrap_or((0, 0));
-    TimelineFollowOutputFrameKey {
-        epoch: follow.epoch,
-        generation: follow.generation,
-        output_id,
-        width,
-        height,
-    }
-}
-
-#[cfg(feature = "ndi")]
-fn timeline_follow_not_applicable(
-    follow: &TimelineFollowVideoRenderSnapshot,
-    output_id: VideoOutputId,
-    reason: impl Into<String>,
-) -> TimelineFollowOutputRenderDecision {
-    TimelineFollowOutputRenderDecision::NotApplicable {
-        key: timeline_follow_output_key(follow, output_id),
-        reason: reason.into(),
-    }
-}
-
-#[cfg(any(feature = "ndi", test))]
-fn timeline_follow_result_after_physical_send(
-    rendered: TimelineFollowSettlementAckResult,
-    send_error: Option<&str>,
-    backend: &str,
-    output_id: VideoOutputId,
-) -> TimelineFollowSettlementAckResult {
-    match send_error {
-        Some(error) => TimelineFollowSettlementAckResult::Fault {
-            fault: format!("{backend} output route {output_id} send failed: {error}"),
-        },
-        None => rendered,
-    }
-}
-
-#[cfg(feature = "ndi")]
-fn publish_timeline_follow_output_result(
-    engine: &EngineHandle,
-    state: &mut TimelineFollowOutputState,
-    key: TimelineFollowOutputFrameKey,
-    result: TimelineFollowSettlementAckResult,
-) -> Result<bool, String> {
-    let now = Instant::now();
-    state.queue_ack(key, result, now);
-    state.try_publish_ack(now, |ack| {
-        engine.acknowledge_timeline_follow_settlement_published(
-            ack.clone(),
-            Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
-        )
-    })
-}
-
-#[cfg(feature = "ndi")]
-fn publish_timeline_follow_output_result_until_resolved(
-    engine: &EngineHandle,
-    state: &mut TimelineFollowOutputState,
-    key: TimelineFollowOutputFrameKey,
-    result: TimelineFollowSettlementAckResult,
-    should_stop: impl FnMut() -> bool,
-) {
-    publish_timeline_follow_output_result_until_resolved_with(
-        engine,
-        state,
-        key,
-        result,
-        should_stop,
-        |ack| {
-            engine.acknowledge_timeline_follow_settlement_published(
-                ack.clone(),
-                Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
-            )
-        },
-    );
-}
-
-/// An issued acknowledgement may have settled Follow even if the caller lost
-/// its reply. Replays are exact and bounded after that terminal transition.
-#[cfg(any(feature = "ndi", test))]
-fn publish_timeline_follow_output_result_until_resolved_with(
-    engine: &EngineHandle,
-    state: &mut TimelineFollowOutputState,
-    key: TimelineFollowOutputFrameKey,
-    result: TimelineFollowSettlementAckResult,
-    mut should_stop: impl FnMut() -> bool,
-    mut publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
-) {
-    let mut issued_publish = false;
-    let mut terminal_receipt_retries = 0;
-    loop {
-        let now = Instant::now();
-        state.queue_ack(key, result.clone(), now);
-        let _ = state.try_publish_ack(now, |ack| {
-            issued_publish = true;
-            publish(ack)
-        });
-        if state.published_for(key) || should_stop() {
-            return;
-        }
-        if engine.output_ownership_status().epoch != key.epoch {
-            return;
-        }
-        match engine.timeline_follow_video_render_snapshot() {
-            Some(follow) if follow.generation == key.generation => {}
-            Some(_) => return,
-            None if issued_publish
-                && terminal_receipt_retries < TIMELINE_FOLLOW_TERMINAL_RECEIPT_RETRIES =>
-            {
-                terminal_receipt_retries += 1;
-            }
-            None => return,
-        }
-        std::thread::sleep(TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY);
-    }
-}
-
-/// Close output admission before an acknowledgement retry can block. The
-/// caller retains the returned lease through its physical teardown path.
-#[cfg(any(feature = "ndi", test))]
-fn fence_timeline_follow_fault_before_ack(
-    engine: &EngineHandle,
-    state: &mut TimelineFollowOutputState,
-    key: TimelineFollowOutputFrameKey,
-    fault: String,
-) -> (
-    engine::OutputOwnershipTeardownLease,
-    TimelineFollowOutputFrameKey,
-) {
-    let failure_lease = engine.begin_output_ownership_failure_fence(fault.clone());
-    // The engine validates acknowledgements against the *current* ownership
-    // epoch. Failure fencing advances it, so retire the pre-fence identity
-    // before queuing the same Follow generation/output Fault.
-    let failed_key = TimelineFollowOutputFrameKey {
-        epoch: engine.output_ownership_status().epoch,
-        ..key
-    };
-    state.queue_ack(
-        failed_key,
-        TimelineFollowSettlementAckResult::Fault { fault },
-        Instant::now(),
-    );
-    (failure_lease, failed_key)
-}
-
-#[cfg(any(feature = "ndi", test))]
-#[derive(Default)]
-struct NdiStartupFailureFenceState {
-    epoch: Option<u64>,
-    lease: Option<engine::OutputOwnershipTeardownLease>,
-}
-
-#[cfg(any(feature = "ndi", test))]
-type NdiStartupFailureLeaseSlot = Arc<Mutex<NdiStartupFailureFenceState>>;
-
-#[cfg(any(feature = "ndi", test))]
-fn ensure_ndi_startup_failure_fence(
-    engine: &EngineHandle,
-    slot: &NdiStartupFailureLeaseSlot,
-    reason: impl Into<String>,
-) -> u64 {
-    let mut state = match slot.lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if state.epoch.is_none() {
-        state.lease = Some(engine.begin_output_ownership_failure_fence(reason));
-        state.epoch = Some(engine.output_ownership_status().epoch);
-    }
-    state.epoch.expect("startup failure fence epoch must exist")
-}
-
-#[cfg(any(feature = "ndi", test))]
-fn take_ndi_startup_failure_lease(
-    slot: &NdiStartupFailureLeaseSlot,
-) -> Option<engine::OutputOwnershipTeardownLease> {
-    match slot.lock() {
-        Ok(mut state) => state.lease.take(),
-        Err(poisoned) => poisoned.into_inner().lease.take(),
-    }
-}
-
-#[cfg(any(feature = "ndi", test))]
-fn fence_timeline_follow_fault_before_ack_in_ndi_startup(
-    engine: &EngineHandle,
-    state: &mut TimelineFollowOutputState,
-    key: TimelineFollowOutputFrameKey,
-    fault: String,
-    slot: &NdiStartupFailureLeaseSlot,
-) -> TimelineFollowOutputFrameKey {
-    let failed_key = TimelineFollowOutputFrameKey {
-        epoch: ensure_ndi_startup_failure_fence(engine, slot, fault.clone()),
-        ..key
-    };
-    state.queue_ack(
-        failed_key,
-        TimelineFollowSettlementAckResult::Fault { fault },
-        Instant::now(),
-    );
-    failed_key
 }
 
 pub struct NdiAwareVideoFrameDecoder {
@@ -1245,8 +703,8 @@ impl NdiOutputWorker {
         let (start_sender, start_receiver) = mpsc::sync_channel::<NdiOutputStartDecision>(1);
         let creation_lease_slot: NdiCreationLeaseSlot = Arc::new(Mutex::new(None));
         let worker_creation_lease_slot = Arc::clone(&creation_lease_slot);
-        let startup_failure_lease: NdiStartupFailureLeaseSlot =
-            Arc::new(Mutex::new(NdiStartupFailureFenceState::default()));
+        let startup_failure_lease: StartupFailureLeaseSlot =
+            Arc::new(Mutex::new(StartupFailureFenceState::default()));
         let worker_startup_failure_lease = Arc::clone(&startup_failure_lease);
         let parent_engine = engine.clone();
         let worker = spawn_ndi_output_worker(output_id, move || {
@@ -1255,14 +713,15 @@ impl NdiOutputWorker {
                 Ok(lease) => lease,
                 Err(error) => {
                     if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
-                        let key = timeline_follow_output_key(&follow, output_id);
-                        publish_timeline_follow_output_result_until_resolved(
-                            &engine,
-                            &mut follow_output_state,
-                            key,
-                            TimelineFollowSettlementAckResult::NotApplicable,
-                            || worker_stop.load(Ordering::Acquire),
-                        );
+                        if let Ok(key) = timeline_follow_output_key(&follow, output_id) {
+                            publish_timeline_follow_output_result_until_resolved(
+                                &engine,
+                                &mut follow_output_state,
+                                key,
+                                TimelineFollowSettlementAckResult::NotApplicable,
+                                || worker_stop.load(Ordering::Acquire),
+                            );
+                        }
                     }
                     let _ = startup_sender.send(Err(error.clone()));
                     return Err(NdiOutputWorkerStopError {
@@ -1285,25 +744,35 @@ impl NdiOutputWorker {
                     // Creation is still admitted here. Fence it before an ACK
                     // retry can wait so no competing output can enter.
                     if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
-                        let key = timeline_follow_output_key(&follow, output_id);
-                        let failed_key = fence_timeline_follow_fault_before_ack_in_ndi_startup(
-                            &engine,
-                            &mut follow_output_state,
-                            key,
-                            fault.clone(),
-                            &worker_startup_failure_lease,
-                        );
-                        publish_timeline_follow_output_result_until_resolved(
-                            &engine,
-                            &mut follow_output_state,
-                            failed_key,
-                            TimelineFollowSettlementAckResult::Fault {
-                                fault: fault.clone(),
-                            },
-                            || worker_stop.load(Ordering::Acquire),
-                        );
+                        match timeline_follow_output_key(&follow, output_id) {
+                            Ok(key) => {
+                                let failed_key = fence_timeline_follow_fault_before_ack_in_startup(
+                                    &engine,
+                                    &mut follow_output_state,
+                                    key,
+                                    fault.clone(),
+                                    &worker_startup_failure_lease,
+                                );
+                                publish_timeline_follow_output_result_until_resolved(
+                                    &engine,
+                                    &mut follow_output_state,
+                                    failed_key,
+                                    TimelineFollowSettlementAckResult::Fault {
+                                        fault: fault.clone(),
+                                    },
+                                    || worker_stop.load(Ordering::Acquire),
+                                );
+                            }
+                            Err(key_error) => {
+                                let _ = ensure_startup_failure_fence(
+                                    &engine,
+                                    &worker_startup_failure_lease,
+                                    format!("{fault}; {key_error}"),
+                                );
+                            }
+                        }
                     } else {
-                        ensure_ndi_startup_failure_fence(
+                        ensure_startup_failure_fence(
                             &engine,
                             &worker_startup_failure_lease,
                             fault.clone(),
@@ -1367,191 +836,422 @@ impl NdiOutputWorker {
             let mut failure_lease = None;
             while !worker_stop.load(Ordering::Acquire) {
                 let started = Instant::now();
-                let project_render_epoch = engine.output_ownership_status().epoch;
-                let snapshot = engine.snapshot();
+                let presentation_sample = engine.video_presentation_sample();
+                let snapshot = &presentation_sample.snapshot;
+                let ownership = engine.output_ownership_status();
+                let blackout_authority = engine.safety_blackout_authority();
                 renderer
                     .frame_provider_mut()
                     .set_bpm(Some(snapshot.clock.bpm));
                 let follow = engine.timeline_follow_video_render_snapshot();
-                let rendered = match follow.as_ref() {
-                    Some(follow) => {
-                        let ownership = engine.output_ownership_status();
-                        if !ownership.video_allowed
-                            || ownership.state != OutputOwnershipState::Ready
-                        {
-                            Ok(timeline_follow_not_applicable(
-                                follow,
-                                output_id,
-                                "NDI output is not owned by this machine",
+                let rendered = match capture_output_presentation_authority(
+                    "NDI",
+                    protocol::VideoOutputKind::NdiSender,
+                    &presentation_sample,
+                    ownership,
+                    blackout_authority,
+                    output_id,
+                    &endpoint_name,
+                )
+                .and_then(|authority| {
+                    revalidate_output_presentation_authority(&engine, "NDI", &authority)?;
+                    Ok(authority)
+                }) {
+                    Ok(authority) => match follow.as_ref() {
+                        Some(follow) if follow.epoch != authority.ownership_epoch() => {
+                            let retry_key = timeline_follow_output_key(follow, output_id).ok();
+                            Ok((
+                                TimelineFollowOutputRenderDecision::Retry {
+                                    reason: "NDI Timeline Follow authority epoch changed before render"
+                                        .to_string(),
+                                    key: retry_key,
+                                },
+                                None,
                             ))
-                        } else {
-                            render_timeline_follow_output(
+                        }
+                        Some(follow) if authority.project_blackout() => {
+                            // A current safety blackout is a canonical output
+                            // result, not a property of either historical
+                            // Follow snapshot. Do not inspect or render them.
+                            render_timeline_follow_hard_blackout_output(follow, &authority)
+                                .map(|decision| (decision, Some(authority)))
+                        }
+                        Some(follow) => match validate_follow_output_authority("NDI", follow, &authority)
+                        {
+                            Ok(()) => render_timeline_follow_output(
                                 &mut renderer,
-                                &snapshot,
+                                snapshot,
                                 follow,
                                 output_id,
                                 &mut follow_output_state,
                             )
-                        }
-                    }
-                    None => renderer
-                        .render_output_with_effects_and_transitions(
-                            &snapshot.video,
-                            ndi_output_effect_render_context(&snapshot, project_render_epoch),
-                            &snapshot.video_transition_runtime,
-                            output_id,
-                        )
-                        .map(|frame| TimelineFollowOutputRenderDecision::Frame {
-                            key: TimelineFollowOutputFrameKey {
-                                epoch: 0,
-                                generation: 0,
+                            .map(|decision| (decision, Some(authority))),
+                            Err(reason) => {
+                                let retry_key =
+                                    timeline_follow_output_key(follow, output_id).ok();
+                                Ok((
+                                    TimelineFollowOutputRenderDecision::Retry {
+                                        reason,
+                                        key: retry_key,
+                                    },
+                                    None,
+                                ))
+                            }
+                        },
+                        None => renderer
+                            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                                &snapshot.video,
+                                ndi_output_effect_render_context(
+                                    snapshot,
+                                    authority.ownership_epoch(),
+                                ),
+                                &snapshot.video_transition_runtime,
                                 output_id,
-                                width: frame.width,
-                                height: frame.height,
-                            },
-                            frame,
-                            result: TimelineFollowSettlementAckResult::Applied,
-                        })
-                        .map_err(|error| format!("{error:?}")),
+                                authority.output_summary().width,
+                                authority.output_summary().height,
+                            )
+                            .map_err(|error| {
+                                format!("NDI output {output_id} artistic render failed: {error:?}")
+                            })
+                            .and_then(|result| {
+                                materialize_output_artistic_result(result, &authority)
+                            })
+                            .map(|frame| {
+                                (
+                                    TimelineFollowOutputRenderDecision::Frame {
+                                        key: TimelineFollowOutputFrameKey {
+                                            epoch: authority.ownership_epoch(),
+                                            generation: 0,
+                                            output_id,
+                                            width: frame.width,
+                                            height: frame.height,
+                                        },
+                                        frame,
+                                        result: TimelineFollowSettlementAckResult::Applied,
+                                        follow_identity: None,
+                                    },
+                                    Some(authority),
+                                )
+                            }),
+                    },
+                    Err(error) => match follow.as_ref() {
+                        Some(follow) => {
+                            let retry_key = timeline_follow_output_key(follow, output_id).ok();
+                            Ok((
+                                TimelineFollowOutputRenderDecision::Retry {
+                                    reason: error,
+                                    key: retry_key,
+                                },
+                                None,
+                            ))
+                        }
+                        None => Err(error),
+                    },
                 };
                 let result = match rendered {
-                    Ok(TimelineFollowOutputRenderDecision::NotApplicable { key, reason }) => {
-                        let _ = publish_timeline_follow_output_result(
-                            &engine,
-                            &mut follow_output_state,
+                    Ok((TimelineFollowOutputRenderDecision::NotApplicable { key, reason }, _)) => {
+                        // This transport cannot prove an atomic engine video
+                        // quorum, so it may not turn a locally observed
+                        // NotApplicable sample into a terminal Follow ACK.
+                        // Discard it and reacquire on the next iteration, but
+                        // only within the bounded-settlement deadline: a hold
+                        // that never admits must fault visibly.
+                        if follow_output_state.tick_follow_unresolved(
                             key,
-                            TimelineFollowSettlementAckResult::NotApplicable,
-                        );
-                        let _ = reason;
-                        Ok(())
+                            Instant::now(),
+                            &reason,
+                        ) {
+                            let (_, failed_key, fault) = fence_timeline_follow_settlement_deadline(
+                                &engine,
+                                &mut follow_output_state,
+                                key,
+                                &reason,
+                            );
+                            publish_timeline_follow_output_result_until_resolved(
+                                &engine,
+                                &mut follow_output_state,
+                                failed_key,
+                                TimelineFollowSettlementAckResult::Fault { fault: fault.clone() },
+                                || worker_stop.load(Ordering::Acquire),
+                            );
+                            Err(fault)
+                        } else {
+                            Ok(())
+                        }
                     }
-                    Ok(TimelineFollowOutputRenderDecision::Frame {
-                        key,
-                        frame,
-                        result: follow_result,
-                    }) => {
-                        let _permit = loop {
+                    Ok((TimelineFollowOutputRenderDecision::Retry { reason, key }, _)) => {
+                        // A route/ownership/Follow generation changed while
+                        // sampling. It is neither a physical-send fault nor a
+                        // NotApplicable acknowledgement, but the same
+                        // generation may not stay unadmitted forever.
+                        let mut outcome = Ok(());
+                        if let Some(key) = key {
+                            if follow_output_state.tick_follow_unresolved(
+                                key,
+                                Instant::now(),
+                                &reason,
+                            ) {
+                                let (_, failed_key, fault) =
+                                    fence_timeline_follow_settlement_deadline(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        key,
+                                        &reason,
+                                    );
+                                publish_timeline_follow_output_result_until_resolved(
+                                    &engine,
+                                    &mut follow_output_state,
+                                    failed_key,
+                                    TimelineFollowSettlementAckResult::Fault {
+                                        fault: fault.clone(),
+                                    },
+                                    || worker_stop.load(Ordering::Acquire),
+                                );
+                                outcome = Err(fault);
+                            }
+                        }
+                        outcome
+                    }
+                    Ok((
+                        TimelineFollowOutputRenderDecision::Frame {
+                            key,
+                            frame,
+                            result: follow_result,
+                            follow_identity,
+                        },
+                        Some(authority),
+                    )) => {
+                        let admission_started = Instant::now();
+                        let permit_outcome = loop {
                             match engine.acquire_video_output() {
-                                Ok(permit) => break permit,
+                                Ok(permit) => break Ok(permit),
                                 Err(_) if worker_stop.load(Ordering::Acquire) => {
-                                    return Err(NdiOutputWorkerStopError {
+                                    break Err(NdiOutputWorkerStopError {
                                         message: "NDI output worker is stopping".to_string(),
                                         pending_teardown: None,
                                         resource_teardown_pending: false,
                                     });
                                 }
+                                Err(_) if admission_started.elapsed()
+                                    >= VIDEO_OUTPUT_ADMISSION_DEADLINE =>
+                                {
+                                    break Err(NdiOutputWorkerStopError {
+                                        message: format!(
+                                            "NDI output route {output_id} video ownership admission deadline ({VIDEO_OUTPUT_ADMISSION_DEADLINE:?}) exceeded"
+                                        ),
+                                        pending_teardown: None,
+                                        resource_teardown_pending: false,
+                                    });
+                                }
                                 Err(_) => {
-                                    if follow.is_some() {
-                                        let _ = publish_timeline_follow_output_result(
-                                            &engine,
-                                            &mut follow_output_state,
-                                            key,
-                                            TimelineFollowSettlementAckResult::NotApplicable,
-                                        );
-                                    }
+                                    // The ownership gate did not admit this
+                                    // frame. Without an engine-issued atomic
+                                    // quorum proof, do not acknowledge it.
+                                    // The bounded wait above turns a stuck
+                                    // gate into a visible fault instead of an
+                                    // indefinite silent hold.
                                     std::thread::sleep(Duration::from_millis(5));
                                 }
                             }
                         };
-                        if key.epoch != 0
-                            && !timeline_follow_epoch_matches_ready_owner(&engine, key)
-                        {
-                            let _ = publish_timeline_follow_output_result(
-                                &engine,
-                                &mut follow_output_state,
-                                key,
-                                TimelineFollowSettlementAckResult::NotApplicable,
-                            );
-                            continue;
-                        }
-                        let send_result = sender
-                            .send_rgba(&io::ndi::NdiRgbaFrame {
-                                width: frame.width,
-                                height: frame.height,
-                                frame_rate_n: 60,
-                                frame_rate_d: 1,
-                                rgba: frame.data,
-                            })
-                            .map_err(|error| error.to_string());
-                        let mut failed_follow_key = None;
-                        if let Err(error) = &send_result {
-                            // Hold the physical frame permit while fencing;
-                            // Follow Fault acknowledgement may retry below.
-                            if let Some(follow) = follow.as_ref() {
-                                let (lease, failed_key) = fence_timeline_follow_fault_before_ack(
+                        match permit_outcome {
+                            Ok(_permit) => {
+                                let send_result = send_frame_if_authorized(
+                                    "NDI",
                                     &engine,
-                                    &mut follow_output_state,
-                                    timeline_follow_output_key(follow, output_id),
-                                    format!("NDI output route {output_id} send failed: {error}"),
+                                    &authority,
+                                    follow_identity,
+                                    || {
+                                        sender
+                                            .send_rgba(&io::ndi::NdiRgbaFrame {
+                                                width: frame.width,
+                                                height: frame.height,
+                                                frame_rate_n: 60,
+                                                frame_rate_d: 1,
+                                                rgba: frame.data,
+                                            })
+                                            .map_err(|error| error.to_string())
+                                    },
                                 );
-                                failure_lease = Some(lease);
-                                failed_follow_key = Some(failed_key);
-                            } else {
-                                failure_lease = Some(engine.begin_output_ownership_failure_fence(
-                                    format!("NDI output route {output_id} send failed: {error}"),
-                                ));
+                                match send_result {
+                            Ok(()) => {
+                                if follow_identity.is_some() {
+                                    // The settled physical outcome for this
+                                    // generation was just achieved; clear its
+                                    // unresolved clock.
+                                    follow_output_state.note_follow_admitted();
+                                    let settlement = timeline_follow_result_after_physical_send(
+                                        follow_result,
+                                        None,
+                                        "NDI",
+                                        output_id,
+                                    );
+                                    if matches!(
+                                        &settlement,
+                                        TimelineFollowSettlementAckResult::Applied
+                                    ) {
+                                        // The physical send above succeeded.
+                                        // Keep its exact Applied ACK retryable
+                                        // through terminal presenter
+                                        // retirement/reply loss.
+                                        publish_timeline_follow_output_result_until_resolved(
+                                            &engine,
+                                            &mut follow_output_state,
+                                            key,
+                                            settlement,
+                                            || worker_stop.load(Ordering::Acquire),
+                                        );
+                                    } else {
+                                        let _ = publish_timeline_follow_output_result(
+                                            &engine,
+                                            &mut follow_output_state,
+                                            key,
+                                            settlement,
+                                        );
+                                    }
+                                }
+                                Ok(())
+                            }
+                            Err(PhysicalOutputSendError::Revoked(reason)) => {
+                                // The physical closure was not entered. A
+                                // fresh loop captures current authority (and,
+                                // for blackout, produces canonical hard
+                                // black) without a stale ACK or fault fence —
+                                // but the same generation may not be revoked
+                                // on every attempt forever.
+                                let mut outcome = Ok(());
+                                if follow_identity.is_some()
+                                    && follow_output_state.tick_follow_unresolved(
+                                        key,
+                                        Instant::now(),
+                                        &reason,
+                                    )
+                                {
+                                    let (lease, failed_key, fault) =
+                                        fence_timeline_follow_settlement_deadline(
+                                            &engine,
+                                            &mut follow_output_state,
+                                            key,
+                                            &reason,
+                                        );
+                                    failure_lease = Some(lease);
+                                    publish_timeline_follow_output_result_until_resolved(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        failed_key,
+                                        TimelineFollowSettlementAckResult::Fault {
+                                            fault: fault.clone(),
+                                        },
+                                        || worker_stop.load(Ordering::Acquire),
+                                    );
+                                    outcome = Err(fault);
+                                }
+                                outcome
+                            }
+                            Err(PhysicalOutputSendError::Sdk(error)) => {
+                                // Hold the physical frame permit while
+                                // fencing; a Follow Fault acknowledgement may
+                                // retry below.
+                                let failed_follow_key = if follow_identity.is_some() {
+                                    let (lease, failed_key) =
+                                        fence_timeline_follow_fault_before_ack(
+                                            &engine,
+                                            &mut follow_output_state,
+                                            key,
+                                            format!(
+                                                "NDI output route {output_id} send failed: {error}"
+                                            ),
+                                        );
+                                    failure_lease = Some(lease);
+                                    Some(failed_key)
+                                } else {
+                                    failure_lease = Some(
+                                        engine.begin_output_ownership_failure_fence(format!(
+                                            "NDI output route {output_id} send failed: {error}"
+                                        )),
+                                    );
+                                    None
+                                };
+                                if follow_identity.is_some() {
+                                    let settlement = timeline_follow_result_after_physical_send(
+                                        follow_result,
+                                        Some(error.as_str()),
+                                        "NDI",
+                                        output_id,
+                                    );
+                                    publish_timeline_follow_output_result_until_resolved(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        failed_follow_key.unwrap_or(key),
+                                        settlement,
+                                        || worker_stop.load(Ordering::Acquire),
+                                    );
+                                }
+                                Err(error)
+                            }
+                                }
+                            }
+                            Err(admission_error) => {
+                                // A lost-ownership wait is still a settlement
+                                // path: a pending Follow generation must
+                                // resolve visibly, and the frame itself must
+                                // never be silently dropped. Keep the failure
+                                // lease alive through shared teardown.
+                                if follow_identity.is_some() {
+                                    let (lease, failed_key, fault) =
+                                        fence_timeline_follow_settlement_deadline(
+                                            &engine,
+                                            &mut follow_output_state,
+                                            key,
+                                            &admission_error.message,
+                                        );
+                                    failure_lease = Some(lease);
+                                    publish_timeline_follow_output_result_until_resolved(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        failed_key,
+                                        TimelineFollowSettlementAckResult::Fault {
+                                            fault: fault.clone(),
+                                        },
+                                        || worker_stop.load(Ordering::Acquire),
+                                    );
+                                    Err(fault)
+                                } else {
+                                    Err(admission_error.message)
+                                }
                             }
                         }
-                        if let Some(follow) = follow.as_ref() {
-                            let settlement = timeline_follow_result_after_physical_send(
-                                follow_result,
-                                send_result.as_ref().err().map(String::as_str),
-                                "NDI",
-                                output_id,
-                            );
-                            if send_result.is_err() {
-                                publish_timeline_follow_output_result_until_resolved(
-                                    &engine,
-                                    &mut follow_output_state,
-                                    failed_follow_key.unwrap_or_else(|| {
-                                        timeline_follow_output_key(follow, output_id)
-                                    }),
-                                    settlement,
-                                    || worker_stop.load(Ordering::Acquire),
-                                );
-                            } else if matches!(
-                                &settlement,
-                                TimelineFollowSettlementAckResult::Applied
-                            ) {
-                                // The physical send above succeeded. Keep its
-                                // exact Applied ACK retryable through terminal
-                                // presenter retirement/reply loss.
-                                publish_timeline_follow_output_result_until_resolved(
-                                    &engine,
-                                    &mut follow_output_state,
-                                    key,
-                                    settlement,
-                                    || worker_stop.load(Ordering::Acquire),
-                                );
-                            } else {
-                                let _ = publish_timeline_follow_output_result(
-                                    &engine,
-                                    &mut follow_output_state,
-                                    key,
-                                    settlement,
-                                );
-                            }
-                        }
-                        send_result
                     }
+                    Ok((TimelineFollowOutputRenderDecision::Frame { .. }, None)) => Err(
+                        "NDI output frame was produced without an authority contract".to_string(),
+                    ),
                     Err(error) => {
                         if let Some(follow) = follow.as_ref() {
                             let fault =
                                 format!("NDI output route {output_id} render failed: {error}");
-                            let (lease, failed_key) = fence_timeline_follow_fault_before_ack(
-                                &engine,
-                                &mut follow_output_state,
-                                timeline_follow_output_key(follow, output_id),
-                                fault.clone(),
-                            );
-                            failure_lease = Some(lease);
-                            publish_timeline_follow_output_result_until_resolved(
-                                &engine,
-                                &mut follow_output_state,
-                                failed_key,
-                                TimelineFollowSettlementAckResult::Fault { fault },
-                                || worker_stop.load(Ordering::Acquire),
-                            );
+                            match timeline_follow_output_key(follow, output_id) {
+                                Ok(key) => {
+                                    let (lease, failed_key) = fence_timeline_follow_fault_before_ack(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        key,
+                                        fault.clone(),
+                                    );
+                                    failure_lease = Some(lease);
+                                    publish_timeline_follow_output_result_until_resolved(
+                                        &engine,
+                                        &mut follow_output_state,
+                                        failed_key,
+                                        TimelineFollowSettlementAckResult::Fault { fault },
+                                        || worker_stop.load(Ordering::Acquire),
+                                    );
+                                }
+                                Err(key_error) => {
+                                    failure_lease = Some(engine.begin_output_ownership_failure_fence(
+                                        format!("{fault}; {key_error}"),
+                                    ));
+                                }
+                            }
                         } else if !worker_stop.load(Ordering::Acquire) && failure_lease.is_none() {
                             failure_lease = Some(engine.begin_output_ownership_failure_fence(
                                 format!("NDI output route {output_id} render failed: {error}"),
@@ -1578,13 +1278,14 @@ impl NdiOutputWorker {
                     "NDI output route {output_id} failed before teardown: {worker_error}"
                 ))
             } else {
-                engine.begin_output_ownership_teardown().map_err(|error| {
-                    NdiOutputWorkerStopError {
-                        message: format!("NDI output teardown was not admitted: {error}"),
-                        pending_teardown: None,
-                        resource_teardown_pending: true,
+                match engine.begin_output_ownership_teardown() {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        let message = format!("NDI output teardown was not admitted: {error}");
+                        worker_error = Some(message.clone());
+                        engine.begin_output_ownership_failure_fence(message)
                     }
-                })?
+                }
             };
             let teardown = sender
                 .begin_close_with_lease(teardown_lease)
@@ -1650,14 +1351,14 @@ impl NdiOutputWorker {
                 stop.store(true, Ordering::Release);
                 drop(startup_receiver);
                 drop(start_sender);
-                let failure_lease = take_ndi_startup_failure_lease(&startup_failure_lease)
+                let failure_lease = take_startup_failure_lease(&startup_failure_lease)
                     .or_else(|| {
-                        ensure_ndi_startup_failure_fence(
+                        ensure_startup_failure_fence(
                             &parent_engine,
                             &startup_failure_lease,
                             format!("NDI output startup failed: {message}"),
                         );
-                        take_ndi_startup_failure_lease(&startup_failure_lease)
+                        take_startup_failure_lease(&startup_failure_lease)
                     })
                     .expect("NDI startup failure fence must retain its lease");
                 return Err(NdiOutputWorkerStartError {
@@ -1676,8 +1377,8 @@ impl NdiOutputWorker {
                 drop(startup_receiver);
                 drop(start_sender);
                 let message = format!("NDI output worker startup acknowledgement failed: {error}");
-                ensure_ndi_startup_failure_fence(&parent_engine, &startup_failure_lease, &message);
-                let failure_lease = take_ndi_startup_failure_lease(&startup_failure_lease)
+                ensure_startup_failure_fence(&parent_engine, &startup_failure_lease, &message);
+                let failure_lease = take_startup_failure_lease(&startup_failure_lease)
                     .expect("startup timeout fence must retain its lease");
                 return Err(NdiOutputWorkerStartError {
                     message,
@@ -1861,6 +1562,881 @@ mod capture_decoder_tests {
         }
     }
 
+    fn ndi_test_endpoint(output_id: VideoOutputId) -> String {
+        format!("Injected NDI {output_id}")
+    }
+
+    fn engine_with_ndi_output_extent(
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+    ) -> EngineHandle {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let transition = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .unwrap();
+        transition.complete().unwrap();
+        let mut output = follow_video_snapshot(output_id, width, height, true)
+            .outputs
+            .into_iter()
+            .next()
+            .unwrap();
+        output.kind = protocol::VideoOutputKind::NdiSender;
+        output.endpoint_name = Some(ndi_test_endpoint(output_id));
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(output))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !engine
+            .snapshot()
+            .video
+            .outputs
+            .iter()
+            .any(|output| output.id == output_id)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "NDI test output {output_id} did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        engine
+    }
+
+    fn engine_with_ndi_output(output_id: VideoOutputId) -> EngineHandle {
+        engine_with_ndi_output_extent(output_id, 2, 1)
+    }
+
+    fn capture_ndi_test_authority(
+        engine: &EngineHandle,
+        output_id: VideoOutputId,
+    ) -> OutputPresentationAuthority {
+        let sample = engine.video_presentation_sample();
+        capture_output_presentation_authority(
+            "NDI",
+            protocol::VideoOutputKind::NdiSender,
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &ndi_test_endpoint(output_id),
+        )
+        .expect("NDI test authority must be present and owned")
+    }
+
+    fn assert_ndi_authority_rejects_without_send(
+        engine: &EngineHandle,
+        authority: &OutputPresentationAuthority,
+        expected_error: &str,
+    ) {
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sends_for_attempt = Arc::clone(&sends);
+        let error = send_frame_if_authorized("NDI", engine, authority, None, move || {
+            sends_for_attempt.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Ok(())
+        })
+        .expect_err("changed authority must reject before the NDI SDK send");
+        assert!(
+            matches!(&error, PhysicalOutputSendError::Revoked(_)),
+            "an authority mismatch is a typed revoke, never an SDK fault or success: {error}"
+        );
+        assert!(error.to_string().contains(expected_error), "{error}");
+        assert_eq!(
+            sends.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "a rejected NDI authority must not enter the physical send closure"
+        );
+    }
+
+    fn ndi_hard_blackout_artistic_result(
+        authority: &OutputPresentationAuthority,
+        freshness: video::VideoOutputRenderFreshness,
+    ) -> video::VideoOutputArtisticRenderResult {
+        video::VideoOutputArtisticRenderResult {
+            payload: video::VideoOutputArtisticPayload::HardBlackout,
+            output_mapping: authority.output_summary().mapping.clone(),
+            output_mapping_identity: video::VideoOutputMappingIdentity::from_mapping(
+                &authority.output_summary().mapping,
+            ),
+            evidence: video::VideoOutputRenderEvidence {
+                project_render_epoch: authority.ownership_epoch(),
+                output_id: authority.output_summary().id,
+                freshness,
+                error: None,
+            },
+        }
+    }
+
+    fn bind_follow_to_ndi_route(
+        follow: &mut TimelineFollowVideoRenderSnapshot,
+        output_id: VideoOutputId,
+    ) {
+        for video in [&mut follow.outgoing_video, &mut follow.incoming_video] {
+            let output = video
+                .outputs
+                .iter_mut()
+                .find(|output| output.id == output_id)
+                .expect("historical NDI Follow output exists");
+            output.kind = protocol::VideoOutputKind::NdiSender;
+            output.endpoint_name = Some(ndi_test_endpoint(output_id));
+        }
+    }
+
+    #[test]
+    fn ndi_route_identity_mismatch_rejects_before_any_send() {
+        let output_id = 98_099;
+        let engine = engine_with_ndi_output(output_id);
+        let sample = engine.video_presentation_sample();
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error = capture_output_presentation_authority(
+            "NDI",
+            protocol::VideoOutputKind::NdiSender,
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            "different NDI sender",
+        )
+        .expect_err("endpoint mismatch must reject the bound NDI route");
+        assert!(error.contains("endpoint does not match"), "{error}");
+        assert_eq!(sends.load(std::sync::atomic::Ordering::Acquire), 0);
+
+        let mut wrong_kind = VideoPresentationSample {
+            config_token: sample.config_token,
+            snapshot: sample.snapshot.clone(),
+        };
+        wrong_kind
+            .snapshot
+            .video
+            .outputs
+            .iter_mut()
+            .find(|output| output.id == output_id)
+            .expect("NDI test output exists")
+            .kind = protocol::VideoOutputKind::Display;
+        assert!(capture_output_presentation_authority(
+            "NDI",
+            protocol::VideoOutputKind::NdiSender,
+            &wrong_kind,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &ndi_test_endpoint(output_id),
+        )
+        .expect_err("wrong output kind must reject the bound NDI route")
+        .contains("not NdiSender"));
+    }
+
+    #[test]
+    fn ndi_current_blackout_overrides_visible_historical_follow_snapshots() {
+        let output_id = 7;
+        let engine = engine_with_ndi_output_extent(output_id, 4, 2);
+        let mut follow = follow_render_snapshot(protocol::VideoClipTakeKind::Custom);
+        bind_follow_to_ndi_route(&mut follow, output_id);
+        assert!(!follow.outgoing_video.blackout);
+        assert!(!follow.incoming_video.blackout);
+        assert!(!follow.outgoing_video.outputs[0].blackout);
+        assert!(!follow.incoming_video.outputs[0].blackout);
+
+        engine
+            .send(engine::EngineCommand::SetAllBlackout(true))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !engine.snapshot().blackout {
+            assert!(
+                Instant::now() < deadline,
+                "NDI current project blackout did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        assert!(authority.project_blackout());
+        follow.epoch = authority.ownership_epoch();
+        // Safety blackout deliberately does not depend on either historical
+        // route: an old visible Follow snapshot may already be structurally
+        // obsolete, yet it must still yield current opaque black.
+        follow.outgoing_video.outputs[0].kind = protocol::VideoOutputKind::Display;
+        follow.outgoing_video.outputs[0].endpoint_name = None;
+        let TimelineFollowOutputRenderDecision::Frame {
+            frame,
+            follow_identity,
+            ..
+        } = render_timeline_follow_hard_blackout_output(&follow, &authority)
+            .expect("current blackout must bypass historical Follow rendering")
+        else {
+            panic!("current blackout must produce a physical Follow frame");
+        };
+        assert_eq!(
+            follow_identity,
+            Some(timeline_follow_active_identity(&follow))
+        );
+        assert_eq!(frame.data, vec![0, 0, 0, 255].repeat(8));
+    }
+
+    #[test]
+    fn ndi_follow_retirement_or_generation_rollover_rejects_before_any_send() {
+        let mut follow = follow_render_snapshot(protocol::VideoClipTakeKind::Crossfade);
+        let output_id = follow.outgoing_video.outputs[0].id;
+        let engine = engine_with_ndi_output_extent(output_id, 4, 2);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        bind_follow_to_ndi_route(&mut follow, output_id);
+        follow.epoch = authority.ownership_epoch();
+        let identity = timeline_follow_active_identity(&follow);
+        let mut rollover = follow.clone();
+        rollover.generation = rollover.generation.saturating_add(1);
+        assert!(
+            validate_timeline_follow_active_identity("NDI", identity, Some(&rollover))
+                .expect_err("Follow generation rollover must reject the old render")
+                .contains("identity changed")
+        );
+
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sends_for_attempt = Arc::clone(&sends);
+        let error =
+            send_frame_if_authorized("NDI", &engine, &authority, Some(identity), move || {
+                sends_for_attempt.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                Ok(())
+            })
+            .expect_err("retired Follow must reject before entering the NDI SDK closure");
+        assert!(
+            matches!(&error, PhysicalOutputSendError::Revoked(_)),
+            "a pre-send Follow retirement is a discard/re-render, not an SDK fault: {error}"
+        );
+        assert!(error.to_string().contains("was retired"), "{error}");
+        assert_eq!(sends.load(std::sync::atomic::Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn ndi_transport_rejects_nonfresh_or_zero_area_and_materializes_hard_blackout_exactly() {
+        let output_id = 98_100;
+        let engine = engine_with_ndi_output(output_id);
+        let mut authority = capture_ndi_test_authority(&engine, output_id);
+        let mut overridden_mapping = authority.output_summary().mapping.clone();
+        overridden_mapping.black_level = 0.9;
+        authority.override_output_mapping_for_test(overridden_mapping);
+        let frame = materialize_output_artistic_result(
+            ndi_hard_blackout_artistic_result(&authority, video::VideoOutputRenderFreshness::Fresh),
+            &authority,
+        )
+        .expect("hard blackout must reach the NDI boundary as an admitted frame");
+        assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+
+        for freshness in [
+            video::VideoOutputRenderFreshness::Error,
+            video::VideoOutputRenderFreshness::LastValid,
+        ] {
+            let error = materialize_output_artistic_result(
+                ndi_hard_blackout_artistic_result(&authority, freshness),
+                &authority,
+            )
+            .expect_err("non-fresh render evidence must not create NDI send bytes");
+            assert!(error.contains("NotFresh"), "{error}");
+        }
+
+        let mut zero_area = VideoPresentationSample {
+            config_token: 1,
+            snapshot: protocol::EngineSnapshot::default(),
+        };
+        zero_area
+            .snapshot
+            .video
+            .outputs
+            .push(protocol::VideoOutputSummary {
+                id: output_id,
+                label: "Zero Area".to_string(),
+                kind: protocol::VideoOutputKind::NdiSender,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: None,
+                monitor_identity: None,
+                width: 0,
+                height: 2,
+                endpoint_name: Some(ndi_test_endpoint(output_id)),
+                opacity: 1.0,
+                blackout: false,
+                mapping: protocol::VideoOutputMapping::default(),
+            });
+        let error = capture_output_presentation_authority(
+            "NDI",
+            protocol::VideoOutputKind::NdiSender,
+            &zero_area,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &ndi_test_endpoint(output_id),
+        )
+        .expect_err("zero-area NDI output must reject before render or send");
+        assert!(error.contains("zero-area"), "{error}");
+    }
+
+    #[test]
+    fn ndi_output_authority_races_fail_closed_before_any_send() {
+        let output_id = 98_101;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        let mut mapping = authority.output_summary().mapping.clone();
+        mapping.black_level = 0.25;
+        engine
+            .send(engine::EngineCommand::SetVideoOutputMapping { output_id, mapping })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().video.outputs[0].mapping.black_level != 0.25 {
+            assert!(
+                Instant::now() < deadline,
+                "NDI mapping mutation did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "route, mapping, or enablement changed",
+        );
+
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        engine
+            .send(engine::EngineCommand::SetVideoOutputEnabled {
+                output_id,
+                enabled: false,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().video.outputs[0].enabled {
+            assert!(
+                Instant::now() < deadline,
+                "NDI disable mutation did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "route, mapping, or enablement changed",
+        );
+
+        let output_id = 98_103;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        engine
+            .send(engine::EngineCommand::RemoveVideoOutput(output_id))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine
+            .snapshot()
+            .video
+            .outputs
+            .iter()
+            .any(|output| output.id == output_id)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "NDI output removal did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_ndi_authority_rejects_without_send(&engine, &authority, "was removed before send");
+
+        let output_id = 98_104;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        engine
+            .send(engine::EngineCommand::SetAllBlackout(true))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !engine.snapshot().blackout {
+            assert!(
+                Instant::now() < deadline,
+                "NDI safety blackout did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "project safety blackout changed",
+        );
+
+        let output_id = 98_102;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        let transition = engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap();
+        assert_ndi_authority_rejects_without_send(&engine, &authority, "authority changed");
+        transition.complete().unwrap();
+    }
+
+    #[test]
+    fn ndi_presentation_token_change_after_preparation_revokes_restored_content() {
+        let output_id = 98_105;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        let captured_video = engine.snapshot().video;
+        let original_mapping = authority.output_summary().mapping.clone();
+        let mut mutated = original_mapping.clone();
+        mutated.black_level = 0.25;
+        engine
+            .send(engine::EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: mutated,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().video.outputs[0].mapping.black_level != 0.25 {
+            assert!(
+                Instant::now() < deadline,
+                "NDI token-hostile mapping mutation did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        engine
+            .send(engine::EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: original_mapping,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().video.outputs[0].mapping.black_level
+            != authority.output_summary().mapping.black_level
+        {
+            assert!(
+                Instant::now() < deadline,
+                "NDI token-hostile mapping revert did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // Every deep-equality observation is restored exactly: only the
+        // engine-issued presentation token can see the intervening mutation.
+        assert_eq!(engine.snapshot().video, captured_video);
+        assert_eq!(
+            engine.output_ownership_status(),
+            authority.ownership_status(),
+            "the ownership epoch/generation must be unchanged for this hostile case"
+        );
+        assert_eq!(
+            engine.safety_blackout_authority(),
+            authority.blackout_authority()
+        );
+        assert_ne!(
+            engine.video_presentation_config_token(),
+            authority.presentation_config_token(),
+            "the presentation config token must have advanced across mutate/revert"
+        );
+
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "presentation authority token advanced before send",
+        );
+    }
+
+    #[test]
+    fn ndi_safety_blackout_latch_cycle_after_preparation_revokes_before_send() {
+        let output_id = 98_106;
+        let engine = engine_with_ndi_output_extent(output_id, 4, 2);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        assert!(!authority.project_blackout());
+
+        let engaged = engine
+            .safety_blackout_engage_published(Instant::now() + Duration::from_secs(30))
+            .unwrap();
+        assert_eq!(
+            engaged,
+            engine::SafetyBlackoutEngageDisposition::Applied,
+            "a successful emergency engage must follow its publication"
+        );
+        let engaged_authority = engine.safety_blackout_authority();
+        assert!(engaged_authority.engaged);
+        let released = engine
+            .safety_blackout_release_published(
+                engaged_authority.epoch,
+                engaged_authority.generation,
+                Instant::now() + Duration::from_secs(30),
+            )
+            .unwrap();
+        assert_eq!(released, engine::SafetyBlackoutReleaseDisposition::Applied);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().blackout {
+            assert!(
+                Instant::now() < deadline,
+                "NDI safety blackout latch release did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // The visible blackout bit returned to its captured value; only the
+        // runtime safety-blackout authority (engaged/epoch/generation) still
+        // proves the intervening emergency cycle.
+        assert_eq!(engine.snapshot().blackout, authority.project_blackout());
+        assert_ne!(
+            engine.safety_blackout_authority(),
+            authority.blackout_authority()
+        );
+
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "blackout authority changed before send",
+        );
+    }
+
+    #[test]
+    fn ndi_output_identity_substitution_after_preparation_revokes_before_send() {
+        let output_id = 98_107;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        engine
+            .send(engine::EngineCommand::RemoveVideoOutput(output_id))
+            .unwrap();
+        let substituted_endpoint = format!("Substituted NDI {output_id}");
+        let mut substituted = authority.output_summary().clone();
+        substituted.endpoint_name = Some(substituted_endpoint.clone());
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(substituted))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !engine.snapshot().video.outputs.iter().any(|output| {
+            output.id == output_id
+                && output.endpoint_name.as_deref() == Some(substituted_endpoint.as_str())
+        }) {
+            assert!(
+                Instant::now() < deadline,
+                "substituted NDI output identity did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // The output ID resolves again, so removal alone cannot fence it:
+        // exact route-resource identity must.
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "bound route resource identity changed",
+        );
+    }
+
+    #[test]
+    fn ndi_stable_authority_commits_exactly_one_sdk_send_per_admission() {
+        let output_id = 98_108;
+        let engine = engine_with_ndi_output(output_id);
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first_commit = send_frame_if_authorized("NDI", &engine, &authority, None, || {
+            sends.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Ok(41_u8)
+        })
+        .expect("stable authority must commit the prepared frame");
+        assert_eq!(first_commit, 41);
+        assert_eq!(sends.load(std::sync::atomic::Ordering::Acquire), 1);
+
+        let second_commit = send_frame_if_authorized("NDI", &engine, &authority, None, || {
+            sends.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Ok(())
+        })
+        .expect("unchanged authority must authorize an independent second commit");
+        assert_eq!(second_commit, ());
+        assert_eq!(sends.load(std::sync::atomic::Ordering::Acquire), 2);
+        assert_eq!(
+            engine.video_presentation_config_token(),
+            authority.presentation_config_token(),
+            "a stable authority must never advance or consume the presentation token"
+        );
+    }
+
+    #[test]
+    fn ndi_playing_timeline_ticks_admit_frames_but_token_mutations_revoke() {
+        let output_id = 98_110;
+        let engine = engine_with_ndi_output(output_id);
+        let source = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(98_111),
+            label: "NDI playing admission source".to_string(),
+            layers: vec![protocol::TimelineLayerSummary {
+                id: 2,
+                label: "Audio".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: false,
+                kind: protocol::TimelineLayerKind::Audio,
+            }],
+            audio_clips: vec![protocol::TimelineAudioClipSummary {
+                id: 98_112,
+                layer_id: 2,
+                path: "memory://ndi-playing-admission.wav".to_string(),
+                duration_ms: 60_000,
+                ..protocol::TimelineAudioClipSummary::default()
+            }],
+            duration_ms: 60_000,
+            ..protocol::TimelineSnapshot::default()
+        };
+        engine
+            .apply_timeline_bank_published(vec![source], protocol::TimelineId(98_111), false)
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SeekTimeline(1_000))
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        let advanced_deadline = Instant::now() + Duration::from_secs(2);
+        while engine.snapshot().timeline.position_ms <= 1_000 {
+            assert!(
+                Instant::now() < advanced_deadline,
+                "the playing timeline never advanced past its seek point"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // Capture an authority mid-playback, then let the transport cadence
+        // elapse. Natural per-tick position/transition progress must never
+        // revoke the frame; only the engine-issued presentation token can.
+        let authority = capture_ndi_test_authority(&engine, output_id);
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(
+            engine.output_ownership_status(),
+            authority.ownership_status(),
+            "natural playback must not rotate output ownership"
+        );
+        assert_eq!(
+            engine.safety_blackout_authority(),
+            authority.blackout_authority()
+        );
+        assert_eq!(
+            engine.video_presentation_config_token(),
+            authority.presentation_config_token(),
+            "per-tick playback must never advance the presentation token"
+        );
+
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sends_for_attempt = Arc::clone(&sends);
+        send_frame_if_authorized("NDI", &engine, &authority, None, move || {
+            sends_for_attempt.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Ok(())
+        })
+        .expect("normal per-tick playback must admit the prepared frame instead of mass-revoking");
+        assert_eq!(sends.load(std::sync::atomic::Ordering::Acquire), 1);
+
+        // A real presentation mutation that reverts its visible content must
+        // still revoke through the advanced token: no stale physical send.
+        let original_mapping = authority.output_summary().mapping.clone();
+        let mut mutated = original_mapping.clone();
+        mutated.black_level = 0.4;
+        engine
+            .send(engine::EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: mutated,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().video.outputs[0].mapping.black_level != 0.4 {
+            assert!(
+                Instant::now() < deadline,
+                "NDI admission mapping mutation did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        engine
+            .send(engine::EngineCommand::SetVideoOutputMapping {
+                output_id,
+                mapping: original_mapping,
+            })
+            .unwrap();
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "NDI admission mapping revert did not publish"
+            );
+            if engine.snapshot().video.outputs[0].mapping.black_level
+                == authority.output_summary().mapping.black_level
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_ndi_authority_rejects_without_send(
+            &engine,
+            &authority,
+            "presentation authority token advanced before send",
+        );
+    }
+
+    #[test]
+    fn ndi_persistent_supersession_faults_at_bounded_settlement_deadline() {
+        // One live settling Hold generation whose historical Follow route is
+        // permanently superseded by a renamed current output. Every worker
+        // iteration observes exactly this supersession, so the bounded
+        // settlement watchdog must convert it into a visible Fault instead of
+        // extending the hold indefinitely.
+        let output_id = 98_112;
+        let engine = engine_with_ndi_output_extent(output_id, 4, 2);
+        let audio_layer = protocol::TimelineLayerSummary {
+            id: 2,
+            label: "Audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: protocol::TimelineLayerKind::Audio,
+        };
+        let mut source = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(98_113),
+            label: "NDI deadline Follow source".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![protocol::TimelineAudioClipSummary {
+                id: 98_114,
+                layer_id: 2,
+                media_asset_id: None,
+                path: "memory://ndi-deadline-follow.wav".to_string(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 100,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            }],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        source.follow = Some(protocol::TimelineFollowSummary {
+            enabled: true,
+            next_timeline_id: protocol::TimelineId(98_115),
+            duration: protocol::VideoClipTakeDuration::milliseconds(10),
+            curve: protocol::VideoLayerTransitionCurve::Linear,
+            video_kind: protocol::VideoClipTakeKind::Crossfade,
+            lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+            destination_bpm: None,
+            preroll_ms: 0,
+            trans_cadence_bars: 4,
+            trans_target_measures: Vec::new(),
+            fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+        });
+        let target = protocol::TimelineSnapshot {
+            id: protocol::TimelineId(98_115),
+            label: "NDI deadline Follow target".to_string(),
+            layers: vec![audio_layer],
+            duration_ms: 100,
+            ..protocol::TimelineSnapshot::default()
+        };
+        engine
+            .apply_timeline_bank_published(
+                vec![source, target],
+                protocol::TimelineId(98_113),
+                false,
+            )
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SeekTimeline(90))
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SetTimelinePlaying(true))
+            .unwrap();
+        let settle_deadline = Instant::now() + Duration::from_secs(2);
+        let follow = loop {
+            if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
+                if matches!(
+                    engine.timeline_follow_runtime_status(follow.epoch).status,
+                    protocol::TimelineFollowRuntimeStatus::Settling
+                ) {
+                    break follow;
+                }
+            }
+            assert!(
+                Instant::now() < settle_deadline,
+                "NDI deadline Follow never entered settlement"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        // Supersede the bound route for the rest of the hold.
+        let mut superseded = follow_video_snapshot(output_id, 4, 2, true)
+            .outputs
+            .into_iter()
+            .next()
+            .unwrap();
+        superseded.endpoint_name = Some("Superseded NDI deadline sender".to_string());
+        engine
+            .send(engine::EngineCommand::SetVideoOutputConfig {
+                output_id,
+                label: "Superseded NDI deadline".to_string(),
+                kind: protocol::VideoOutputKind::NdiSender,
+                fullscreen: false,
+                monitor_id: None,
+                monitor_identity: None,
+                width: 4,
+                height: 2,
+                endpoint_name: Some("Superseded NDI deadline sender".to_string()),
+            })
+            .unwrap();
+        let route_publication_deadline = Instant::now() + Duration::from_secs(1);
+        while engine
+            .snapshot()
+            .video
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .and_then(|output| output.endpoint_name.as_deref())
+            != Some("Superseded NDI deadline sender")
+        {
+            assert!(
+                Instant::now() < route_publication_deadline,
+                "the superseded NDI route identity did not publish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // Reproduce the production render decision for every iteration: the
+        // historical Follow route no longer matches current authority, so
+        // each observation is a Retry carrying the same frame key.
+        let retry_key = timeline_follow_output_key(&follow, output_id).unwrap();
+        let superseded_sample = engine.video_presentation_sample();
+        let superseded_authority = capture_output_presentation_authority(
+            "NDI",
+            protocol::VideoOutputKind::NdiSender,
+            &superseded_sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            "Superseded NDI deadline sender",
+        )
+        .expect("the renamed route must still be capturable");
+        let reason = validate_follow_output_authority("NDI", &follow, &superseded_authority)
+            .expect_err("the superseded route must no longer match");
+        assert!(reason.contains("does not match the current project authority"));
+
+        let mut state = TimelineFollowOutputState::default();
+        state.set_settlement_deadline(Duration::from_millis(80));
+        assert!(!state.tick_follow_unresolved(retry_key, Instant::now(), &reason));
+        std::thread::sleep(Duration::from_millis(90));
+        assert!(
+            state.tick_follow_unresolved(retry_key, Instant::now(), &reason),
+            "continuous supersession beyond the deadline must expire visibly"
+        );
+
+        let (failure_lease, failed_key, fault) =
+            fence_timeline_follow_settlement_deadline(&engine, &mut state, retry_key, &reason);
+        publish_timeline_follow_output_result_until_resolved(
+            &engine,
+            &mut state,
+            failed_key,
+            TimelineFollowSettlementAckResult::Fault { fault },
+            || false,
+        );
+        assert!(state.published_for(failed_key));
+        let runtime = engine.snapshot().timeline.follow_runtime;
+        assert_eq!(runtime.status, protocol::TimelineFollowRuntimeStatus::Held);
+        assert!(matches!(
+            runtime.outcome,
+            Some(protocol::TimelineFollowOutcome::Held)
+        ));
+        drop(failure_lease);
+    }
+
     #[test]
     fn capture_registry_frame_is_exposed_at_requested_playhead() {
         let inputs = Arc::new(Mutex::new(HashMap::from([(
@@ -1949,7 +2525,10 @@ mod capture_decoder_tests {
                 &mut state,
             )
             .expect("empty compositions render a real transparent program frame");
-            let TimelineFollowOutputRenderDecision::Frame { key, frame, result } = decision else {
+            let TimelineFollowOutputRenderDecision::Frame {
+                key, frame, result, ..
+            } = decision
+            else {
                 panic!("enabled Follow output must render");
             };
             assert_eq!(
@@ -1985,7 +2564,10 @@ mod capture_decoder_tests {
         let first =
             render_timeline_follow_output(&mut renderer, &engine_snapshot, &follow, 7, &mut state)
                 .unwrap();
-        let TimelineFollowOutputRenderDecision::Frame { key, frame, result } = first else {
+        let TimelineFollowOutputRenderDecision::Frame {
+            key, frame, result, ..
+        } = first
+        else {
             panic!("enabled Follow output must render");
         };
         assert_eq!(result, TimelineFollowSettlementAckResult::Applied);
@@ -1993,25 +2575,15 @@ mod capture_decoder_tests {
 
         follow.transition_effect_chain =
             Some(invalid_follow_transition_chain(protocol::TimelineId(41)));
-        let fallback =
+        let error =
             render_timeline_follow_output(&mut renderer, &engine_snapshot, &follow, 7, &mut state)
-                .unwrap();
-        let TimelineFollowOutputRenderDecision::Frame {
-            frame: fallback,
-            result,
-            ..
-        } = fallback
-        else {
-            panic!("chain fault must retain a presentable frame");
-        };
+                .expect_err("a LastValid Follow result must fail before the send boundary");
+        assert!(error.contains("ISF source"), "{error}");
         assert_eq!(
-            fallback, frame,
-            "chain fault uses the exact caller last-valid frame"
+            state.last_valid(key),
+            Some(&frame),
+            "the rejected LastValid result must not mutate the transport cache"
         );
-        assert!(matches!(
-            result,
-            TimelineFollowSettlementAckResult::Fault { .. }
-        ));
 
         let resized_key = TimelineFollowOutputFrameKey { width: 8, ..key };
         let newer_key = TimelineFollowOutputFrameKey {
@@ -2154,10 +2726,7 @@ mod capture_decoder_tests {
             .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
             .is_err());
         assert_eq!(
-            state
-                .pending_ack
-                .as_ref()
-                .map(|pending| &pending.ack.result),
+            state.pending_ack_result(),
             Some(&TimelineFollowSettlementAckResult::Applied)
         );
 
@@ -2229,10 +2798,7 @@ mod capture_decoder_tests {
         state.update_last_valid(resized, resized_frame.clone());
         state.queue_ack(resized, TimelineFollowSettlementAckResult::Applied, now);
         assert_eq!(
-            state
-                .pending_ack
-                .as_ref()
-                .map(|pending| &pending.ack.result),
+            state.pending_ack_result(),
             Some(&TimelineFollowSettlementAckResult::Applied)
         );
         let mut published = Vec::new();
@@ -2657,25 +3223,21 @@ mod capture_decoder_tests {
             .unwrap();
         let creation_lease = activation.admit_resource_creation().unwrap();
         let initial_epoch = engine.output_ownership_status().epoch;
-        let startup_failure_lease: NdiStartupFailureLeaseSlot =
-            Arc::new(Mutex::new(NdiStartupFailureFenceState::default()));
+        let startup_failure_lease: StartupFailureLeaseSlot =
+            Arc::new(Mutex::new(StartupFailureFenceState::default()));
         let worker_slot = Arc::clone(&startup_failure_lease);
         let worker_engine = engine.clone();
         let (failed_tx, failed_rx) = std::sync::mpsc::sync_channel(1);
         let (cleanup_tx, cleanup_rx) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
-            ensure_ndi_startup_failure_fence(
-                &worker_engine,
-                &worker_slot,
-                "injected NDI open failure",
-            );
+            ensure_startup_failure_fence(&worker_engine, &worker_slot, "injected NDI open failure");
             creation_lease.retire();
             failed_tx.send(()).unwrap();
             cleanup_rx.recv().unwrap();
         });
         failed_rx.recv().unwrap();
 
-        let failure_lease = take_ndi_startup_failure_lease(&startup_failure_lease)
+        let failure_lease = take_startup_failure_lease(&startup_failure_lease)
             .expect("the parent must receive the exact inner open-failure fence");
         let failed = engine.output_ownership_status();
         assert_eq!(failed.epoch, initial_epoch + 1);
@@ -2709,8 +3271,8 @@ mod capture_decoder_tests {
             .unwrap();
         let creation_lease = activation.admit_resource_creation().unwrap();
         let initial_epoch = engine.output_ownership_status().epoch;
-        let startup_failure_lease: NdiStartupFailureLeaseSlot =
-            Arc::new(Mutex::new(NdiStartupFailureFenceState::default()));
+        let startup_failure_lease: StartupFailureLeaseSlot =
+            Arc::new(Mutex::new(StartupFailureFenceState::default()));
         let worker_slot = Arc::clone(&startup_failure_lease);
         let worker_engine = engine.clone();
         let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
@@ -2720,7 +3282,7 @@ mod capture_decoder_tests {
             entered_tx.send(()).unwrap();
             return_error_rx.recv().unwrap();
             let mut state = TimelineFollowOutputState::default();
-            let failed_key = fence_timeline_follow_fault_before_ack_in_ndi_startup(
+            let failed_key = fence_timeline_follow_fault_before_ack_in_startup(
                 &worker_engine,
                 &mut state,
                 TimelineFollowOutputFrameKey {
@@ -2739,12 +3301,12 @@ mod capture_decoder_tests {
         });
         entered_rx.recv().unwrap();
 
-        let timeout_epoch = ensure_ndi_startup_failure_fence(
+        let timeout_epoch = ensure_startup_failure_fence(
             &engine,
             &startup_failure_lease,
             "NDI startup constructor timeout",
         );
-        let failure_lease = take_ndi_startup_failure_lease(&startup_failure_lease)
+        let failure_lease = take_startup_failure_lease(&startup_failure_lease)
             .expect("timeout must transfer its single fence to parent cleanup");
         assert_eq!(timeout_epoch, initial_epoch + 1);
         return_error_tx.send(()).unwrap();
@@ -2819,6 +3381,7 @@ mod ndi_output_worker_tests {
 
     #[test]
     fn injected_worker_spawn_failure_constructs_no_sender() {
+        let _hook_guard = NDI_TEST_HOOK_LOCK.lock().unwrap();
         NDI_OUTPUT_CONSTRUCTION_ATTEMPTS.store(0, Ordering::Release);
         NDI_WORKER_SPAWN_FAILURE.store(true, Ordering::Release);
         let route = video::ExternalVideoTransportRoute {
@@ -2855,6 +3418,7 @@ mod ndi_output_worker_tests {
 
     #[test]
     fn failure_fence_before_ndi_creation_admission_never_constructs_sender() {
+        let _hook_guard = NDI_TEST_HOOK_LOCK.lock().unwrap();
         NDI_OUTPUT_CONSTRUCTION_ATTEMPTS.store(0, Ordering::Release);
         let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
             enabled: false,
@@ -2930,6 +3494,18 @@ mod ndi_output_worker_tests {
             }
             Ok::<(), NdiOutputWorkerStopError>(())
         });
+        // Synchronize on the delayed constructor actually entering before the
+        // startup-timeout window is measured, mirroring the Spout twin's
+        // entered-channel handshake; otherwise the attempt count below races
+        // the scheduler.
+        let entered_deadline = Instant::now() + Duration::from_secs(2);
+        while constructor_attempts.load(Ordering::Acquire) == 0 {
+            assert!(
+                Instant::now() < entered_deadline,
+                "delayed NDI constructor never entered"
+            );
+            std::thread::yield_now();
+        }
 
         assert!(matches!(
             ready_rx.recv_timeout(Duration::from_millis(1)),
@@ -3026,6 +3602,7 @@ mod ndi_output_worker_tests {
         while !pending.poll() {
             std::thread::yield_now();
         }
+        drop(pending);
         let retry = engine
             .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
             .unwrap();

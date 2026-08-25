@@ -232,7 +232,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <option value="FlashCue">Flash Cue (hold)</option>
             <option value="TriggerCueDirection">Directional Cue</option>
             <option value="FlashCueDirection">Directional Cue (hold)</option>
-            <option value="TriggerCueListNext">Cue List Next</option>
+            <option value="TriggerCueListNext">Bank Next</option>
             <option value="TriggerNextCue">Cue Next</option>
             <option value="TriggerPreviousCue">Cue Previous</option>
             <option value="EffectEnabled">Effect Enable</option>

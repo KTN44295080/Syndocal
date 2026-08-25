@@ -1,4 +1,7 @@
 import type {
+  LiveAudioInputAsioSelection,
+  LiveAudioInputAsioSelectionState,
+  LiveAudioInputBackendAvailability,
   LiveAudioInputBackendId,
   LiveAudioInputBackendSummary,
   LiveAudioInputCapabilities,
@@ -9,7 +12,9 @@ export type LiveAudioInputHealth = "unknown" | "stopped" | "live" | "clearing" |
 
 export type LiveAudioInputBackendState =
   | "checking"
-  | "not_built"
+  | "not_packaged"
+  | "unsupported"
+  | "contract_invalid"
   | "empty"
   | "select_device"
   | "configure"
@@ -17,6 +22,446 @@ export type LiveAudioInputBackendState =
   | "ready"
   | "open"
   | "active";
+
+export type LiveAudioInputBackendContractFailureReason =
+  | "SUMMARY_NOT_OBJECT"
+  | "SUMMARY_LIST_INVALID"
+  | "SUMMARY_UNEXPECTED_FIELD"
+  | "BACKEND_ID_UNKNOWN"
+  | "BACKEND_ID_DUPLICATE"
+  | "LABEL_BLANK"
+  | "BUILT_INVALID"
+  | "REQUIRES_EXPLICIT_DEVICE_INVALID"
+  | "DISTRIBUTION_BLANK"
+  | "AVAILABILITY_MISSING"
+  | "AVAILABILITY_UNKNOWN"
+  | "AVAILABILITY_READY_CONTRADICTS_BUILT"
+  | "AVAILABILITY_DETAIL_INVALID"
+  | "AVAILABILITY_DETAIL_BLANK";
+
+const LIVE_AUDIO_INPUT_BACKEND_AVAILABILITIES: readonly string[] = [
+  "ready",
+  "not_packaged",
+  "fault",
+  "unsupported",
+];
+
+const LIVE_AUDIO_INPUT_BACKEND_SUMMARY_KEYS: readonly string[] = [
+  "id",
+  "label",
+  "built",
+  "requires_explicit_device",
+  "distribution",
+  "availability",
+  "availability_detail",
+];
+
+export type ParsedLiveAudioInputBackendSummary =
+  | { ok: true; summary: LiveAudioInputBackendSummary }
+  | { ok: false; reason_code: LiveAudioInputBackendContractFailureReason };
+
+export type ParsedLiveAudioInputBackendSummaries =
+  | { ok: true; summaries: LiveAudioInputBackendSummary[] }
+  | {
+    ok: false;
+    index: number;
+    reason_code: LiveAudioInputBackendContractFailureReason;
+  };
+
+/**
+ * Runtime contract gate for backend summaries: unknown or missing
+ * `availability` fails closed instead of falling back to a `built`-derived
+ * guess. The parsed summary is an exact defensive copy with exactly the
+ * contracted fields.
+ */
+export const parseLiveAudioInputBackendSummary = (
+  raw: unknown,
+): ParsedLiveAudioInputBackendSummary => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason_code: "SUMMARY_NOT_OBJECT" };
+  }
+  const record = raw as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!LIVE_AUDIO_INPUT_BACKEND_SUMMARY_KEYS.includes(key)) {
+      return { ok: false, reason_code: "SUMMARY_UNEXPECTED_FIELD" };
+    }
+  }
+  if (record.id !== "wasapi_shared" && record.id !== "asio") {
+    return { ok: false, reason_code: "BACKEND_ID_UNKNOWN" };
+  }
+  if (typeof record.label !== "string" || !record.label.trim()) {
+    return { ok: false, reason_code: "LABEL_BLANK" };
+  }
+  if (typeof record.built !== "boolean") {
+    return { ok: false, reason_code: "BUILT_INVALID" };
+  }
+  if (typeof record.requires_explicit_device !== "boolean") {
+    return { ok: false, reason_code: "REQUIRES_EXPLICIT_DEVICE_INVALID" };
+  }
+  if (typeof record.distribution !== "string" || !record.distribution.trim()) {
+    return { ok: false, reason_code: "DISTRIBUTION_BLANK" };
+  }
+  if (
+    !("availability" in record) ||
+    record.availability === undefined ||
+    record.availability === null
+  ) {
+    return { ok: false, reason_code: "AVAILABILITY_MISSING" };
+  }
+  if (!LIVE_AUDIO_INPUT_BACKEND_AVAILABILITIES.includes(record.availability as string)) {
+    return { ok: false, reason_code: "AVAILABILITY_UNKNOWN" };
+  }
+  if (record.availability_detail !== null) {
+    if (typeof record.availability_detail !== "string") {
+      return { ok: false, reason_code: "AVAILABILITY_DETAIL_INVALID" };
+    }
+    if (!record.availability_detail.trim()) {
+      return { ok: false, reason_code: "AVAILABILITY_DETAIL_BLANK" };
+    }
+  }
+  if (record.availability === "ready" && record.built !== true) {
+    return { ok: false, reason_code: "AVAILABILITY_READY_CONTRADICTS_BUILT" };
+  }
+  return {
+    ok: true,
+    summary: {
+      id: record.id,
+      label: record.label,
+      built: record.built,
+      requires_explicit_device: record.requires_explicit_device,
+      distribution: record.distribution,
+      availability: record.availability as LiveAudioInputBackendAvailability,
+      availability_detail: record.availability_detail as string | null,
+    },
+  };
+};
+
+/**
+ * All-or-nothing list gate: one invalid summary or one duplicate backend ID
+ * fails the entire catalogue at the offending index.
+ */
+export const parseLiveAudioInputBackendSummaries = (
+  raw: unknown,
+): ParsedLiveAudioInputBackendSummaries => {
+  if (!Array.isArray(raw)) {
+    return { ok: false, index: -1, reason_code: "SUMMARY_LIST_INVALID" };
+  }
+  const summaries: LiveAudioInputBackendSummary[] = [];
+  const seenIds = new Set<LiveAudioInputBackendId>();
+  for (let index = 0; index < raw.length; index += 1) {
+    const parsed = parseLiveAudioInputBackendSummary(raw[index]);
+    if (!parsed.ok) return { ok: false, index, reason_code: parsed.reason_code };
+    if (seenIds.has(parsed.summary.id)) {
+      return { ok: false, index, reason_code: "BACKEND_ID_DUPLICATE" };
+    }
+    seenIds.add(parsed.summary.id);
+    summaries.push(parsed.summary);
+  }
+  return { ok: true, summaries };
+};
+
+export const liveAudioInputBackendCanDispatch = (
+  raw: unknown,
+): boolean => {
+  const parsed = parseLiveAudioInputBackendSummary(raw);
+  return parsed.ok && parsed.summary.built && parsed.summary.availability === "ready";
+};
+
+export const liveAudioInputBackendAvailabilityLabel = (
+  availability: LiveAudioInputBackendAvailability,
+): string => {
+  switch (availability) {
+    case "ready":
+      return "READY";
+    case "not_packaged":
+      return "NOT PACKAGED";
+    case "fault":
+      return "FAULT";
+    case "unsupported":
+      return "UNSUPPORTED";
+  }
+};
+
+export const liveAudioInputBackendScopeLabel = (
+  backend: LiveAudioInputBackendId,
+): string => (backend === "asio" ? "ASIO" : "WASAPI");
+
+export const liveAudioInputBackendOptionLabel = (
+  backend: LiveAudioInputBackendSummary,
+): string => {
+  const parsed = parseLiveAudioInputBackendSummary(backend);
+  if (!parsed.ok) return `${backend.label} · CONTRACT INVALID`;
+  if (!liveAudioInputBackendCanDispatch(backend)) {
+    return `${backend.label} · ${liveAudioInputBackendAvailabilityLabel(parsed.summary.availability)}`;
+  }
+  return backend.label;
+};
+
+export type LiveAudioInputBackendSelectOption =
+  | { kind: "checking"; value: LiveAudioInputBackendId; label: string; noLocalize: false }
+  | { kind: "selection_unavailable"; value: LiveAudioInputBackendId; label: string; noLocalize: true }
+  | {
+    kind: "catalogue";
+    value: LiveAudioInputBackendId;
+    label: string;
+    noLocalize: true;
+    duplicate_catalogue_entry: boolean;
+  };
+
+export const liveAudioInputBackendSelectOptions = (input: {
+  selectedBackend: LiveAudioInputBackendId;
+  backends: readonly LiveAudioInputBackendSummary[];
+  backendsKnown: boolean;
+  savedBackend: LiveAudioInputBackendId | null;
+}): LiveAudioInputBackendSelectOption[] => {
+  const { selectedBackend, backends, backendsKnown, savedBackend } = input;
+  if (backends.length === 0) {
+    return [{
+      kind: "checking",
+      value: selectedBackend,
+      label: backendsKnown ? "Backend unavailable" : "Checking backends",
+      noLocalize: false,
+    }];
+  }
+  const firstIndexById = new Map<LiveAudioInputBackendId, number>();
+  const duplicateIds = new Set<LiveAudioInputBackendId>();
+  for (let index = 0; index < backends.length; index += 1) {
+    const id = backends[index].id;
+    if (firstIndexById.has(id)) duplicateIds.add(id);
+    else firstIndexById.set(id, index);
+  }
+  const options: LiveAudioInputBackendSelectOption[] = [];
+  for (let index = 0; index < backends.length; index += 1) {
+    const backend = backends[index];
+    if (firstIndexById.get(backend.id) !== index) continue;
+    const baseLabel = liveAudioInputBackendOptionLabel(backend);
+    options.push({
+      kind: "catalogue",
+      value: backend.id,
+      label: duplicateIds.has(backend.id)
+        ? `${baseLabel} · DUPLICATE BACKEND CATALOGUE · CONTRACT INVALID`
+        : baseLabel,
+      noLocalize: true,
+      duplicate_catalogue_entry: duplicateIds.has(backend.id),
+    });
+  }
+  if (!firstIndexById.has(selectedBackend)) {
+    options.unshift({
+      kind: "selection_unavailable",
+      value: selectedBackend,
+      label:
+        savedBackend === selectedBackend
+          ? `${liveAudioInputBackendScopeLabel(selectedBackend)} · saved selection missing`
+          : `${liveAudioInputBackendScopeLabel(selectedBackend)} · selection unavailable`,
+      noLocalize: true,
+    });
+  }
+  return options;
+};
+
+export const liveAudioInputBackendVisibleValue = (
+  options: readonly { value: string }[],
+  target: string,
+): string | null =>
+  options.some((option) => option.value === target) ? target : null;
+
+export type LiveAudioInputAsioSelectionContractFailureReason =
+  | "ASIO_SELECTION_NOT_OBJECT"
+  | "ASIO_SELECTION_UNEXPECTED_FIELD"
+  | "ASIO_SELECTION_STATE_INVALID"
+  | "ASIO_SELECTION_DRIVER_ID_INVALID"
+  | "ASIO_SELECTION_DRIVER_NAME_INVALID"
+  | "ASIO_SELECTION_SAMPLE_RATE_INVALID"
+  | "ASIO_SELECTION_INPUT_CHANNELS_INVALID"
+  | "ASIO_SELECTION_SAMPLE_FORMAT_INVALID"
+  | "ASIO_SELECTION_FIXED_BUFFER_FRAMES_INVALID"
+  | "ASIO_SELECTION_REASON_INVALID"
+  | "ASIO_SELECTION_MESSAGE_INVALID";
+
+export type ParsedLiveAudioInputAsioSelection =
+  | { ok: true; selection: LiveAudioInputAsioSelection }
+  | { ok: false; reason_code: LiveAudioInputAsioSelectionContractFailureReason };
+
+const LIVE_AUDIO_INPUT_ASIO_SELECTION_KEYS: readonly string[] = [
+  "state",
+  "driver_id",
+  "driver_name",
+  "sample_rate_hz",
+  "input_channels",
+  "sample_format",
+  "fixed_buffer_frames",
+  "reason",
+  "message",
+];
+
+const liveAudioAsioIsNonblankString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
+
+const liveAudioAsioIsPositiveSafeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+const liveAudioAsioInvalidStateLeakedFieldReason = (
+  record: Record<string, unknown>,
+): LiveAudioInputAsioSelectionContractFailureReason => {
+  if (record.driver_id !== null) return "ASIO_SELECTION_DRIVER_ID_INVALID";
+  if (record.driver_name !== null) return "ASIO_SELECTION_DRIVER_NAME_INVALID";
+  if (record.sample_rate_hz !== null) return "ASIO_SELECTION_SAMPLE_RATE_INVALID";
+  if (record.input_channels !== null) return "ASIO_SELECTION_INPUT_CHANNELS_INVALID";
+  if (record.sample_format !== null) return "ASIO_SELECTION_SAMPLE_FORMAT_INVALID";
+  return "ASIO_SELECTION_FIXED_BUFFER_FRAMES_INVALID";
+};
+
+/**
+ * Exact fail-closed contract gate for the backend-native ASIO persisted
+ * selection verdict attached to LiveAudioInputStatus. restored/revalidated
+ * require full nonblank device identity plus positive safe integers and a
+ * null reason; invalid requires every device/config field to be exactly
+ * null with a nonblank reason. Anything unknown, missing, or malformed
+ * fails with an explicit reason code.
+ */
+export const parseLiveAudioInputAsioSelection = (
+  raw: unknown,
+): ParsedLiveAudioInputAsioSelection => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_NOT_OBJECT" };
+  }
+  const record = raw as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!LIVE_AUDIO_INPUT_ASIO_SELECTION_KEYS.includes(key)) {
+      return { ok: false, reason_code: "ASIO_SELECTION_UNEXPECTED_FIELD" };
+    }
+  }
+  const state = record.state;
+  if (state !== "restored" && state !== "revalidated" && state !== "invalid") {
+    return { ok: false, reason_code: "ASIO_SELECTION_STATE_INVALID" };
+  }
+  if (!liveAudioAsioIsNonblankString(record.message)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_MESSAGE_INVALID" };
+  }
+  const message = record.message;
+  if (state === "invalid") {
+    if (
+      record.driver_id !== null ||
+      record.driver_name !== null ||
+      record.sample_rate_hz !== null ||
+      record.input_channels !== null ||
+      record.sample_format !== null ||
+      record.fixed_buffer_frames !== null
+    ) {
+      return { ok: false, reason_code: liveAudioAsioInvalidStateLeakedFieldReason(record) };
+    }
+    if (!liveAudioAsioIsNonblankString(record.reason)) {
+      return { ok: false, reason_code: "ASIO_SELECTION_REASON_INVALID" };
+    }
+    return {
+      ok: true,
+      selection: {
+        state,
+        driver_id: null,
+        driver_name: null,
+        sample_rate_hz: null,
+        input_channels: null,
+        sample_format: null,
+        fixed_buffer_frames: null,
+        reason: record.reason,
+        message,
+      },
+    };
+  }
+  if (!liveAudioAsioIsNonblankString(record.driver_id)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_DRIVER_ID_INVALID" };
+  }
+  if (!liveAudioAsioIsNonblankString(record.driver_name)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_DRIVER_NAME_INVALID" };
+  }
+  if (!liveAudioAsioIsPositiveSafeInteger(record.sample_rate_hz)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_SAMPLE_RATE_INVALID" };
+  }
+  if (!liveAudioAsioIsPositiveSafeInteger(record.input_channels)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_INPUT_CHANNELS_INVALID" };
+  }
+  if (!liveAudioAsioIsNonblankString(record.sample_format)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_SAMPLE_FORMAT_INVALID" };
+  }
+  if (!liveAudioAsioIsPositiveSafeInteger(record.fixed_buffer_frames)) {
+    return { ok: false, reason_code: "ASIO_SELECTION_FIXED_BUFFER_FRAMES_INVALID" };
+  }
+  if (record.reason !== null) {
+    return { ok: false, reason_code: "ASIO_SELECTION_REASON_INVALID" };
+  }
+  return {
+    ok: true,
+    selection: {
+      state,
+      driver_id: record.driver_id,
+      driver_name: record.driver_name,
+      sample_rate_hz: record.sample_rate_hz,
+      input_channels: record.input_channels,
+      sample_format: record.sample_format,
+      fixed_buffer_frames: record.fixed_buffer_frames,
+      reason: null,
+      message,
+    },
+  };
+};
+
+export type LiveAudioInputAsioVerdictState =
+  | LiveAudioInputAsioSelectionState
+  | "contract_invalid";
+
+export interface LiveAudioInputAsioVerdict {
+  state: LiveAudioInputAsioVerdictState;
+  contract_valid: boolean;
+  start_locked: boolean;
+  state_label: string;
+  reason: string | null;
+  message: string;
+}
+
+export const liveAudioInputAsioSelectionVerdict = (
+  raw: unknown,
+): LiveAudioInputAsioVerdict => {
+  const parsed = parseLiveAudioInputAsioSelection(raw);
+  if (!parsed.ok) {
+    return {
+      state: "contract_invalid",
+      contract_valid: false,
+      start_locked: true,
+      state_label: "ASIO VERDICT CONTRACT INVALID",
+      reason: parsed.reason_code,
+      message: "The native ASIO selection verdict violated its wire contract; Start stays locked.",
+    };
+  }
+  switch (parsed.selection.state) {
+    case "restored":
+      return {
+        state: "restored",
+        contract_valid: true,
+        start_locked: true,
+        state_label: "ASIO RESTORED",
+        reason: null,
+        message: parsed.selection.message,
+      };
+    case "revalidated":
+      return {
+        state: "revalidated",
+        contract_valid: true,
+        start_locked: false,
+        state_label: "ASIO REVALIDATED",
+        reason: null,
+        message: parsed.selection.message,
+      };
+    case "invalid":
+      return {
+        state: "invalid",
+        contract_valid: true,
+        start_locked: true,
+        state_label: "ASIO INVALID",
+        reason: parsed.selection.reason,
+        message: parsed.selection.message,
+      };
+  }
+};
 
 const statusMatchesBackend = (
   status: LiveAudioInputStatus,
@@ -42,7 +487,19 @@ export const liveAudioInputBackendState = (input: {
 }): LiveAudioInputBackendState => {
   if (!input.backendKnown || input.backendBusy) return "checking";
   if (!input.backend || input.backendError?.trim()) return "fault";
-  if (!input.backend.built) return "not_built";
+  const parsed = parseLiveAudioInputBackendSummary(input.backend);
+  if (!parsed.ok) return "contract_invalid";
+  switch (parsed.summary.availability) {
+    case "not_packaged":
+      return "not_packaged";
+    case "fault":
+      return "fault";
+    case "unsupported":
+      return "unsupported";
+    case "ready":
+      if (!liveAudioInputBackendCanDispatch(parsed.summary)) return "contract_invalid";
+      break;
+  }
   if (statusMatchesBackend(input.status, input.backend.id)) {
     if (!input.statusKnown) return "checking";
     if (input.status.stale || input.status.last_error?.trim()) return "fault";
@@ -69,8 +526,12 @@ export const liveAudioInputBackendStateLabel = (
   switch (state) {
     case "checking":
       return "CHECKING";
-    case "not_built":
-      return "NOT BUILT";
+    case "not_packaged":
+      return "NOT PACKAGED";
+    case "unsupported":
+      return "UNSUPPORTED";
+    case "contract_invalid":
+      return "CONTRACT INVALID";
     case "empty":
       return "EMPTY";
     case "select_device":

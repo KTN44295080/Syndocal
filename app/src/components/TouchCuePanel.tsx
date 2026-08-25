@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import type { CueSummary, EngineSnapshot } from "../types";
 import { cueIdentityCss } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
+import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
 
 type MaybePromise = void | Promise<void>;
 
@@ -12,6 +13,7 @@ export interface TouchCuePad {
 }
 
 interface TouchCuePanelProps {
+  bankAuthority: FullBankAuthoritySnapshot;
   snapshot: EngineSnapshot;
   activeCue: CueSummary | null;
   nextCue: CueSummary | null;
@@ -27,6 +29,14 @@ interface TouchCuePanelProps {
 export function TouchCuePanel(props: TouchCuePanelProps) {
   return (
     <section class="panel touchPanel touchCuePanel">
+      <Show
+        when={props.bankAuthority.issue === null}
+        fallback={
+          <p class="empty" role="alert" data-bank-authority-unavailable={props.bankAuthority.issue?.kind}>
+            {props.bankAuthority.issue ? bankAuthorityIssueMessage(props.bankAuthority.issue) : ""}
+          </p>
+        }
+      >
       <div class="panelHeader">
         <h2>Touch Cues</h2>
         <Show when={props.activeCue} fallback={<span>Standby</span>}>
@@ -93,6 +103,7 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
             <progress max="1" value={fade().progress} />
           </div>
         )}
+      </Show>
       </Show>
     </section>
   );

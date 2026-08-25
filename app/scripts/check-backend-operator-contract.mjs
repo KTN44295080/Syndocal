@@ -278,7 +278,7 @@ assert.match(
 const beginRecoveryHelper = section(
   app,
   "const beginProjectTransactionWithRecovery = async (",
-  "const queryProjectTransactionTerminal = async (",
+  "const cancelProjectTransactionWithRecovery = async (",
 );
 assert.match(
   beginRecoveryHelper,
@@ -304,7 +304,11 @@ const cancelRecoveryHelper = section(
   "const cancelProjectTransactionWithRecovery = async (",
   "const commitProjectTransactionWithRecovery = async (",
 );
-assert.match(cancelRecoveryHelper, /ownerId:\s*identity\.ownerId/);
+assert.match(
+  cancelRecoveryHelper,
+  /projectTransactionTerminalArgs\(transaction, identity\)/,
+  "Cancel must derive the complete owner-bound terminal envelope from the shared strict helper",
+);
 assert.match(cancelRecoveryHelper, /"cancel_project_transaction",\s*cancelArgs/);
 assert.equal(
   [...app.matchAll(/\bcancelProjectTransactionWithRecovery\(/g)].length,
@@ -313,19 +317,24 @@ assert.equal(
 );
 assert.equal(
   [...app.matchAll(/\bcommitProjectTransactionWithRecovery\(/g)].length,
-  0,
-  "no specialized workflow may bypass the central inline Commit recovery path",
+  1,
+  "the sole central mutation workflow must use the shared Commit recovery helper",
 );
 const genericCommit = section(app, "transaction = await beginProjectTransactionWithRecovery", "const listen = <T,>");
 assert.match(
   genericCommit,
-  /"commit_project_transaction"[\s\S]*?ownerId:\s*projectTransactionOwnerId/,
-  "the generic Commit workflow must bind the renderer owner",
+  /commitProjectTransactionWithRecovery\(transaction, transactionIdentity, settleTerminal\)/,
+  "the generic Commit workflow must bind its exact transaction identity and terminal settlement",
+);
+const commitRecoveryHelper = section(
+  app,
+  "const commitProjectTransactionWithRecovery = async (",
+  "// A convergence poll can briefly leave the old transaction/recovery detail",
 );
 assert.match(
-  genericCommit,
-  /catch \(commitError\)[\s\S]*?queryProjectTransactionTerminal\(transactionIdentity\)[\s\S]*?terminal\.status !== "committed"[\s\S]*?mutation = terminal\.mutation/s,
-  "the generic Commit workflow must recover only the exact committed terminal mutation after reply loss",
+  commitRecoveryHelper,
+  /projectTransactionTerminalArgs\(transaction, identity\)[\s\S]*?recoverProjectTransactionTerminalInForeground\(\s*"commit",\s*commitArgs,\s*identity,\s*settleTerminal,[\s\S]*?status === "committed"[\s\S]*?status === "cancelled"/s,
+  "Commit must use the exact owner-bound terminal envelope and reject a recovered Cancel",
 );
 assert.match(
   app,
@@ -421,13 +430,13 @@ assert.match(
 );
 assert.match(
   ownerRegistration,
-  /current\.key === projectTransactionOwnerRegistrationStatusKey[\s\S]*?key !== projectTransactionOwnerRegistrationStatusKey/s,
-  "unkeyed background failures must not erase the actionable owner-registration failure",
+  /\(current\.key === projectTransactionOwnerRegistrationStatusKey[\s\S]*?\|\| current\.key === projectTransactionTerminalRecoveryStatusKey\)[\s\S]*?&& key !== current\.key/s,
+  "unkeyed background failures must not erase owner-registration or exact terminal-recovery failures",
 );
 assert.match(
   ownerRegistration,
-  /result\.kind === "clear"[\s\S]*?current\.key === projectTransactionOwnerRegistrationStatusKey[\s\S]*?appStatusFromMessage\("Ready"\)/s,
-  "post-commit refresh must not unconditionally clear a live owner-registration failure",
+  /result\.kind === "clear"[\s\S]*?current\.key === projectTransactionOwnerRegistrationStatusKey[\s\S]*?\|\| current\.key === projectTransactionTerminalRecoveryStatusKey[\s\S]*?appStatusFromMessage\("Ready"\)/s,
+  "post-commit refresh must not clear owner-registration or exact terminal-recovery failures",
 );
 const registeredOwnerCommand = section(
   app,

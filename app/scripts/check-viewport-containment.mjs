@@ -1,10 +1,12 @@
 import { execSync, spawn } from "node:child_process";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import ts from "typescript";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
@@ -15,6 +17,7 @@ const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
+const liveAudioRestoreOnlyMode = process.argv.includes("--live-audio-restore-only");
 const fullscreenVjOnlyMode = process.argv.includes("--fullscreen-vj");
 const operatorVjOnlyMode = process.argv.includes("--operator-vj-only");
 const vjBankOnlyMode = process.argv.includes("--vj-bank-only");
@@ -120,7 +123,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
           ? "auto-vj"
           : audioReactiveOnlyMode
             ? "audio-reactive"
-            : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
+            : vjEmptyMode || liveAudioOnlyMode || liveAudioRestoreOnlyMode || fullscreenVjOnlyMode
               ? "vj-empty"
               : timelineLayeredOnlyMode
                 ? "timeline-layered"
@@ -152,6 +155,12 @@ const controlScreenshotDir = process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR
 const primaryOperationalViewport = { width: 1920, height: 1080 };
 const measuredClientSizeViewport = { width: 1920, height: 1032 };
 const extendedCeilingViewport = { width: 2048, height: 1152 };
+// Physical 3840x2160 desktop at 150% scaling, expressed as the maximized
+// logical client area (2560x1392). Pane reflow must reflow, never shrink, at
+// this class, so the runner drives deviceScaleFactor 1.5 for exactly it.
+const physical4KAt150PercentViewport = { width: 2560, height: 1392 };
+const physical4KLogicalScaleFactor = 1.5;
+let cachedSceneMatrixBankMutationTauriLane = null;
 const defaultMixerPaneViewport = { width: 860, height: 520 };
 const compactFallbackViewports = [
   { width: 1366, height: 768 },
@@ -176,12 +185,14 @@ const viewports = paneMixerOnlyMode
     : largeShowMode
     ? [primaryOperationalViewport]
     : paneReflowOnlyMode
-      ? allViewports
+      ? [...allViewports, physical4KAt150PercentViewport]
     : timelineSourcePlacementOnlyMode || controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
     ? [primaryOperationalViewport]
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode || barBeamsOnlyMode
       ? [primaryOperationalViewport]
-    : audioReactiveOnlyMode
+    : liveAudioRestoreOnlyMode
+      ? [primaryOperationalViewport]
+      : audioReactiveOnlyMode
       ? [primaryOperationalViewport, compactFallbackViewports[0]]
       : fullscreenVjOnlyMode || operatorVjOnlyMode
         ? [primaryOperationalViewport, ...compactFallbackViewports]
@@ -194,6 +205,12 @@ const fullWindowTimelineViewports = requestedViewport
 const captureAllViewportScreenshots = process.env.SYNDOCAL_VIEWPORT_CAPTURE_ALL === "1";
 const matchesViewport = (candidate, reference) =>
   candidate.width === reference.width && candidate.height === reference.height;
+// Only the physical-4K-at-150% pane-reflow class renders with a scaled
+// backing store; every other viewport keeps the historical 1:1 mapping.
+const deviceScaleFactorForViewport = (viewport) =>
+  matchesViewport(viewport, physical4KAt150PercentViewport)
+    ? physical4KLogicalScaleFactor
+    : 1;
 const isPrimaryOperationalViewport = (viewport) => matchesViewport(viewport, primaryOperationalViewport);
 const isMeasuredClientSizeViewport = (viewport) => matchesViewport(viewport, measuredClientSizeViewport);
 const shouldCaptureViewport = (viewport) =>
@@ -825,7 +842,8 @@ class CdpClient {
       const waiters = [...this.pending.values()];
       this.pending.clear();
       const error = new Error(reason);
-      for (const { reject } of waiters) {
+      for (const { reject, timeout } of waiters) {
+        clearTimeout(timeout);
         reject(error);
       }
       const eventWaiters = [...this.eventWaiters.values()].flat();
@@ -859,8 +877,9 @@ class CdpClient {
       if (!data.id || !this.pending.has(data.id)) {
         return;
       }
-      const { resolve: resolveCall, reject } = this.pending.get(data.id);
+      const { resolve: resolveCall, reject, timeout } = this.pending.get(data.id);
       this.pending.delete(data.id);
+      clearTimeout(timeout);
       if (data.error) {
         reject(new Error(JSON.stringify(data.error)));
         return;
@@ -869,7 +888,7 @@ class CdpClient {
     });
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = 15_000) {
     if (!this.socket) {
       throw new Error("CDP socket is not connected.");
     }
@@ -878,9 +897,19 @@ class CdpClient {
     }
     const id = this.nextId;
     this.nextId += 1;
-    this.socket.send(JSON.stringify({ id, method, params }));
     return new Promise((resolveCall, reject) => {
-      this.pending.set(id, { resolve: resolveCall, reject });
+      const timeout = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`CDP command ${method} did not reply within ${timeoutMs} ms.`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolveCall, reject, timeout });
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        this.pending.delete(id);
+        clearTimeout(timeout);
+        reject(error);
+      }
     });
   }
 
@@ -1044,7 +1073,7 @@ async function navigateToReadyApp(
   await waitForApp(client);
   const previousTimeOrigin = await client.evaluate("performance.timeOrigin");
   const loaded = client.waitForEvent("Page.loadEventFired", 8_000);
-  await Promise.all([
+  await awaitObservedPromises([
     client.send("Page.navigate", { url }),
     loaded,
   ]);
@@ -1056,6 +1085,49 @@ async function navigateToReadyApp(
   });
 }
 
+const observePromise = (promise) => promise.then(
+  (value) => ({ ok: true, value }),
+  (error) => ({ ok: false, error }),
+);
+
+async function awaitObservedPromises(promises) {
+  const results = await Promise.all(promises.map(observePromise));
+  const failed = results.find((result) => !result.ok);
+  if (failed) throw failed.error;
+  return results.map((result) => result.value);
+}
+
+async function navigateToReadyAppThroughExpectedBeforeUnload(client, url) {
+  await waitForApp(client);
+  const previousTimeOrigin = await client.evaluate("performance.timeOrigin");
+  const dialogOpening = client.waitForEvent("Page.javascriptDialogOpening", 8_000);
+  const loaded = observePromise(client.waitForEvent("Page.loadEventFired", 8_000));
+  const navigation = observePromise(client.send("Page.navigate", { url }));
+  let dialog;
+  try {
+    dialog = await dialogOpening;
+    if (dialog?.type !== "beforeunload") {
+      throw new Error(`Expected a beforeunload dialog after the authoritative mutation: ${JSON.stringify(dialog)}`);
+    }
+    await client.send("Page.handleJavaScriptDialog", { accept: true });
+    const [navigationResult, loadedResult] = await Promise.all([navigation, loaded]);
+    if (!navigationResult.ok) throw navigationResult.error;
+    if (!loadedResult.ok) throw loadedResult.error;
+  } catch (error) {
+    if (dialog) {
+      await client.send("Page.handleJavaScriptDialog", { accept: false }).catch(() => {});
+    }
+    await Promise.all([navigation, loaded]);
+    throw error;
+  }
+  const state = await waitForReadyWorkspaceDocument(client, {
+    expectedUrl: new URL(url).href,
+    previousTimeOrigin,
+    actionDescription: "accepted beforeunload navigation",
+  });
+  return { ...state, beforeUnloadDialogType: dialog.type };
+}
+
 async function reloadReadyApp(client) {
   await waitForApp(client);
   const previousDocument = await client.evaluate(`({
@@ -1063,7 +1135,7 @@ async function reloadReadyApp(client) {
     timeOrigin: performance.timeOrigin,
   })`);
   const loaded = client.waitForEvent("Page.loadEventFired", 8_000);
-  await Promise.all([
+  await awaitObservedPromises([
     client.send("Page.reload", { ignoreCache: true }),
     loaded,
   ]);
@@ -1087,6 +1159,34 @@ async function waitForClientCondition(client, expression, description) {
 function installLiveAudioMockInPage() {
   const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
   const clone = (value) => JSON.parse(JSON.stringify(value));
+  const nativeAsioSelection = (state) => {
+    if (state === "invalid") {
+      return {
+        state,
+        driver_id: null,
+        driver_name: null,
+        sample_rate_hz: null,
+        input_channels: null,
+        sample_format: null,
+        fixed_buffer_frames: null,
+        reason: "ASIO_STORAGE_SCHEMA_FUTURE",
+        message: "The saved ASIO selection uses a newer schema. Select and start the current driver to revalidate it.",
+      };
+    }
+    return {
+      state,
+      driver_id: "viewport-asio-studio-g1",
+      driver_name: "Viewport ASIO Studio Driver",
+      sample_rate_hz: 48_000,
+      input_channels: 2,
+      sample_format: "f32",
+      fixed_buffer_frames: 128,
+      reason: null,
+      message: state === "restored"
+        ? "Saved ASIO selection is restored; an explicit Start will revalidate it."
+        : "ASIO selection was revalidated by the native Start path.",
+    };
+  };
   const stoppedStatus = () => ({
     running: false,
     stale: false,
@@ -1128,13 +1228,27 @@ function installLiveAudioMockInPage() {
     queue_capacity: 4,
     queue_depth_high_water: 0,
     last_error: null,
+    asio_selection: null,
   });
   const mock = {
     calls: [],
+    registrationArgs: null,
+    programAudioHandoffConfigs: [],
     status: stoppedStatus(),
     deviceGeneration: 0,
     asioGeneration: 0,
+    asioCatalogMode: "exact",
+    backendCatalogueMode: "ready",
+    stopReturnsCleared: false,
     levelsPaused: false,
+    // Hostile levers for the ASIO revalidation arm-consumption acceptance:
+    // every default keeps the historical behavior used by other scenarios.
+    statusPollReject: false,
+    startRejectOnce: false,
+    freezeDeviceGeneration: false,
+    wasapiCatalogEmpty: false,
+    startDelayMs: 120,
+    deviceListHoldMs: 120,
   };
   const invoke = async (command, args = {}) => {
     if (command === "get_live_video_monitor_frame") {
@@ -1149,15 +1263,49 @@ function installLiveAudioMockInPage() {
       return packet;
     }
     mock.calls.push({ command, args: clone(args) });
+    if (command === "register_project_transaction_owner") {
+      if (
+        mock.registrationArgs !== null ||
+        !args ||
+        typeof args !== "object" ||
+        Object.keys(args).length !== 1 ||
+        typeof args.ownerId !== "string" ||
+        !args.ownerId.trim()
+      ) {
+        throw new Error("Live-audio restore owner registration contract violated: " + JSON.stringify(args));
+      }
+      mock.registrationArgs = clone(args);
+      return null;
+    }
+    if (mock.registrationArgs === null) {
+      throw new Error(`Live-audio restore received ${command} before owner registration.`);
+    }
+    if (command === "set_program_audio_handoff_config") {
+      const expectedKeys = ["deviceName", "enabled", "volume"];
+      const actualKeys = args && typeof args === "object" ? Object.keys(args).sort() : [];
+      if (
+        JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) ||
+        typeof args.enabled !== "boolean" ||
+        typeof args.volume !== "number" ||
+        !Number.isFinite(args.volume) ||
+        (args.deviceName !== null && typeof args.deviceName !== "string")
+      ) {
+        throw new Error("Live-audio restore Program Audio handoff contract violated: " + JSON.stringify(args));
+      }
+      mock.programAudioHandoffConfigs.push(clone(args));
+      return null;
+    }
     if (command === "live_audio_input_backends") {
       await delay(40);
-      return [
+      const backends = [
         {
           id: "wasapi_shared",
           label: "WASAPI shared",
           built: true,
           requires_explicit_device: false,
           distribution: "MIT default artifact",
+          availability: "ready",
+          availability_detail: null,
         },
         {
           id: "asio",
@@ -1165,14 +1313,43 @@ function installLiveAudioMockInPage() {
           built: true,
           requires_explicit_device: true,
           distribution: "GPL-3.0-or-proprietary feature build",
+          availability: "ready",
+          availability_detail: null,
         },
       ];
+      if (mock.backendCatalogueMode === "missing_availability") {
+        delete backends[1].availability;
+      } else if (mock.backendCatalogueMode === "unknown_availability") {
+        backends[1].availability = "not_built";
+      } else if (["not_packaged", "fault", "unsupported"].includes(mock.backendCatalogueMode)) {
+        backends[1].availability = mock.backendCatalogueMode;
+        backends[1].availability_detail = `Viewport ${mock.backendCatalogueMode} probe`;
+      }
+      return backends;
     }
     if (command === "list_audio_input_devices") {
-      await delay(120);
+      await delay(mock.deviceListHoldMs ?? 120);
       if (args.backend === "asio") {
-        mock.asioGeneration += 1;
+        if (!mock.freezeDeviceGeneration) {
+          mock.asioGeneration += 1;
+        }
         const generation = mock.asioGeneration;
+        if (mock.asioCatalogMode === "ambiguous") {
+          return [
+            {
+              id: `viewport-asio-studio-g${generation}a`,
+              name: "Viewport ASIO Studio Driver",
+              label: "Viewport ASIO Studio Driver · ASIO",
+              backend: "ASIO",
+            },
+            {
+              id: `viewport-asio-studio-g${generation}b`,
+              name: "Viewport ASIO Studio Driver",
+              label: "Viewport ASIO Studio Driver · ASIO",
+              backend: "ASIO",
+            },
+          ];
+        }
         return [{
           id: `viewport-asio-studio-g${generation}`,
           name: "Viewport ASIO Studio Driver",
@@ -1181,6 +1358,9 @@ function installLiveAudioMockInPage() {
         }];
       }
       mock.deviceGeneration += 1;
+      if (mock.wasapiCatalogEmpty) {
+        return [];
+      }
       if (mock.deviceGeneration === 1) {
         return [
           { id: "viewport-wasapi-studio-g1", name: "Viewport Studio Microphone", label: "Viewport Studio Microphone · WASAPI", backend: "WASAPI" },
@@ -1233,15 +1413,21 @@ function installLiveAudioMockInPage() {
       };
     }
     if (command === "start_live_audio_input") {
-      await delay(120);
+      await delay(mock.startDelayMs ?? 120);
+      if (mock.startRejectOnce) {
+        mock.startRejectOnce = false;
+        throw new Error("Viewport hostile ASIO Start rejection.");
+      }
       const request = args.request ?? {};
+      const startsAsio = request.backend === "asio";
+      const nativeAsioVerdict = mock.status.asio_selection;
       mock.status = {
         running: true,
         stale: false,
         safety_clear_pending: false,
         device_id: request.device_id ?? null,
-        device_name: "Viewport Studio Microphone",
-        backend: "WASAPI",
+        device_name: startsAsio ? "Viewport ASIO Studio Driver" : "Viewport Studio Microphone",
+        backend: startsAsio ? "ASIO" : "WASAPI",
         sample_format: request.sample_format ?? "f32",
         sample_rate: request.sample_rate ?? 48_000,
         channels: request.stream_channels ?? 2,
@@ -1276,14 +1462,23 @@ function installLiveAudioMockInPage() {
         queue_capacity: 4,
         queue_depth_high_water: 4,
         last_error: null,
+        // The app-side terminal fence decides which current ASIO Start may
+        // reach native. Once it does, both a restored selection and a
+        // one-attempt explicitly armed invalid selection revalidate here; a
+        // status poll never upgrades either verdict by itself.
+        asio_selection: startsAsio &&
+          (nativeAsioVerdict?.state === "restored" || nativeAsioVerdict?.state === "invalid")
+          ? nativeAsioSelection("revalidated")
+          : nativeAsioVerdict ?? null,
       };
       return clone(mock.status);
     }
     if (command === "stop_live_audio_input") {
       await delay(120);
+      const priorAsioSelection = mock.status.asio_selection ?? null;
       mock.status = {
         ...stoppedStatus(),
-        safety_clear_pending: true,
+        safety_clear_pending: !mock.stopReturnsCleared,
         device_id: "viewport-wasapi-studio-g3a",
         device_name: "Viewport Studio Microphone",
         backend: "WASAPI",
@@ -1299,10 +1494,17 @@ function installLiveAudioMockInPage() {
         max_callback_frames: 8_192,
         queue_capacity: 4,
         queue_depth_high_water: 4,
+        asio_selection: priorAsioSelection,
       };
       return clone(mock.status);
     }
-    if (command === "live_audio_input_status") return clone(mock.status);
+    if (command === "live_audio_input_status") {
+      if (mock.statusPollReject) {
+        await delay(30);
+        throw new Error("Viewport hostile live audio status outage.");
+      }
+      return clone(mock.status);
+    }
     if (command === "live_audio_input_levels") {
       if (mock.levelsPaused) {
         await new Promise(() => {});
@@ -1346,6 +1548,9 @@ function readLiveAudioRailStateInPage() {
   if (!rail) return null;
   const action = rail.querySelector('[data-live-audio-action="transport"]');
   const refresh = rail.querySelector('[data-live-audio-action="refresh"]');
+  const asioRevalidate = rail.querySelector('[data-live-audio-action="asio-revalidate"]');
+  const savedSelection = rail.querySelector('[data-live-audio-saved-state]');
+  const asioVerdict = rail.querySelector('[data-live-audio-asio-verdict]');
   const device = rail.querySelector('[data-live-audio-control="device"]');
   const backend = rail.querySelector('[data-live-audio-control="backend"]');
   const sampleRate = rail.querySelector('[data-live-audio-control="rate"]');
@@ -1369,12 +1574,17 @@ function readLiveAudioRailStateInPage() {
   return {
     health: rail.getAttribute("data-health") ?? "",
     backend: backend?.value ?? rail.getAttribute("data-live-audio-backend") ?? "",
+    backendData: rail.getAttribute("data-live-audio-backend") ?? "",
     backendState: rail.getAttribute("data-live-audio-backend-state") ?? "",
+    backendAvailability: rail.getAttribute("data-live-audio-backend-availability") ?? "",
     backendBuilt: rail.getAttribute("data-live-audio-backend-built") ?? "",
     backendOptions: optionValues(backend),
     actionText: (action?.textContent ?? "").trim(),
     actionDisabled: Boolean(action?.disabled),
     refreshDisabled: Boolean(refresh?.disabled),
+    asioRevalidateVisible: asioRevalidate instanceof HTMLButtonElement,
+    asioRevalidateDisabled: Boolean(asioRevalidate?.disabled),
+    asioRevalidateText: (asioRevalidate?.textContent ?? "").trim(),
     deviceDisabled: Boolean(device?.disabled),
     deviceTitle: device?.getAttribute("title") ?? "",
     deviceInvalid: device?.getAttribute("aria-invalid") ?? "",
@@ -1385,6 +1595,14 @@ function readLiveAudioRailStateInPage() {
     sampleRateOptions: optionValues(sampleRate),
     selectedBuffer: buffer?.value ?? "",
     bufferOptions: optionValues(buffer),
+    savedSelectionState: savedSelection?.getAttribute("data-live-audio-saved-state") ?? "",
+    savedSelectionReason: savedSelection?.getAttribute("data-live-audio-saved-reason") ?? "",
+    asioVerdictState: asioVerdict?.getAttribute("data-live-audio-asio-verdict") ?? "",
+    asioVerdictContract: asioVerdict?.getAttribute("data-live-audio-asio-contract") ?? "",
+    asioVerdictStartLocked: asioVerdict?.getAttribute("data-live-audio-asio-start-locked") ?? "",
+    asioVerdictReason: asioVerdict?.getAttribute("data-live-audio-asio-reason") ?? "",
+    asioVerdictMessage: asioVerdict?.getAttribute("data-live-audio-asio-message") ?? "",
+    asioVerdictText: (asioVerdict?.textContent ?? "").trim().replace(/\s+/g, " "),
     mixOptions: optionValues(mix),
     configFormat: (rail.querySelector(".liveAudioConfigFormat")?.textContent ?? "").trim(),
     meters,
@@ -1396,6 +1614,7 @@ function readLiveAudioRailStateInPage() {
       .map((node) => (node.textContent ?? "").trim().replace(/\s+/g, " ")),
     safetyMessage: (rail.querySelector(".liveAudioSafetyMessage")?.textContent ?? "").trim(),
     announcement: (rail.querySelector(".liveAudioHealthAnnouncement")?.textContent ?? "").trim(),
+    appStatus: (document.querySelector(".appStatusLine .appStatusText")?.textContent ?? "").trim(),
   };
 }
 
@@ -3626,7 +3845,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   const expectedTransportIconActions = ['back', 'fade', 'timeline', 'clear-flags'];
   const expectedTransportTextActions = ['go', 'dmx-blackout', 'video-blackout', 'all-blackout'];
   const expectedViewIconActions = ['matrix', 'cue-pads', 'status'];
-  const expectedViewIconWidths = { matrix: 88, 'cue-pads': 88, status: 28 };
+  const expectedViewIconWidths = { matrix: 28, 'cue-pads': 28, status: 28 };
   // The Control/Edit header lays the action groups inline in the same bank
   // toolbar row, so every group must share the header's vertical center.
   const surfaceHeaderCenter = matrix.toolbarRect
@@ -3730,16 +3949,15 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         metric.title.length > 0 &&
         metric.ariaLabel === metric.title),
     viewAndStatusControlsStayInsideOneRowSurfaceHeader:
-      // On the Control/Edit host the actions sit inline in the bank toolbar
-      // row instead of right-aligned as on the old Live Desk header; the
-      // contract that survives is containment inside the header and one
-      // shared visual row.
+      // Matrix/Cue Pads/Status are a three-button cluster anchored to the
+      // far-right edge of the Bank header on one visual row.
       matrix.toolbarActionsCount === 1 &&
       matrix.viewToggleButtonCount === 2 &&
       matrix.statusToggleCount === 1 &&
       matrix.toolbarActionsContained &&
       matrix.viewToggleContained &&
       matrix.statusToggleContained &&
+      Math.abs((matrix.toolbarRect?.right ?? 0) - (matrix.toolbarActionsRect?.right ?? -100)) <= 1 &&
       headerAnchoredOneVisualRow,
     iconTokensDriveCompactViewGeometryAndFocus:
       matrix.iconSizeToken === '18px' &&
@@ -3749,8 +3967,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         Math.abs(metric.iconWidth - 18) <= 0.01 &&
         Math.abs(metric.iconHeight - 18) <= 0.01) &&
       viewIconMetrics.every((metric) =>
-        // The Edit-hosted two-surface selector keeps its existing 88px tabs;
-        // the separate status icon keeps the 28px token width.
+        // The three actions intentionally use one exact token width.
         Math.abs(metric.width - expectedViewIconWidths[metric.action]) <= 0.01 &&
         Math.abs(metric.iconWidth - 18) <= 0.01 &&
         Math.abs(metric.iconHeight - 18) <= 0.01) &&
@@ -5263,6 +5480,7 @@ function installControlStageEditMockInPage() {
     undoSnapshots: [],
     redoSnapshots: [],
     transactionId: 0,
+    ticket: null,
   };
   const historyStatus = (undoLabel = null, redoLabel = null) => ({
     can_undo: mock.undoSnapshots.length > 0,
@@ -5271,19 +5489,87 @@ function installControlStageEditMockInPage() {
     redo_depth: mock.redoSnapshots.length,
     undo_label: undoLabel ?? (mock.undoSnapshots.length > 0 ? "Set Fixture Transform" : null),
     redo_label: redoLabel ?? (mock.redoSnapshots.length > 0 ? "Set Fixture Transform" : null),
+    project_epoch: mock.ticket?.project_epoch ?? 0,
+    project_revision: mock.ticket ? mock.ticket.project_revision + mock.undoSnapshots.length : 0,
+    checkpoint_hash: mock.ticket?.project_checkpoint_hash ?? "",
+    history_generation: mock.undoSnapshots.length + mock.redoSnapshots.length,
+    undo_entry_id: null,
+    undo_checkpoint_hash: null,
+    redo_entry_id: null,
+    redo_checkpoint_hash: null,
   });
+  const terminalMutation = (undoLabel = null, redoLabel = null) => {
+    const history = historyStatus(undoLabel, redoLabel);
+    return {
+      history_status: history,
+      authority: {
+        project_epoch: history.project_epoch,
+        project_revision: history.project_revision,
+        checkpoint_hash: history.checkpoint_hash,
+        publication_generation: mock.undoSnapshots.length,
+        publication_kind: "mutation",
+        mapping_replacement_generation: 0,
+        authority_disposition_generation: 0,
+        authority_disposition: "runtime_sanitize",
+        recovery_authority_serial: 0,
+        recovery_authority_last_transition: { kind: "legacy_unknown" },
+        path_generation: 0,
+        history_generation: history.history_generation,
+        current_project_path: null,
+        snapshot: clone(mock.current),
+        profiles: [],
+        fixture_groups: [],
+        operator_policy: null,
+        midi_mappings: [],
+        osc_mappings: [],
+        dmx_mappings: [],
+        dj_track_triggers: [],
+        history,
+        input_runtime: {},
+      },
+    };
+  };
   const invoke = async (command, args = {}) => {
     mock.calls.push({ command, args: clone(args) });
     if (command === "begin_project_transaction") {
       mock.transactionId += 1;
       mock.pendingBefore = clone(mock.current);
-      return mock.transactionId;
+      mock.ticket = {
+        transaction_id: mock.transactionId,
+        project_epoch: args.expectedEpoch,
+        project_revision: args.expectedRevision,
+        project_checkpoint_hash: args.expectedCheckpointHash,
+        client_operation_id: args.clientOperationId,
+        shape_fingerprint: args.shapeFingerprint,
+        schema_version: args.schemaVersion,
+        owner_id: args.ownerId,
+        window_label: "main",
+        owner_incarnation: 1,
+        label: args.label,
+        coalesce_key: args.coalesceKey,
+      };
+      return clone(mock.ticket);
     }
     if (command === "set_fixture_transform") {
-      const fixture = mock.current.fixtures.find((candidate) => candidate.id === args.fixtureId);
-      if (!fixture) throw new Error(`Fixture ${args.fixtureId} was not found`);
-      fixture.position = clone(args.position);
-      fixture.rotation = clone(args.rotation);
+      const request = args.request;
+      const expectedKeys = [
+        "expectedEpoch",
+        "fixtureId",
+        "ownerId",
+        "position",
+        "projectTransactionId",
+        "rotation",
+      ];
+      if (!request || JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(expectedKeys)
+        || request.projectTransactionId !== mock.ticket?.transaction_id
+        || request.expectedEpoch !== mock.ticket?.project_epoch
+        || request.ownerId !== mock.ticket?.owner_id) {
+        throw new Error("Control Stage transform did not use the exact strict ticket request.");
+      }
+      const fixture = mock.current.fixtures.find((candidate) => candidate.id === request.fixtureId);
+      if (!fixture) throw new Error(`Fixture ${request.fixtureId} was not found`);
+      fixture.position = clone(request.position);
+      fixture.rotation = clone(request.rotation);
       return null;
     }
     if (command === "commit_project_transaction") {
@@ -5292,12 +5578,12 @@ function installControlStageEditMockInPage() {
         mock.pendingBefore = null;
         mock.redoSnapshots = [];
       }
-      return historyStatus("Set Fixture Transform", null);
+      return terminalMutation("Set Fixture Transform", null);
     }
     if (command === "cancel_project_transaction") {
       if (mock.pendingBefore) mock.current = mock.pendingBefore;
       mock.pendingBefore = null;
-      return historyStatus();
+      return terminalMutation();
     }
     if (command === "undo_project_transaction") {
       const previous = mock.undoSnapshots.pop();
@@ -5307,6 +5593,7 @@ function installControlStageEditMockInPage() {
       }
       return historyStatus(null, "Set Fixture Transform");
     }
+    if (command === "acknowledge_project_transaction") return undefined;
     if (command === "get_project_history_status") return historyStatus();
     if (command === "get_snapshot") return clone(mock.current);
     if (command === "trigger_cue") {
@@ -11731,6 +12018,83 @@ async function clickLiveAudioControl(client, kind) {
   );
 }
 
+/**
+ * The restore contract must be exercised through a trusted input path. A DOM
+ * `.click()` would not re-arm the App's native-owner registration fence after
+ * the browser fixture startup; this real CDP gesture proves the actual event
+ * ordering without widening the mock into a general native-runtime shim.
+ */
+async function dispatchLiveAudioCdpControlClick(
+  client,
+  action,
+  description,
+  { forceDisabledForDirectHandlerProof = false } = {},
+) {
+  const selector = `.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action="${action}"]`;
+  const target = await client.evaluate(`(() => {
+    const button = document.querySelector(${JSON.stringify(selector)});
+    if (!(button instanceof HTMLButtonElement)) return { found: false };
+    const wasDisabled = button.disabled;
+    if (${forceDisabledForDirectHandlerProof ? "true" : "false"}) button.disabled = false;
+    button.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const rect = button.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = x >= 0 && x < innerWidth && y >= 0 && y < innerHeight
+      ? document.elementFromPoint(x, y)
+      : null;
+    return {
+      found: true,
+      enabled: !button.disabled,
+      wasDisabled,
+      x,
+      y,
+      width: rect.width,
+      height: rect.height,
+      centerInViewport: x >= 0 && x < innerWidth && y >= 0 && y < innerHeight,
+      topHitOwnsButton: Boolean(hit && (hit === button || button.contains(hit))),
+    };
+  })()`);
+  if (!target.found || !target.enabled || !target.centerInViewport || !target.topHitOwnsButton
+    || target.width <= 0 || target.height <= 0) {
+    throw new Error(`${description} is not a unique enabled CDP hit target: ${JSON.stringify(target)}`);
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: target.x,
+    y: target.y,
+    button: "none",
+    buttons: 0,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: target.x,
+    y: target.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  if (forceDisabledForDirectHandlerProof) {
+    await client.evaluate(`(() => {
+      const button = document.querySelector(${JSON.stringify(selector)});
+      if (button instanceof HTMLButtonElement) button.disabled = ${target.wasDisabled ? "true" : "false"};
+    })()`);
+  }
+  return {
+    ...target,
+    pointerSequence: "mouseMoved>mousePressed>mouseReleased",
+    forcedDirectHandlerProof: forceDisabledForDirectHandlerProof,
+  };
+}
+
 function setLiveAudioSelectInPage(kind, value) {
   const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
   if (!rail) return false;
@@ -11748,6 +12112,21 @@ async function setLiveAudioSelect(client, kind, value) {
     "(" + setLiveAudioSelectInPage.toString() + ")(" +
       JSON.stringify(kind) + "," + JSON.stringify(value) + ")",
   );
+}
+
+async function setLiveAudioSelectWhenEnabled(client, kind, value, description) {
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const select = document.querySelector('[data-live-audio-control=${JSON.stringify(kind)}]');
+      return select instanceof HTMLSelectElement && !select.disabled &&
+        [...select.options].some((option) => option.value === ${JSON.stringify(value)});
+    })()`,
+    `${description} control enablement`,
+  );
+  const selected = await setLiveAudioSelect(client, kind, value);
+  if (!selected) throw new Error(`${description} did not dispatch the exact enabled ${kind} selection ${value}.`);
+  return selected;
 }
 
 async function runLiveAudioAcceptance(client, locale, label) {
@@ -12151,6 +12530,1930 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
     await sleep(60);
   }
+}
+
+const liveAudioInputSelectionStorageKey = "syndocal.live-audio-input-selection.v1";
+
+const persistedViewportAsioSelection = (identity = {
+  backend: "ASIO",
+  name: "Viewport ASIO Studio Driver",
+  label: "Viewport ASIO Studio Driver · ASIO",
+}) => JSON.stringify({
+  schema_version: 1,
+  backend: "asio",
+  device_identity: identity,
+  sample_rate: 48_000,
+  sample_format: "f32",
+  stream_channels: 2,
+  buffer_frames: 128,
+  channel_mix: { mode: "average_all" },
+});
+
+/**
+ * Make the App read a real persisted selection at mount while it is still in
+ * browser-fixture mode. The strict native mock is deliberately installed only
+ * after this restart: it proves that the production storage path ran before
+ * the first device discovery and avoids treating a synthetic native boot as a
+ * browser fixture.
+ */
+async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  const persistedSelection = rawSelection === null
+    ? ""
+    : `window.localStorage.setItem(${JSON.stringify(liveAudioInputSelectionStorageKey)}, ${JSON.stringify(rawSelection)});`;
+  await client.evaluate(
+    "window.localStorage.clear();" +
+      persistedSelection +
+      "window.localStorage.setItem('syndocal.uiLocale.v1', 'en');",
+  );
+  await reloadReadyApp(client);
+  await pressKey(client, "F2");
+  await sleep(120);
+  await clickControlModeOption(client, "mixer");
+  await sleep(120);
+  await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
+  const beforeMock = await readLiveAudioRailState(client);
+  const storedBeforeMock = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
+  return { beforeMock, storedBeforeMock };
+}
+
+const readLiveAudioRestoreMockAudit = async (client) => await client.evaluate(
+  "JSON.parse(JSON.stringify({" +
+    "calls: window.__syndocalLiveAudioMock?.calls ?? []," +
+    "registrationArgs: window.__syndocalLiveAudioMock?.registrationArgs ?? null," +
+    "programAudioHandoffConfigs: window.__syndocalLiveAudioMock?.programAudioHandoffConfigs ?? []" +
+  "}))",
+);
+
+const countLiveAudioRestoreCalls = (calls, command, predicate = () => true) =>
+  calls.filter((call) => call.command === command && predicate(call)).length;
+
+async function runLiveAudioRestoreScenario(
+  client,
+  viewport,
+  { id, rawSelection, asioCatalogMode = "exact", backendCatalogueMode = "ready", expectedSavedState, expectedSavedReason },
+) {
+  const startup = await prepareLiveAudioRestoreViewport(client, viewport, rawSelection);
+  await installLiveAudioInvokeMock(client);
+  await client.evaluate(
+    `(() => {
+      const mock = window.__syndocalLiveAudioMock;
+      if (!mock) throw new Error("Live audio restore mock was not installed.");
+      mock.asioCatalogMode = ${JSON.stringify(asioCatalogMode)};
+      mock.backendCatalogueMode = ${JSON.stringify(backendCatalogueMode)};
+    })()`,
+  );
+  const refreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    `Live audio restore ${id} Refresh`,
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const saved = rail?.querySelector('[data-live-audio-saved-state]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return Boolean(
+        rail && saved &&
+        saved.getAttribute('data-live-audio-saved-state') === ${JSON.stringify(expectedSavedState)} &&
+        saved.getAttribute('data-live-audio-saved-reason') === ${JSON.stringify(expectedSavedReason)} &&
+        calls.some((call) => call.command === 'register_project_transaction_owner') &&
+        calls.some((call) => call.command === 'set_program_audio_handoff_config') &&
+        calls.some((call) => call.command === 'live_audio_input_backends')
+      );
+    })()`,
+    `Live audio restore ${id} settlement`,
+  );
+  await sleep(40);
+  const settled = await readLiveAudioRailState(client);
+  const mockAudit = await readLiveAudioRestoreMockAudit(client);
+  const calls = mockAudit.calls;
+  const storedAfter = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
+  return { id, startup, refreshTarget, settled, calls, mockAudit, storedAfter };
+}
+
+/**
+ * A backend availability probe can turn a previously revalidated saved
+ * selection into Fault without changing its identity. The rail must disable
+ * Start, but this scenario also forces a trusted Start gesture through that
+ * visual lock and proves the App-side terminal barrier emits no stream-open
+ * IPC from stale ready state.
+ */
+async function runLiveAudioSavedReadyProbeFaultDirectStart(client) {
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalLiveAudioMock;
+    if (!mock) throw new Error("Live audio saved-ready fault mock was not installed.");
+    mock.backendCatalogueMode = "fault";
+  })()`);
+  const beforeProbe = await readLiveAudioRestoreMockAudit(client);
+  const refreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Live audio saved-ready fault Refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return rail?.getAttribute('data-live-audio-backend-state') === 'fault' &&
+        rail?.getAttribute('data-live-audio-backend-availability') === 'fault' &&
+        calls.filter((call) => call.command === 'live_audio_input_backends').length === ${
+          countLiveAudioRestoreCalls(beforeProbe.calls, "live_audio_input_backends") + 1
+        };
+    })()`,
+    "Live audio saved-ready fault catalogue refresh",
+  );
+  const afterProbe = await readLiveAudioRestoreMockAudit(client);
+  const startCountBeforeForcedGesture = countLiveAudioRestoreCalls(
+    afterProbe.calls,
+    "start_live_audio_input",
+  );
+  const forcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Live audio saved-ready fault forced Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const status = document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '';
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return status.includes('Audio input backend asio is fault; devices and Start are locked.') &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          startCountBeforeForcedGesture
+        };
+    })()`,
+    "Live audio saved-ready fault direct Start rejection",
+  );
+  return {
+    beforeProbe,
+    refreshTarget,
+    afterProbe,
+    forcedStartTarget,
+    settled: await readLiveAudioRailState(client),
+    afterForcedStart: await readLiveAudioRestoreMockAudit(client),
+  };
+}
+
+const viewportNativeAsioSelection = (state) => state === "invalid"
+  ? {
+      state,
+      driver_id: null,
+      driver_name: null,
+      sample_rate_hz: null,
+      input_channels: null,
+      sample_format: null,
+      fixed_buffer_frames: null,
+      reason: "ASIO_STORAGE_SCHEMA_FUTURE",
+      message: "The saved ASIO selection uses a newer schema. Select and start the current driver to revalidate it.",
+    }
+  : {
+      state,
+      driver_id: "viewport-asio-studio-g1",
+      driver_name: "Viewport ASIO Studio Driver",
+      sample_rate_hz: 48_000,
+      input_channels: 2,
+      sample_format: "f32",
+      fixed_buffer_frames: 128,
+      reason: null,
+      message: state === "restored"
+        ? "Saved ASIO selection is restored; an explicit Start will revalidate it."
+        : "ASIO selection was revalidated by the native Start path.",
+    };
+
+async function setLiveAudioMockNativeAsioSelection(client, state, overrides = {}) {
+  const selection = { ...viewportNativeAsioSelection(state), ...overrides };
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalLiveAudioMock;
+    if (!mock) throw new Error("Live audio native ASIO verdict mock was not installed.");
+    mock.status = { ...mock.status, asio_selection: ${JSON.stringify(selection)} };
+  })()`);
+}
+
+/**
+ * Native persisted-ASIO verdicts are deliberately independent from the
+ * browser's machine-local selection restore. This fixture has no saved local
+ * selection, then proves that invalid remains visibly actionable, its lock is
+ * scoped to ASIO only, and restored is revalidated only by one real explicit
+ * ASIO Start request.
+ */
+async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
+  const startup = await prepareLiveAudioRestoreViewport(client, viewport, null);
+  await installLiveAudioInvokeMock(client);
+  const refreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO verdict initial backend discovery",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+        [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+          .some((option) => option.value === 'viewport-wasapi-studio-g1');
+    })()`,
+    "Native ASIO verdict initial ready WASAPI catalogue",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      const refresh = rail?.querySelector('[data-live-audio-action="refresh"]');
+      return action instanceof HTMLButtonElement && !action.disabled &&
+        refresh instanceof HTMLButtonElement && !refresh.disabled;
+    })()`,
+    "Native ASIO verdict initial WASAPI discovery idle",
+  );
+  const asioSelected = await setLiveAudioSelectWhenEnabled(client, "backend", "asio", "Native ASIO verdict ASIO backend");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return window.__syndocalLiveAudioMock?.asioGeneration >= 1 &&
+        rail?.getAttribute('data-live-audio-backend') === 'asio';
+    })()`,
+    "Native ASIO verdict ASIO driver discovery",
+  );
+  const initialAsio = await readLiveAudioRailState(client);
+  const initialAsioDevice = initialAsio?.deviceOptions?.find((value) => value.startsWith("viewport-asio-studio-g"));
+  assert.ok(initialAsioDevice, "Native ASIO verdict fixture exposes one exact ASIO driver id");
+  const initialAsioDriverSelected = await setLiveAudioSelectWhenEnabled(client, "device", initialAsioDevice, "Native ASIO verdict initial ASIO driver");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return calls.some((call) => call.command === 'get_live_audio_input_capabilities' &&
+        call.args?.backend === 'asio' && call.args?.deviceId === ${JSON.stringify(initialAsioDevice)});
+    })()`,
+    "Native ASIO verdict initial exact driver capability resolution",
+  );
+  const initialAsioRateSelected = await setLiveAudioSelectWhenEnabled(client, "rate", "48000", "Native ASIO verdict initial ASIO rate");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-control=\"buffer\"]')?.disabled === false",
+    "Native ASIO verdict initial fixed-buffer enablement",
+  );
+  const initialAsioBufferSelected = await setLiveAudioSelectWhenEnabled(client, "buffer", "128", "Native ASIO verdict initial ASIO buffer");
+  try {
+    await waitForClientCondition(
+      client,
+      "document.querySelector('[data-live-audio-action=\"transport\"]')?.disabled === false",
+      "Native ASIO verdict initial explicit ASIO configuration",
+    );
+  } catch (error) {
+    throw new Error(`${String(error)}; rail=${JSON.stringify(await readLiveAudioRailState(client))}`);
+  }
+
+  await setLiveAudioMockNativeAsioSelection(client, "invalid");
+  const invalidRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO invalid current-state refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      return rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
+        rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-reason') === 'ASIO_STORAGE_SCHEMA_FUTURE' &&
+        action instanceof HTMLButtonElement && action.disabled;
+    })()`,
+    "Native ASIO invalid verdict visible actionable ASIO lock",
+  );
+  const invalid = await readLiveAudioRailState(client);
+  const auditBeforeInvalidForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const invalidForcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid forced direct Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const status = document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '';
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return status.includes('The saved ASIO selection uses a newer schema.') &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(auditBeforeInvalidForcedStart.calls, "start_live_audio_input")
+        };
+    })()`,
+    "Native ASIO invalid direct Start terminal rejection",
+  );
+  const auditAfterInvalidForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const invalidAfterForcedStart = await readLiveAudioRailState(client);
+
+  const invalidRevalidateControl = await readLiveAudioRailState(client);
+  const auditBeforeDriftArm = await readLiveAudioRestoreMockAudit(client);
+  const driftArmTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "asio-revalidate",
+    "Native ASIO invalid explicit revalidation arm before request drift",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      const status = document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '';
+      return action instanceof HTMLButtonElement && !action.disabled &&
+        status.includes('ASIO revalidation is armed for one Start') &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(auditBeforeDriftArm.calls, "start_live_audio_input")
+        };
+    })()`,
+    "Native ASIO invalid explicit revalidation arm only",
+  );
+  const driftArmArmed = await readLiveAudioRailState(client);
+  const auditAfterDriftArm = await readLiveAudioRestoreMockAudit(client);
+  const driftBufferSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "buffer",
+    "256",
+    "Native ASIO invalid request-drift buffer",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      return rail?.querySelector('[data-live-audio-control="buffer"]')?.value === '256' &&
+        action instanceof HTMLButtonElement && action.disabled;
+    })()`,
+    "Native ASIO invalid request drift clears the arm",
+  );
+  const auditBeforeDriftForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const driftForcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid drifted armed request forced Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+        countLiveAudioRestoreCalls(auditBeforeDriftForcedStart.calls, "start_live_audio_input")
+      };
+    })()`,
+    "Native ASIO invalid drifted arm terminal rejection",
+  );
+  const auditAfterDriftForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const restoreBufferSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "buffer",
+    "128",
+    "Native ASIO invalid restore exact buffer",
+  );
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-control=\"buffer\"]')?.value === '128'",
+    "Native ASIO invalid exact buffer restored",
+  );
+
+  const auditBeforeStaleArm = await readLiveAudioRestoreMockAudit(client);
+  const staleArmTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "asio-revalidate",
+    "Native ASIO invalid explicit revalidation arm before verdict drift",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const action = document.querySelector('[data-live-audio-action="transport"]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return action instanceof HTMLButtonElement && !action.disabled &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(auditBeforeStaleArm.calls, "start_live_audio_input")
+        };
+    })()`,
+    "Native ASIO invalid exact arm before verdict drift",
+  );
+  await setLiveAudioMockNativeAsioSelection(client, "invalid", {
+    message: "The saved ASIO selection changed after the revalidation arm.",
+  });
+  const staleVerdictRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO invalid changed-verdict refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      return rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-message') ===
+          'The saved ASIO selection changed after the revalidation arm.' &&
+        action instanceof HTMLButtonElement && action.disabled;
+    })()`,
+    "Native ASIO invalid verdict drift clears the arm",
+  );
+  const auditBeforeStaleForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const staleForcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid stale arm forced Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+        countLiveAudioRestoreCalls(auditBeforeStaleForcedStart.calls, "start_live_audio_input")
+      };
+    })()`,
+    "Native ASIO invalid stale arm terminal rejection",
+  );
+  const auditAfterStaleForcedStart = await readLiveAudioRestoreMockAudit(client);
+  const replayForcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid replayed arm forced Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+        countLiveAudioRestoreCalls(auditAfterStaleForcedStart.calls, "start_live_audio_input")
+      };
+    })()`,
+    "Native ASIO invalid replayed arm terminal rejection",
+  );
+  const auditAfterReplayForcedStart = await readLiveAudioRestoreMockAudit(client);
+
+  await setLiveAudioMockNativeAsioSelection(client, "invalid");
+  const restoredInvalidVerdictRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO invalid current-verdict refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-message') === ${
+      JSON.stringify(viewportNativeAsioSelection("invalid").message)
+    }`,
+    "Native ASIO invalid original verdict restored",
+  );
+  const auditBeforeExactInvalidArm = await readLiveAudioRestoreMockAudit(client);
+  const exactInvalidArmTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "asio-revalidate",
+    "Native ASIO invalid exact explicit revalidation arm",
+  );
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-live-audio-action="transport"]')?.disabled === false &&
+      (window.__syndocalLiveAudioMock?.calls ?? []).filter((call) => call.command === 'start_live_audio_input').length === ${
+        countLiveAudioRestoreCalls(auditBeforeExactInvalidArm.calls, "start_live_audio_input")
+      }`,
+    "Native ASIO invalid exact arm unlocks only one current Start",
+  );
+  const exactInvalidBeforeStart = await readLiveAudioRailState(client);
+  const auditBeforeExactInvalidStart = await readLiveAudioRestoreMockAudit(client);
+  const exactInvalidStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid exact armed revalidation Start",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return rail?.getAttribute('data-health') === 'live' &&
+        verdict?.getAttribute('data-live-audio-asio-verdict') === 'revalidated' &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(auditBeforeExactInvalidStart.calls, "start_live_audio_input") + 1
+        };
+    })()`,
+    "Native ASIO invalid exact armed native revalidation result",
+  );
+  const exactInvalidRevalidated = await readLiveAudioRailState(client);
+  const auditAfterExactInvalidStart = await readLiveAudioRestoreMockAudit(client);
+  const exactInvalidStartCall = auditAfterExactInvalidStart.calls
+    .filter((call) => call.command === "start_live_audio_input")
+    .at(-1);
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalLiveAudioMock;
+    if (!mock) throw new Error("Live audio native ASIO verdict mock was not installed.");
+    mock.stopReturnsCleared = true;
+  })()`);
+  const exactInvalidStopTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO invalid revalidated Stop",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return rail?.getAttribute('data-health') === 'stopped' &&
+        rail?.querySelector('[data-live-audio-action="refresh"]')?.disabled === false;
+    })()`,
+    "Native ASIO invalid revalidated stopped status",
+  );
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalLiveAudioMock;
+    if (!mock) throw new Error("Live audio native ASIO verdict mock was not installed.");
+    mock.stopReturnsCleared = false;
+  })()`);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-action=\"refresh\"]')?.disabled === false",
+    "Native ASIO invalid revalidated refresh settles",
+  );
+  await setLiveAudioMockNativeAsioSelection(client, "invalid");
+  const wasapiInvalidVerdictRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO invalid verdict restore before WASAPI scope proof",
+  );
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-verdict') === 'invalid'",
+    "Native ASIO invalid verdict restored before WASAPI scope proof",
+  );
+
+  const wasapiSelected = await setLiveAudioSelectWhenEnabled(client, "backend", "wasapi_shared", "Native ASIO verdict WASAPI backend");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+        [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+          .some((option) => option.value.startsWith('viewport-wasapi-studio-g'));
+    })()`,
+    "Native ASIO verdict WASAPI driver discovery",
+  );
+  const wasapiBeforeSelection = await readLiveAudioRailState(client);
+  const wasapiDevice = wasapiBeforeSelection?.deviceOptions?.find((value) => value.startsWith("viewport-wasapi-studio-g"));
+  assert.ok(wasapiDevice, "Native ASIO verdict fixture exposes one exact current WASAPI device id");
+  const wasapiDeviceSelected = await setLiveAudioSelectWhenEnabled(client, "device", wasapiDevice, "Native ASIO verdict WASAPI device");
+  await waitForClientCondition(
+    client,
+    `(() => (window.__syndocalLiveAudioMock?.calls ?? []).some((call) =>
+      call.command === 'get_live_audio_input_capabilities' && call.args?.backend === 'wasapi_shared' &&
+      call.args?.deviceId === ${JSON.stringify(wasapiDevice)}
+    ))()`,
+    "Native ASIO verdict current WASAPI capability resolution",
+  );
+  const wasapiRateSelected = await setLiveAudioSelectWhenEnabled(client, "rate", "48000", "Native ASIO verdict current WASAPI rate");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-control=\"buffer\"]')?.disabled === false",
+    "Native ASIO verdict current WASAPI buffer enablement",
+  );
+  const wasapiBufferSelected = await setLiveAudioSelectWhenEnabled(client, "buffer", "128", "Native ASIO verdict current WASAPI buffer");
+  try {
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const action = rail?.querySelector('[data-live-audio-action="transport"]');
+        return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+          rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
+          action instanceof HTMLButtonElement && !action.disabled;
+      })()`,
+      "Native ASIO invalid verdict never locks current WASAPI Start",
+    );
+  } catch (error) {
+    throw new Error(`${String(error)}; rail=${JSON.stringify(await readLiveAudioRailState(client))}`);
+  }
+  const wasapiWithAsioInvalid = await readLiveAudioRailState(client);
+
+  const restoredAsioGenerationBeforeSelect = await client.evaluate("window.__syndocalLiveAudioMock?.asioGeneration ?? 0");
+  const restoredAsioSelected = await setLiveAudioSelectWhenEnabled(client, "backend", "asio", "Native ASIO verdict restored ASIO backend");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return window.__syndocalLiveAudioMock?.asioGeneration >= ${restoredAsioGenerationBeforeSelect + 1} &&
+        rail?.getAttribute('data-live-audio-backend') === 'asio';
+    })()`,
+    "Native ASIO restored current driver discovery",
+  );
+  const restoredAsioInitial = await readLiveAudioRailState(client);
+  const restoredAsioDevice = restoredAsioInitial?.deviceOptions?.find((value) => value.startsWith("viewport-asio-studio-g"));
+  assert.ok(restoredAsioDevice, "Native ASIO restored fixture exposes an exact current ASIO driver id");
+  const restoredAsioDriverSelected = await setLiveAudioSelectWhenEnabled(client, "device", restoredAsioDevice, "Native ASIO verdict restored ASIO driver");
+  await waitForClientCondition(
+    client,
+    `(() => (window.__syndocalLiveAudioMock?.calls ?? []).some((call) =>
+      call.command === 'get_live_audio_input_capabilities' && call.args?.backend === 'asio' &&
+      call.args?.deviceId === ${JSON.stringify(restoredAsioDevice)}
+    ))()`,
+    "Native ASIO restored current driver capability resolution",
+  );
+  const restoredAsioRateSelected = await setLiveAudioSelectWhenEnabled(client, "rate", "48000", "Native ASIO verdict restored ASIO rate");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-control=\"buffer\"]')?.disabled === false",
+    "Native ASIO restored current fixed-buffer enablement",
+  );
+  const restoredAsioBufferSelected = await setLiveAudioSelectWhenEnabled(client, "buffer", "128", "Native ASIO verdict restored ASIO buffer");
+  await setLiveAudioMockNativeAsioSelection(client, "restored");
+  const restoredRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Native ASIO restored current-state refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      return verdict?.getAttribute('data-live-audio-asio-verdict') === 'restored' &&
+        verdict?.getAttribute('data-live-audio-asio-start-locked') === 'true' &&
+        action instanceof HTMLButtonElement && !action.disabled;
+    })()`,
+    "Native ASIO restored permits one current explicit revalidation Start",
+  );
+  const restoredBeforeStart = await readLiveAudioRailState(client);
+  const restoredAsioStartDevice = restoredBeforeStart?.selectedDevice;
+  const auditBeforeStart = await readLiveAudioRestoreMockAudit(client);
+  const startTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Native ASIO restored explicit revalidation Start",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return rail?.getAttribute('data-health') === 'live' &&
+        verdict?.getAttribute('data-live-audio-asio-verdict') === 'revalidated' &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(auditBeforeStart.calls, "start_live_audio_input") + 1
+        };
+    })()`,
+    "Native ASIO restored Start native revalidation result",
+  );
+  const revalidated = await readLiveAudioRailState(client);
+  const auditAfterStart = await readLiveAudioRestoreMockAudit(client);
+  const startCall = auditAfterStart.calls.filter((call) => call.command === "start_live_audio_input").at(-1);
+  const checks = {
+    startupHasNoMachineLocalSavedSelection:
+      startup.storedBeforeMock === null && startup.beforeMock?.savedSelectionState === "",
+    initialExplicitAsioConfiguresBeforeNativeVerdict:
+      asioSelected && initialAsioDriverSelected && initialAsioRateSelected && initialAsioBufferSelected,
+    invalidIsVisibleAndActionable:
+      invalid?.backend === "asio" &&
+      invalid?.asioVerdictState === "invalid" &&
+      invalid?.asioVerdictContract === "valid" &&
+      invalid?.asioVerdictStartLocked === "true" &&
+      invalid?.asioVerdictReason === "ASIO_STORAGE_SCHEMA_FUTURE" &&
+      invalid?.asioVerdictText.includes("ASIO_STORAGE_SCHEMA_FUTURE") &&
+      invalid?.asioVerdictText.includes("Select and start the current driver") &&
+      invalid?.actionDisabled === true,
+    invalidNativeVerdictRejectsForcedSameAsioStart:
+      invalidForcedStartTarget.forcedDirectHandlerProof === true &&
+      invalidForcedStartTarget.wasDisabled === true &&
+      invalidForcedStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      countLiveAudioRestoreCalls(auditAfterInvalidForcedStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditBeforeInvalidForcedStart.calls, "start_live_audio_input") &&
+      invalidAfterForcedStart?.appStatus.includes("The saved ASIO selection uses a newer schema."),
+    invalidVerdictRequiresAnExplicitOneAttemptArm:
+      invalidRevalidateControl?.asioRevalidateVisible === true &&
+      invalidRevalidateControl?.asioRevalidateDisabled === false &&
+      invalidRevalidateControl?.asioRevalidateText === "Revalidate current ASIO selection" &&
+      driftArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      driftArmArmed?.actionDisabled === false &&
+      countLiveAudioRestoreCalls(auditBeforeDriftArm.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditAfterDriftArm.calls, "start_live_audio_input"),
+    invalidArmRequestDriftAndStaleReplayStayTerminal:
+      driftBufferSelected &&
+      driftForcedStartTarget.forcedDirectHandlerProof === true &&
+      countLiveAudioRestoreCalls(auditAfterDriftForcedStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditBeforeDriftForcedStart.calls, "start_live_audio_input") &&
+      restoreBufferSelected &&
+      staleArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      staleVerdictRefreshTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      staleForcedStartTarget.forcedDirectHandlerProof === true &&
+      replayForcedStartTarget.forcedDirectHandlerProof === true &&
+      countLiveAudioRestoreCalls(auditAfterStaleForcedStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditBeforeStaleForcedStart.calls, "start_live_audio_input") &&
+      countLiveAudioRestoreCalls(auditAfterReplayForcedStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditAfterStaleForcedStart.calls, "start_live_audio_input"),
+    invalidArmPermitsOnlyTheExactFreshAsioRequest:
+      restoredInvalidVerdictRefreshTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      exactInvalidArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      exactInvalidStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      countLiveAudioRestoreCalls(auditAfterExactInvalidStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditBeforeExactInvalidStart.calls, "start_live_audio_input") + 1 &&
+      exactInvalidStartCall?.args?.request?.backend === "asio" &&
+      exactInvalidStartCall?.args?.request?.device_id === exactInvalidBeforeStart?.selectedDevice &&
+      exactInvalidStartCall?.args?.request?.sample_rate === 48_000 &&
+      exactInvalidStartCall?.args?.request?.buffer_frames === 128 &&
+      exactInvalidRevalidated?.asioVerdictState === "revalidated" &&
+      exactInvalidRevalidated?.health === "live" &&
+      exactInvalidStopTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      wasapiInvalidVerdictRefreshTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased",
+    invalidVerdictDoesNotLockWasapi:
+      wasapiSelected && wasapiDeviceSelected && wasapiRateSelected && wasapiBufferSelected &&
+      wasapiWithAsioInvalid?.backend === "wasapi_shared" &&
+      wasapiWithAsioInvalid?.asioVerdictState === "invalid" &&
+      wasapiWithAsioInvalid?.actionDisabled === false,
+    restoredAllowsOnlyExplicitCurrentAsioRevalidation:
+      restoredAsioSelected && restoredAsioDriverSelected && restoredAsioRateSelected && restoredAsioBufferSelected &&
+      restoredBeforeStart?.backend === "asio" &&
+      restoredBeforeStart?.asioVerdictState === "restored" &&
+      restoredBeforeStart?.asioVerdictStartLocked === "true" &&
+      restoredBeforeStart?.actionDisabled === false &&
+      startTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      countLiveAudioRestoreCalls(auditAfterStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(auditBeforeStart.calls, "start_live_audio_input") + 1 &&
+      startCall?.args?.request?.backend === "asio" &&
+       typeof restoredAsioStartDevice === "string" && restoredAsioStartDevice.startsWith("viewport-asio-studio-g") &&
+       startCall?.args?.request?.device_id === restoredAsioStartDevice &&
+      startCall?.args?.request?.sample_rate === 48_000 &&
+      startCall?.args?.request?.buffer_frames === 128 &&
+      revalidated?.asioVerdictState === "revalidated" &&
+      revalidated?.asioVerdictStartLocked === "false" &&
+      revalidated?.health === "live",
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    failedChecks,
+    checks,
+    startup,
+    refreshTarget,
+    invalidRefreshTarget,
+    restoredRefreshTarget,
+    invalid,
+    invalidAfterForcedStart,
+    invalidForcedStartTarget,
+    auditBeforeInvalidForcedStart,
+    auditAfterInvalidForcedStart,
+    invalidRevalidateControl,
+    driftArmTarget,
+    driftArmArmed,
+    auditBeforeDriftArm,
+    auditAfterDriftArm,
+    driftForcedStartTarget,
+    auditBeforeDriftForcedStart,
+    auditAfterDriftForcedStart,
+    staleArmTarget,
+    staleVerdictRefreshTarget,
+    staleForcedStartTarget,
+    replayForcedStartTarget,
+    auditBeforeStaleForcedStart,
+    auditAfterStaleForcedStart,
+    auditAfterReplayForcedStart,
+    restoredInvalidVerdictRefreshTarget,
+    exactInvalidArmTarget,
+    exactInvalidBeforeStart,
+    exactInvalidStartTarget,
+    exactInvalidRevalidated,
+    auditBeforeExactInvalidArm,
+    auditBeforeExactInvalidStart,
+    auditAfterExactInvalidStart,
+    exactInvalidStopTarget,
+    wasapiInvalidVerdictRefreshTarget,
+    wasapiWithAsioInvalid,
+    restoredBeforeStart,
+    revalidated,
+    auditBeforeStart,
+    auditAfterStart,
+  };
+}
+
+/**
+ * Hostile one-attempt semantics for the App-owned ASIO revalidation arm,
+ * driven with real trusted CDP gestures against the production control flow:
+ *
+ * 1. A busy Start attempt (blocked inside an operator Refresh) must spend a
+ *    pending arm at absolute entry; the post-busy forced Start is zero native
+ *    ASIO IPC.
+ * 2. A failed Start attempt spends the arm; mid-busy and post-error replays
+ *    are zero IPC. A status-poll outage clears any residual arm immediately, a
+ *    forced Revalidate while unknown refuses to arm, and recovery to the exact
+ *    same invalid verdict still locks Start at zero IPC.
+ * 3. One fresh exact explicit Revalidate + Start yields exactly one native
+ *    ASIO Start IPC. Each backend/device/rate/buffer/mix boundary, the saved
+ *    revalidation application boundary, and a full document reload leave a
+ *    prior arm worthless at zero IPC.
+ */
+async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport) {
+  const armedStatusNeedle = "ASIO revalidation is armed for one Start";
+  const unknownRefusalNeedle = "ASIO revalidation cannot be armed until a fresh status arrives";
+  const startRejectionNeedle = "Viewport hostile ASIO Start rejection";
+
+  const appStatusText = () => client.evaluate(
+    "(document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '').trim()",
+  );
+  const startCallCount = () => client.evaluate(
+    "(window.__syndocalLiveAudioMock?.calls ?? [])" +
+      ".filter((call) => call.command === 'start_live_audio_input').length",
+  );
+  const setMockFlags = (flags) => client.evaluate(`(() => {
+    const mock = window.__syndocalLiveAudioMock;
+    if (!mock) throw new Error("ASIO arm-consumption hostile mock was not installed.");
+    Object.assign(mock, ${JSON.stringify(flags)});
+    return true;
+  })()`);
+
+  const clickAction = (action, description, forceDisabled = false) =>
+    dispatchLiveAudioCdpControlClick(
+      client,
+      action,
+      description,
+      forceDisabled ? { forceDisabledForDirectHandlerProof: true } : {},
+    );
+
+  const waitInvalidLocked = async (description) => {
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const action = rail?.querySelector('[data-live-audio-action="transport"]');
+        const refresh = rail?.querySelector('[data-live-audio-action="refresh"]');
+        const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+        return rail?.getAttribute('data-health') === 'stopped' &&
+          verdict?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
+          verdict?.getAttribute('data-live-audio-asio-reason') === 'ASIO_STORAGE_SCHEMA_FUTURE' &&
+          action instanceof HTMLButtonElement && action.disabled &&
+          action.textContent?.trim() === 'Start' &&
+          refresh instanceof HTMLButtonElement && !refresh.disabled;
+      })()`,
+      description,
+    );
+  };
+  const waitArmedUnlock = async (description) => {
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const action = rail?.querySelector('[data-live-audio-action="transport"]');
+        const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+        return rail?.getAttribute('data-health') === 'stopped' &&
+          verdict?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
+          action instanceof HTMLButtonElement && !action.disabled;
+      })()`,
+      description,
+    );
+    await waitForClientCondition(
+      client,
+      `(() => (document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '').includes(${JSON.stringify(armedStatusNeedle)}))()`,
+      `${description} arm announcement`,
+    );
+  };
+  const publishInvalidVerdict = async (description) => {
+    await setLiveAudioMockNativeAsioSelection(client, "invalid");
+    await waitIdleControls(`${description} pre-refresh settle`);
+    await clickAction("refresh", `${description} invalid-verdict refresh`);
+    await waitInvalidLocked(`${description} invalid verdict locked without an arm`);
+  };
+
+  /**
+   * Every hostile boot seeds the exact persisted ASIO selection before mount.
+   * Configuration selects legitimately persist (production behavior), so a
+   * seeded stale->ready saved runtime is the one deterministic baseline: it
+   * revalidates against the frozen catalogue and never hijacks a proof
+   * mid-flight with an unexpected persistence edge.
+   */
+  const bootHostileFixture = async () => {
+    const boot = await prepareLiveAudioRestoreViewport(
+      client,
+      viewport,
+      persistedViewportAsioSelection(),
+    );
+    await installLiveAudioInvokeMock(client);
+    await setMockFlags({ freezeDeviceGeneration: true });
+    return boot;
+  };
+  const discoverAndSelectAsio = async (label) => {
+    await clickAction("refresh", `${label} initial catalogue discovery`);
+    // A fresh boot defaults to WASAPI; a saved-selection boot is pinned to
+    // ASIO before discovery. Both are valid starting catalogues here.
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const backend = rail?.getAttribute('data-live-audio-backend');
+        return (backend === 'wasapi_shared' || backend === 'asio') &&
+          [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+            .some((option) => option.value.startsWith('viewport-'));
+      })()`,
+      `${label} initial catalogue`,
+    );
+    const initialBackend = await client.evaluate(
+      "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend')",
+    );
+    if (initialBackend !== "asio") {
+      await setLiveAudioSelectWhenEnabled(client, "backend", "asio", `${label} ASIO backend`);
+    }
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail?.getAttribute('data-live-audio-backend') === 'asio' &&
+          [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+            .some((option) => option.value.startsWith('viewport-asio-studio-g'));
+      })()`,
+      `${label} stable ASIO driver discovery`,
+    );
+    const railState = await readLiveAudioRailState(client);
+    const deviceId = railState?.deviceOptions?.find((value) => value.startsWith("viewport-asio-studio-g"));
+    assert.ok(deviceId, `${label} fixture exposes one exact stable ASIO driver id`);
+    return deviceId;
+  };
+
+  let asioDeviceId = null;
+  const liveRailSnapshot = () => client.evaluate(`(() => {
+    const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+    const value = (kind) => rail?.querySelector('[data-live-audio-control="' + kind + '"]')?.value ?? "";
+    return {
+      device: value("device"),
+      rate: value("rate"),
+      buffer: value("buffer"),
+      savedState: rail?.querySelector('[data-live-audio-saved-state]')?.getAttribute('data-live-audio-saved-state') ?? "",
+      actionDisabled: rail?.querySelector('[data-live-audio-action="transport"]')?.disabled ?? null,
+      refreshDisabled: rail?.querySelector('[data-live-audio-action="refresh"]')?.disabled ?? null,
+    };
+  })()`);
+  const waitIdleControls = async (label) => {
+    await waitForClientCondition(
+      client,
+      "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+      `${label} controls settle`,
+    );
+  };
+  /**
+   * Converge on the exact ASIO configuration. The seeded saved runtime being
+   * READY is the authoritative baseline: its revalidation applies every exact
+   * signal (device, capabilities, rate, buffer, mix) to the App. Operator
+   * selects legitimately demote it to stale, so each pass repairs only what
+   * differs and revalidates once via Refresh. Start enablement is NOT a
+   * criterion here — a published invalid native verdict legitimately keeps
+   * Start locked until an explicit arm.
+   */
+  const selectExactAsioRequest = async (label) => {
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      await waitIdleControls(`${label} pass ${attempt}`);
+      const snapshot = await liveRailSnapshot();
+      if (snapshot.savedState === "ready") {
+        return true;
+      }
+      if (snapshot.device !== asioDeviceId) {
+        await setLiveAudioSelectWhenEnabled(client, "device", asioDeviceId, `${label} pass ${attempt} device`);
+        await waitIdleControls(`${label} pass ${attempt} post-device settle`);
+      }
+      if (snapshot.rate !== "48000") {
+        await setLiveAudioSelectWhenEnabled(client, "rate", "48000", `${label} pass ${attempt} rate`);
+        await waitIdleControls(`${label} pass ${attempt} post-rate settle`);
+      }
+      if (snapshot.buffer !== "128") {
+        await waitForClientCondition(
+          client,
+          "document.querySelector('[data-live-audio-control=\"buffer\"]')?.disabled === false",
+          `${label} pass ${attempt} buffer enablement`,
+        );
+        await setLiveAudioSelectWhenEnabled(client, "buffer", "128", `${label} pass ${attempt} buffer`);
+      }
+      await waitIdleControls(`${label} pass ${attempt} pre-refresh settle`);
+      await clickAction("refresh", `${label} pass ${attempt} saved-selection revalidation refresh`);
+      await waitForClientCondition(
+        client,
+        `(() => document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-saved-state]')?.getAttribute('data-live-audio-saved-state') === 'ready')()`,
+        `${label} pass ${attempt} saved selection ready`,
+      );
+      await waitIdleControls(`${label} pass ${attempt} post-refresh settle`);
+    }
+    const failureSnapshot = await liveRailSnapshot();
+    throw new Error(
+      `${label} exact ASIO request did not converge: ${JSON.stringify({
+        failureSnapshot,
+        rail: await readLiveAudioRailState(client),
+        status: await appStatusText(),
+      })}`,
+    );
+  };
+
+  // ---------------------------------------------------------------------
+  // Proof 1: a busy Start attempt spends the arm at absolute entry.
+  // ---------------------------------------------------------------------
+  await bootHostileFixture();
+  asioDeviceId = await discoverAndSelectAsio("Arm consumption");
+  await selectExactAsioRequest("Arm consumption initial");
+  await publishInvalidVerdict("Arm consumption initial");
+
+  const startsBeforeBusyBoundary = await startCallCount();
+  const busyArmTarget = await clickAction("asio-revalidate", "Arm consumption explicit arm before busy boundary");
+  await waitArmedUnlock("Arm consumption arm unlock before busy boundary");
+  await setMockFlags({ deviceListHoldMs: 1500 });
+  await clickAction("refresh", "Arm consumption long refresh to open the busy window");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
+    "Arm consumption busy window opened",
+  );
+  const busyForcedStartTarget = await clickAction("transport", "Arm consumption mid-busy hostile Start", true);
+  const stillBusyAfterMidBusyStart = await client.evaluate(
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
+  );
+  await setMockFlags({ deviceListHoldMs: 120 });
+  await waitInvalidLocked("Arm consumption settled locked after busy-boundary Start spend");
+  const settledLockedRail = await readLiveAudioRailState(client);
+  const startsBeforePostBusyReplay = await startCallCount();
+  const postBusyReplayTarget = await clickAction("transport", "Arm consumption post-busy hostile replay", true);
+  await sleep(150);
+  const startsAfterPostBusyReplay = await startCallCount();
+
+  // ---------------------------------------------------------------------
+  // Proof 2: failed Start spends the arm; status unknown refuses to arm and
+  // recovery to the exact same invalid verdict keeps Start at zero IPC.
+  // ---------------------------------------------------------------------
+  const recoveryArmTarget = await clickAction("asio-revalidate", "Arm consumption explicit arm before failing Start");
+  await waitArmedUnlock("Arm consumption arm unlock before failing Start");
+  await setMockFlags({ startDelayMs: 900, startRejectOnce: true });
+  const failingStartTarget = await clickAction("transport", "Arm consumption armed failing Start");
+  await sleep(250);
+  const statusBeforeMidFlight = await appStatusText();
+  const midFlightBeforeRejection = !statusBeforeMidFlight.includes(startRejectionNeedle);
+  const midFlightReplayTarget = await clickAction(
+    "transport",
+    "Arm consumption mid-flight hostile replay while Start is in flight",
+    true,
+  );
+  await waitForClientCondition(
+    client,
+    `(() => (document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '').includes(${JSON.stringify(startRejectionNeedle)}))()`,
+    "Arm consumption armed Start rejection visible",
+  );
+  await setMockFlags({ startDelayMs: 120 });
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
+    "Arm consumption unknown status after failed armed Start",
+  );
+  const startsBeforeUnknownReplay = await startCallCount();
+  const unknownReplayTarget = await clickAction("transport", "Arm consumption post-error hostile replay", true);
+  await sleep(150);
+  const startsAfterUnknownReplay = await startCallCount();
+
+  await setMockFlags({ statusPollReject: true });
+  await clickAction("refresh", "Arm consumption refresh into status outage");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
+    "Arm consumption status outage unknown window",
+  );
+  const outageRail = await readLiveAudioRailState(client);
+  // While status is unknown the whole stopped-state configuration row (and
+  // therefore the Revalidate control) is unmounted: the UI fails closed, so
+  // there is nothing to force-click. The App handler's explicit
+  // refuse-to-arm-while-unknown branch is pinned by the static control-flow
+  // ordering checks in check-live-audio-input.mjs.
+  await sleep(80);
+  const statusWhileUnknown = await appStatusText();
+  // The outage Refresh's own catalogue half may still be settling; wait for
+  // idle controls before driving the recovery Refresh.
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+    "Arm consumption controls settle after status outage",
+  );
+  await setMockFlags({ statusPollReject: false });
+  await clickAction("refresh", "Arm consumption recovery refresh from status outage");
+  await waitInvalidLocked("Arm consumption exact same invalid verdict recovered with no arm");
+  const recoveredSameVerdictRail = await readLiveAudioRailState(client);
+  const startsBeforeRecoveredForcedStart = await startCallCount();
+  const recoveredForcedStartTarget = await clickAction(
+    "transport",
+    "Arm consumption recovered-same-verdict hostile Start",
+    true,
+  );
+  await sleep(150);
+  const startsAfterRecoveredForcedStart = await startCallCount();
+
+  // ---------------------------------------------------------------------
+  // Proof 3: one fresh exact explicit action yields exactly one native IPC.
+  // ---------------------------------------------------------------------
+  const freshArmTarget = await clickAction("asio-revalidate", "Arm consumption fresh explicit Revalidate");
+  await waitArmedUnlock("Arm consumption fresh arm unlock");
+  const startsBeforeFreshExactStart = await startCallCount();
+  await clickAction("transport", "Arm consumption fresh exact armed Start");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
+      return rail?.getAttribute('data-health') === 'live' &&
+        verdict?.getAttribute('data-live-audio-asio-verdict') === 'revalidated';
+    })()`,
+    "Arm consumption fresh exact native revalidation result",
+  );
+  const startsAfterFreshExactStart = await startCallCount();
+  const freshExpectedDeviceId = asioDeviceId;
+  const auditFreshStart = await readLiveAudioRestoreMockAudit(client);
+  const freshStartCall = auditFreshStart.calls
+    .filter((call) => call.command === "start_live_audio_input")
+    .at(-1);
+  await setMockFlags({ stopReturnsCleared: true });
+  await clickAction("transport", "Arm consumption clean Stop after fresh Start");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'stopped'",
+    "Arm consumption stopped after fresh Start",
+  );
+  await setMockFlags({ stopReturnsCleared: false });
+
+  // ---------------------------------------------------------------------
+  // Proofs 4-5: every operator boundary (saved application, device, rate,
+  // buffer, mix, backend switch) leaves a prior arm worthless at zero IPC.
+  // ---------------------------------------------------------------------
+  const runBoundaryProof = async (label, boundaryAction) => {
+    await selectExactAsioRequest(`${label} baseline`);
+    await publishInvalidVerdict(`Arm consumption ${label}`);
+    const armTarget = await clickAction("asio-revalidate", `Arm consumption ${label} explicit arm`);
+    await waitArmedUnlock(`Arm consumption ${label} arm unlock`);
+    await boundaryAction(label);
+    const afterBoundaryRail = await readLiveAudioRailState(client);
+    const startsBeforeForcedStart = await startCallCount();
+    const forcedStartTarget = await clickAction(
+      "transport",
+      `Arm consumption ${label} post-boundary hostile Start`,
+      true,
+    );
+    await sleep(150);
+    const startsAfterForcedStart = await startCallCount();
+    return {
+      label,
+      armTarget,
+      forcedStartTarget,
+      afterBoundaryRail,
+      zeroIpc: startsAfterForcedStart === startsBeforeForcedStart,
+      startLockedAfterBoundary: afterBoundaryRail.actionDisabled === true,
+    };
+  };
+  const boundaryResults = [];
+
+  // Saved-selection application boundary first, while the session's seeded
+  // saved selection stays ready on the current ASIO backend.
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const saved = rail?.querySelector('[data-live-audio-saved-state]');
+      return saved?.getAttribute('data-live-audio-saved-state') === 'ready' &&
+        saved?.getAttribute('data-live-audio-saved-reason') === 'REVALIDATED';
+    })()`,
+    "Saved boundary saved selection ready",
+  );
+  await selectExactAsioRequest("saved boundary baseline");
+  await publishInvalidVerdict("Arm consumption saved boundary");
+  const savedBoundaryArmTarget = await clickAction("asio-revalidate", "Arm consumption saved boundary explicit arm");
+  await waitArmedUnlock("Arm consumption saved boundary arm unlock");
+  await clickAction("refresh", "Arm consumption saved-application refresh spends the arm");
+  await waitInvalidLocked("Arm consumption saved boundary arm spent by saved-selection application");
+  const savedBoundaryRail = await readLiveAudioRailState(client);
+  const startsBeforeSavedForcedStart = await startCallCount();
+  const savedForcedStartTarget = await clickAction("transport", "Arm consumption saved boundary hostile Start", true);
+  await sleep(150);
+  const startsAfterSavedForcedStart = await startCallCount();
+  boundaryResults.push({
+    label: "saved application boundary",
+    armTarget: savedBoundaryArmTarget,
+    forcedStartTarget: savedForcedStartTarget,
+    afterBoundaryRail: savedBoundaryRail,
+    zeroIpc: startsAfterSavedForcedStart === startsBeforeSavedForcedStart,
+    startLockedAfterBoundary: savedBoundaryRail.actionDisabled === true,
+  });
+
+  // Configuration/backend boundaries follow; the backend switch away from
+  // ASIO runs last because it ends the in-session ASIO configuration.
+  boundaryResults.push(await runBoundaryProof("device boundary", async (label) => {
+    await setLiveAudioSelectWhenEnabled(client, "device", asioDeviceId, `${label} reselection`);
+  }));
+  boundaryResults.push(await runBoundaryProof("rate boundary", async (label) => {
+    await setLiveAudioSelectWhenEnabled(client, "rate", "96000", `${label} rate change`);
+  }));
+  boundaryResults.push(await runBoundaryProof("buffer boundary", async (label) => {
+    await setLiveAudioSelectWhenEnabled(client, "buffer", "256", `${label} buffer change`);
+  }));
+  boundaryResults.push(await runBoundaryProof("mix boundary", async (label) => {
+    await setLiveAudioSelectWhenEnabled(client, "mix", "single:0", `${label} mix change`);
+  }));
+  boundaryResults.push(await runBoundaryProof("backend boundary", async (label) => {
+    await setMockFlags({ wasapiCatalogEmpty: true });
+    await setLiveAudioSelectWhenEnabled(client, "backend", "wasapi_shared", `${label} backend switch`);
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+          rail?.querySelector('[data-live-audio-action="transport"]') instanceof HTMLButtonElement &&
+          rail?.querySelector('[data-live-audio-action="transport"]')?.disabled === true;
+      })()`,
+      `${label} switched away from ASIO with no startable configuration`,
+    );
+  }));
+  /**
+   * Hard document replacement for the reload boundary. A same-URL navigate
+   * can be satisfied without a fresh document mid-session, which would leave
+   * the previous page's live-audio signals in place; a unique navigation
+   * parameter forces a genuine cross-document load with the exact seeded
+   * machine-local selection.
+   */
+  const hardReloadSeededFixture = async (label) => {
+    const seededUrl = (() => {
+      const url = new URL(appUrl);
+      url.searchParams.set("_syndocalHarnessReload", `${Date.now()}-${label}`);
+      return url.toString();
+    })();
+    await client.evaluate(`(() => {
+      window.localStorage.clear();
+      window.localStorage.setItem(${JSON.stringify(liveAudioInputSelectionStorageKey)}, ${JSON.stringify(persistedViewportAsioSelection())});
+      window.localStorage.setItem('syndocal.uiLocale.v1', 'en');
+      return true;
+    })()`);
+    const loaded = client.waitForEvent("Page.loadEventFired", 15_000);
+    await awaitObservedPromises([
+      client.send("Page.navigate", { url: seededUrl }),
+      loaded,
+    ]);
+    await waitForApp(client);
+    await pressKey(client, "F2");
+    await sleep(120);
+    await clickControlModeOption(client, "mixer");
+    await sleep(120);
+    await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
+    await installLiveAudioInvokeMock(client);
+    await setMockFlags({ freezeDeviceGeneration: true });
+  };
+
+  // ---------------------------------------------------------------------
+  // Final proof: a full document reload leaves nothing to replay.
+  // ---------------------------------------------------------------------
+  await hardReloadSeededFixture("pre-reload");
+  asioDeviceId = await discoverAndSelectAsio("Reload boundary");
+  await selectExactAsioRequest("Reload boundary initial");
+  await publishInvalidVerdict("Reload boundary pre-reload");
+  const reloadArmTarget = await clickAction("asio-revalidate", "Reload boundary explicit arm");
+  await waitArmedUnlock("Reload boundary arm unlock");
+  await hardReloadSeededFixture("post-reload");
+  const reloadedTransportPresent = await client.evaluate(
+    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]') instanceof HTMLButtonElement",
+  );
+  const startsBeforeReloadForcedStart = await startCallCount();
+  const reloadImmediateForcedStartTarget = await clickAction(
+    "transport",
+    "Reload boundary immediate hostile Start after remount",
+    true,
+  );
+  await sleep(150);
+  const startsAfterReloadImmediateForcedStart = await startCallCount();
+  await discoverAndSelectAsio("Reload boundary post-reload");
+  await publishInvalidVerdict("Reload boundary post-reload");
+  const reloadedInvalidRail = await readLiveAudioRailState(client);
+  const reloadPostPublishForcedStartTarget = await clickAction(
+    "transport",
+    "Reload boundary post-publish hostile Start",
+    true,
+  );
+  await sleep(150);
+  const startsAfterReloadPostPublishForcedStart = await startCallCount();
+
+  const checks = {
+    busyStartSpendsTheArmAtAbsoluteEntry:
+      busyArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      busyForcedStartTarget.forcedDirectHandlerProof === true &&
+      busyForcedStartTarget.wasDisabled === true &&
+      stillBusyAfterMidBusyStart === true &&
+      settledLockedRail.actionDisabled === true &&
+      settledLockedRail.asioVerdictState === "invalid" &&
+      startsBeforePostBusyReplay === startsBeforeBusyBoundary &&
+      startsAfterPostBusyReplay === startsBeforeBusyBoundary,
+    failedStartMidFlightAndUnknownReplaysAreZeroIpc:
+      recoveryArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      failingStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      midFlightBeforeRejection === true &&
+      midFlightReplayTarget.forcedDirectHandlerProof === true &&
+      midFlightReplayTarget.wasDisabled === true &&
+      unknownReplayTarget.forcedDirectHandlerProof === true &&
+      startsBeforeUnknownReplay === startsAfterPostBusyReplay + 1 &&
+      startsAfterUnknownReplay === startsBeforeUnknownReplay,
+    forcedRevalidateWhileUnknownRefusesToArm:
+      outageRail.health === "unknown" &&
+      outageRail.actionDisabled === true &&
+      outageRail.asioRevalidateVisible === false &&
+      !statusWhileUnknown.includes(armedStatusNeedle),
+    recoveredExactSameVerdictStillRequiresExplicitRevalidate:
+      recoveredSameVerdictRail.actionDisabled === true &&
+      recoveredSameVerdictRail.asioVerdictState === "invalid" &&
+      recoveredForcedStartTarget.forcedDirectHandlerProof === true &&
+      startsAfterRecoveredForcedStart === startsBeforeRecoveredForcedStart,
+    oneFreshExactExplicitActionYieldsExactlyOneAsioIpc:
+      freshArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      startsAfterFreshExactStart === startsBeforeFreshExactStart + 1 &&
+      freshStartCall?.args?.request?.backend === "asio" &&
+      freshStartCall?.args?.request?.device_id === freshExpectedDeviceId &&
+      freshStartCall?.args?.request?.sample_rate === 48_000 &&
+      freshStartCall?.args?.request?.buffer_frames === 128,
+    everyOperatorBoundaryLeavesPriorArmWorthless:
+      boundaryResults.every((result) =>
+        result.zeroIpc &&
+        result.startLockedAfterBoundary &&
+        result.armTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+        result.forcedStartTarget.forcedDirectHandlerProof === true),
+    savedApplicationBoundarySpendsTheArm:
+      savedBoundaryArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      savedBoundaryRail.actionDisabled === true &&
+      savedForcedStartTarget.forcedDirectHandlerProof === true &&
+      startsAfterSavedForcedStart === startsBeforeSavedForcedStart,
+    reloadLeavesNothingToReplay:
+      reloadArmTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      reloadedTransportPresent === true &&
+      reloadImmediateForcedStartTarget.forcedDirectHandlerProof === true &&
+      startsAfterReloadImmediateForcedStart === startsBeforeReloadForcedStart &&
+      reloadedInvalidRail.actionDisabled === true &&
+      reloadPostPublishForcedStartTarget.forcedDirectHandlerProof === true &&
+      startsAfterReloadPostPublishForcedStart === startsAfterReloadImmediateForcedStart,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    failedChecks,
+    checks,
+    boundaryResults,
+    counts: {
+      startsBeforeBusyBoundary,
+      startsAfterPostBusyReplay,
+      startsAfterUnknownReplay,
+      startsAfterRecoveredForcedStart,
+      startsAfterFreshExactStart,
+      startsAfterSavedForcedStart,
+      startsAfterReloadPostPublishForcedStart,
+    },
+  };
+}
+
+async function configureLiveAudioWasapiForStart(client, description) {
+  const beforeDeviceSelection = await readLiveAudioRailState(client);
+  const deviceId = beforeDeviceSelection?.deviceOptions?.find((value) =>
+    value.startsWith("viewport-wasapi-studio-g"),
+  );
+  assert.ok(deviceId, `${description} fixture exposes one exact current WASAPI device id`);
+  const deviceSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "device",
+    deviceId,
+    `${description} WASAPI device`,
+  );
+  await waitForClientCondition(
+    client,
+    `(() => (window.__syndocalLiveAudioMock?.calls ?? []).some((call) =>
+      call.command === 'get_live_audio_input_capabilities' && call.args?.backend === 'wasapi_shared' &&
+      call.args?.deviceId === ${JSON.stringify(deviceId)}
+    ))()`,
+    `${description} exact WASAPI capability resolution`,
+  );
+  const rateSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "rate",
+    "48000",
+    `${description} WASAPI rate`,
+  );
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-live-audio-control=\"buffer\"]')?.disabled === false",
+    `${description} WASAPI buffer enablement`,
+  );
+  const bufferSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "buffer",
+    "128",
+    `${description} WASAPI buffer`,
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+        action instanceof HTMLButtonElement && !action.disabled;
+    })()`,
+    `${description} explicit WASAPI Start enablement`,
+  );
+  return {
+    deviceId,
+    deviceSelected,
+    rateSelected,
+    bufferSelected,
+    settled: await readLiveAudioRailState(client),
+  };
+}
+
+/**
+ * A saved selection is backend-scoped state, never a global Start lock. These
+ * two real-restart scenarios keep malformed storage visible, while proving a
+ * separately configured WASAPI path has its own exact request and that direct
+ * ASIO events cannot bypass an ASIO stale lock.
+ */
+async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport) {
+  const staleAsioRaw = persistedViewportAsioSelection({
+    backend: "ASIO",
+    name: "Missing Viewport ASIO Driver",
+    label: "Missing Viewport ASIO Driver · ASIO",
+  });
+  const staleStartup = await prepareLiveAudioRestoreViewport(client, viewport, staleAsioRaw);
+  await installLiveAudioInvokeMock(client);
+  const staleRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Saved stale ASIO backend-scope Refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      const saved = rail?.querySelector('[data-live-audio-saved-state]');
+      return rail?.getAttribute('data-live-audio-backend') === 'asio' &&
+        saved?.getAttribute('data-live-audio-saved-state') === 'stale' &&
+        saved?.getAttribute('data-live-audio-saved-reason') === 'DEVICE_MISSING' &&
+        action instanceof HTMLButtonElement && action.disabled;
+    })()`,
+    "Saved stale ASIO exact backend lock",
+  );
+  const staleBeforeDirectStart = await readLiveAudioRestoreMockAudit(client);
+  const staleForcedStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Saved stale ASIO forced direct Start",
+    { forceDisabledForDirectHandlerProof: true },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const status = document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '';
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return status.includes('Saved live audio device is not present in the refreshed catalogue.') &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(staleBeforeDirectStart.calls, "start_live_audio_input")
+        };
+    })()`,
+    "Saved stale ASIO direct Start terminal rejection",
+  );
+  const staleAfterDirectStart = await readLiveAudioRestoreMockAudit(client);
+  const staleRejected = await readLiveAudioRailState(client);
+  const staleWasapiSelected = await setLiveAudioSelectWhenEnabled(
+    client,
+    "backend",
+    "wasapi_shared",
+    "Saved stale ASIO explicit WASAPI backend",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+        [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+          .some((option) => option.value.startsWith('viewport-wasapi-studio-g'));
+    })()`,
+    "Saved stale ASIO WASAPI catalogue",
+  );
+  const staleWasapiConfiguration = await configureLiveAudioWasapiForStart(
+    client,
+    "Saved stale ASIO",
+  );
+  const staleWasapiAuditBeforeStart = await readLiveAudioRestoreMockAudit(client);
+  const staleWasapiStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Saved stale ASIO explicit WASAPI Start",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return rail?.getAttribute('data-health') === 'live' &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(staleWasapiAuditBeforeStart.calls, "start_live_audio_input") + 1
+        };
+    })()`,
+    "Saved stale ASIO exactly one WASAPI Start request",
+  );
+  const staleWasapiAuditAfterStart = await readLiveAudioRestoreMockAudit(client);
+  const staleWasapiStartCall = staleWasapiAuditAfterStart.calls
+    .filter((call) => call.command === "start_live_audio_input")
+    .at(-1);
+  const staleWasapiLive = await readLiveAudioRailState(client);
+
+  const invalidAsioRaw = JSON.stringify({
+    ...JSON.parse(persistedViewportAsioSelection()),
+    schema_version: 2,
+  });
+  const invalidStartup = await prepareLiveAudioRestoreViewport(client, viewport, invalidAsioRaw);
+  await installLiveAudioInvokeMock(client);
+  const invalidRefreshTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "refresh",
+    "Backend-less invalid saved ASIO Refresh",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const action = rail?.querySelector('[data-live-audio-action="transport"]');
+      const saved = rail?.querySelector('[data-live-audio-saved-state]');
+      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+        saved?.getAttribute('data-live-audio-saved-state') === 'invalid' &&
+        saved?.getAttribute('data-live-audio-saved-reason') === 'SCHEMA_VERSION_FUTURE' &&
+        action instanceof HTMLButtonElement && !action.disabled;
+    })()`,
+    "Backend-less invalid saved ASIO remains visible without a WASAPI lock",
+  );
+  const invalidVisibleBeforeConfiguration = await readLiveAudioRailState(client);
+  const invalidWasapiConfiguration = await configureLiveAudioWasapiForStart(
+    client,
+    "Backend-less invalid saved ASIO",
+  );
+  const invalidWasapiAuditBeforeStart = await readLiveAudioRestoreMockAudit(client);
+  const invalidWasapiStartTarget = await dispatchLiveAudioCdpControlClick(
+    client,
+    "transport",
+    "Backend-less invalid saved ASIO explicit WASAPI Start",
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return rail?.getAttribute('data-health') === 'live' &&
+        calls.filter((call) => call.command === 'start_live_audio_input').length === ${
+          countLiveAudioRestoreCalls(invalidWasapiAuditBeforeStart.calls, "start_live_audio_input") + 1
+        };
+    })()`,
+    "Backend-less invalid saved ASIO exactly one WASAPI Start request",
+  );
+  const invalidWasapiAuditAfterStart = await readLiveAudioRestoreMockAudit(client);
+  const invalidWasapiStartCall = invalidWasapiAuditAfterStart.calls
+    .filter((call) => call.command === "start_live_audio_input")
+    .at(-1);
+  const invalidWasapiLive = await readLiveAudioRailState(client);
+
+  const exactWasapiStart = (call, deviceId) =>
+    call?.args?.request?.backend === "wasapi_shared" &&
+    call.args.request.device_id === deviceId &&
+    call.args.request.sample_rate === 48_000 &&
+    call.args.request.buffer_frames === 128;
+  const checks = {
+    staleAsioIsVisibleAndLocksItsOwnBackend:
+      staleStartup.beforeMock?.backend === "asio" &&
+      staleStartup.beforeMock?.savedSelectionState === "stale" &&
+      staleRejected?.backend === "asio" &&
+      staleRejected?.savedSelectionState === "stale" &&
+      staleRejected?.savedSelectionReason === "DEVICE_MISSING" &&
+      staleRejected?.actionDisabled === true,
+    staleAsioDirectStartCannotEscapeItsTerminalBarrier:
+      staleForcedStartTarget.forcedDirectHandlerProof === true &&
+      staleForcedStartTarget.wasDisabled === true &&
+      staleForcedStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      staleRejected?.appStatus.includes("Saved live audio device is not present in the refreshed catalogue.") &&
+      countLiveAudioRestoreCalls(staleAfterDirectStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(staleBeforeDirectStart.calls, "start_live_audio_input"),
+    staleAsioDoesNotLockConfiguredWasapi:
+      staleWasapiSelected &&
+      staleWasapiConfiguration.deviceSelected &&
+      staleWasapiConfiguration.rateSelected &&
+      staleWasapiConfiguration.bufferSelected &&
+      staleWasapiConfiguration.settled?.backend === "wasapi_shared" &&
+      staleWasapiConfiguration.settled?.actionDisabled === false &&
+      staleWasapiStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      countLiveAudioRestoreCalls(staleWasapiAuditAfterStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(staleWasapiAuditBeforeStart.calls, "start_live_audio_input") + 1 &&
+      exactWasapiStart(staleWasapiStartCall, staleWasapiConfiguration.deviceId) &&
+      staleWasapiLive?.health === "live",
+    backendlessInvalidStorageStaysVisibleButDoesNotLockWasapi:
+      invalidStartup.beforeMock?.backend === "wasapi_shared" &&
+      invalidVisibleBeforeConfiguration?.backend === "wasapi_shared" &&
+      invalidVisibleBeforeConfiguration?.savedSelectionState === "invalid" &&
+      invalidVisibleBeforeConfiguration?.savedSelectionReason === "SCHEMA_VERSION_FUTURE" &&
+      invalidVisibleBeforeConfiguration?.actionDisabled === false,
+    backendlessInvalidStorageUsesCurrentConfiguredWasapiRequest:
+      invalidWasapiConfiguration.deviceSelected &&
+      invalidWasapiConfiguration.rateSelected &&
+      invalidWasapiConfiguration.bufferSelected &&
+      invalidWasapiConfiguration.settled?.backend === "wasapi_shared" &&
+      invalidWasapiConfiguration.settled?.actionDisabled === false &&
+      invalidWasapiStartTarget.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      countLiveAudioRestoreCalls(invalidWasapiAuditAfterStart.calls, "start_live_audio_input") ===
+        countLiveAudioRestoreCalls(invalidWasapiAuditBeforeStart.calls, "start_live_audio_input") + 1 &&
+      exactWasapiStart(invalidWasapiStartCall, invalidWasapiConfiguration.deviceId) &&
+      invalidWasapiLive?.health === "live",
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    failedChecks,
+    checks,
+    staleStartup,
+    staleRefreshTarget,
+    staleRejected,
+    staleForcedStartTarget,
+    staleWasapiConfiguration,
+    staleWasapiStartCall,
+    invalidStartup,
+    invalidRefreshTarget,
+    invalidVisibleBeforeConfiguration,
+    invalidWasapiConfiguration,
+    invalidWasapiStartCall,
+  };
+}
+
+async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
+  const exactRaw = persistedViewportAsioSelection();
+  const missingRaw = persistedViewportAsioSelection({
+    backend: "ASIO",
+    name: "Viewport ASIO Studio Driver",
+    label: "Missing Viewport ASIO Driver · ASIO",
+  });
+  const exact = await runLiveAudioRestoreScenario(client, viewport, {
+    id: "exact",
+    rawSelection: exactRaw,
+    expectedSavedState: "ready",
+    expectedSavedReason: "REVALIDATED",
+  });
+  const savedReadyProbeFault = await runLiveAudioSavedReadyProbeFaultDirectStart(client);
+  const missing = await runLiveAudioRestoreScenario(client, viewport, {
+    id: "missing",
+    rawSelection: missingRaw,
+    expectedSavedState: "stale",
+    expectedSavedReason: "DEVICE_MISSING",
+  });
+  const ambiguous = await runLiveAudioRestoreScenario(client, viewport, {
+    id: "ambiguous",
+    rawSelection: exactRaw,
+    asioCatalogMode: "ambiguous",
+    expectedSavedState: "stale",
+    expectedSavedReason: "DEVICE_AMBIGUOUS",
+  });
+  const catalogueFailure = async (mode, expectedReason) => {
+    const result = await runLiveAudioRestoreScenario(client, viewport, {
+      id: mode,
+      rawSelection: exactRaw,
+      backendCatalogueMode: mode,
+      expectedSavedState: "stale",
+      expectedSavedReason: "REVALIDATION_REQUIRED",
+    });
+    const backendErrorSettled = await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+        return Boolean(
+          rail?.getAttribute('data-live-audio-backend-state') === 'fault' &&
+          calls.filter((call) => call.command === 'live_audio_input_backends').length === 1
+        );
+      })()`,
+      `Live audio restore ${mode} catalogue rejection`,
+    );
+    return { ...result, expectedReason, backendErrorSettled, settled: await readLiveAudioRailState(client) };
+  };
+  const missingAvailability = await catalogueFailure("missing_availability", "AVAILABILITY_MISSING");
+  const unknownAvailability = await catalogueFailure("unknown_availability", "AVAILABILITY_UNKNOWN");
+  const unavailableBackend = async (availability) => {
+    const result = await runLiveAudioRestoreScenario(client, viewport, {
+      id: availability,
+      rawSelection: exactRaw,
+      backendCatalogueMode: availability,
+      expectedSavedState: "stale",
+      expectedSavedReason: "REVALIDATION_REQUIRED",
+    });
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        return rail?.getAttribute('data-live-audio-backend-state') === ${JSON.stringify(availability)} &&
+          rail?.getAttribute('data-live-audio-backend-availability') === ${JSON.stringify(availability)};
+      })()`,
+      `Live audio restore ${availability} ready-gate rejection`,
+    );
+    return { ...result, settled: await readLiveAudioRailState(client) };
+  };
+  const unavailableBackends = [];
+  for (const availability of ["not_packaged", "fault", "unsupported"]) {
+    unavailableBackends.push(await unavailableBackend(availability));
+  }
+  const nativeAsioVerdict = await runLiveAudioNativeAsioVerdictAcceptance(client, viewport);
+  const armConsumptionHostile =
+    await runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport);
+  const savedSelectionBackendScope = await runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport);
+
+  const exactCalls = exact.calls;
+  const missingCalls = missing.calls;
+  const ambiguousCalls = ambiguous.calls;
+  const catalogueFailures = [missingAvailability, unknownAvailability];
+  const allRestoreScenarios = [
+    exact,
+    missing,
+    ambiguous,
+    ...catalogueFailures,
+    ...unavailableBackends,
+  ];
+  const noWasapiFallback = (calls) =>
+    countLiveAudioRestoreCalls(
+      calls,
+      "list_audio_input_devices",
+      (call) => call.args?.backend === "wasapi_shared",
+    ) === 0;
+  const noStart = (calls) => countLiveAudioRestoreCalls(calls, "start_live_audio_input") === 0;
+  const noCapabilityProbe = (calls) =>
+    countLiveAudioRestoreCalls(calls, "get_live_audio_input_capabilities") === 0;
+  const ownerAndProgramHandoffAreStrictlyOrdered = (result) => {
+    const ownerIndex = result.calls.findIndex(
+      (call) => call.command === "register_project_transaction_owner",
+    );
+    const programIndices = result.calls
+      .map((call, index) => call.command === "set_program_audio_handoff_config" ? index : -1)
+      .filter((index) => index >= 0);
+    const owner = result.mockAudit?.registrationArgs;
+    const programConfigs = result.mockAudit?.programAudioHandoffConfigs;
+    return ownerIndex === 0 &&
+      result.calls.filter((call) => call.command === "register_project_transaction_owner").length === 1 &&
+      owner && Object.keys(owner).length === 1 && typeof owner.ownerId === "string" && owner.ownerId.trim() &&
+      programIndices.length === 1 && programIndices[0] > ownerIndex &&
+      Array.isArray(programConfigs) && programConfigs.length === 1 &&
+      Object.keys(programConfigs[0]).sort().join(",") === "deviceName,enabled,volume" &&
+      typeof programConfigs[0].enabled === "boolean" &&
+      typeof programConfigs[0].volume === "number" && Number.isFinite(programConfigs[0].volume) &&
+      (programConfigs[0].deviceName === null || typeof programConfigs[0].deviceName === "string") &&
+      result.calls.every((call, index) => index === ownerIndex || ownerIndex < index || call.command === "register_project_transaction_owner");
+  };
+  const checks = {
+    startupRestoresOnlyExactAsioIntent:
+      exact.startup.beforeMock?.backend === "asio" &&
+      exact.startup.beforeMock?.savedSelectionState === "stale" &&
+      exact.startup.beforeMock?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
+      exact.startup.beforeMock?.selectedDevice === "" &&
+      exact.startup.beforeMock?.actionDisabled === true &&
+      exact.startup.storedBeforeMock === exactRaw,
+    exactCatalogueRevalidatesWithoutFallback:
+      exact.settled?.backend === "asio" &&
+      exact.settled?.backendAvailability === "ready" &&
+      exact.settled?.savedSelectionState === "ready" &&
+      exact.settled?.savedSelectionReason === "REVALIDATED" &&
+      exact.settled?.selectedDevice === "viewport-asio-studio-g1" &&
+      exact.settled?.selectedSampleRate === "48000" &&
+      exact.settled?.selectedBuffer === "128" &&
+      exact.settled?.actionDisabled === false &&
+      exact.storedAfter === exactRaw &&
+      countLiveAudioRestoreCalls(exactCalls, "register_project_transaction_owner") === 1 &&
+      countLiveAudioRestoreCalls(exactCalls, "live_audio_input_backends") === 1 &&
+      countLiveAudioRestoreCalls(
+        exactCalls,
+        "list_audio_input_devices",
+        (call) => call.args?.backend === "asio",
+      ) === 1 &&
+      countLiveAudioRestoreCalls(exactCalls, "get_live_audio_input_capabilities") === 1 &&
+      noWasapiFallback(exactCalls) &&
+      noStart(exactCalls),
+    strictMockRegistersOwnerBeforeEveryRestoreInvoke:
+      allRestoreScenarios.every(ownerAndProgramHandoffAreStrictlyOrdered),
+    savedReadyFaultProbeRejectsForcedDirectStart:
+      savedReadyProbeFault.refreshTarget?.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      savedReadyProbeFault.refreshTarget?.wasDisabled === false &&
+      savedReadyProbeFault.afterProbe.calls.filter((call) => call.command === "live_audio_input_backends").length ===
+        savedReadyProbeFault.beforeProbe.calls.filter((call) => call.command === "live_audio_input_backends").length + 1 &&
+      savedReadyProbeFault.afterProbe.calls.filter((call) => call.command === "list_audio_input_devices").length ===
+        savedReadyProbeFault.beforeProbe.calls.filter((call) => call.command === "list_audio_input_devices").length &&
+      savedReadyProbeFault.afterProbe.calls.filter((call) => call.command === "get_live_audio_input_capabilities").length ===
+        savedReadyProbeFault.beforeProbe.calls.filter((call) => call.command === "get_live_audio_input_capabilities").length &&
+      savedReadyProbeFault.forcedStartTarget?.forcedDirectHandlerProof === true &&
+      savedReadyProbeFault.forcedStartTarget?.wasDisabled === true &&
+      savedReadyProbeFault.forcedStartTarget?.pointerSequence === "mouseMoved>mousePressed>mouseReleased" &&
+      savedReadyProbeFault.settled?.backend === "asio" &&
+      savedReadyProbeFault.settled?.backendData === "asio" &&
+      savedReadyProbeFault.settled?.backendState === "fault" &&
+      savedReadyProbeFault.settled?.backendAvailability === "fault" &&
+      savedReadyProbeFault.settled?.actionDisabled === true &&
+      savedReadyProbeFault.settled?.appStatus === "Audio input backend asio is fault; devices and Start are locked." &&
+      savedReadyProbeFault.afterForcedStart.calls.filter((call) => call.command === "start_live_audio_input").length ===
+        savedReadyProbeFault.afterProbe.calls.filter((call) => call.command === "start_live_audio_input").length &&
+      noWasapiFallback(savedReadyProbeFault.afterForcedStart.calls) &&
+      savedReadyProbeFault.afterForcedStart.programAudioHandoffConfigs.length ===
+        savedReadyProbeFault.beforeProbe.programAudioHandoffConfigs.length,
+    missingSelectionRemainsLocked:
+      missing.startup.beforeMock?.backend === "asio" &&
+      missing.settled?.backend === "asio" &&
+      missing.settled?.savedSelectionState === "stale" &&
+      missing.settled?.savedSelectionReason === "DEVICE_MISSING" &&
+      missing.settled?.selectedDevice === "" &&
+      missing.settled?.actionDisabled === true &&
+      missing.storedAfter === missingRaw &&
+      countLiveAudioRestoreCalls(
+        missingCalls,
+        "list_audio_input_devices",
+        (call) => call.args?.backend === "asio",
+      ) === 1 &&
+      noCapabilityProbe(missingCalls) &&
+      noWasapiFallback(missingCalls) &&
+      noStart(missingCalls),
+    ambiguousSelectionRemainsLocked:
+      ambiguous.startup.beforeMock?.backend === "asio" &&
+      ambiguous.settled?.backend === "asio" &&
+      ambiguous.settled?.savedSelectionState === "stale" &&
+      ambiguous.settled?.savedSelectionReason === "DEVICE_AMBIGUOUS" &&
+      ambiguous.settled?.selectedDevice === "" &&
+      ambiguous.settled?.actionDisabled === true &&
+      ambiguous.storedAfter === exactRaw &&
+      countLiveAudioRestoreCalls(
+        ambiguousCalls,
+        "list_audio_input_devices",
+        (call) => call.args?.backend === "asio",
+      ) === 1 &&
+      noCapabilityProbe(ambiguousCalls) &&
+      noWasapiFallback(ambiguousCalls) &&
+      noStart(ambiguousCalls),
+    nonReadyProbeAvailabilityNeverEnumeratesOrStarts: unavailableBackends.every((result) => {
+      const calls = result.calls;
+      return result.settled?.backend === "asio" &&
+        result.settled?.backendData === "asio" &&
+        result.settled?.backendState === result.id &&
+        result.settled?.backendAvailability === result.id &&
+        result.settled?.savedSelectionState === "stale" &&
+        result.settled?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
+        result.settled?.selectedDevice === "" &&
+        result.settled?.actionDisabled === true &&
+        result.storedAfter === exactRaw &&
+        countLiveAudioRestoreCalls(calls, "live_audio_input_backends") === 1 &&
+        countLiveAudioRestoreCalls(calls, "list_audio_input_devices") === 0 &&
+        noCapabilityProbe(calls) &&
+        noWasapiFallback(calls) &&
+        noStart(calls);
+    }),
+    malformedBackendCataloguesFailClosed: catalogueFailures.every((result) => {
+      const calls = result.calls;
+      return result.backendErrorSettled &&
+        result.settled?.backend === "asio" &&
+        result.settled?.backendState === "fault" &&
+        result.settled?.savedSelectionState === "stale" &&
+        result.settled?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
+        result.settled?.selectedDevice === "" &&
+        result.settled?.actionDisabled === true &&
+        result.storedAfter === exactRaw &&
+        countLiveAudioRestoreCalls(calls, "live_audio_input_backends") === 1 &&
+        countLiveAudioRestoreCalls(calls, "list_audio_input_devices") === 0 &&
+        noCapabilityProbe(calls) &&
+        noWasapiFallback(calls) &&
+        noStart(calls);
+    }),
+    nativeAsioVerdictRestoredInvalidAndScoped: nativeAsioVerdict.passed,
+    asioRevalidationArmConsumptionHostileProofs: armConsumptionHostile.passed,
+    savedSelectionBackendScopeIsFailClosedAndDoesNotGloballyLock: savedSelectionBackendScope.passed,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `live-audio-restore-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    exact,
+    missing,
+    ambiguous,
+    unavailableBackends,
+    catalogueFailures,
+    nativeAsioVerdict,
+    armConsumptionHostile,
+    savedSelectionBackendScope,
+  };
 }
 
 // T6: open one of the mixer drawers (audio-in / auto-vj / reactive) and wait
@@ -18279,6 +20582,12 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
     const jumpButtons = [...document.querySelectorAll('[data-scene-matrix-bank-jump]')].filter(visible);
     const headerRows = [...document.querySelectorAll('.sceneMatrixCueListHeader')].filter(visible);
     const surfaceHeader = document.querySelector('.sceneMatrixSurfaceHeader');
+    const surfaceHeaderRect = surfaceHeader?.getBoundingClientRect() ?? null;
+    const toolbar = surfaceHeader?.querySelector('[data-live-desk-toolbar-actions]');
+    const toolbarRect = toolbar?.getBoundingClientRect() ?? null;
+    const toolbarButtons = toolbar
+      ? [...toolbar.querySelectorAll('button')].filter(visible)
+      : [];
     const lastControl = [...document.querySelectorAll('.sceneMatrixSurfaceHeader button')].filter(visible).at(-1);
     const lastRect = lastControl?.getBoundingClientRect();
     return {
@@ -18296,6 +20605,9 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
       legacyGroupHeaderCount: document.querySelectorAll('.sceneMatrixGroupHeader').length,
       surfaceHeaderOverflowX: surfaceHeader ? getComputedStyle(surfaceHeader).overflowX : '',
       lastControlReachable: Boolean(lastRect && lastRect.width > 0 && lastRect.height > 0 && lastRect.left >= -1 && lastRect.right <= innerWidth + 1),
+      toolbarRightGap: surfaceHeaderRect && toolbarRect ? surfaceHeaderRect.right - toolbarRect.right : Number.POSITIVE_INFINITY,
+      toolbarButtonWidths: toolbarButtons.map((button) => button.getBoundingClientRect().width),
+      toolbarActionCount: toolbarButtons.length,
       createSceneButtons: [...document.querySelectorAll('[data-scene-matrix-create-scene]')].map((button) => button.getAttribute('data-scene-matrix-create-scene') ?? ''),
       emptyActionTexts: [...document.querySelectorAll('[data-scene-matrix-empty-bank]')]
         .map((empty) => (empty.textContent ?? '').trim()),
@@ -18407,17 +20719,34 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
     );
     return state;
   };
+  const nextFreeBankLabel = (banks) => {
+    const labels = new Set(banks.map((bank) => bank.label.trim().toLowerCase()));
+    let index = 1;
+    while (labels.has(`bank ${index}`)) index += 1;
+    return `Bank ${index}`;
+  };
   const initial = {
     ...await readState('initial'),
     ...await readPlaybackExecutorState(),
   };
+  // `Main` is a persisted authored Bank label in this fixture.  It must stay
+  // literal, while a new Bank derives its ID and default label from the
+  // current authoritative set rather than assuming an old fixture shape.
+  const initialDefaultLabel = nextFreeBankLabel(initial.banks);
   await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
   await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'Scene Matrix Bank editor');
   const prefilled = await readState('prefilled');
   await setBankInput('Night');
   await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"2\\"]")', 'Night bank column');
+  await waitForClientCondition(
+    client,
+    `(() => [...document.querySelectorAll('[data-scene-matrix-column]')].some((column) =>
+      column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() === 'Night'))()`,
+    'Night bank column',
+  );
   const customCreated = await readState('custom-created');
+  const customBank = customCreated.banks.find((bank) => bank.label === 'Night') ?? null;
+  const automaticDefaultLabel = nextFreeBankLabel(customCreated.banks);
   await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
   await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'duplicate Bank editor');
   await setBankInput(' night ');
@@ -18429,12 +20758,17 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
   await clickVisibleSelector(client, '[data-scene-matrix-create-bank]');
   const autoPrefilled = await readState('auto-prefilled');
   await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'automatic bank column');
+  await waitForClientCondition(
+    client,
+    `(() => [...document.querySelectorAll('[data-scene-matrix-column]')].some((column) =>
+      column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() === ${JSON.stringify(automaticDefaultLabel)}))()`,
+    'automatic bank column',
+  );
   const autoCreated = await readState('auto-created');
 
   await openContext('2');
   await clickMenu('[data-scene-matrix-context-rename]');
-  await setBankInput(' bank 1 ');
+  await setBankInput(` ${automaticDefaultLabel.toLowerCase()} `);
   await clickVisibleSelector(client, '[data-scene-matrix-save-bank]');
   await settle();
   const duplicateRenameRejected = await readState('duplicate-rename-rejected');
@@ -18565,6 +20899,9 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
   const undone = await readState('undone');
   return {
     initial,
+    initialDefaultLabel,
+    automaticDefaultLabel,
+    customBank,
     prefilled,
     customCreated,
     duplicateCreateRejected,
@@ -18637,11 +20974,11 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       labelTextAccent: label ? getComputedStyle(label).getPropertyValue('--cue-identity-text') : '',
       renderedBorderColor: cardStyle?.borderLeftColor ?? '',
       renderedBandColor: bandStyle?.backgroundColor ?? '',
-      renderedAccentMatches: Boolean(
+      renderedInactiveIdentityIsDimmed: Boolean(
         cardAccent
         && bankAccent
         && cardAccent === bankAccent
-        && cardStyle?.borderLeftColor === bandStyle?.backgroundColor,
+        && cardStyle?.borderLeftColor !== bandStyle?.backgroundColor,
       ),
       sceneSettingsCount: document.querySelectorAll('[data-scene-settings]').length,
       ghostPresent: Boolean(document.querySelector('[data-timeline-cue-drag-ghost]')),
@@ -18771,34 +21108,92 @@ async function exerciseSceneMatrixStripReorder(
 async function installSceneMatrixBankMoveCapture(client) {
   return await evaluatePageFunction(client, () => {
     const installedWithoutExistingInternals = window.__TAURI_INTERNALS__ === undefined;
+    const clone = (value) => value === undefined ? undefined : structuredClone(value);
+    const projectCueProjection = (snapshot) => (snapshot?.cues ?? [])
+      .filter((cue) => [301, 302, 303, 320].includes(Number(cue.id)))
+      .map((cue) => ({
+        id: Number(cue.id),
+        cueListId: Number(cue.cue_list_id),
+        groupId: cue.group_id ?? null,
+      }));
     window.__syndocalSceneMatrixBankMoveCapture = {
       installedWithoutExistingInternals,
       commands: [],
+      startupCommands: [],
+      transactionCommands: [],
+      phase: "await-owner-registration",
+      ownerRegistrationArgs: null,
+      ownerRegistrationResult: "unanswered",
+      programAudioHandoffArgs: null,
       beginArgs: null,
       beginTicket: null,
       batchArgs: null,
-      nativeBefore: [
-        { id: 301, cueListId: 2, groupId: "front" },
-        { id: 302, cueListId: 2, groupId: "front" },
-        { id: 303, cueListId: 3, groupId: "back" },
-        { id: 320, cueListId: 3, groupId: "back" },
-      ],
+      beforeSnapshot: null,
+      terminalSnapshot: null,
+      nativeBefore: null,
       nativeAfter: null,
       commitArgs: null,
+      terminalResult: null,
       acknowledgeArgs: null,
       cancelCount: 0,
     };
     window.__TAURI_INTERNALS__ = {
-      invoke: async (command, args) => {
+      invoke: async (command, args = {}) => {
         const capture = window.__syndocalSceneMatrixBankMoveCapture;
         capture.commands.push(command);
+        if (capture.phase === "await-owner-registration") {
+          if (command !== "register_project_transaction_owner") {
+            throw new Error(`Scene Matrix strict capture expected owner registration before ${command}.`);
+          }
+          const ownerId = args && typeof args === "object" ? args.ownerId : null;
+          const exactOwnerShape = args && typeof args === "object"
+            && Object.keys(args).length === 1
+            && typeof ownerId === "string"
+            && /^renderer:[A-Za-z0-9_.:-]{1,119}$/.test(ownerId);
+          if (!exactOwnerShape) {
+            throw new Error("Scene Matrix strict capture received a malformed owner identity.");
+          }
+          capture.startupCommands.push(command);
+          capture.ownerRegistrationArgs = clone(args);
+          capture.ownerRegistrationResult = null;
+          capture.phase = "await-program-audio-handoff";
+          return null;
+        }
+        if (capture.phase === "await-program-audio-handoff") {
+          if (command !== "set_program_audio_handoff_config") {
+            throw new Error(`Scene Matrix strict capture expected Program Audio startup completion before ${command}.`);
+          }
+          const exactConfig = args && typeof args === "object"
+            && Object.keys(args).length === 3
+            && typeof args.enabled === "boolean"
+            && typeof args.volume === "number"
+            && Number.isFinite(args.volume)
+            && (args.deviceName === null || typeof args.deviceName === "string");
+          if (!exactConfig) {
+            throw new Error("Scene Matrix strict capture received a malformed Program Audio handoff config.");
+          }
+          capture.startupCommands.push(command);
+          capture.programAudioHandoffArgs = clone(args);
+          capture.phase = "await-begin";
+          return null;
+        }
+        capture.transactionCommands.push(command);
         if (command === "begin_project_transaction") {
-          capture.beginArgs = structuredClone(args);
+          if (capture.phase !== "await-begin") {
+            throw new Error(`Scene Matrix strict capture received Begin during ${capture.phase}.`);
+          }
+          const source = clone(window.__syndocalReadSceneMatrixFixtureSnapshot?.());
+          if (!source?.timeline || !Array.isArray(source.cues) || !Array.isArray(source.cue_lists)) {
+            throw new Error("Scene Matrix production snapshot bridge is unavailable or malformed.");
+          }
+          capture.beforeSnapshot = source;
+          capture.nativeBefore = projectCueProjection(source);
+          capture.beginArgs = clone(args);
           const ticket = {
             transaction_id: 27_001,
             project_epoch: args.expectedEpoch,
             project_revision: args.expectedRevision,
-            project_checkpoint_hash: "scene-matrix-checkpoint-0",
+            project_checkpoint_hash: args.expectedCheckpointHash,
             client_operation_id: args.clientOperationId,
             shape_fingerprint: args.shapeFingerprint,
             schema_version: args.schemaVersion,
@@ -18808,62 +21203,128 @@ async function installSceneMatrixBankMoveCapture(client) {
             label: args.label,
             coalesce_key: args.coalesceKey,
           };
-          capture.beginTicket = structuredClone(ticket);
+          capture.beginTicket = clone(ticket);
+          capture.phase = "await-batch";
           return ticket;
         }
         if (command === "move_cue_between_scene_banks_batch") {
-          capture.batchArgs = structuredClone(args);
-          const next = structuredClone(capture.nativeBefore);
-          const sourceIndex = next.findIndex((cue) => cue.id === args.cueId);
+          if (capture.phase !== "await-batch") {
+            throw new Error(`Scene Matrix strict capture received the batch during ${capture.phase}.`);
+          }
+          const request = args.request;
+          const expectedKeys = [
+            "cueId",
+            "expectedEpoch",
+            "ownerId",
+            "position",
+            "projectTransactionId",
+            "targetCueId",
+            "targetCueListId",
+            "targetGroupId",
+          ];
+          if (!request || JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(expectedKeys)
+            || request.projectTransactionId !== capture.beginTicket?.transaction_id
+            || request.expectedEpoch !== capture.beginTicket?.project_epoch
+            || request.ownerId !== capture.beginTicket?.owner_id) {
+            throw new Error("Scene Matrix batch did not use the exact strict ticket request.");
+          }
+          capture.batchArgs = clone(request);
+          const nextSnapshot = clone(capture.beforeSnapshot);
+          const next = nextSnapshot.cues;
+          const sourceIndex = next.findIndex((cue) => Number(cue.id) === Number(request.cueId));
           if (sourceIndex < 0) throw new Error("Scene Matrix batch source Cue was not found");
           const [source] = next.splice(sourceIndex, 1);
-          source.cueListId = args.targetCueListId;
-          source.groupId = args.targetGroupId;
-          const targetIndex = args.targetCueId === null
+          source.cue_list_id = request.targetCueListId;
+          source.group_id = request.targetGroupId;
+          const targetIndex = request.targetCueId === null
             ? next.reduce(
-              (last, cue, index) => cue.cueListId === args.targetCueListId ? index : last,
+              (last, cue, index) => Number(cue.cue_list_id) === Number(request.targetCueListId) ? index : last,
               -1,
             )
-            : next.findIndex((cue) => cue.id === args.targetCueId);
-          if (args.targetCueId !== null && targetIndex < 0) {
+            : next.findIndex((cue) => Number(cue.id) === Number(request.targetCueId));
+          if (request.targetCueId !== null && targetIndex < 0) {
             throw new Error("Scene Matrix batch target Cue was not found");
           }
-          next.splice(args.position === "after" ? targetIndex + 1 : targetIndex, 0, source);
-          capture.nativeAfter = next;
+          next.splice(request.position === "after" ? targetIndex + 1 : targetIndex, 0, source);
+          capture.terminalSnapshot = nextSnapshot;
+          capture.nativeAfter = projectCueProjection(nextSnapshot);
+          capture.phase = "await-commit";
           return undefined;
         }
         if (command === "commit_project_transaction") {
-          capture.commitArgs = structuredClone(args);
-          return {
-            // This browser fixture never replaces the initial project identity,
-            // so Commit publishes a same-token history mutation. The production
-            // command returns this wrapper, not a bare ProjectHistoryStatus. This
-            // synthetic response does not prove native CAS or a full authority bundle.
-            authority: {
-              project_epoch: 0,
-              project_revision: 0,
-              checkpoint_hash: "",
-            },
-            history_status: {
-              can_undo: true,
-              can_redo: false,
-              undo_depth: 1,
-              redo_depth: 0,
-              undo_label: "Move Cue Between Scene Banks",
-              redo_label: null,
-              project_epoch: 0,
-              project_revision: 0,
-              checkpoint_hash: "",
-              history_generation: 1,
-              undo_entry_id: null,
-              undo_checkpoint_hash: null,
-              redo_entry_id: null,
-              redo_checkpoint_hash: null,
-            },
+          if (capture.phase !== "await-commit") {
+            throw new Error(`Scene Matrix strict capture received Commit during ${capture.phase}.`);
+          }
+          capture.commitArgs = clone(args);
+          if (!capture.terminalSnapshot) {
+            throw new Error("Scene Matrix strict capture cannot commit without a complete moved snapshot.");
+          }
+          const terminalRevision = Number(capture.beginArgs.expectedRevision) + 1;
+          const terminalCheckpointHash = "a".repeat(64);
+          const terminalHistoryGeneration = 2;
+          const historyStatus = {
+            can_undo: true,
+            can_redo: false,
+            undo_depth: 1,
+            redo_depth: 0,
+            undo_label: "Move Cue Between Scene Banks",
+            redo_label: null,
+            project_epoch: capture.beginArgs.expectedEpoch,
+            project_revision: terminalRevision,
+            checkpoint_hash: terminalCheckpointHash,
+            history_generation: terminalHistoryGeneration,
+            undo_entry_id: null,
+            undo_checkpoint_hash: null,
+            redo_entry_id: null,
+            redo_checkpoint_hash: null,
           };
+          const terminal = {
+            authority: {
+              project_epoch: capture.beginArgs.expectedEpoch,
+              project_revision: terminalRevision,
+              checkpoint_hash: terminalCheckpointHash,
+              publication_generation: 1,
+              publication_kind: "mutation",
+              mapping_replacement_generation: 0,
+              authority_disposition_generation: 0,
+              authority_disposition: "runtime_sanitize",
+              recovery_authority_serial: 0,
+              recovery_authority_last_transition: { kind: "legacy_unknown" },
+              path_generation: 0,
+              history_generation: terminalHistoryGeneration,
+              current_project_path: null,
+              snapshot: clone(capture.terminalSnapshot),
+              profiles: [],
+              fixture_groups: [],
+              operator_policy: null,
+              midi_mappings: [],
+              osc_mappings: [],
+              dmx_mappings: [],
+              dj_track_triggers: [],
+              history: historyStatus,
+              input_runtime: {
+                project_input_runtime_generation: 0,
+                mapping_input_runtime_generation: 0,
+                midi_clock_active: false,
+                midi_control_active: false,
+                midi_feedback_output_active: false,
+                midi_feedback_runtime_active: false,
+                osc_active: false,
+                dmx_active: false,
+              },
+            },
+            history_status: historyStatus,
+          };
+          capture.terminalResult = clone(terminal);
+          capture.phase = "await-acknowledgement";
+          return terminal;
         }
         if (command === "acknowledge_project_transaction") {
-          capture.acknowledgeArgs = structuredClone(args);
+          if (capture.phase !== "await-acknowledgement") {
+            throw new Error(`Scene Matrix strict capture received acknowledgement during ${capture.phase}.`);
+          }
+          capture.acknowledgeArgs = clone(args);
+          capture.phase = "complete";
           return undefined;
         }
         if (command === "cancel_project_transaction") {
@@ -18997,9 +21458,10 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
     '[aria-keyshortcuts^="Control+Z"]',
     "Scene Matrix Undo button",
   );
-  await waitForClientCondition(
-    client,
-    `(() => {
+  try {
+    await waitForClientCondition(
+      client,
+      `(() => {
       const front = [...document.querySelectorAll('[data-scene-matrix-column="2"] [data-scene-matrix-cue-id]')]
         .map((card) => card.getAttribute('data-scene-matrix-cue-id'));
       const back = [...document.querySelectorAll('[data-scene-matrix-column="3"] [data-scene-matrix-cue-id]')]
@@ -19017,12 +21479,24 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
         && JSON.stringify(active) === JSON.stringify(['301'])
         && JSON.stringify(selected) === JSON.stringify([])
         && document.querySelectorAll('[data-scene-settings]').length === 0;
-    })()`,
-    "Scene Matrix cross-bank Undo restoration",
-  );
+      })()`,
+      "Scene Matrix cross-bank Undo restoration",
+    );
+  } catch (error) {
+    const observed = await measureSceneMatrixInteractionState(client, 302);
+    throw new Error(`${String(error)} Observed state: ${JSON.stringify(observed)}`);
+  }
   const afterUndo = await measureSceneMatrixInteractionState(client, 302);
   const capture = await finishSceneMatrixBankMoveCapture(client);
-  const reloadDocument = await reloadReadyApp(client);
+  // Navigate to a distinct fixture document instead of relying on Page.reload:
+  // current Chrome can keep a same-URL Vite reload pending past the CDP event
+  // deadline even though a fresh document navigation settles immediately.
+  const freshFixtureUrl = new URL(fixtureUrl("scene-matrix"));
+  freshFixtureUrl.searchParams.set("syndocalSceneMatrixFreshRun", "after-cross-bank-undo");
+  const reloadDocument = await navigateToReadyAppThroughExpectedBeforeUnload(
+    client,
+    freshFixtureUrl.toString(),
+  );
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "edit");
   await sleep(120);
@@ -19778,7 +22252,7 @@ async function runPaneReflowViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
-    deviceScaleFactor: 1,
+    deviceScaleFactor: deviceScaleFactorForViewport(viewport),
     mobile: false,
   });
   const paneReflowStorageSentinel = {
@@ -19818,6 +22292,209 @@ async function runPaneReflowViewport(client, viewport) {
     bandSourceForPaneToggles.includes('disabled={props.paneOperationPending("stage")}') &&
     bandSourceForPaneToggles.includes('aria-busy={props.paneOperationPending("timeline") ? "true" : undefined}') &&
     bandSourceForPaneToggles.includes('disabled={props.paneOperationPending("timeline")}');
+  // P2 startup-restore reconciliation proof. Real Tauri pane windows stay
+  // native QA, but the exact restore machinery contract is pinned here AND the
+  // presence census is behaviorally executed below: a failed startup capture
+  // retains records for a bounded retry chain, and once that budget is
+  // exhausted an independent exact-label presence census (getAllWebviewWindows)
+  // decides each record. Only a proven-absent exact `pane-${pane}` child
+  // rejoins the main window; present, malformed, duplicate, or unknown
+  // verdicts keep the record popped, so a live-but-untrackable child can
+  // never dual-render with the main window, and no rejection path may
+  // bulk-clear records without that independent proof.
+  const restoreSectionStart = appSourceForPaneToggles.indexOf("const restorePoppedPaneWindows = async");
+  const restoreSectionEnd = appSourceForPaneToggles.indexOf(
+    "paneWindowEventsReady = listen",
+    restoreSectionStart,
+  );
+  const restoreSectionForProof = restoreSectionStart >= 0 && restoreSectionEnd > restoreSectionStart
+    ? appSourceForPaneToggles.slice(restoreSectionStart, restoreSectionEnd)
+    : "";
+  const restoreHelpersBeforeRestore = appSourceForPaneToggles.slice(
+    Math.max(0, restoreSectionStart - 8000),
+    restoreSectionStart,
+  );
+  const sectionBetweenMarkers = (source, startMarker, endMarker) => {
+    const start = source.indexOf(startMarker);
+    if (start < 0) return "";
+    const end = source.indexOf(endMarker, start);
+    return end < 0 ? "" : source.slice(start, end);
+  };
+  const countOccurrences = (haystack, needle) => haystack.split(needle).length - 1;
+  const presenceHelperSource = sectionBetweenMarkers(
+    appSourceForPaneToggles,
+    "const retainUnknownStartupRecord",
+    "const failStartupRestoreRetryClosed",
+  );
+  const retryFailClosedSource = sectionBetweenMarkers(
+    appSourceForPaneToggles,
+    "const failStartupRestoreRetryClosed",
+    "// Single-slot bounded scheduling",
+  );
+  const scheduleRetryHelperSource = sectionBetweenMarkers(
+    appSourceForPaneToggles,
+    "const scheduleStartupPaneRestoreRetry",
+    "const restorePoppedPaneWindows = async",
+  );
+  const stopChainHelperSource = sectionBetweenMarkers(
+    appSourceForPaneToggles,
+    "stopStartupPaneRestoreChain = () => {",
+    "const startupUntrackedPoppedRecords",
+  );
+  const paneListenerRegionStart = appSourceForPaneToggles.indexOf("paneWindowEventsReady = listen");
+  const paneListenerRegionSource = paneListenerRegionStart >= 0
+    ? appSourceForPaneToggles.slice(paneListenerRegionStart)
+    : "";
+  const listenerCatchSource = sectionBetweenMarkers(
+    paneListenerRegionSource,
+    ".catch(async (error) => {",
+    "disposePaneWindowEvents = () => {",
+  );
+  const onCleanupSource = sectionBetweenMarkers(
+    paneListenerRegionSource,
+    "onCleanup(() => {",
+    "if (isTauriRuntime() && !paneWindow && autoOpenPaneWindows)",
+  );
+  // Behavioral execution of the shipped pure census: extract the exported
+  // verdict reducer plus its label builder from App.tsx, transpile them, and
+  // run non-vacuous cases that fail any implementation lacking the census.
+  const pureCensusExtractStart = appSourceForPaneToggles.indexOf("export type PaneChildPresenceVerdict =");
+  const pureCensusExtractEnd = pureCensusExtractStart >= 0
+    ? appSourceForPaneToggles.indexOf("const projectHistoryMutationFromUnknown", pureCensusExtractStart)
+    : -1;
+  const pureCensusExtract = pureCensusExtractStart >= 0 && pureCensusExtractEnd > pureCensusExtractStart
+    ? appSourceForPaneToggles.slice(pureCensusExtractStart, pureCensusExtractEnd)
+    : "";
+  let paneChildPresenceModule = null;
+  try {
+    if (pureCensusExtract.length > 0) {
+      const transpiled = ts.transpileModule(pureCensusExtract, {
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ES2022,
+        },
+        fileName: "paneChildPresence.ts",
+      }).outputText;
+      paneChildPresenceModule = await import(
+        `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`
+      );
+    }
+  } catch {
+    paneChildPresenceModule = null;
+  }
+  const paneChildPresenceBehavior = await (async () => {
+    if (!paneChildPresenceModule) {
+      return { available: false, failures: ["presence-census-module-unavailable"] };
+    }
+    const failures = [];
+    const record = (name, ok) => {
+      if (!ok) failures.push(name);
+    };
+    const { paneChildLabelForPane, paneChildPresenceVerdicts } = paneChildPresenceModule;
+    record("label-builder-exact", paneChildLabelForPane("stage") === "pane-stage");
+    // Alive child after ALL capture failures stays popped: exact label found.
+    const alive = paneChildPresenceVerdicts(["stage"], [{ label: "main" }, { label: "pane-stage" }]);
+    record("alive-child-stays-present", alive.stage?.kind === "present");
+    // Absent exact child after a successful enumeration rejoins.
+    const absent = paneChildPresenceVerdicts(["timeline"], [{ label: "main" }, { label: "pane-stage" }]);
+    record("absent-child-rejoins", absent.timeline?.kind === "absent");
+    // Enumeration error/malformed/duplicate can never prove absence.
+    record(
+      "non-array-enumeration-unknown",
+      paneChildPresenceVerdicts(["stage"], "pane-stage").stage?.kind === "unknown",
+    );
+    record(
+      "malformed-entry-unknown",
+      paneChildPresenceVerdicts(["stage"], [{ label: "pane-stage" }, { label: 42 }])
+        .stage?.kind === "unknown",
+    );
+    record(
+      "missing-label-entry-unknown",
+      paneChildPresenceVerdicts(["stage"], [{}, null]).stage?.kind === "unknown",
+    );
+    const duplicate = paneChildPresenceVerdicts(
+      ["stage"],
+      [{ label: "pane-stage" }, { label: "pane-stage" }, { label: "main" }],
+    ).stage;
+    record(
+      "duplicate-exact-label-unknown",
+      duplicate?.kind === "unknown" && /duplicate/.test(duplicate.reason),
+    );
+    // Mixed panes decide independently in one census.
+    const mixed = paneChildPresenceVerdicts(
+      ["stage", "timeline"],
+      [{ label: "main" }, { label: "pane-timeline" }],
+    );
+    record("mixed-panes-independent", mixed.stage?.kind === "absent" && mixed.timeline?.kind === "present");
+    // Exact labels only: case folding, padding, suffixes, and ordinals prove nothing.
+    record(
+      "exact-label-no-fold-pad-suffix-ordinal",
+      paneChildPresenceVerdicts(["stage"], [
+        { label: "PANE-STAGE" },
+        { label: "pane-stage " },
+        { label: " pane-stage" },
+        { label: "pane-stagex" },
+        { label: "pane-stage2" },
+        { label: "main" },
+      ]).stage?.kind === "absent",
+    );
+    return { available: true, failures };
+  })();
+  const paneRestoreReconciliationProof = {
+    boundedAttemptsConstant:
+      /PANE_WINDOW_RESTORE_CAPTURE_ATTEMPTS = 3;/.test(restoreHelpersBeforeRestore)
+      && /PANE_WINDOW_RESTORE_CAPTURE_RETRY_DELAY_MS = \d+;/.test(restoreHelpersBeforeRestore)
+      && /remainingCaptureAttempts: number = PANE_WINDOW_RESTORE_CAPTURE_ATTEMPTS/.test(restoreSectionForProof),
+    transientFailureRetainsRecords:
+      /panes kept for retry/.test(restoreSectionForProof)
+      && /scheduleStartupPaneRestoreRetry\(remainingCaptureAttempts - 1\);/.test(restoreSectionForProof),
+    exhaustionUsesIndependentExactLabelPresenceCensus:
+      /reconcileStartupPaneRecordsByPresence\(/.test(restoreSectionForProof)
+      && !appSourceForPaneToggles.includes("retireUnrenderedStartupPaneRecords")
+      && !appSourceForPaneToggles.includes("will render in the main window")
+      && presenceHelperSource.includes("await getAllWebviewWindows()")
+      && presenceHelperSource.includes("paneChildPresenceVerdicts(candidates")
+      && presenceHelperSource.includes("retained because live child exists")
+      && presenceHelperSource.includes("presence unknown"),
+    retirementOnlyAfterProvenAbsence:
+      countOccurrences(presenceHelperSource, "acknowledgePaneWindowClosed") === 1
+      && presenceHelperSource.includes('verdict?.kind !== "absent"')
+      && presenceHelperSource.indexOf("acknowledgePaneWindowClosed")
+        > presenceHelperSource.indexOf('verdict?.kind !== "absent"')
+      && presenceHelperSource.indexOf("!paneLifecycleController.transitionOf(pane)")
+        > presenceHelperSource.indexOf('verdict?.kind !== "absent"')
+      && presenceHelperSource.includes("no live")
+      && presenceHelperSource.includes("paneChildLabelForPane(pane)"),
+    retirementNeverMintsChildren:
+      presenceHelperSource.length > 0
+      && !/beginOpen|openPaneWindowCore|createOpaquePaneId|window\.open|close_pane_window/
+        .test(presenceHelperSource),
+    censusIsExactLabelOnly:
+      pureCensusExtract.includes("`pane-${pane}`")
+      && pureCensusExtract.includes("Array.isArray(enumeratedWindows)")
+      && !/toLowerCase|toUpperCase|\.trim\(/.test(pureCensusExtract),
+    retryRejectionCannotBulkClear:
+      retryFailClosedSource.includes("dispose(String(error))")
+      && retryFailClosedSource.includes(
+        "reconcileStartupPaneRecordsByPresence(startupUntrackedPoppedRecords()",
+      )
+      && !/for \(const pane of poppedPanes\(\)\) acknowledgePaneWindowClosed/.test(retryFailClosedSource),
+    listenerFailureCannotBulkClear:
+      listenerCatchSource.includes(".catch(async (error) => {")
+      && listenerCatchSource.includes("dispose(String(error))")
+      && listenerCatchSource.includes("reconcileStartupPaneRecordsByPresence")
+      && !/for \(const pane of poppedPanes\(\)\) acknowledgePaneWindowClosed/.test(listenerCatchSource),
+    boundedSingleSlotChainWithoutPostUnmountUpdates:
+      scheduleRetryHelperSource.includes("startupPaneRestoreRetryTimer !== null")
+      && stopChainHelperSource.includes("clearTimeout(startupPaneRestoreRetryTimer)")
+      && onCleanupSource.includes("stopStartupPaneRestoreChain();")
+      && countOccurrences(restoreSectionForProof, "!startupPaneRestoreChainAlive") >= 4,
+    successfulPlacementRestoreUnchanged:
+      /adoptOpen\(pane, status\.instance_id\)/.test(restoreSectionForProof)
+      && /restored = await openPaneWindowCore\(pane, null, status\?\.instance_id \?\? undefined\);/
+        .test(restoreSectionForProof)
+      && !/openPaneWindow\(/.test(restoreSectionForProof),
+  };
   const readState = async () => await client.evaluate(`(() => {
       const renderedBox = (element) => {
         // The editable Stage surface is an <svg> element, not HTMLElement.
@@ -20104,6 +22781,24 @@ async function runPaneReflowViewport(client, viewport) {
       paneToggleSerializationProof.closeSerialized &&
       paneToggleSerializationProof.toggleGuardedWhilePending &&
       paneToggleTruthfulBusyButtonProof],
+    ["paneReflowRestoreCaptureFailureStaysBoundedAndRetained", () =>
+      paneRestoreReconciliationProof.boundedAttemptsConstant &&
+      paneRestoreReconciliationProof.transientFailureRetainsRecords],
+    ["paneReflowRestoreRetiresOnlyOnProvenExactChildAbsence", () =>
+      paneRestoreReconciliationProof.exhaustionUsesIndependentExactLabelPresenceCensus &&
+      paneRestoreReconciliationProof.retirementOnlyAfterProvenAbsence &&
+      paneRestoreReconciliationProof.retirementNeverMintsChildren &&
+      paneRestoreReconciliationProof.censusIsExactLabelOnly],
+    ["paneReflowRestorePresenceCensusBehavesFailClosed", () =>
+      paneChildPresenceBehavior.available &&
+      paneChildPresenceBehavior.failures.length === 0],
+    ["paneReflowRestoreRejectionsNeverBulkClearRecords", () =>
+      paneRestoreReconciliationProof.retryRejectionCannotBulkClear &&
+      paneRestoreReconciliationProof.listenerFailureCannotBulkClear],
+    ["paneReflowRestoreBoundedSingleSlotChainNoUnmountUpdates", () =>
+      paneRestoreReconciliationProof.boundedSingleSlotChainWithoutPostUnmountUpdates],
+    ["paneReflowRestoreSuccessfulPlacementPathUnchanged", () =>
+      paneRestoreReconciliationProof.successfulPlacementRestoreUnchanged],
     ["paneReflowBaselineShowsRealTimelineStageAndSource", () =>
       baselineNone.rootPresent &&
       baselineNone.bandPresent &&
@@ -20422,7 +23117,9 @@ async function runPaneReflowViewport(client, viewport) {
   }
   return {
     viewport,
-    label: `pane-reflow-${viewport.width}x${viewport.height}`,
+    label: `pane-reflow-${viewport.width}x${viewport.height}` + (deviceScaleFactorForViewport(viewport) === 1
+      ? ""
+      : `@${deviceScaleFactorForViewport(viewport)}`),
     passed: failedChecks.length === 0,
     failedChecks,
     baseline: [baselineNone.band.h, baselineNone.upper.h],
@@ -20464,6 +23161,635 @@ async function runPaneReflowViewport(client, viewport) {
       try { return [name, Boolean(check())]; } catch { return [name, false]; }
     })),
   };
+}
+
+async function exerciseSceneMatrixSceneContextMenu(client) {
+  const openContext = async (cueId, keyboard = false) => {
+    await client.evaluate(`(() => {
+      const card = document.querySelector('[data-scene-matrix-cue-id="${cueId}"]');
+      const invoker = card?.querySelector('[data-scene-matrix-edit-strip]');
+      if (!(card instanceof HTMLElement) || !(invoker instanceof HTMLButtonElement)) return false;
+      invoker.focus();
+      if (${keyboard ? "true" : "false"}) {
+        invoker.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'F10', code: 'F10', shiftKey: true, bubbles: true, cancelable: true,
+        }));
+      } else {
+        const rect = card.getBoundingClientRect();
+        card.dispatchEvent(new MouseEvent('contextmenu', {
+          clientX: rect.right - 2,
+          clientY: rect.bottom - 2,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
+      return true;
+    })()`);
+    await waitForClientCondition(
+      client,
+      'document.querySelector("[data-scene-matrix-scene-context-rename]")',
+      `Scene ${cueId} context menu`,
+    );
+    await sleep(80);
+    return await client.evaluate(`(() => {
+      const menu = document.querySelector('.sceneMatrixSceneContextMenu');
+      const rect = menu?.getBoundingClientRect() ?? null;
+      return {
+        labels: menu ? [...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim() ?? '') : [],
+        disabledLabels: menu ? [...menu.querySelectorAll('[role="menuitem"]:disabled')].map((item) => item.textContent?.trim() ?? '') : [],
+        selectedCueIds: [...document.querySelectorAll('[data-scene-matrix-selected="true"]')]
+          .map((card) => card.getAttribute('data-scene-matrix-cue-id') ?? ''),
+        clamped: Boolean(rect && rect.left >= 7 && rect.top >= 7 && rect.right <= innerWidth - 7 && rect.bottom <= innerHeight - 7),
+        focusedItem: document.activeElement?.getAttribute?.('data-scene-matrix-scene-context-rename') !== null,
+      };
+    })()`);
+  };
+
+  const pointerOpened = await openContext('302');
+  await clickVisibleSelector(client, '[data-scene-matrix-scene-context-delete]');
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-scene-matrix-scene-delete-dialog][open]")',
+    'Scene delete confirmation',
+  );
+  const deleteDialog = await client.evaluate(`(() => ({
+    open: Boolean(document.querySelector('[data-scene-matrix-scene-delete-dialog][open]')),
+    placementCount: document.querySelector('[data-scene-matrix-scene-delete-placement-count]')?.textContent?.trim() ?? '',
+    jumpCount: document.querySelector('[data-scene-matrix-scene-delete-jump-count]')?.textContent?.trim() ?? '',
+  }))()`);
+  await clickVisibleSelector(client, '[data-scene-matrix-scene-delete-cancel]');
+  await sleep(80);
+  const deleteCanceled = await client.evaluate(
+    `!document.querySelector('[data-scene-matrix-scene-delete-dialog][open]')`,
+  );
+
+  const keyboardOpened = await openContext('302', true);
+  await clickVisibleSelector(client, '[data-scene-matrix-scene-context-rename]');
+  await waitForClientCondition(
+    client,
+    'document.activeElement?.matches?.("[data-cue-metadata-label=\\"302\\"]")',
+    'Scene rename label focus',
+  );
+  const renameFocused = await client.evaluate(`(() => {
+    const input = document.querySelector('[data-cue-metadata-label="302"]');
+    return input instanceof HTMLInputElement
+      && document.activeElement === input
+      && input.selectionStart === 0
+      && input.selectionEnd === input.value.length;
+  })()`);
+  return {
+    pointerOpened,
+    deleteDialog,
+    deleteCanceled,
+    keyboardOpened,
+    renameFocused,
+  };
+}
+
+/**
+ * The normal Scene Matrix viewport deliberately remains a browser fixture so
+ * its geometry and local undo affordances can be inspected deterministically.
+ * This separate capture switches only the Bank mutations to the production
+ * Tauri-shaped transport.  It verifies the strict nested request, authoritative
+ * receipt, refresh, stale receipt rejection, and component failure behavior
+ * without reintroducing a scene-matrix-only App transport branch.
+ */
+async function installSceneMatrixBankMutationCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const clone = (value) => value === undefined ? undefined : structuredClone(value);
+    const initial = clone(window.__syndocalReadSceneMatrixFixtureSnapshot?.());
+    if (!initial || !Array.isArray(initial.cue_lists) || !Array.isArray(initial.cues)) {
+      throw new Error("Scene Matrix Bank mutation capture requires an exact fixture snapshot.");
+    }
+    const capture = {
+      commands: [],
+      bankCommands: [],
+      refreshes: [],
+      ownerRegistrationArgs: null,
+      current: initial,
+      revision: 0,
+      nextDisposition: { kind: "success", message: null },
+      pending: null,
+      applied: [],
+    };
+    let pendingResolve = null;
+    let pendingMutation = null;
+    const hashFor = (revision) => `${revision.toString(16).padStart(2, "0")}${"b".repeat(62)}`;
+    const historyFor = (revision, checkpointHash, label = null) => ({
+      can_undo: revision > 0,
+      can_redo: false,
+      undo_depth: revision,
+      redo_depth: 0,
+      undo_label: label,
+      redo_label: null,
+      project_epoch: 0,
+      project_revision: revision,
+      checkpoint_hash: checkpointHash,
+      history_generation: revision,
+      undo_entry_id: null,
+      undo_checkpoint_hash: null,
+      redo_entry_id: null,
+      redo_checkpoint_hash: null,
+    });
+    const terminal = (snapshot, label, cueListId = null, stale = false) => {
+      const revision = stale ? Math.max(0, capture.revision - 1) : ++capture.revision;
+      const checkpointHash = stale ? "a".repeat(64) : hashFor(revision);
+      const history = historyFor(revision, checkpointHash, label);
+      const result = {
+        authority: {
+          project_epoch: 0,
+          project_revision: revision,
+          checkpoint_hash: checkpointHash,
+          publication_generation: revision,
+          publication_kind: "mutation",
+          mapping_replacement_generation: 0,
+          authority_disposition_generation: 0,
+          authority_disposition: "runtime_sanitize",
+          recovery_authority_serial: 0,
+          recovery_authority_last_transition: { kind: "legacy_unknown" },
+          path_generation: 0,
+          history_generation: revision,
+          current_project_path: null,
+          snapshot: clone(snapshot),
+          profiles: [],
+          fixture_groups: [],
+          operator_policy: null,
+          midi_mappings: [],
+          osc_mappings: [],
+          dmx_mappings: [],
+          dj_track_triggers: [],
+          history,
+          input_runtime: {
+            project_input_runtime_generation: 0,
+            mapping_input_runtime_generation: 0,
+            midi_clock_active: false,
+            midi_control_active: false,
+            midi_feedback_output_active: false,
+            midi_feedback_runtime_active: false,
+            osc_active: false,
+            dmx_active: false,
+          },
+        },
+        history_status: history,
+      };
+      if (cueListId !== null) result.cue_list_id = cueListId;
+      return result;
+    };
+    const exactRequest = (command, args) => {
+      if (!args || typeof args !== "object" || Object.keys(args).length !== 1
+        || !args.request || typeof args.request !== "object") {
+        throw new Error(`Scene Matrix Bank ${command} escaped the strict nested request envelope.`);
+      }
+      const request = args.request;
+      const required = command === "create_cue_list"
+        ? ["expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId"]
+        : command === "rename_cue_list"
+          ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId"]
+          : command === "delete_cue_list"
+            ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId"]
+            : ["cueListIds", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId"];
+      if (JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(required)
+        || request.expectedEpoch !== 0
+        || request.expectedRevision !== capture.revision
+        || typeof request.expectedCheckpointHash !== "string"
+        || typeof request.ownerId !== "string"
+        || request.ownerId !== capture.ownerRegistrationArgs?.ownerId) {
+        throw new Error(`Scene Matrix Bank ${command} received an invalid E/R/H/owner fence.`);
+      }
+      return request;
+    };
+    const apply = (command, request) => {
+      const next = clone(capture.current);
+      let cueListId = null;
+      if (command === "create_cue_list") {
+        if (typeof request.label !== "string" || request.label.trim() === "") {
+          throw new Error("Scene Matrix Bank create received an empty label.");
+        }
+        cueListId = Math.max(0, ...next.cue_lists.map((cueList) => Number(cueList.id))) + 1;
+        next.cue_lists.push({ id: cueListId, label: request.label, active_cue_id: null });
+      } else if (command === "rename_cue_list") {
+        const cueList = next.cue_lists.find((candidate) => Number(candidate.id) === Number(request.cueListId));
+        if (!cueList || typeof request.label !== "string" || request.label.trim() === "") {
+          throw new Error("Scene Matrix Bank rename target is unavailable.");
+        }
+        cueList.label = request.label;
+      } else if (command === "delete_cue_list") {
+        const cueListIdToDelete = Number(request.cueListId);
+        if (!next.cue_lists.some((candidate) => Number(candidate.id) === cueListIdToDelete)) {
+          throw new Error("Scene Matrix Bank delete target is unavailable.");
+        }
+        next.cue_lists = next.cue_lists.filter((candidate) => Number(candidate.id) !== cueListIdToDelete);
+        next.cues = next.cues.filter((cue) => Number(cue.cue_list_id) !== cueListIdToDelete);
+      } else {
+        const requestedIds = request.cueListIds;
+        if (!Array.isArray(requestedIds)
+          || requestedIds.length !== next.cue_lists.length
+          || new Set(requestedIds).size !== requestedIds.length) {
+          throw new Error("Scene Matrix Bank reorder identity set is invalid.");
+        }
+        const byId = new Map(next.cue_lists.map((cueList) => [Number(cueList.id), cueList]));
+        const reordered = requestedIds.map((id) => byId.get(Number(id)) ?? null);
+        if (reordered.some((cueList) => cueList === null)) {
+          throw new Error("Scene Matrix Bank reorder referenced an unknown Bank.");
+        }
+        next.cue_lists = reordered;
+      }
+      capture.current = next;
+      capture.applied.push({ command, request: clone(request), cueListId });
+      const label = command === "create_cue_list"
+        ? "Create Scene Bank"
+        : command === "rename_cue_list"
+          ? "Rename Scene Bank"
+          : command === "delete_cue_list"
+            ? "Delete Scene Bank"
+            : "Reorder Scene Banks";
+      return terminal(next, label, cueListId);
+    };
+    const stale = () => terminal(capture.current, "Stale Scene Bank receipt", null, true);
+    const completePending = () => {
+      if (!pendingMutation || !pendingResolve) return false;
+      const { command, request } = pendingMutation;
+      pendingMutation = null;
+      const resolve = pendingResolve;
+      pendingResolve = null;
+      capture.pending = null;
+      resolve(apply(command, request));
+      return true;
+    };
+    window.__syndocalSetSceneMatrixBankMutationDisposition = (kind, message = null) => {
+      if (!["success", "stale", "throw", "pending"].includes(kind)) {
+        throw new Error(`Unknown Scene Matrix Bank mutation disposition ${String(kind)}.`);
+      }
+      capture.nextDisposition = { kind, message: typeof message === "string" ? message : null };
+    };
+    window.__syndocalResolveSceneMatrixBankMutationPending = completePending;
+    window.__syndocalSceneMatrixBankMutationCapture = capture;
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        capture.commands.push({ command, args: clone(args) });
+        if (command === "register_project_transaction_owner") {
+          if (capture.ownerRegistrationArgs !== null
+            || !args || typeof args !== "object"
+            || Object.keys(args).length !== 1
+            || typeof args.ownerId !== "string"
+            || !/^renderer:[A-Za-z0-9_.:-]{1,119}$/.test(args.ownerId)) {
+            throw new Error("Scene Matrix Bank mutation capture received a malformed owner registration.");
+          }
+          capture.ownerRegistrationArgs = clone(args);
+          return null;
+        }
+        if (capture.ownerRegistrationArgs === null) {
+          throw new Error(`Scene Matrix Bank mutation ${command} preceded owner registration.`);
+        }
+        if (command === "get_snapshot") {
+          capture.refreshes.push({ command, afterBankCommandCount: capture.bankCommands.length });
+          return clone(capture.current);
+        }
+        if (command === "get_project_history_status") {
+          return historyFor(capture.revision, capture.revision === 0 ? "" : hashFor(capture.revision));
+        }
+        if (!["create_cue_list", "rename_cue_list", "delete_cue_list", "reorder_cue_lists"].includes(command)) {
+          throw new Error(`Unexpected Scene Matrix Bank mutation capture command: ${command}`);
+        }
+        const request = exactRequest(command, args);
+        capture.bankCommands.push({ command, request: clone(request) });
+        const disposition = capture.nextDisposition;
+        capture.nextDisposition = { kind: "success", message: null };
+        if (disposition.kind === "throw") {
+          throw new Error(disposition.message ?? `fixture ${command} failure`);
+        }
+        if (disposition.kind === "stale") return stale();
+        if (disposition.kind === "pending") {
+          if (pendingMutation !== null) throw new Error("Scene Matrix Bank mutation capture already has a pending request.");
+          capture.pending = { command, request: clone(request) };
+          pendingMutation = { command, request };
+          return await new Promise((resolve) => {
+            pendingResolve = resolve;
+          });
+        }
+        return apply(command, request);
+      },
+    };
+    return {
+      initialBankIds: initial.cue_lists.map((cueList) => Number(cueList.id)),
+      initialLabels: initial.cue_lists.map((cueList) => String(cueList.label)),
+    };
+  });
+}
+
+async function finishSceneMatrixBankMutationCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const capture = window.__syndocalSceneMatrixBankMutationCapture;
+    const copy = capture ? structuredClone(capture) : null;
+    delete window.__syndocalSceneMatrixBankMutationCapture;
+    delete window.__syndocalSetSceneMatrixBankMutationDisposition;
+    delete window.__syndocalResolveSceneMatrixBankMutationPending;
+    delete window.__TAURI_INTERNALS__;
+    return copy;
+  });
+}
+
+async function exerciseSceneMatrixBankMutationTauriLane(client) {
+  // A distinct inert query forces a fresh fixture document. Repeating the
+  // exact URL is allowed to be a no-op by CDP/Chromium and would accidentally
+  // retain the preceding local-fixture mutations.
+  const freshFixtureUrl = new URL(fixtureUrl("scene-matrix"));
+  freshFixtureUrl.searchParams.set("syndocalStrictBankCapture", "1");
+  await waitForApp(client);
+  const previousTimeOrigin = await client.evaluate("performance.timeOrigin");
+  const navigation = await client.send("Page.navigate", { url: freshFixtureUrl.href });
+  await waitForReadyWorkspaceDocument(client, {
+    expectedUrl: freshFixtureUrl.href,
+    previousTimeOrigin,
+    actionDescription: `strict Bank capture navigation ${JSON.stringify(navigation)}`,
+  });
+  await clickWorkspaceOption(client, "control");
+  await selectControlSurface(client, "edit");
+  await sleep(80);
+  const installed = await installSceneMatrixBankMutationCapture(client);
+  const setBankInput = async (value) => {
+    const updated = await client.evaluate(`(() => {
+      const input = document.querySelector('[data-scene-matrix-save-bank]')?.closest('form')?.querySelector('input');
+      if (!(input instanceof HTMLInputElement)) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    if (!updated) throw new Error("Could not set the Scene Matrix Bank editor input.");
+  };
+  const readEditor = async () => await client.evaluate(`(() => {
+    const form = document.querySelector('.sceneMatrixBankEditor');
+    const input = form?.querySelector('input');
+    const alert = form?.querySelector('[data-scene-matrix-bank-editor-error]');
+    const save = form?.querySelector('[data-scene-matrix-save-bank]');
+    return {
+      open: Boolean(form),
+      value: input instanceof HTMLInputElement ? input.value : '',
+      alert: alert?.textContent?.trim() ?? '',
+      inputFocused: input === document.activeElement,
+      saveDisabled: save instanceof HTMLButtonElement ? save.disabled : false,
+      saveBusy: save?.getAttribute('aria-busy') ?? '',
+    };
+  })()`);
+  const captureState = async () => await client.evaluate(
+    "JSON.parse(JSON.stringify(window.__syndocalSceneMatrixBankMutationCapture ?? null))",
+  );
+  const setDisposition = async (kind, message = null) => {
+    await client.evaluate(
+      `window.__syndocalSetSceneMatrixBankMutationDisposition?.(${JSON.stringify(kind)}, ${JSON.stringify(message)})`,
+    );
+  };
+  const openCreate = async () => {
+    await dispatchSceneMatrixCdpButtonClick(client, '[data-scene-matrix-create-bank]', 'strict Bank create control');
+    await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'strict Bank create editor');
+  };
+  const submit = async (description) => {
+    await dispatchSceneMatrixCdpButtonClick(client, '[data-scene-matrix-save-bank]', description);
+  };
+  const cancelEditor = async () => {
+    await clickVisibleSelector(client, '[data-scene-matrix-cancel-bank]');
+    await waitForClientCondition(client, '!document.querySelector("[data-scene-matrix-save-bank]")', 'strict Bank editor close');
+  };
+  const openContext = async (cueListId) => {
+    const opened = await client.evaluate(`(() => {
+      const trigger = document.querySelector('[data-scene-matrix-bank-jump="${cueListId}"]');
+      if (!(trigger instanceof HTMLButtonElement)) return false;
+      trigger.focus();
+      trigger.dispatchEvent(new MouseEvent('contextmenu', {
+        clientX: 48,
+        clientY: 48,
+        bubbles: true,
+        cancelable: true,
+      }));
+      return true;
+    })()`);
+    if (!opened) throw new Error(`Could not open the strict Bank context menu for ${cueListId}.`);
+    await waitForClientCondition(
+      client,
+      'document.querySelector("[data-scene-matrix-context-rename]")',
+      'strict Bank context menu',
+    );
+  };
+  const beginRename = async (cueListId) => {
+    await openContext(cueListId);
+    await clickVisibleSelector(client, '[data-scene-matrix-context-rename]');
+    await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-save-bank]")', 'strict Bank rename editor');
+  };
+  const invokeCount = async (command) => await client.evaluate(
+    `window.__syndocalSceneMatrixBankMutationCapture?.bankCommands.filter((entry) => entry.command === ${JSON.stringify(command)}).length ?? -1`,
+  );
+  const failureCreate = async (kind, label, expectedAlert) => {
+    const before = await captureState();
+    await setDisposition(kind, kind === 'throw' ? expectedAlert.replace(/^Error: /, '') : null);
+    await openCreate();
+    await setBankInput(label);
+    await submit(`strict Bank create ${kind}`);
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const alert = document.querySelector('[data-scene-matrix-bank-editor-error]');
+        const input = document.querySelector('.sceneMatrixBankEditor input');
+        return alert?.textContent?.trim() === ${JSON.stringify(expectedAlert)} && input === document.activeElement;
+      })()`,
+      `strict Bank create ${kind} visible failure`,
+    );
+    const editor = await readEditor();
+    const after = await captureState();
+    await cancelEditor();
+    return { before, editor, after };
+  };
+  const failureRename = async (kind, cueListId, label, expectedAlert) => {
+    const before = await captureState();
+    await setDisposition(kind, kind === 'throw' ? expectedAlert.replace(/^Error: /, '') : null);
+    await beginRename(cueListId);
+    await setBankInput(label);
+    await submit(`strict Bank rename ${kind}`);
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const alert = document.querySelector('[data-scene-matrix-bank-editor-error]');
+        const input = document.querySelector('.sceneMatrixBankEditor input');
+        return alert?.textContent?.trim() === ${JSON.stringify(expectedAlert)} && input === document.activeElement;
+      })()`,
+      `strict Bank rename ${kind} visible failure`,
+    );
+    const editor = await readEditor();
+    const after = await captureState();
+    await cancelEditor();
+    return { before, editor, after };
+  };
+
+  // A first successful operation establishes a non-empty authority token. The
+  // following stale terminal receipts can then be rejected deterministically
+  // rather than slipping through the intentional bootstrap-empty token rule.
+  await openCreate();
+  await setBankInput('Native Created');
+  await submit('strict Bank create success');
+  await waitForClientCondition(
+    client,
+    `(() => [...document.querySelectorAll('[data-scene-matrix-column]')].some((column) =>
+      column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() === 'Native Created'))()`,
+    'strict Bank create refresh',
+  );
+  const afterCreate = await captureState();
+  const createdBankId = await client.evaluate(`(() => [...document.querySelectorAll('[data-scene-matrix-column]')]
+    .find((column) => column.querySelector('.sceneMatrixColumnHeader strong')?.textContent?.trim() === 'Native Created')
+    ?.getAttribute('data-scene-matrix-column') ?? '')()`);
+  if (!/^\d+$/.test(createdBankId)) {
+    throw new Error(`Strict Bank create did not expose its refreshed Bank identity: ${String(createdBankId)}.`);
+  }
+
+  const createStaleMessage = 'New Bank acknowledgement was stale; refresh before retrying.';
+  const createThrowMessage = 'Error: fixture create transport failure';
+  const renameStaleMessage = 'Bank rename acknowledgement was stale; refresh before retrying.';
+  const renameThrowMessage = 'Error: fixture rename transport failure';
+  const createStale = await failureCreate('stale', 'Rejected stale create', createStaleMessage);
+  const createThrow = await failureCreate('throw', 'Rejected throw create', createThrowMessage);
+  const renameStale = await failureRename('stale', createdBankId, 'Rejected stale rename', renameStaleMessage);
+  const renameThrow = await failureRename('throw', createdBankId, 'Rejected throw rename', renameThrowMessage);
+
+  await beginRename(createdBankId);
+  await setBankInput('Native Renamed');
+  await submit('strict Bank rename success');
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-scene-matrix-column="${createdBankId}"] .sceneMatrixColumnHeader strong')?.textContent?.trim() === 'Native Renamed'`,
+    'strict Bank rename refresh',
+  );
+  const afterRename = await captureState();
+
+  const reorderBefore = await captureState();
+  const reordered = await client.evaluate(`(() => {
+    const source = document.querySelector('[data-scene-matrix-bank-jump="${createdBankId}"]');
+    const target = document.querySelector('[data-scene-matrix-bank-jump="1"]');
+    if (!(source instanceof HTMLElement) || !(target instanceof HTMLElement)) return false;
+    source.dispatchEvent(new Event('dragstart', { bubbles: true }));
+    target.dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true }));
+    source.dispatchEvent(new Event('dragend', { bubbles: true }));
+    return true;
+  })()`);
+  if (!reordered) throw new Error('Could not dispatch strict Bank reorder gesture.');
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') === ${JSON.stringify(createdBankId)}`,
+    'strict Bank reorder refresh',
+  );
+  const afterReorder = await captureState();
+
+  await openContext(createdBankId);
+  await clickVisibleSelector(client, '[data-scene-matrix-context-delete]');
+  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'strict Bank delete dialog');
+  await clickVisibleSelector(client, '[data-scene-matrix-delete-confirm]');
+  await waitForClientCondition(
+    client,
+    `!document.querySelector('[data-scene-matrix-column="${createdBankId}"]')`,
+    'strict Bank delete refresh',
+  );
+  const afterDelete = await captureState();
+
+  const beforePending = await captureState();
+  await setDisposition('pending');
+  await openCreate();
+  await setBankInput('Pending native Bank');
+  await submit('strict Bank pending create');
+  await waitForClientCondition(
+    client,
+    "Boolean(window.__syndocalSceneMatrixBankMutationCapture?.pending)",
+    'strict Bank pending create admission',
+  );
+  const pendingEditor = await readEditor();
+  const pendingCreateCountBeforeSecondInput = await invokeCount('create_cue_list');
+  await client.evaluate(`(() => {
+    const input = document.querySelector('.sceneMatrixBankEditor input');
+    const save = document.querySelector('[data-scene-matrix-save-bank]');
+    if (input instanceof HTMLInputElement) input.focus();
+    if (save instanceof HTMLButtonElement) save.click();
+  })()`);
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter' });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
+  await sleep(60);
+  const pendingCreateCountAfterSecondInput = await invokeCount('create_cue_list');
+  await clickWorkspaceOption(client, 'setup');
+  await waitForClientCondition(client, '!document.querySelector(".sceneMatrixPanel")', 'strict Bank editor unmount');
+  const beforePendingResolve = await client.evaluate(`(() => ({
+    editorPresent: Boolean(document.querySelector('.sceneMatrixBankEditor')),
+    panelPresent: Boolean(document.querySelector('.sceneMatrixPanel')),
+    pending: Boolean(window.__syndocalSceneMatrixBankMutationCapture?.pending),
+  }))()`);
+  const pendingResolved = await client.evaluate('window.__syndocalResolveSceneMatrixBankMutationPending?.() ?? false');
+  await waitForClientCondition(
+    client,
+    '!window.__syndocalSceneMatrixBankMutationCapture?.pending',
+    'strict Bank pending completion',
+  );
+  await sleep(80);
+  const afterPendingResolve = await client.evaluate(`(() => ({
+    editorPresent: Boolean(document.querySelector('.sceneMatrixBankEditor')),
+    panelPresent: Boolean(document.querySelector('.sceneMatrixPanel')),
+    setupVisible: Boolean(document.querySelector('[data-workspace-tab="setup"]') || document.querySelector('.setupPanel')),
+  }))()`);
+  const finalCapture = await finishSceneMatrixBankMutationCapture(client);
+  const result = {
+    installed,
+    afterCreate,
+    createStale,
+    createThrow,
+    renameStale,
+    renameThrow,
+    afterRename,
+    reorderBefore,
+    afterReorder,
+    afterDelete,
+    beforePending,
+    pendingEditor,
+    pendingCreateCountBeforeSecondInput,
+    pendingCreateCountAfterSecondInput,
+    beforePendingResolve,
+    pendingResolved,
+    afterPendingResolve,
+    capture: finalCapture,
+  };
+  // The strict capture applied authoritative mutations, so its fresh document
+  // must be discarded explicitly before the next geometry viewport starts.
+  await navigateToReadyAppThroughExpectedBeforeUnload(client, fixtureUrl("scene-matrix"));
+  return result;
+}
+
+async function exerciseSceneMatrixSelectedAccent(client) {
+  const read = async () => await client.evaluate(`(() => {
+    const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')];
+    const probe = document.createElement('span');
+    probe.style.position = 'fixed';
+    probe.style.visibility = 'hidden';
+    document.body.append(probe);
+    const resolveColor = (value) => {
+      probe.style.color = value;
+      return getComputedStyle(probe).color;
+    };
+    const entries = cards.map((card) => {
+      const band = card.querySelector('.sceneMatrixEditStripBand');
+      const style = getComputedStyle(card);
+      return {
+        cueId: card.getAttribute('data-scene-matrix-cue-id') ?? '',
+        selected: card.getAttribute('data-scene-matrix-selected') === 'true',
+        strip: band ? getComputedStyle(band).backgroundColor : '',
+        identity: resolveColor(style.getPropertyValue('--cue-identity')),
+      };
+    });
+    probe.remove();
+    return entries;
+  })()`);
+  const before = await read();
+  await client.evaluate(`document.querySelector('[data-scene-matrix-edit-strip="302"]')?.click()`);
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-scene-matrix-cue-id=\\"302\\"]")?.getAttribute("data-scene-matrix-selected") === "true"',
+    'selected Scene accent',
+  );
+  await sleep(80);
+  return { before, after: await read() };
 }
 
 async function runSceneMatrixPaneCheck(client, viewport) {
@@ -20578,6 +23904,15 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   const sameColumnReorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
   const after = await measureSceneMatrixPane(client);
   const cueListBanks = await exerciseSceneMatrixCueListBanksV2(client);
+  const selectedAccent = await exerciseSceneMatrixSelectedAccent(client);
+  const sceneContextMenu = await exerciseSceneMatrixSceneContextMenu(client);
+  const strictBankMutation = cachedSceneMatrixBankMutationTauriLane
+    ?? await exerciseSceneMatrixBankMutationTauriLane(client);
+  cachedSceneMatrixBankMutationTauriLane ??= strictBankMutation;
+  const sceneMatrixPanelSource = readFileSync(
+    join(appRoot, "src", "components", "SceneMatrixPanel.tsx"),
+    "utf8",
+  );
   const expectedColumns = Array.from({ length: 13 }, (_, index) => String(index + 1));
   // T17 added the flash-mode cue 320 to the "back" column of the fixture.
   const expectedCardCount = 15;
@@ -20729,7 +24064,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.label.length > 0
         && entry.name === `Edit scene settings for Cue ${entry.label}`) &&
       new Set(before.editStrips.map((entry) => entry.name)).size === expectedCardCount],
-    ["matrixEditStripsKeepSixteenPixelHitBandAndGateIdentityToExecution", () =>
+    ["matrixEditStripsKeepSixteenPixelHitBandAndDimUnselectedIdentity", () =>
       before.editStrips.some((entry) => entry.active)
       && before.editStrips.some((entry) => !entry.active)
       && before.editStrips.every((entry) =>
@@ -20740,8 +24075,20 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.rightEdgeAligned)
       && before.editStrips
         .every((entry) =>
-          entry.visualColor === entry.identityColor
-          && entry.borderColors[3] === entry.identityColor)],
+          entry.visualColor !== entry.identityColor)
+      && new Set(before.editStrips.map((entry) => entry.visualColor)).size > 1],
+    ["matrixOnlySelectedSceneUsesBrightBankAccent", () => {
+      const beforeSelected = selectedAccent.before.filter((entry) => entry.selected);
+      const afterSelected = selectedAccent.after.filter((entry) => entry.selected);
+      return beforeSelected.length === 0
+        && selectedAccent.before.every((entry) => entry.strip !== entry.identity)
+        && afterSelected.length === 1
+        && afterSelected[0]?.cueId === "302"
+        && afterSelected[0]?.strip === afterSelected[0]?.identity
+        && selectedAccent.after
+          .filter((entry) => !entry.selected)
+          .every((entry) => entry.strip !== entry.identity);
+    }],
     ["matrixEditStripsReplaceLegacyHandleWithoutLosingDragSources", () =>
       before.dedicatedDragHandleCount === 0 &&
       before.dragSourceCount === expectedCardCount],
@@ -20872,8 +24219,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && Object.values(before.cardIdentityById).every((identity) =>
         identity.fill === identity.bankFill
         && identity.text === identity.bankText
-        && identity.labelText === identity.bankText
-        && identity.strip === identity.border)],
+        && identity.labelText === identity.bankText)],
     ["matrixBankIdentityUsesStableNonGroupHue", () =>
       (before.backHeaderIdentity || "").startsWith("hsl(")],
     ["matrixGroupColorPickerNotDuplicatedIntoBankHeader", () => before.groupColorInputCount === 0],
@@ -20882,13 +24228,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && cueListBanks.initial.cardIds.length === expectedCardCount
       && cueListBanks.initial.bankIds.every((id) => expectedColumns.includes(id))
       && cueListBanks.initial.jumpIds.length === expectedColumns.length],
-    ["matrixNewFixtureUsesBankLabelsForCueListAndPlaybackExecutor", () =>
+    ["matrixFixturePreservesAuthoredMainBankLabel", () =>
       cueListBanks.initial.cueListLabels.length > 0
-      && cueListBanks.initial.cueListLabels.every((label) => label !== "Main")
-      && cueListBanks.initial.playbackExecutorCueListLabels.length > 0
-      && cueListBanks.initial.playbackExecutorCueListLabels.every((label) => label !== "Main")
-      && cueListBanks.initial.playbackExecutorLabels.length > 0
-      && cueListBanks.initial.playbackExecutorLabels.every((label) => label !== "Main")],
+      && cueListBanks.initial.cueListLabels[0] === "Main"
+      && !cueListBanks.initial.cueListLabels.includes("Bank 1")],
     ["matrixCueListJumpStripIsNavigationNotTabs", () =>
       cueListBanks.initial.jumpRoles.every((role) => role === "")
       && cueListBanks.initial.jumpCurrentValues.every((value) => value === "true" || value === "")
@@ -20896,11 +24239,12 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && cueListBanks.initial.legacyGroupHeaderCount === 0],
     ["matrixCueListBankCreatePrefillsAndSupportsCustomName", () =>
       cueListBanks.prefilled.editorOpen
-      && cueListBanks.prefilled.editorValue === "Bank 2"
-      && cueListBanks.customCreated.banks.some((bank) => bank.label === "Night")],
+      && cueListBanks.prefilled.editorValue === cueListBanks.initialDefaultLabel
+      && cueListBanks.customBank !== null
+      && Number(cueListBanks.customBank.id) > Math.max(...cueListBanks.initial.bankIds.map(Number))],
     ["matrixCueListBankAutoNameIsUnused", () =>
-      cueListBanks.autoPrefilled.editorValue === "Bank 2"
-      && cueListBanks.autoCreated.banks.some((bank) => bank.label === "Bank 2")],
+      cueListBanks.autoPrefilled.editorValue === cueListBanks.automaticDefaultLabel
+      && cueListBanks.autoCreated.banks.some((bank) => bank.label === cueListBanks.automaticDefaultLabel)],
     ["matrixCueListBankColumnsKeepFixedWidthAndAlignedHeight", () => {
       const states = [
         cueListBanks.initial,
@@ -20923,7 +24267,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && state.emptyActionTexts.every((text) => text === "+ Scene")
         && state.emptyActionBodyTexts.every((text) => text === "")
         && state.emptyRedundantTextCount === 0
-        && state.emptyActionSceneTargets.includes(emptyBank.id);
+        && state.emptyActionSceneTargets.includes(emptyBank.id)
+        && state.createSceneButtons.filter((cueListId) => cueListId === emptyBank.id).length === 1;
     }],
     ["matrixCueListBankCreateRejectsNormalizedDuplicate", () =>
       cueListBanks.duplicateCreateRejected.editorOpen
@@ -20975,7 +24320,97 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         JSON.stringify(cueListBanks.undone.bankIds.slice(2))],
     ["matrixCueListTopRowControlsReachable", () =>
       cueListBanks.initial.lastControlReachable
-      && ["auto", "scroll"].some((mode) => cueListBanks.initial.surfaceHeaderOverflowX.includes(mode))],
+      && cueListBanks.initial.surfaceHeaderOverflowX === "hidden"
+      && cueListBanks.initial.toolbarActionCount === 3
+      && cueListBanks.initial.toolbarRightGap >= -1
+      && cueListBanks.initial.toolbarRightGap <= 4
+      && cueListBanks.initial.toolbarButtonWidths.length === 3
+      && Math.max(...cueListBanks.initial.toolbarButtonWidths) -
+        Math.min(...cueListBanks.initial.toolbarButtonWidths) <= 0.1],
+    ["matrixSceneContextMenuSupportsRenameDuplicateAndDelete", () =>
+      sceneContextMenu.pointerOpened.clamped
+      && sceneContextMenu.pointerOpened.focusedItem
+      && sceneContextMenu.pointerOpened.selectedCueIds.join(",") === "302"
+      && ["Rename", "Duplicate", "Delete"].every((label) =>
+        sceneContextMenu.pointerOpened.labels.includes(label))
+      && sceneContextMenu.pointerOpened.disabledLabels.length === 0
+      && sceneContextMenu.deleteDialog.open
+      && sceneContextMenu.deleteDialog.placementCount.startsWith("0")
+      && sceneContextMenu.deleteDialog.jumpCount.startsWith("0")
+      && sceneContextMenu.deleteCanceled
+      && sceneContextMenu.keyboardOpened.clamped
+      && sceneContextMenu.renameFocused],
+    ["matrixBankMutationsUseOneStrictTauriLaneAndRefreshAuthoritatively", () => {
+      const capture = strictBankMutation.capture;
+      const commands = capture?.commands ?? [];
+      const bankCommands = capture?.bankCommands ?? [];
+      const refreshes = capture?.refreshes ?? [];
+      const expectedNames = [
+        "create_cue_list",
+        "create_cue_list",
+        "create_cue_list",
+        "rename_cue_list",
+        "rename_cue_list",
+        "rename_cue_list",
+        "reorder_cue_lists",
+        "delete_cue_list",
+        "create_cue_list",
+      ];
+      return strictBankMutation.installed.initialLabels.includes("Main")
+        && commands[0]?.command === "register_project_transaction_owner"
+        && Object.keys(capture?.ownerRegistrationArgs ?? {}).join(",") === "ownerId"
+        && /^renderer:[A-Za-z0-9_.:-]{1,119}$/.test(capture?.ownerRegistrationArgs?.ownerId ?? "")
+        && JSON.stringify(bankCommands.map((entry) => entry.command)) === JSON.stringify(expectedNames)
+        && bankCommands.every((entry) => entry.request?.ownerId === capture.ownerRegistrationArgs?.ownerId
+          && entry.request.expectedEpoch === 0
+          && Number.isSafeInteger(entry.request.expectedRevision)
+          && typeof entry.request.expectedCheckpointHash === "string")
+        && JSON.stringify(refreshes.map((entry) => entry.afterBankCommandCount)) === JSON.stringify([1, 6, 7, 8, 9])
+        && capture.applied?.map((entry) => entry.command).join(",") ===
+          "create_cue_list,rename_cue_list,reorder_cue_lists,delete_cue_list,create_cue_list";
+    }],
+    ["matrixBankCreateAndRenameRejectFalseAndThrowWithExactBackendAlert", () => {
+      const exactFailure = (entry, expectedAlert, rejectedLabel) =>
+        entry.editor.open
+        && entry.editor.inputFocused
+        && entry.editor.alert === expectedAlert
+        && entry.after.bankCommands.length === entry.before.bankCommands.length + 1
+        && entry.after.refreshes.length === entry.before.refreshes.length
+        && !entry.after.current.cue_lists.some((cueList) => cueList.label === rejectedLabel);
+      return exactFailure(
+        strictBankMutation.createStale,
+        "New Bank acknowledgement was stale; refresh before retrying.",
+        "Rejected stale create",
+      )
+        && exactFailure(
+          strictBankMutation.createThrow,
+          "Error: fixture create transport failure",
+          "Rejected throw create",
+        )
+        && exactFailure(
+          strictBankMutation.renameStale,
+          "Bank rename acknowledgement was stale; refresh before retrying.",
+          "Rejected stale rename",
+        )
+        && exactFailure(
+          strictBankMutation.renameThrow,
+          "Error: fixture rename transport failure",
+          "Rejected throw rename",
+        );
+    }],
+    ["matrixBankPendingSubmitIsSingleShotAndUnmountCannotMutateDisposedEditor", () =>
+      strictBankMutation.pendingEditor.open
+      && strictBankMutation.pendingEditor.saveDisabled
+      && strictBankMutation.pendingEditor.saveBusy === "true"
+      && strictBankMutation.pendingCreateCountBeforeSecondInput === strictBankMutation.pendingCreateCountAfterSecondInput
+      && strictBankMutation.beforePendingResolve.pending
+      && !strictBankMutation.beforePendingResolve.editorPresent
+      && !strictBankMutation.beforePendingResolve.panelPresent
+      && strictBankMutation.pendingResolved
+      && !strictBankMutation.afterPendingResolve.editorPresent
+      && !strictBankMutation.afterPendingResolve.panelPresent
+      && /const result = await props\.onCreateCueList\(\);[\s\S]*?if \(!sceneMatrixMounted\) return;[\s\S]*?result === false/s.test(sceneMatrixPanelSource)
+      && /const result = await props\.onRenameCueList\(\);[\s\S]*?if \(!sceneMatrixMounted\) return;[\s\S]*?result === false/s.test(sceneMatrixPanelSource)],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -20999,6 +24434,9 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     subThresholdClick,
     sameColumnReorder,
     cueListBanks,
+    selectedAccent,
+    sceneContextMenu,
+    strictBankMutation,
   };
 }
 
@@ -21009,13 +24447,17 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
     deviceScaleFactor: 1,
     mobile: false,
   });
+  traceViewport(`scene-matrix-strip ${viewport.width}x${viewport.height} first-navigation-start`);
   await navigateToReadyApp(client, fixtureUrl("scene-matrix"));
+  traceViewport(`scene-matrix-strip ${viewport.width}x${viewport.height} first-navigation-ready`);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "edit");
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
   const reorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
+  traceViewport(`scene-matrix-strip ${viewport.width}x${viewport.height} second-navigation-start`);
   await navigateToReadyApp(client, fixtureUrl("scene-matrix"));
+  traceViewport(`scene-matrix-strip ${viewport.width}x${viewport.height} second-navigation-ready`);
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "edit");
   await sleep(120);
@@ -21081,18 +24523,19 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && JSON.stringify(crossBank.move?.after.selectedCardIds) === JSON.stringify([])
       && crossBank.move?.before.sceneSettingsCount === 0
       && crossBank.move?.after.sceneSettingsCount === 0
-      && crossBank.move?.after.renderedAccentMatches
+      && crossBank.move?.after.renderedInactiveIdentityIsDimmed
       && crossBank.move?.after.cardAccent === crossBank.move?.after.bankAccent
       && crossBank.move?.after.cardTextAccent === crossBank.move?.after.bankTextAccent
       && crossBank.move?.after.labelTextAccent === crossBank.move?.after.bankTextAccent],
     ["freshSceneMatrixFixtureReinitializesOrderingAndAccent", () =>
-      JSON.stringify(crossBank.afterReload?.frontColumnCueIds) === JSON.stringify(["301", "302"])
+      crossBank.reloadDocument?.beforeUnloadDialogType === "beforeunload"
+      && JSON.stringify(crossBank.afterReload?.frontColumnCueIds) === JSON.stringify(["301", "302"])
       && JSON.stringify(crossBank.afterReload?.backColumnCueIds) === JSON.stringify(["303", "320"])
       && crossBank.afterReload?.cueGroupId === "2"
       && JSON.stringify(crossBank.afterReload?.activeCardIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.afterReload?.selectedCardIds) === JSON.stringify([])
       && crossBank.afterReload?.sceneSettingsCount === 0
-      && crossBank.afterReload?.renderedAccentMatches
+      && crossBank.afterReload?.renderedInactiveIdentityIsDimmed
       && crossBank.afterReload?.cardAccent === crossBank.afterReload?.bankAccent
       && crossBank.afterReload?.cardTextAccent === crossBank.afterReload?.bankTextAccent
       && crossBank.afterReload?.labelTextAccent === crossBank.afterReload?.bankTextAccent],
@@ -21100,11 +24543,36 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       crossBank.captureInstalled
       && crossBank.capture.installedWithoutExistingInternals
       && JSON.stringify(crossBank.capture.commands) === JSON.stringify([
+        "register_project_transaction_owner",
+        "set_program_audio_handoff_config",
         "begin_project_transaction",
         "move_cue_between_scene_banks_batch",
         "commit_project_transaction",
         "acknowledge_project_transaction",
       ])
+      && JSON.stringify(crossBank.capture.startupCommands) === JSON.stringify([
+        "register_project_transaction_owner",
+        "set_program_audio_handoff_config",
+      ])
+      && JSON.stringify(crossBank.capture.transactionCommands) === JSON.stringify([
+        "begin_project_transaction",
+        "move_cue_between_scene_banks_batch",
+        "commit_project_transaction",
+        "acknowledge_project_transaction",
+      ])
+      && crossBank.capture.phase === "complete"
+      && crossBank.capture.ownerRegistrationResult === null
+      && JSON.stringify(Object.keys(crossBank.capture.ownerRegistrationArgs ?? {}).sort())
+        === JSON.stringify(["ownerId"])
+      && /^renderer:[A-Za-z0-9_.:-]{1,119}$/.test(
+        crossBank.capture.ownerRegistrationArgs?.ownerId ?? "",
+      )
+      && JSON.stringify(Object.keys(crossBank.capture.programAudioHandoffArgs ?? {}).sort())
+        === JSON.stringify(["deviceName", "enabled", "volume"])
+      && typeof crossBank.capture.programAudioHandoffArgs?.enabled === "boolean"
+      && Number.isFinite(crossBank.capture.programAudioHandoffArgs?.volume)
+      && (crossBank.capture.programAudioHandoffArgs?.deviceName === null
+        || typeof crossBank.capture.programAudioHandoffArgs?.deviceName === "string")
       && crossBank.capture.beginArgs?.label === "Move Cue Between Scene Banks Batch"
       && crossBank.capture.beginArgs?.coalesceKey ===
         'move_cue_between_scene_banks_batch:{"cueId":302,"targetCueListId":3,"targetGroupId":"back","targetCueId":320}'
@@ -21116,10 +24584,12 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && crossBank.capture.beginArgs.shapeFingerprint.length > 0
       && typeof crossBank.capture.beginArgs?.ownerId === "string"
       && crossBank.capture.beginArgs.ownerId.length > 0
+      && crossBank.capture.beginArgs.ownerId === crossBank.capture.ownerRegistrationArgs.ownerId
       && crossBank.capture.beginTicket?.transaction_id === 27_001
       && crossBank.capture.beginTicket?.project_epoch === 0
       && crossBank.capture.beginTicket?.project_revision === 0
-      && crossBank.capture.beginTicket?.project_checkpoint_hash === "scene-matrix-checkpoint-0"
+      && crossBank.capture.beginTicket?.project_checkpoint_hash ===
+        crossBank.capture.beginArgs.expectedCheckpointHash
       && crossBank.capture.beginTicket?.client_operation_id === crossBank.capture.beginArgs.clientOperationId
       && crossBank.capture.beginTicket?.shape_fingerprint === crossBank.capture.beginArgs.shapeFingerprint
       && crossBank.capture.beginTicket?.schema_version === crossBank.capture.beginArgs.schemaVersion
@@ -21149,9 +24619,25 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && crossBank.capture.acknowledgeArgs?.commandName === crossBank.capture.beginArgs.commandName
       && crossBank.capture.acknowledgeArgs?.schemaVersion === crossBank.capture.beginTicket.schema_version
       && crossBank.capture.acknowledgeArgs?.ownerId === crossBank.capture.beginTicket.owner_id
+      && JSON.stringify(Object.keys(crossBank.capture.acknowledgeArgs ?? {}).sort())
+        === JSON.stringify([
+          "clientOperationId",
+          "commandName",
+          "ownerId",
+          "schemaVersion",
+          "shapeFingerprint",
+        ])
+      && !("transactionId" in (crossBank.capture.acknowledgeArgs ?? {}))
+      && !("expectedEpoch" in (crossBank.capture.acknowledgeArgs ?? {}))
       && crossBank.capture.cancelCount === 0],
     ["crossBankBrowserProjectionMatchesNativeBatchOrdering", () =>
-      JSON.stringify(
+      JSON.stringify(crossBank.capture.nativeBefore) === JSON.stringify([
+        { id: 301, cueListId: 2, groupId: "front" },
+        { id: 302, cueListId: 2, groupId: "front" },
+        { id: 303, cueListId: 3, groupId: "back" },
+        { id: 320, cueListId: 3, groupId: "back" },
+      ])
+      && JSON.stringify(
         crossBank.capture.nativeAfter
           ?.filter((cue) => cue.cueListId === 2)
           .map((cue) => String(cue.id)),
@@ -21162,7 +24648,33 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
           .map((cue) => String(cue.id)),
       ) === JSON.stringify(crossBank.move?.after.backColumnCueIds)
       && String(crossBank.capture.nativeAfter
-        ?.find((cue) => cue.id === 302)?.cueListId) === crossBank.move?.after.cueGroupId],
+        ?.find((cue) => cue.id === 302)?.cueListId) === crossBank.move?.after.cueGroupId
+      && crossBank.capture.beforeSnapshot?.cues
+        ?.find((cue) => cue.id === 302)?.cue_list_id === 2
+      && crossBank.capture.beforeSnapshot?.cues
+        ?.find((cue) => cue.id === 302)?.group_id === "front"
+      && crossBank.capture.terminalSnapshot?.cues
+        ?.find((cue) => cue.id === 302)?.cue_list_id === 3
+      && crossBank.capture.terminalSnapshot?.cues
+        ?.find((cue) => cue.id === 302)?.group_id === "back"
+      && JSON.stringify(crossBank.capture.terminalResult?.authority?.snapshot)
+        === JSON.stringify(crossBank.capture.terminalSnapshot)
+      && crossBank.capture.terminalResult?.authority?.project_epoch
+        === crossBank.capture.beginTicket.project_epoch
+      && crossBank.capture.terminalResult?.authority?.project_revision
+        === crossBank.capture.beginTicket.project_revision + 1
+      && crossBank.capture.terminalResult?.authority?.checkpoint_hash.length === 64
+      && crossBank.capture.terminalResult?.authority?.checkpoint_hash
+        !== crossBank.capture.beginTicket.project_checkpoint_hash
+      && crossBank.capture.terminalResult?.authority?.publication_generation === 1
+      && crossBank.capture.terminalResult?.authority?.publication_kind === "mutation"
+      && crossBank.capture.terminalResult?.authority?.history_generation === 2
+      && crossBank.capture.terminalResult?.history_status?.project_revision
+        === crossBank.capture.terminalResult.authority.project_revision
+      && crossBank.capture.terminalResult?.history_status?.checkpoint_hash
+        === crossBank.capture.terminalResult.authority.checkpoint_hash
+      && crossBank.capture.terminalResult?.history_status?.history_generation
+        === crossBank.capture.terminalResult.authority.history_generation],
     ["singleUndoCompletelyRestoresCrossBankMove", () =>
       crossBank.menuControl.count === 1
       && crossBank.menuControl.visibleCount === 1
@@ -21192,7 +24704,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       && JSON.stringify(crossBank.afterUndo.activeCardIds) === JSON.stringify(["301"])
       && JSON.stringify(crossBank.afterUndo.selectedCardIds) === JSON.stringify([])
       && crossBank.afterUndo.sceneSettingsCount === 0
-      && crossBank.afterUndo.renderedAccentMatches
+      && crossBank.afterUndo.renderedInactiveIdentityIsDimmed
       && crossBank.afterUndo.cardAccent === crossBank.afterUndo.bankAccent
       && crossBank.afterUndo.cardTextAccent === crossBank.afterUndo.bankTextAccent
       && crossBank.afterUndo.labelTextAccent === crossBank.afterUndo.bankTextAccent],
@@ -21290,6 +24802,23 @@ async function readSceneSettingsState(client) {
     const settingsInteractiveElements = pane
       ? [...pane.querySelectorAll('button, input:not([type="checkbox"]), select, summary')].filter(isVisible)
       : [];
+    const nonToolbarInteractiveElements = settingsInteractiveElements.filter(
+      (element) => !element.closest(".sceneOwnedFxToolbar"),
+    );
+    const chooserButtonRects = chooserButtons.map((button) => button.getBoundingClientRect());
+    const chooserGridRows = [...new Set(chooserButtonRects.map((box) => Math.round(box.top)))];
+    const chooserGridColumns = [...new Set(chooserButtonRects.map((box) => Math.round(box.left)))];
+    const visibleChooserDescriptionCount = chooserButtons.reduce(
+      (count, button) => count + [...button.querySelectorAll(":scope > small")].filter(isVisible).length,
+      0,
+    );
+    const ownedFxToolbarButtons = [...(pane?.querySelectorAll(
+      ".sceneOwnedFxToolbar button",
+    ) ?? [])].filter(isVisible);
+    const measureHitSize = (element) => {
+      const box = element.getBoundingClientRect();
+      return Math.min(box.width, box.height);
+    };
     const app = document.querySelector(".app");
     const documentElement = document.documentElement;
     const body = document.body;
@@ -21471,20 +25000,25 @@ async function readSceneSettingsState(client) {
         .map((button) => button.getAttribute("data-scene-fx-quick-block") ?? ""),
       chooserMinimumHitSize: chooserButtons.length > 0
         ? Math.min(...chooserButtons.map((button) => {
-          const box = button.getBoundingClientRect();
-          return Math.min(box.width, box.height);
-        }))
+            const box = button.getBoundingClientRect();
+            return Math.min(box.width, box.height);
+          }))
         : 0,
+      chooserGridColumnCount: chooserGridColumns.length,
+      chooserGridRowCount: chooserGridRows.length,
+      chooserVisibleDescriptionCount: visibleChooserDescriptionCount,
       minimumVisibleFontPx: settingsTextElements.length > 0
         ? Math.min(...settingsTextElements.map((element) =>
-          Number.parseFloat(getComputedStyle(element).fontSize) || Number.POSITIVE_INFINITY))
+            Number.parseFloat(getComputedStyle(element).fontSize) || Number.POSITIVE_INFINITY))
         : 0,
       minimumInteractiveHitSize: settingsInteractiveElements.length > 0
-        ? Math.min(...settingsInteractiveElements.map((element) => {
-          const box = element.getBoundingClientRect();
-          return Math.min(box.width, box.height);
-        }))
+        ? Math.min(...settingsInteractiveElements.map(measureHitSize))
         : 0,
+      minimumNonToolbarInteractiveHitSize: nonToolbarInteractiveElements.length > 0
+        ? Math.min(...nonToolbarInteractiveElements.map(measureHitSize))
+        : 0,
+      ownedFxToolbarButtonHeights: ownedFxToolbarButtons.map((button) =>
+        Math.round(button.getBoundingClientRect().height * 100) / 100),
       minimumInteractiveDescriptor: settingsInteractiveElements.length > 0
         ? settingsInteractiveElements
           .map((element) => {
@@ -21610,7 +25144,7 @@ async function readSceneSettingsState(client) {
         ? Math.max(0, settingsScroller.scrollWidth - settingsScroller.clientWidth)
         : 0,
       settingsHasInternalVerticalScroll: settingsScroller
-        ? settingsScroller.scrollHeight >= settingsScroller.clientHeight
+        ? settingsScroller.scrollHeight > settingsScroller.clientHeight + 1
         : false,
       documentAndAppScrollZero: Boolean(
         documentElement.scrollWidth <= documentElement.clientWidth + 1
@@ -21635,6 +25169,255 @@ async function clickSceneSettingsTarget(client, selector) {
   }, selector);
 }
 
+async function exerciseSceneSettingsInputScroll(client) {
+  const geometry = await evaluatePageFunction(client, () => {
+    const scroller = document.querySelector(".sceneSettingsScroller");
+    if (!(scroller instanceof HTMLElement)) return null;
+    // A test-local sentinel makes the actual scroll terminus observable without
+    // changing the production editor. It must become visible after End, not
+    // merely move by one pixel.
+    scroller.querySelector(":scope > [data-scene-settings-scroll-bottom-sentinel]")?.remove();
+    const bottomSentinel = document.createElement("div");
+    bottomSentinel.setAttribute("data-scene-settings-scroll-bottom-sentinel", "");
+    bottomSentinel.setAttribute("aria-hidden", "true");
+    bottomSentinel.style.cssText = "width:1px;height:1px;min-height:1px;margin:0;padding:0;pointer-events:none;";
+    scroller.append(bottomSentinel);
+    scroller.scrollTop = 0;
+    const box = scroller.getBoundingClientRect();
+    const paneBox = scroller.closest(".sceneSettingsPane")?.getBoundingClientRect() ?? null;
+    return {
+      x: box.left + Math.min(Math.max(8, box.width / 2), Math.max(8, box.width - 8)),
+      y: box.top + Math.min(Math.max(8, box.height / 2), Math.max(8, box.height - 8)),
+      beforeScrollTop: scroller.scrollTop,
+      overflowPx: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      maxScrollTop: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      focusable: scroller.getAttribute("tabindex") === "0",
+      scrollerContainedByPane: Boolean(
+        paneBox
+        && box.left >= paneBox.left - 1
+        && box.right <= paneBox.right + 1
+        && box.top >= paneBox.top - 1
+        && box.bottom <= paneBox.bottom + 1,
+      ),
+    };
+  });
+  if (!geometry) {
+    return {
+      found: false,
+      inputDispatched: false,
+      focusable: false,
+      scrollerContainedByPane: false,
+      overflowPx: 0,
+      maxScrollTop: 0,
+      beforeScrollTop: 0,
+      afterWheelScrollTop: 0,
+      afterPageDownScrollTop: 0,
+      afterEndScrollTop: 0,
+      endPressCount: 0,
+      moved: false,
+      wheelMoved: false,
+      pageDownMoved: false,
+      endMoved: false,
+      endAtBottom: false,
+      bottomSentinelVisibleAtEnd: false,
+      documentAndAppScrollZero: false,
+    };
+  }
+  const documentAndAppScrollZero = async () => await evaluatePageFunction(client, () => {
+    const app = document.querySelector(".app");
+    return document.documentElement.scrollTop === 0
+      && document.body.scrollTop === 0
+      && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+      && document.documentElement.scrollHeight <= document.documentElement.clientHeight + 1
+      && document.body.scrollWidth <= document.body.clientWidth + 1
+      && document.body.scrollHeight <= document.body.clientHeight + 1
+      && (!app || (app.scrollTop === 0
+        && app.scrollWidth <= app.clientWidth + 1
+        && app.scrollHeight <= app.clientHeight + 1));
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: geometry.x,
+    y: geometry.y,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: geometry.x,
+    y: geometry.y,
+    deltaX: 0,
+    deltaY: Math.max(120, Math.min(480, geometry.overflowPx)),
+  });
+  await sleep(80);
+  const afterWheelScrollTop = await evaluatePageFunction(client, () =>
+    document.querySelector(".sceneSettingsScroller")?.scrollTop ?? 0);
+  const wheelMoved = afterWheelScrollTop > geometry.beforeScrollTop + 0.5;
+
+  await evaluatePageFunction(client, (scrollTop) => {
+    const scroller = document.querySelector(".sceneSettingsScroller");
+    if (scroller instanceof HTMLElement) scroller.scrollTop = scrollTop;
+  }, geometry.beforeScrollTop);
+
+  const focused = await evaluatePageFunction(client, () => {
+    const scroller = document.querySelector(".sceneSettingsScroller");
+    if (!(scroller instanceof HTMLElement)) return false;
+    if (scroller.getAttribute("tabindex") !== "0") return false;
+    scroller.focus({ preventScroll: true });
+    return document.activeElement === scroller;
+  });
+  let afterPageDownScrollTop = afterWheelScrollTop;
+  let afterEndScrollTop = afterWheelScrollTop;
+  let pageDownMoved = false;
+  let endMoved = false;
+  let endPressCount = 0;
+  if (focused) {
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      code: "PageDown",
+      key: "PageDown",
+      windowsVirtualKeyCode: 34,
+      nativeVirtualKeyCode: 34,
+    });
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      code: "PageDown",
+      key: "PageDown",
+      windowsVirtualKeyCode: 34,
+      nativeVirtualKeyCode: 34,
+    });
+    await sleep(60);
+    afterPageDownScrollTop = await evaluatePageFunction(client, () =>
+      document.querySelector(".sceneSettingsScroller")?.scrollTop ?? 0);
+    pageDownMoved = afterPageDownScrollTop > geometry.beforeScrollTop + 0.5;
+    await evaluatePageFunction(client, (scrollTop) => {
+      const scroller = document.querySelector(".sceneSettingsScroller");
+      if (scroller instanceof HTMLElement) scroller.scrollTop = scrollTop;
+    }, geometry.beforeScrollTop);
+    const readEndPosition = async () => await evaluatePageFunction(client, () => {
+      const scroller = document.querySelector(".sceneSettingsScroller");
+      const sentinel = scroller?.querySelector(":scope > [data-scene-settings-scroll-bottom-sentinel]");
+      if (!(scroller instanceof HTMLElement) || !(sentinel instanceof HTMLElement)) {
+        return { scrollTop: 0, maxScrollTop: 0, atBottom: false, sentinelVisible: false };
+      }
+      const scrollerBox = scroller.getBoundingClientRect();
+      const sentinelBox = sentinel.getBoundingClientRect();
+      const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      return {
+        scrollTop: scroller.scrollTop,
+        maxScrollTop,
+        atBottom: scroller.scrollTop >= maxScrollTop - 1,
+        sentinelVisible: sentinelBox.top >= scrollerBox.top - 1
+          && sentinelBox.bottom <= scrollerBox.bottom + 1,
+      };
+    });
+    // Chromium applies the platform's page-increment handling to a focusable
+    // overflow container in this harness. Send bounded, real End strokes and
+    // require the observed bottom sentinel; do not programmatically scroll it.
+    let endPosition = await readEndPosition();
+    while (!endPosition.atBottom && endPressCount < 8) {
+      await client.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        code: "End",
+        key: "End",
+        windowsVirtualKeyCode: 35,
+        nativeVirtualKeyCode: 35,
+      });
+      await client.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        code: "End",
+        key: "End",
+        windowsVirtualKeyCode: 35,
+        nativeVirtualKeyCode: 35,
+      });
+      endPressCount += 1;
+      await sleep(60);
+      endPosition = await readEndPosition();
+    }
+    afterEndScrollTop = endPosition.scrollTop;
+    endMoved = afterEndScrollTop > geometry.beforeScrollTop + 0.5;
+    geometry.endAtBottom = endPosition.atBottom;
+    geometry.bottomSentinelVisibleAtEnd = endPosition.sentinelVisible;
+  }
+  const inputDispatched = true;
+  const moved = geometry.overflowPx > 0 && wheelMoved && pageDownMoved && endMoved;
+  const scrollZeroWhileMoved = await documentAndAppScrollZero();
+  await evaluatePageFunction(client, (scrollTop) => {
+    const scroller = document.querySelector(".sceneSettingsScroller");
+    if (!(scroller instanceof HTMLElement)) return;
+    scroller.scrollTop = scrollTop;
+    scroller.querySelector(":scope > [data-scene-settings-scroll-bottom-sentinel]")?.remove();
+    scroller.blur();
+  }, geometry.beforeScrollTop);
+  await sleep(40);
+  return {
+    found: true,
+    inputDispatched,
+    focused,
+    focusable: geometry.focusable,
+    scrollerContainedByPane: geometry.scrollerContainedByPane,
+    overflowPx: geometry.overflowPx,
+    maxScrollTop: geometry.maxScrollTop,
+    beforeScrollTop: geometry.beforeScrollTop,
+    afterWheelScrollTop,
+    afterPageDownScrollTop,
+    afterEndScrollTop,
+    endPressCount,
+    moved,
+    wheelMoved,
+    pageDownMoved,
+    endMoved,
+    endAtBottom: geometry.endAtBottom ?? false,
+    bottomSentinelVisibleAtEnd: geometry.bottomSentinelVisibleAtEnd ?? false,
+    scrollZeroWhileMoved,
+    documentAndAppScrollZero: await documentAndAppScrollZero(),
+  };
+}
+
+async function exerciseCueOwnedFxRemovalToZero(client) {
+  return await evaluatePageFunction(client, async () => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0
+        && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const app = document.querySelector(".app");
+    const read = () => ({
+      count: [...document.querySelectorAll("[data-scene-owned-effect]")].filter(visible).length,
+      removeCount: [...document.querySelectorAll(".sceneOwnedFxRemove")].filter(visible).length,
+      emptyStateVisible: [...document.querySelectorAll(".sceneSettingsEmpty")]
+        .some((element) => visible(element)
+          && (element.textContent || "").includes("Select an FX family")),
+    });
+    const before = read();
+    let clicks = 0;
+    while (clicks < 16) {
+      const remove = [...document.querySelectorAll(".sceneOwnedFxRemove")].find(visible);
+      if (!(remove instanceof HTMLButtonElement)) break;
+      remove.click();
+      clicks += 1;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+    const after = read();
+    return {
+      before,
+      clicks,
+      after,
+      removedToZero: before.count > 0 && clicks === before.count && after.count === 0
+        && after.removeCount === 0 && after.emptyStateVisible,
+      documentAndAppScrollZero: document.documentElement.scrollTop === 0
+        && document.body.scrollTop === 0
+        && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+        && document.documentElement.scrollHeight <= document.documentElement.clientHeight + 1
+        && document.body.scrollWidth <= document.body.clientWidth + 1
+        && document.body.scrollHeight <= document.body.clientHeight + 1
+        && (!app || (app.scrollTop === 0
+          && app.scrollWidth <= app.clientWidth + 1
+          && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  });
+}
+
 async function installSceneSettingsSaveCapture(client) {
   return await evaluatePageFunction(client, () => {
     const installedWithoutExistingInternals = window.__TAURI_INTERNALS__ === undefined;
@@ -21649,6 +25432,8 @@ async function installSceneSettingsSaveCapture(client) {
       invoke: async (command, args) => {
         const capture = window.__syndocalSceneSettingsSaveCapture;
         capture.commands.push(command);
+        if (command === "register_project_transaction_owner") return null;
+        if (command === "set_program_audio_handoff_config") return undefined;
         if (command === "begin_project_transaction") {
           return {
             transaction_id: 26_001,
@@ -21671,28 +25456,49 @@ async function installSceneSettingsSaveCapture(client) {
         }
         if (command === "commit_project_transaction") {
           capture.committed = true;
+          const historyStatus = {
+            can_undo: true,
+            can_redo: false,
+            undo_depth: 1,
+            redo_depth: 0,
+            undo_label: "Set Cue Metadata",
+            redo_label: null,
+            project_epoch: 0,
+            project_revision: 0,
+            checkpoint_hash: "",
+            history_generation: 1,
+            undo_entry_id: null,
+            undo_checkpoint_hash: null,
+            redo_entry_id: null,
+            redo_checkpoint_hash: null,
+          };
           return {
             authority: {
               project_epoch: 0,
               project_revision: 0,
               checkpoint_hash: "",
-            },
-            history_status: {
-              can_undo: true,
-              can_redo: false,
-              undo_depth: 1,
-              redo_depth: 0,
-              undo_label: "Set Cue Metadata",
-              redo_label: null,
-              project_epoch: 0,
-              project_revision: 0,
-              checkpoint_hash: "",
+              publication_generation: 0,
+              publication_kind: "Initial",
+              mapping_replacement_generation: 0,
+              authority_disposition_generation: 0,
+              authority_disposition: "Clean",
+              recovery_authority_serial: 0,
+              recovery_authority_last_transition: { kind: "legacy_unknown" },
+              path_generation: 0,
               history_generation: 1,
-              undo_entry_id: null,
-              undo_checkpoint_hash: null,
-              redo_entry_id: null,
-              redo_checkpoint_hash: null,
+              current_project_path: null,
+              snapshot: {},
+              profiles: [],
+              fixture_groups: [],
+              operator_policy: null,
+              midi_mappings: [],
+              osc_mappings: [],
+              dmx_mappings: [],
+              dj_track_triggers: [],
+              history: historyStatus,
+              input_runtime: {},
             },
+            history_status: historyStatus,
           };
         }
         if (command === "acknowledge_project_transaction") return undefined;
@@ -21935,6 +25741,28 @@ async function runSceneSettingsViewport(client, viewport) {
   );
   await sleep(120);
   const createdFx = await readSceneSettingsState(client);
+  // One normal Curve editor fits at 1920×1080, so use real chooser gestures to
+  // build a deliberately deep rack before proving the inspector scrolls. This
+  // keeps the scroll test on the shipped authoring path rather than treating a
+  // no-overflow desktop as a successful scroll test.
+  const scrollFixtureOwnedFxTargetCount = 8;
+  const scrollFixtureAdditions = [];
+  for (let expectedCount = createdFx.ownedFxCount + 1;
+    expectedCount <= scrollFixtureOwnedFxTargetCount;
+    expectedCount += 1) {
+    const clicked = await clickSceneSettingsTarget(
+      client,
+      '[data-scene-fx-chooser] [data-effect-family="COLOR FX"]',
+    );
+    scrollFixtureAdditions.push(clicked);
+    await waitForClientCondition(
+      client,
+      `document.querySelectorAll("[data-scene-owned-effect]").length === ${expectedCount}`,
+      `Scene Settings scroll fixture owned FX ${expectedCount} ${viewport.width}x${viewport.height}`,
+    );
+  }
+  const scrollFixtureFx = await readSceneSettingsState(client);
+  const createdFxScrollExercise = await exerciseSceneSettingsInputScroll(client);
   const twoDMappingClicked = await clickSceneSettingsTarget(
     client,
     '[data-scene-fx-chooser] [data-effect-family="2D MAPPING"]',
@@ -22331,6 +26159,7 @@ async function runSceneSettingsViewport(client, viewport) {
   );
   await sleep(80);
   const pointerOnlySelected = await readSceneSettingsState(client);
+  const cueOwnedFxRemoval = await exerciseCueOwnedFxRemovalToZero(client);
 
   const expectedFamilies = [
     "STEPS",
@@ -22343,6 +26172,10 @@ async function runSceneSettingsViewport(client, viewport) {
     "SUPER SCENE",
   ];
   const expectedQuickFamilies = ["COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX"];
+  const standardSceneSettingsViewport = viewport.width === 1920 && viewport.height === 1080;
+  const settingsTouchFloor = (state) =>
+    state.minimumNonToolbarInteractiveHitSize >= 40
+    && state.ownedFxToolbarButtonHeights.every((height) => Math.abs(height - 32) <= 0.5);
   const conditions = [
     ["unselectedKeepsAuthoringDeskAndCollapsesOptionalStatusRail", () =>
       initial.settingsCount === 0
@@ -22430,6 +26263,8 @@ async function runSceneSettingsViewport(client, viewport) {
       && saveRoundTrip.committed
       && saveRoundTrip.snapshotAttempted
       && JSON.stringify(saveRoundTrip.commands) === JSON.stringify([
+        "register_project_transaction_owner",
+        "set_program_audio_handoff_config",
         "begin_project_transaction",
         "set_cue_metadata",
         "commit_project_transaction",
@@ -22570,6 +26405,10 @@ async function runSceneSettingsViewport(client, viewport) {
       && !fxSurface.advancedSettingsVisible
       && fxSurface.chooserButtonCount === 8
       && JSON.stringify(fxSurface.chooserFamilies) === JSON.stringify(expectedFamilies)
+      && (!standardSceneSettingsViewport
+        || (fxSurface.chooserGridColumnCount === 4
+          && fxSurface.chooserGridRowCount === 2))
+      && fxSurface.chooserVisibleDescriptionCount === 0
       && fxSurface.chooserMinimumHitSize >= 40],
     ["advancedSurfaceContainsOnlyExistingSyndocalSettings", () =>
       advancedSurface.unsupportedAdvancedSettingCount === 0
@@ -22597,6 +26436,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && createdFx.editorType === "Curve"
       && createdFx.curveEditorVisible
       && createdFx.saveFxButtonVisible
+      && createdFx.chooserVisibleDescriptionCount === 0
       && createdFx.activeCardIds.includes("302")],
     ["everySceneFxEditorOwnsDaslightPlusColorPaletteLibrary", () =>
       createdFx.fxPaletteLibraryType === "Curve"
@@ -22626,6 +26466,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickBeforeEdit.ownedFxCount === 0
       && oneClickEditContext.activeSurface === "fx"
       && oneClickEditContext.chooserButtonCount === 8
+      && oneClickEditContext.chooserVisibleDescriptionCount === 0
       && JSON.stringify(oneClickEditContext.quickBlockFamilies)
         === JSON.stringify(expectedQuickFamilies)
       && oneClickEditContext.disabledQuickBlockFamilies.length === 0],
@@ -22638,6 +26479,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickAdded.enabledOwnedFxCount === 1
       && oneClickAdded.selectedOwnedFxIds.length === 1
       && oneClickAdded.editorType === "Color"
+      && oneClickAdded.chooserVisibleDescriptionCount === 0
       && oneClickAdded.ownedFxToggleCount === 1
       && oneClickAdded.ownedFxRemoveCount === 1],
     ["colorSweepExposesUnifiedParametersWithoutEvaluatorRoute", () =>
@@ -22687,13 +26529,37 @@ async function runSceneSettingsViewport(client, viewport) {
     ["selectedRailPreservesMatrixPrimaryWidth", () =>
       selectedStatic.matrixOwnsMoreWidth
       && createdFx.matrixOwnsMoreWidth
-      && (selectedStatic.statusRect?.width ?? 0) >= 340
-      && (selectedStatic.statusRect?.width ?? 0) <= 421],
+      && (selectedStatic.statusRect?.width ?? 0) >= 480
+      && (selectedStatic.statusRect?.width ?? 0) <= 681
+      && (createdFx.statusRect?.width ?? 0) >= 480
+      && (createdFx.statusRect?.width ?? 0) <= 681
+      && (!standardSceneSettingsViewport
+        || (Math.round(selectedStatic.statusRect?.width ?? 0) === 680
+          && Math.round(createdFx.statusRect?.width ?? 0) === 680))],
     ["settingsUseInternalScrollWithoutHorizontalEscape", () =>
-      selectedStatic.settingsHasInternalVerticalScroll
-      && advancedSurface.settingsHasInternalVerticalScroll
-      && fxSurface.settingsHasInternalVerticalScroll
-      && createdFx.settingsHasInternalVerticalScroll
+      [selectedStatic, advancedSurface, fxSurface, createdFx].every((state) =>
+        !state.settingsHasInternalVerticalScroll || state.settingsHorizontalOverflowPx <= 1)
+      && scrollFixtureAdditions.length === scrollFixtureOwnedFxTargetCount - createdFx.ownedFxCount
+      && scrollFixtureAdditions.every(Boolean)
+      && scrollFixtureFx.ownedFxCount === scrollFixtureOwnedFxTargetCount
+      && scrollFixtureFx.settingsHasInternalVerticalScroll
+      && scrollFixtureFx.settingsHorizontalOverflowPx <= 1
+      && createdFxScrollExercise.found
+      && createdFxScrollExercise.inputDispatched
+      && createdFxScrollExercise.focusable
+      && createdFxScrollExercise.focused
+      && createdFxScrollExercise.scrollerContainedByPane
+      && createdFxScrollExercise.overflowPx > 1
+      && createdFxScrollExercise.moved
+      && createdFxScrollExercise.wheelMoved
+      && createdFxScrollExercise.pageDownMoved
+      && createdFxScrollExercise.endMoved
+      && createdFxScrollExercise.endPressCount >= 1
+      && createdFxScrollExercise.endPressCount <= 8
+      && createdFxScrollExercise.endAtBottom
+      && createdFxScrollExercise.bottomSentinelVisibleAtEnd
+      && createdFxScrollExercise.scrollZeroWhileMoved
+      && createdFxScrollExercise.documentAndAppScrollZero
       && editSourceRoute.detailsVisible
       && selectedStatic.settingsHorizontalOverflowPx <= 1
       && advancedSurface.settingsHorizontalOverflowPx <= 1
@@ -22704,10 +26570,10 @@ async function runSceneSettingsViewport(client, viewport) {
       && advancedSurface.minimumVisibleFontPx >= 11
       && fxSurface.minimumVisibleFontPx >= 11
       && createdFx.minimumVisibleFontPx >= 11
-      && selectedStatic.minimumInteractiveHitSize >= 40
-      && advancedSurface.minimumInteractiveHitSize >= 40
-      && fxSurface.minimumInteractiveHitSize >= 40
-      && createdFx.minimumInteractiveHitSize >= 40],
+      && settingsTouchFloor(selectedStatic)
+      && settingsTouchFloor(advancedSurface)
+      && settingsTouchFloor(fxSurface)
+      && settingsTouchFloor(createdFx)],
     ["sceneSettingsKeepDocumentAndAppScrollZero", () =>
       initial.documentAndAppScrollZero
       && triggeredOnly.documentAndAppScrollZero
@@ -22720,7 +26586,8 @@ async function runSceneSettingsViewport(client, viewport) {
       && advancedSurface.documentAndAppScrollZero
       && fxSurface.documentAndAppScrollZero
       && createdFx.documentAndAppScrollZero
-      && createdFxContents.documentAndAppScrollZero],
+      && createdFxContents.documentAndAppScrollZero
+      && cueOwnedFxRemoval.documentAndAppScrollZero],
     ["oneClickFxKeepsFixedViewportAndInternalPaneGeometry", () =>
       oneClickBeforeEdit.documentAndAppScrollZero
       && oneClickEditContext.documentAndAppScrollZero
@@ -22728,8 +26595,15 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickAdded.settingsHorizontalOverflowPx <= 1
       && oneClickAdded.minimumVisibleFontPx >= 11
       && oneClickAdded.chooserMinimumHitSize >= 40
+      && settingsTouchFloor(oneClickAdded)
       && oneClickAdded.ownedFxToggleCount === 1
       && oneClickAdded.ownedFxRemoveCount === 1],
+    ["cueOwnedFxCanBeRemovedToEmptyState", () =>
+      cueOwnedFxRemoval.removedToZero
+      && cueOwnedFxRemoval.before.count > 0
+      && cueOwnedFxRemoval.after.count === 0
+      && cueOwnedFxRemoval.after.removeCount === 0
+      && cueOwnedFxRemoval.after.emptyStateVisible],
     ["valueGeneratorUsesOneEditorAndPreservesCustomEnvelope", () =>
       valueSurfaceClicked
       && valueCreateClicked
@@ -22802,6 +26676,10 @@ async function runSceneSettingsViewport(client, viewport) {
     advancedSurface,
     fxSurface,
     createdFx,
+    scrollFixtureOwnedFxTargetCount,
+    scrollFixtureAdditions,
+    scrollFixtureFx,
+    createdFxScrollExercise,
     valueGeneratorState,
     valueSweepState,
     valueCustomState,
@@ -22825,6 +26703,7 @@ async function runSceneSettingsViewport(client, viewport) {
     oneClickPaletteApplied,
     pointerOnlyStripGesture,
     pointerOnlySelected,
+    cueOwnedFxRemoval,
   };
 }
 
@@ -22846,6 +26725,10 @@ const sceneSettingsLogLine = (result) =>
       `${result.fxSurface.activeSurface}>${result.createdFxContents.activeSurface} ` +
     `chooser=${result.fxSurface.chooserButtonCount}@${Math.round(result.fxSurface.chooserMinimumHitSize)}px ` +
     `created=${result.createdFx.editorType}/${result.createdFx.ownedFxCount} ` +
+    `grid=${result.fxSurface.chooserGridColumnCount}x${result.fxSurface.chooserGridRowCount}/small${result.fxSurface.chooserVisibleDescriptionCount} ` +
+    `scrollFixture=${result.scrollFixtureFx.ownedFxCount}/${result.scrollFixtureOwnedFxTargetCount} ` +
+    `scrollExercise=${Number(result.createdFxScrollExercise.moved)}/wheel${Number(result.createdFxScrollExercise.wheelMoved)}/page${Number(result.createdFxScrollExercise.pageDownMoved)}/end${Number(result.createdFxScrollExercise.endMoved)}x${result.createdFxScrollExercise.endPressCount}/bottom${Number(result.createdFxScrollExercise.endAtBottom)}/sentinel${Number(result.createdFxScrollExercise.bottomSentinelVisibleAtEnd)}/${Math.round(result.createdFxScrollExercise.overflowPx)}:${Math.round(result.createdFxScrollExercise.afterEndScrollTop)} ` +
+    `removeToZero=${Number(result.cueOwnedFxRemoval.removedToZero)}:${result.cueOwnedFxRemoval.before.count}->${result.cueOwnedFxRemoval.after.count} ` +
     `quick=${result.oneClickAddGesture.gestureCount}:${result.oneClickAdded.editorType}/` +
       `${result.oneClickAdded.ownedFxCount}/${result.oneClickAdded.enabledOwnedFxCount} ` +
     `details=${result.editSourceRoute.detailsVisible}/${result.editSourceRoute.standaloneDrawerCount} ` +
@@ -24058,7 +27941,7 @@ async function measureTimelineSourceShelfScenePlacement(client, prepared, condit
       after.addedAriaLabel.includes(prepared.sourceLabel) &&
       after.selectedTargetLayerId === prepared.targetLayerId &&
       after.sourceCardCount > 0 &&
-      /Added linked Scene Block/.test(after.statusText) &&
+      /^Scene \d+ placed on the Timeline\.$/.test(after.statusText) &&
       after.documentAndAppScrollZero,
   };
 }
@@ -24159,7 +28042,10 @@ async function exerciseTimelineSourceShelfSceneDragPlacement(client) {
   const dragStartMove = client.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved', x: points[0].x, y: points[0].y,
     button: 'left', buttons: 1,
-  });
+  }).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error }),
+  );
   traceViewport('timeline-source-drag start-move-sent');
   const dragData = (await interceptedDrag)?.data;
   traceViewport('timeline-source-drag payload-intercepted');
@@ -24188,7 +28074,8 @@ async function exerciseTimelineSourceShelfSceneDragPlacement(client) {
   traceViewport('timeline-source-drag mouse-released');
   await client.send('Input.setInterceptDrags', { enabled: false });
   traceViewport('timeline-source-drag intercept-disabled');
-  await dragStartMove;
+  const dragStartMoveResult = await dragStartMove;
+  if (!dragStartMoveResult.ok) throw dragStartMoveResult.error;
   traceViewport('timeline-source-drag start-move-replied');
   const measured = await measureTimelineSourceShelfScenePlacement(
     client,
@@ -24219,6 +28106,12 @@ async function installTimelineSourceShelfProductionCapture(client) {
     const capture = {
       installedWithoutExistingInternals,
       commands: [],
+      startupCommands: [],
+      transactionCommands: [],
+      phase: 'await-owner-registration',
+      ownerRegistrationArgs: null,
+      ownerRegistrationResult: 'unanswered',
+      programAudioHandoffArgs: null,
       beginArgs: null,
       addArgs: null,
       commitArgs: null,
@@ -24230,6 +28123,46 @@ async function installTimelineSourceShelfProductionCapture(client) {
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
         capture.commands.push(command);
+        if (capture.phase === 'await-owner-registration') {
+          if (command !== 'register_project_transaction_owner') {
+            throw new Error(`Timeline Sources strict capture expected owner registration before ${command}.`);
+          }
+          const ownerId = args && typeof args === 'object' ? args.ownerId : null;
+          const exactOwnerShape = args && typeof args === 'object'
+            && Object.keys(args).length === 1
+            && typeof ownerId === 'string'
+            && /^renderer:[A-Za-z0-9_.:-]{1,119}$/.test(ownerId);
+          if (!exactOwnerShape) {
+            throw new Error('Timeline Sources strict capture received a malformed owner identity.');
+          }
+          capture.startupCommands.push(command);
+          capture.ownerRegistrationArgs = clone(args);
+          capture.ownerRegistrationResult = null;
+          capture.phase = 'await-program-audio-handoff';
+          return null;
+        }
+        if (capture.phase === 'await-program-audio-handoff') {
+          if (command !== 'set_program_audio_handoff_config') {
+            throw new Error(`Timeline Sources strict capture expected Program Audio startup completion before ${command}.`);
+          }
+          const exactConfig = args && typeof args === 'object'
+            && Object.keys(args).length === 3
+            && typeof args.enabled === 'boolean'
+            && typeof args.volume === 'number'
+            && Number.isFinite(args.volume)
+            && (args.deviceName === null || typeof args.deviceName === 'string');
+          if (!exactConfig) {
+            throw new Error('Timeline Sources strict capture received a malformed Program Audio handoff config.');
+          }
+          capture.startupCommands.push(command);
+          capture.programAudioHandoffArgs = clone(args);
+          capture.phase = 'transaction';
+          return null;
+        }
+        if (capture.phase !== 'transaction') {
+          throw new Error(`Timeline Sources strict capture reached an invalid phase before ${command}.`);
+        }
+        capture.transactionCommands.push(command);
         if (command === 'begin_project_transaction') {
           capture.beginArgs = clone(args);
           return {
@@ -24287,13 +28220,54 @@ async function installTimelineSourceShelfProductionCapture(client) {
         }
         if (command === 'commit_project_transaction') {
           capture.commitArgs = clone(args);
-          return {
+          const source = capture.snapshot
+            ?? clone(window.__syndocalReadTimelineProductionCaptureSnapshot?.());
+          if (!source || typeof source !== 'object') {
+            throw new Error('Timeline Sources production-capture cannot form a complete terminal authority result.');
+          }
+          const historyStatus = {
             can_undo: true,
             can_redo: false,
             undo_depth: 1,
             redo_depth: 0,
             undo_label: 'Add Timeline Scene Block',
             redo_label: null,
+            project_epoch: 0,
+            project_revision: 0,
+            checkpoint_hash: '',
+            history_generation: 1,
+            undo_entry_id: null,
+            undo_checkpoint_hash: null,
+            redo_entry_id: null,
+            redo_checkpoint_hash: null,
+          };
+          return {
+            authority: {
+              project_epoch: 0,
+              project_revision: 0,
+              checkpoint_hash: '',
+              publication_generation: 0,
+              publication_kind: 'Initial',
+              mapping_replacement_generation: 0,
+              authority_disposition_generation: 0,
+              authority_disposition: 'Clean',
+              recovery_authority_serial: 0,
+              recovery_authority_last_transition: { kind: 'legacy_unknown' },
+              path_generation: 0,
+              history_generation: 1,
+              current_project_path: null,
+              snapshot: source,
+              profiles: [],
+              fixture_groups: [],
+              operator_policy: null,
+              midi_mappings: [],
+              osc_mappings: [],
+              dmx_mappings: [],
+              dj_track_triggers: [],
+              history: historyStatus,
+              input_runtime: {},
+            },
+            history_status: historyStatus,
           };
         }
         if (command === 'acknowledge_project_transaction') {
@@ -24339,8 +28313,16 @@ async function exerciseTimelineSourceShelfProductionClickPlacement(client) {
     capture,
     passed: Boolean(
       captureInstalled &&
+      JSON.stringify(capture?.startupCommands) === JSON.stringify([
+        'register_project_transaction_owner',
+        'set_program_audio_handoff_config',
+      ]) &&
+      capture?.ownerRegistrationResult === null &&
+      typeof capture?.ownerRegistrationArgs?.ownerId === 'string' &&
+      capture?.programAudioHandoffArgs !== null &&
       placement.passed &&
-      JSON.stringify(capture?.commands) === JSON.stringify(exactCommands) &&
+      JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
+      capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
       capture?.eventId === Number(placement.after.addedEventId) &&
       args.cueId === placement.prepared.sourceCueId &&
       args.layerId === placement.prepared.targetLayerId &&
@@ -24374,8 +28356,16 @@ async function exerciseTimelineSourceShelfProductionDragPlacement(client) {
     capture,
     passed: Boolean(
       captureInstalled &&
+      JSON.stringify(capture?.startupCommands) === JSON.stringify([
+        'register_project_transaction_owner',
+        'set_program_audio_handoff_config',
+      ]) &&
+      capture?.ownerRegistrationResult === null &&
+      typeof capture?.ownerRegistrationArgs?.ownerId === 'string' &&
+      capture?.programAudioHandoffArgs !== null &&
       placement.passed &&
-      JSON.stringify(capture?.commands) === JSON.stringify(exactCommands) &&
+      JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
+      capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
       capture?.eventId === Number(placement.after.addedEventId) &&
       args.cueId === placement.prepared.sourceCueId &&
       args.layerId === placement.prepared.targetLayerId &&
@@ -24391,11 +28381,11 @@ async function exerciseTimelineSourceShelfProductionDragPlacement(client) {
   };
 }
 
-async function exerciseTimelineSourceShelfProductionPair(client, viewport) {
+async function exerciseTimelineSourceShelfProductionPair(client, viewport, recycleClient = null) {
   await client.send('Emulation.setDeviceMetricsOverride', {
     width: viewport.width,
     height: viewport.height,
-    deviceScaleFactor: 1,
+    deviceScaleFactor: deviceScaleFactorForViewport(viewport),
     mobile: false,
   });
   const openCaptureFixture = async (runId) => {
@@ -24414,6 +28404,15 @@ async function exerciseTimelineSourceShelfProductionPair(client, viewport) {
   traceViewport('timeline-source-pair click-start');
   const click = await exerciseTimelineSourceShelfProductionClickPlacement(client);
   traceViewport(`timeline-source-pair click-${click.passed ? 'pass' : 'fail'}`);
+  if (recycleClient) {
+    client = await recycleClient();
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+      mobile: false,
+    });
+  }
   await openCaptureFixture('drag');
   traceViewport('timeline-source-pair drag-start');
   const drag = await exerciseTimelineSourceShelfProductionDragPlacement(client);
@@ -24421,20 +28420,20 @@ async function exerciseTimelineSourceShelfProductionPair(client, viewport) {
   const parity = Boolean(
     click.passed &&
     drag.passed &&
-    click.capture?.commands?.[1] === 'add_timeline_scene_block' &&
-    drag.capture?.commands?.[1] === 'add_timeline_scene_block' &&
+    click.capture?.transactionCommands?.[1] === 'add_timeline_scene_block' &&
+    drag.capture?.transactionCommands?.[1] === 'add_timeline_scene_block' &&
     click.capture?.addArgs?.cueId === drag.capture?.addArgs?.cueId &&
     click.capture?.addArgs?.layerId === drag.capture?.addArgs?.layerId &&
     click.capture?.addArgs?.track === drag.capture?.addArgs?.track
   );
-  return {
+  return [{
     viewport,
     label: `timeline-source-placement-${viewport.width}x${viewport.height}`,
     click,
     drag,
     parity,
     passed: click.passed && drag.passed && parity,
-  };
+  }, client];
 }
 
 async function exerciseTimelinePortalLifecycle(client) {
@@ -24670,7 +28669,13 @@ async function runEditIaVideoViewport(client, viewport) {
   };
 }
 
-async function runTimelineSlimViewport(client, viewport) {
+async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+    mobile: false,
+  });
   // The persistent Timeline domain owns its arranger and source shelf. Scene
   // Matrix remains in Lighting, so this focused proof must not navigate via
   // the old cross-domain drag surface.
@@ -24708,7 +28713,30 @@ async function runTimelineSlimViewport(client, viewport) {
   const laneMenuKeyboard = await exerciseTimelineLaneMenuKeyboard(client);
   const dialogEscapePriority = await exerciseTimelineDialogEscapePriority(client);
   const escapePriority = await exerciseTimelineSlimEscapePriority(client);
-  const sourceShelfProductionPair = await exerciseTimelineSourceShelfProductionPair(client, viewport);
+  if (recycleClient) {
+    client = await recycleClient();
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+      mobile: false,
+    });
+  }
+  const [sourceShelfProductionPair, activeClient] = await exerciseTimelineSourceShelfProductionPair(
+    client,
+    viewport,
+    recycleClient,
+  );
+  client = activeClient;
+  if (recycleClient) {
+    client = await recycleClient();
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+      mobile: false,
+    });
+  }
   const sourceShelfScenePlacement = sourceShelfProductionPair.click;
   const sourceShelfSceneDragPlacement = sourceShelfProductionPair.drag;
   const sourceShelfPlacementParity = sourceShelfProductionPair.parity;
@@ -28268,6 +32296,47 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (touchUp.touchActivePadIds.includes("320")) failed.push("touch-flash-still-active-on-up");
   if (!touchUp.containmentZero) failed.push("touch-containment");
 
+  const faultFlashStarted = await evaluatePageFunction(client, () => {
+    const pad = document.querySelector('[data-touch-flash-cue="320"]');
+    if (!pad) return false;
+    pad.dispatchEvent(new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      bubbles: true,
+      cancelable: true,
+    }));
+    return true;
+  });
+  await sleep(48);
+  const faultFlashDown = await readSceneLiveModifierState(client, 303);
+  if (!faultFlashStarted || !faultFlashDown.touchActivePadIds.includes("320")) {
+    failed.push("touch-fault-flash-not-active-before-fault");
+  }
+  const faultInjectionAvailable = await evaluatePageFunction(client, () => {
+    if (!window.__syndocalSetSceneMatrixBankAuthorityFault) return false;
+    window.__syndocalSetSceneMatrixBankAuthorityFault(true);
+    return true;
+  });
+  await sleep(64);
+  const faultFlashReleased = await evaluatePageFunction(client, () => {
+    const snapshot = window.__syndocalReadSceneMatrixFixtureSnapshot?.();
+    const activeIds = [
+      snapshot?.active_cue_id,
+      ...Object.values(snapshot?.active_group_cue_ids ?? {}),
+    ].filter((value) => typeof value === "number");
+    return {
+      activeIds,
+      authorityAlert: Boolean(document.querySelector("[data-bank-authority-unavailable]")),
+    };
+  });
+  if (!faultInjectionAvailable) failed.push("touch-fault-injection-unavailable");
+  if (faultFlashReleased.activeIds.includes(320)) failed.push("touch-flash-latched-on-authority-fault");
+  if (!faultFlashReleased.authorityAlert) failed.push("touch-authority-fault-not-visible");
+  await evaluatePageFunction(client, () => {
+    window.__syndocalSetSceneMatrixBankAuthorityFault?.(false);
+  });
+  await sleep(64);
+
   return {
     label: `scene-live-modifier-${viewport.width}x${viewport.height}`,
     passed: failed.length === 0,
@@ -28279,6 +32348,10 @@ async function runSceneLiveModifierViewport(client, viewport) {
     reactivated,
     flash: { down: flashDown.activeCardIds, up: flashUp.activeCardIds },
     touchFlash: { down: touchDown.touchActivePadIds, up: touchUp.touchActivePadIds },
+    touchAuthorityFaultFlash: {
+      down: faultFlashDown.touchActivePadIds,
+      released: faultFlashReleased,
+    },
     snapshotControlStability,
   };
 }
@@ -31513,6 +35586,7 @@ async function main() {
       client = await createCdpClient();
       await waitForApp(client);
       traceViewport("browser recycled for next phase");
+      return client;
     };
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
@@ -32643,7 +36717,12 @@ async function main() {
     if (timelineSourcePlacementOnlyMode) {
       const results = [];
       for (const viewport of viewports) {
-        const result = await exerciseTimelineSourceShelfProductionPair(client, viewport);
+        const [result, activeClient] = await exerciseTimelineSourceShelfProductionPair(
+          client,
+          viewport,
+          recycleBrowser,
+        );
+        client = activeClient;
         results.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
@@ -32665,8 +36744,11 @@ async function main() {
     }
     if (timelineSlimOnlyMode) {
       const timelineSlimResults = [];
-      for (const viewport of viewports) {
-        const result = await runTimelineSlimViewport(client, viewport);
+      for (const [viewportIndex, viewport] of viewports.entries()) {
+        if (viewportIndex > 0) {
+          await recycleBrowser();
+        }
+        const result = await runTimelineSlimViewport(client, viewport, recycleBrowser);
         timelineSlimResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
@@ -33572,6 +37654,38 @@ async function main() {
       const failures = fullscreenVjResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Fullscreen VJ focus acceptance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (liveAudioRestoreOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runLiveAudioRestoreAcceptanceViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            JSON.stringify({
+              failedChecks: result.failedChecks,
+              exactCalls: result.exact.calls.map((call) => call.command),
+              missingCalls: result.missing.calls.map((call) => call.command),
+              ambiguousCalls: result.ambiguous.calls.map((call) => call.command),
+              unavailableBackends: result.unavailableBackends.map((entry) => ({
+                id: entry.id,
+                state: entry.settled?.backendState,
+                availability: entry.settled?.backendAvailability,
+                calls: entry.calls.map((call) => call.command),
+              })),
+              catalogueFailures: result.catalogueFailures.map((entry) => ({
+                id: entry.id,
+                state: entry.settled?.backendState,
+                calls: entry.calls.map((call) => call.command),
+              })),
+            }),
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Live audio restart restore acceptance failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
