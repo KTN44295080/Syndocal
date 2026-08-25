@@ -345,9 +345,15 @@ evidence. No unavailable physical device is a passing hardware result.
 
 ### 4.1 Current release train
 
-The active development train advances from the long-lived `1.1.0` metadata to
-`1.2.0-alpha.11`. The branch name may remain historical; artifact metadata and tags
-must not derive a false version from the branch name.
+The active train advanced from the long-lived `1.1.0` metadata through accepted
+alpha checkpoints; the last synchronized committed ordinal is `1.2.0-alpha.11`.
+As of 2026-08-26, pushed HEAD is `763670c` and its committed metadata remains
+`1.2.0-alpha.11`, while the dirty uncommitted worktree synchronizes in-progress
+metadata to `1.2.0-alpha.12`. Until that advance is committed with tracked
+sources only and natively verified, `check:release` passes only with untracked
+supporting sources present, and alpha.12 must not be described as a reproducible
+checkpoint, tag, installer, or artifact. The branch name may remain historical;
+artifact metadata and tags must not derive a false version from the branch name.
 
 The synchronized product-version surfaces are:
 
@@ -395,16 +401,29 @@ SemVer and receives its own unique version.
 
 ## 5. Warning elimination policy
 
-Warnings are work, not harmless release log noise. The current Rust release build
-contains many first-party unused/dead-code warnings, and Vite reports oversized
-chunks. The following ratchet begins immediately:
+Warnings are work, not harmless release log noise. The following ratchet begins
+immediately:
 
-Provisional observed baseline from the fresh `1.2.0-alpha.1` native build: the
-Engine reported 9 warnings, the Syndocal release target reported 58 warnings, and
-Vite emitted its oversized-chunk warning for multiple generated chunks. These counts
-are log-level starting evidence, not the complete W0 feature/platform inventory and
-must not be used as an allowlist. W0 must still recount every supported feature and
-platform configuration and classify every first-party diagnostic.
+Historical snapshot — not the current state: the provisional observed baseline
+came from the fresh `1.2.0-alpha.1` native build, where the Engine reported 9
+warnings, the Syndocal release target reported 58 warnings, and Vite emitted its
+oversized-chunk warning for multiple generated chunks. Those counts were
+log-level starting evidence for that ordinal only, are not the complete W0
+feature/platform inventory, and must never be used as an allowlist or cited as a
+current result. Every zero-first-party-warning result is a configuration- and
+commit-pinned historical measurement, never a standing property of this tree:
+the enforced Windows rows (default/all-targets, tests, release, Spout,
+frontend, native release) were measured at zero at the 2026-08-25 exact-linker
+alpha.11 checkpoints (section 37 at D4-checkpoint HEAD
+`63cf795d17846602419d63a007db9f3a95cfce7b` and section 39 at merged HEAD
+`b4a5b62ad48c7e3e58f78c66cf2914e0f53a46f5`) and in individual focused gates at
+their own recorded commits, each valid only for that frozen configuration and
+tree. The current dirty `1.2.0-alpha.12` worktree is unmeasured for the full
+integrated checkpoint; its most recent full dependency clippy run exposed 12
+open first-party large-error lints (near-show finding FC-28), which remain
+open until a fresh full-gate rerun measures this tree again. W0 must still
+recount every supported feature and platform configuration — including the two
+pending macOS rows — and classify every first-party diagnostic.
 
 1. **W0 inventory:** capture warning code, file/line, target/feature, owner, reason,
    and removal checkpoint for default release, tests, all targets, ASIO, NDI, Spout,
@@ -438,22 +457,26 @@ Repeat the Rust/native gates for each supported feature/platform combination. A
 temporary third-party allowlist is a versioned release artifact with expiry; it may
 not contain warnings originating in repository first-party source.
 
-### 5.1 Current bounded W1 checkpoint
+### 5.1 Bounded W1 checkpoint (historical commits; superseded by later zero-warning rows)
 
 Implementation commit `3ee303f4ce7fed897e4d2473ddf80b4335b20591`
 establishes the reviewed Windows warning ratchet for four configurations: default
 all-targets 83/67 warnings/identities with 11/11 artifacts, release 83/67 with
 11/11, tests `--no-run` 25/21 with 11/11, and isolated Spout 79/67 with 9/9.
 The 52-group negative harness and independent review found no remaining P0/P1 in
-that bounded gate. Native release verification reproduced Engine 9, Syndocal 58,
+that bounded gate. Native release verification at that checkpoint reproduced
+Engine 9, Syndocal 58,
 and one Vite chunk warning without growth.
 
 The focused warning/P2 checkpoint
-`a228ba5e492841618ce0262038c965b5519d1ddd` reduces the current first-party
+`a228ba5e492841618ce0262038c965b5519d1ddd` reduced the then-current first-party
 occurrences without editing the baseline: default and release 83 -> 61, workspace
 tests 25 -> 20, and isolated Spout 79 -> 57, with unchanged exact artifact coverage.
-The current native release reports Engine 9 and Syndocal 41 warnings plus the same
-Vite chunk warning. Its independent review returned P0 0, P1 0, and P2 0 for the
+At that checkpoint the native release reported Engine 9 and Syndocal 41 warnings plus the same
+Vite chunk warning. Both figures are historical: later focused commits and the
+enforced Windows rows reached zero first-party warnings (see section 14 and the
+2026-08-25 exact-linker checkpoint), so neither commit's counts describe the
+current tree. Its independent review returned P0 0, P1 0, and P2 0 for the
 bounded Take Over repair. The still-disconnected Output Lease module, including
 `checked_deadline`, remains owned AI3 integration debt and is not suppressed or
 deleted in isolation.
@@ -767,12 +790,14 @@ panic, distinguishes StateSync from triggers, and keeps all rekordbox/Pedal/MIDI
 responsibility in `rekordbox-DJ-Link-ForPCDJ`. The topbar no longer carries the
 Lighting/Video master sliders; no adjacent UI was reduced in size.
 
-The focused Rust and frontend gates listed in the handoff pass, and the Windows
-native `--no-bundle` build, completed with zero first-party and zero Vite warnings.
-The seven locally measurable rows were subsequently promoted; the inventory is now
-11 enforced / 2 pending. macOS dev/release remain pending external evidence, so
-`requiredMatrixComplete` stays false and this does not claim beta, RC, or release
-acceptance.
+Historical checkpoint evidence only: the focused Rust and frontend gates listed in
+the 2026-08-21 handoff passed, and that checkpoint's Windows native `--no-bundle`
+build completed with zero first-party and zero Vite warnings. At that pinned
+checkpoint, seven locally measurable rows were promoted and the inventory recorded
+11 enforced / 2 pending. This is not a current-tree warning claim: macOS
+dev/release remained pending external evidence, `requiredMatrixComplete` remained
+false, and the dirty alpha.12 worktree must be measured again before any current
+warning conclusion, beta, RC, or release acceptance.
 
 The exact rebuilt executable was launched as one responsive maximized Syndocal and
 five Display targets were enumerated. The Raw Input failure recorded at that time
@@ -780,17 +805,21 @@ is historical because the feature was later removed. Do not repeat a five-displa
 exercise for the active target; the final pass retains exactly the editor + LED
 panel + projector state.
 
-## 14. 2026-08-21 warning-P2 promotion result
+## 14. 2026-08-21 warning-P2 promotion result (historical checkpoint only)
 
-The seven locally executable warning rows are now enforced with zero first-party
-warnings: Windows ASIO loader, NDI, separately licensed ASIO bridge, frontend,
-native release, and Linux dev/release. The promotion is reproducible through the
+At the 2026-08-21 promotion checkpoint, seven locally executable warning rows were
+recorded as enforced with zero first-party warnings: Windows ASIO loader, NDI,
+separately licensed ASIO bridge, frontend, native release, and Linux dev/release.
+That commit/configuration-pinned promotion was reproducible through the
 inventory-only `--promote-zero-warning` gate and host-specific execution; ordinary
-baseline immutability was not relaxed. Exact coverage is recorded in
-`qa/warnings/warning-inventory.json`. The required matrix is 11 enforced / 2
-pending. Both remaining rows are macOS-only and therefore keep
-`requiredMatrixComplete=false`; this is a bounded P2 resolution, not beta/RC or
-whole-product completion.
+baseline immutability was not relaxed. Its exact coverage is recorded in
+`qa/warnings/warning-inventory.json`, with that checkpoint's required matrix at 11
+enforced / 2 pending. Both remaining rows were macOS-only and therefore kept
+`requiredMatrixComplete=false`; this was a bounded historical P2 resolution, not
+beta/RC or whole-product completion. It does not establish a standing zero-warning
+state for the dirty alpha.12 worktree, whose full checkpoint is unmeasured and has
+12 open first-party large-error clippy lints (FC-28) pending a fresh full-gate
+rerun.
 
 ## 15. 2026-08-21 Windows-first CI and VJ execution state
 
@@ -1826,13 +1855,16 @@ Web Remote had not been explicitly started and DJ Link defaults to disabled
 with no selected Show-LAN bind IP. No listener or process was changed by this
 observation.
 
-FOH Ethernet 3 / interface index `28` was active at `192.168.1.34/24`, making
-`ws://192.168.1.34:9100/dj-link` the correct current DJ-PC-to-FOH URL. Its
+**Historical 2026-08-25 topology observation — do not execute as current setup:**
+FOH Ethernet 3 / interface index `28` was then active at `192.168.1.34/24`, making
+`ws://192.168.1.34:9100/dj-link` the endpoint observed at that checkpoint. Its
 Windows profile was `Public`, and no exact Syndocal/KDMX or TCP `9100` firewall
 rule was present. The WSL virtual address `172.30.208.1` was also active and can
-be ambiguous in the current address-only picker. Binding must select the
-Ethernet 3 address explicitly; LAN reachability and any narrowly scoped firewall
-change remain recorded physical acceptance work, not an inference from source.
+be ambiguous in an address-only picker. At that historical checkpoint, binding
+would have had to select the Ethernet 3 address explicitly; this is retained as
+past evidence only and is not a current endpoint instruction. LAN reachability
+and any narrowly scoped firewall change remain recorded physical acceptance work,
+not an inference from source.
 
 The DJ PC supplied a useful Stage 1/process preflight but not a completed gate.
 Its `rb-output` state reported version 1.1.2 development/unverified, Agent
@@ -1853,12 +1885,20 @@ reconnect tests. The P2 NIC ambiguity is that address-only discovery can offer
 virtual/tunnel interfaces such as WSL; expose adapter identity and reject or
 warn on those candidates.
 
-Next action is to build and launch the identity-bound current 1.1.2 peer, verify
-its setup API, explicitly select Ethernet 3 / `192.168.1.34` and
-`syndocal-envelope-v1`, rotate/copy the show-once token, start the Syndocal
-Remote listener, and first prove authenticated wired HELLO/ACK. Only then may
-the twelve-row hardware sequence proceed. This observation checks none of
-HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
+**SUPERSEDED / DO NOT EXECUTE — historical preflight evidence only:** this
+2026-08-25 observation previously named `syndocal-envelope-v1` for the then-current
+1.1.2 peer. It is retained solely to preserve the observed older-peer boundary and
+must not be used as a setup, selection, or handshake instruction.
+
+**Current executable next action — exclusive envelope:** build and launch the
+identity-bound current peer, verify its setup API, explicitly select the currently
+provisioned show LAN (FOH Syndocal `Ethernet 4 / 192.168.50.1`; DJ-agent local NIC
+`192.168.50.2`) and `syndocal-envelope-v2`, rotate/copy the show-once token, start
+the Syndocal Remote listener, and first prove authenticated wired HELLO/ACK. The
+current setup and handshake must explicitly reject `syndocal-envelope-v1` and
+generic-JSON envelope selection or payloads; neither may fall back, normalize, or
+proceed. Only then may the twelve-row hardware sequence proceed. This observation
+checks none of HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
 whole-product accepted denominator remains exactly 19/71 (26.8%).
 
 ## 41. 2026-08-25 authoritative near-show completion objective
