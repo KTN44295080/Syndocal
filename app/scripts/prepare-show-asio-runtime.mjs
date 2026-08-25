@@ -54,50 +54,50 @@ function canonical(candidate) {
   return process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }
 
-function cargoBridgeIdentity(stats) {
+function cargoBuildIdentity(stats) {
   return String(stats.dev) + ":" + String(stats.ino) + ":" + String(stats.size) + ":" + String(stats.mtimeNs);
 }
 
-function assertCargoBridgeEntry(stats, label) {
+function assertCargoBuildEntry(stats, label) {
   if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 2n) {
     throw new Error(label + " must have exactly the canonical root/deps two-name link topology.");
   }
 }
 
-export function readVerifiedCargoBridgeBuildOutput(bridgePath, bridgeTarget) {
-  const target = resolve(bridgeTarget);
-  const rootOutput = resolve(bridgePath);
-  const expectedRootOutput = resolve(target, "release/syndocal_asio_bridge.dll");
-  const depsOutput = resolve(target, "release/deps/syndocal_asio_bridge.dll");
+function readVerifiedCargoRootDepsBuildOutput(outputPath, targetPath, filename, label) {
+  const target = resolve(targetPath);
+  const rootOutput = resolve(outputPath);
+  const expectedRootOutput = resolve(target, "release", filename);
+  const depsOutput = resolve(target, "release/deps", filename);
   if (canonical(rootOutput) !== canonical(expectedRootOutput)) {
-    throw new Error("Show-ASIO Cargo bridge root output is not the exact isolated target path.");
+    throw new Error(label + " root output is not the exact isolated target path.");
   }
-  if (!existsSync(depsOutput)) throw new Error("Show-ASIO Cargo bridge canonical deps output is missing.");
+  if (!existsSync(depsOutput)) throw new Error(label + " canonical deps output is missing.");
 
   const rootBefore = lstatSync(rootOutput, { bigint: true });
   const depsBefore = lstatSync(depsOutput, { bigint: true });
-  assertCargoBridgeEntry(rootBefore, "Show-ASIO Cargo bridge root output");
-  assertCargoBridgeEntry(depsBefore, "Show-ASIO Cargo bridge deps output");
-  const rootBeforeIdentity = cargoBridgeIdentity(rootBefore);
-  const depsBeforeIdentity = cargoBridgeIdentity(depsBefore);
+  assertCargoBuildEntry(rootBefore, label + " root output");
+  assertCargoBuildEntry(depsBefore, label + " deps output");
+  const rootBeforeIdentity = cargoBuildIdentity(rootBefore);
+  const depsBeforeIdentity = cargoBuildIdentity(depsBefore);
   if (rootBeforeIdentity !== depsBeforeIdentity) {
-    throw new Error("Show-ASIO Cargo bridge root/deps outputs are not exactly two names for one unchanged file identity.");
+    throw new Error(label + " root/deps outputs are not exactly two names for one unchanged file identity.");
   }
 
-  const rootRecord = readVerifiedRegularFile(rootOutput, "Just-built Show-ASIO bridge root output", {
+  const rootRecord = readVerifiedRegularFile(rootOutput, label + " root output", {
     allowedRoots: [target],
     rejectHardLinks: false,
   });
-  const depsRecord = readVerifiedRegularFile(depsOutput, "Just-built Show-ASIO bridge deps output", {
+  const depsRecord = readVerifiedRegularFile(depsOutput, label + " deps output", {
     allowedRoots: [target],
     rejectHardLinks: false,
   });
   const rootAfter = lstatSync(rootOutput, { bigint: true });
   const depsAfter = lstatSync(depsOutput, { bigint: true });
-  assertCargoBridgeEntry(rootAfter, "Show-ASIO Cargo bridge root output after read");
-  assertCargoBridgeEntry(depsAfter, "Show-ASIO Cargo bridge deps output after read");
-  const rootAfterIdentity = cargoBridgeIdentity(rootAfter);
-  const depsAfterIdentity = cargoBridgeIdentity(depsAfter);
+  assertCargoBuildEntry(rootAfter, label + " root output after read");
+  assertCargoBuildEntry(depsAfter, label + " deps output after read");
+  const rootAfterIdentity = cargoBuildIdentity(rootAfter);
+  const depsAfterIdentity = cargoBuildIdentity(depsAfter);
   if (
     rootBeforeIdentity !== rootAfterIdentity
     || depsBeforeIdentity !== depsAfterIdentity
@@ -106,9 +106,27 @@ export function readVerifiedCargoBridgeBuildOutput(bridgePath, bridgeTarget) {
     || rootRecord.identity !== depsRecord.identity
     || !rootRecord.bytes.equals(depsRecord.bytes)
   ) {
-    throw new Error("Show-ASIO Cargo bridge root/deps outputs are not exactly two names for one unchanged file identity.");
+    throw new Error(label + " root/deps outputs are not exactly two names for one unchanged file identity.");
   }
   return rootRecord;
+}
+
+export function readVerifiedCargoBridgeBuildOutput(bridgePath, bridgeTarget) {
+  return readVerifiedCargoRootDepsBuildOutput(
+    bridgePath,
+    bridgeTarget,
+    "syndocal_asio_bridge.dll",
+    "Show-ASIO Cargo bridge",
+  );
+}
+
+export function readVerifiedCargoApplicationBuildOutput(applicationPath, applicationTarget) {
+  return readVerifiedCargoRootDepsBuildOutput(
+    applicationPath,
+    applicationTarget,
+    "syndocal.exe",
+    "Show-ASIO Cargo application",
+  );
 }
 
 function assertExactInputPath(workspace, candidate, relativePath, label) {
@@ -159,7 +177,7 @@ export function collectShowAsioInputRecords({
   ffmpegDir,
   inventory,
   exportInspector,
-  allowCargoRootDepsAlias = false,
+  allowCargoRootDepsAliases = false,
 } = {}) {
   const resolvedWorkspace = assertSafeExternalDirectory(workspace, "Syndocal workspace");
   const exactApplication = assertExactInputPath(resolvedWorkspace, applicationPath, applicationTargetRelativePath, "Show-ASIO application input");
@@ -168,13 +186,14 @@ export function collectShowAsioInputRecords({
   if (typeof expectedBridgeSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(expectedBridgeSha256)) {
     throw new Error("Show-ASIO expected bridge SHA-256 must be one exact lowercase digest captured from this build.");
   }
-  const appRecord = readVerifiedRegularFile(exactApplication, "Show-ASIO built application", {
-    allowedRoots: [resolve(resolvedWorkspace, "target/show-asio-build/app")],
-  });
+  const applicationTarget = resolve(resolvedWorkspace, "target/show-asio-build/app");
+  const appRecord = allowCargoRootDepsAliases
+    ? readVerifiedCargoApplicationBuildOutput(exactApplication, applicationTarget)
+    : readVerifiedRegularFile(exactApplication, "Show-ASIO built application", { allowedRoots: [applicationTarget] });
   const appPe = parsePeIdentity(appRecord.bytes, "Show-ASIO built application");
   assertApplicationPe(appPe);
   const bridgeTarget = resolve(resolvedWorkspace, "target/show-asio-build/bridge");
-  const bridgeRecord = allowCargoRootDepsAlias
+  const bridgeRecord = allowCargoRootDepsAliases
     ? readVerifiedCargoBridgeBuildOutput(exactBridge, bridgeTarget)
     : readVerifiedRegularFile(exactBridge, "Show-ASIO built bridge", { allowedRoots: [bridgeTarget] });
   if (hash(bridgeRecord.bytes) !== expectedBridgeSha256) throw new Error("Show-ASIO bridge hash changed after the bridge build checkpoint.");
@@ -261,7 +280,7 @@ export function prepareShowAsioRuntime({
   artifactDir = resolve(workspace, expectedShowAsioArtifactRelativeDirectory(version, commit)),
   inventory = loadWindowsRuntimeInventory({ workspace }),
   exportInspector,
-  allowCargoRootDepsAlias = false,
+  allowCargoRootDepsAliases = false,
   validateNormalBoundary = () => validateAsioPackagingBoundary(undefined, { workspace, verifyWindowsRuntimeSources: false }),
 } = {}) {
   validateNormalBoundary();
@@ -275,7 +294,7 @@ export function prepareShowAsioRuntime({
     ffmpegDir,
     inventory,
     exportInspector,
-    allowCargoRootDepsAlias,
+    allowCargoRootDepsAliases,
   });
   const currentSourceFiles = collectShowAsioSourceIdentity(records.workspace);
   if (JSON.stringify(sourceFiles) !== JSON.stringify(currentSourceFiles)) {
@@ -524,6 +543,26 @@ async function runSelfTest() {
       () => collectShowAsioInputRecords({ ...hardlinked, applicationPath: hardlinked.appPath, bridgePath: hardlinked.bridgePath, expectedBridgeSha256: hardlinked.bridgeHash, inventory: hardlinked.inventory, exportInspector: inspect }),
       /hard-link alias/,
       "hard-linked bridge input is rejected",
+    );
+    const cargoAliases = makeFixture(root, "cargo-root-deps-aliases");
+    const cargoAppDeps = resolve(cargoAliases.workspace, "target/show-asio-build/app/release/deps/syndocal.exe");
+    const cargoBridgeDeps = resolve(cargoAliases.workspace, "target/show-asio-build/bridge/release/deps/syndocal_asio_bridge.dll");
+    mkdirSync(dirname(cargoAppDeps), { recursive: true });
+    mkdirSync(dirname(cargoBridgeDeps), { recursive: true });
+    linkSync(cargoAliases.appPath, cargoAppDeps);
+    linkSync(cargoAliases.bridgePath, cargoBridgeDeps);
+    const cargoAliasRecords = collectShowAsioInputRecords({
+      ...cargoAliases,
+      applicationPath: cargoAliases.appPath,
+      bridgePath: cargoAliases.bridgePath,
+      expectedBridgeSha256: cargoAliases.bridgeHash,
+      inventory: cargoAliases.inventory,
+      exportInspector: inspect,
+      allowCargoRootDepsAliases: true,
+    });
+    pass(
+      cargoAliasRecords.application.record.identity !== cargoAliasRecords.bridge.record.identity,
+      "explicit Cargo mode accepts only exact app and bridge root/deps two-name outputs and keeps their identities distinct",
     );
     const reparse = makeFixture(root, "reparse-bridge");
     const reparseOriginal = join(dirname(reparse.bridgePath), "bridge-real.dll");

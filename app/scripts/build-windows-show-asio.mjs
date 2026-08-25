@@ -459,7 +459,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
     expectedBridgeSha256: bridgeSha256,
     applicationPath: resolve(appTarget, "release/syndocal.exe"),
     bridgePath,
-    allowCargoRootDepsAlias: true,
+    allowCargoRootDepsAliases: true,
     artifactDir: finalArtifact,
     inventory,
     exportInspector: (path) => inspectBridgeExports(path, { environment: applicationEnvironment }),
