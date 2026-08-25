@@ -259,6 +259,35 @@ were explicitly excluded from this cleanup. This deletion is irreversible at
 the filesystem-copy level but the removed clean checkout is reproducible from
 the retained branch; it makes no additional product-acceptance claim.
 
+### Rebuildable-cache cleanup tranche 6
+
+The D4 source checkout
+`C:\Users\kouty\Documents\KDMX-d4-stage-transaction` was audited separately.
+It was clean and equal to `origin/codex/d4-stage-transaction` at
+`854b518175f193b4b75d1f9b1f17e364f144de66`, had no target directory and no
+process reference, and the local and remote-tracking source branches remained
+available. The three recorded integration results
+`0aa0b14fbf24701dfd93711372a9ff16fa78c09f`,
+`6bcd879e39aa2c5270da7840f3c6ba265468d05c`, and
+`d44f2b113c1a0c833ba622d6521a06c9a20ab34b` were each verified as ancestors of
+`codex/syndocal-v1.2`. This preserves the conflict-resolved integrated payload
+without incorrectly claiming that every original source commit has an
+identical patch ID on main.
+
+Before deregistration the checkout contained 4,181 files and `121,518,936`
+logical bytes. Normal non-forced `git worktree remove` again removed the Git
+registration but left a directory residue. That residue contained 3,368 files,
+`113,265,146` logical bytes, and 197 pnpm directory junctions. Every junction
+was verified to target a path inside this exact stale checkout, then the
+junction objects were removed without traversal and the remaining directory
+was permanently deleted. The path was absent afterward; the measured physical
+gain for the final residue-removal phase was `40,509,440` bytes.
+
+The source branch and its upstream were retained so the removed clean checkout
+can be recreated. Main, the accepted integration commits, the protected native
+evidence, and the active dirty ASIO worktree were not deleted or modified. This
+cleanup makes no product-acceptance claim.
+
 ## Boundary and next action
 
 This closes the alpha.11 D4 merge/build/launch checkpoint only. It is not a
