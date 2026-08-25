@@ -73,6 +73,8 @@
     "check:release": "node scripts/check-release-metadata.mjs",
     "check:release:candidate": "node scripts/check-release-metadata.mjs --release-candidate --manifest qa/release/release-evidence.json",
     "check:release:self-test": "node scripts/test-check-release-metadata.mjs",
+    "check:completion-ledger": "node scripts/check-completion-ledger.mjs",
+    "check:completion-ledger:self-test": "node scripts/test-check-completion-ledger.mjs",
     "check:warnings": "node scripts/check-warning-ratchet.mjs",
     "check:warnings:self-test": "node scripts/test-warning-ratchet.mjs",
     "check:tauri-build-wrapper": "node scripts/check-tauri-build-wrapper.mjs",

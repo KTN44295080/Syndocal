@@ -1,0 +1,590 @@
+{
+  "schema_version": 1,
+  "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
+  "authoritative_sections": ["6", "7", "8", "9"],
+  "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
+  "expected_status_counts": { "Open": 50, "Deferred": 8 },
+  "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
+  "items": [
+    {
+      "id": "COMP-Q1-Q4-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Completion-ledger maintainer",
+      "dependency": "Current flow authority and the master roadmap Q1-Q5 contract",
+      "nonclaim": "Does not claim Q1-Q4 coverage is complete or that any linked domain is accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "WARN-MACOS-001",
+      "source": { "section": "6", "kind": "Deferred" },
+      "classification": "Deferred",
+      "owner": "Warning-matrix owner",
+      "dependency": "Windows-only product scope and the versioned warning inventory",
+      "nonclaim": "Does not claim macOS warning enforcement or macOS acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/warnings/warning-inventory.json"],
+      "status": "Deferred"
+    },
+    {
+      "id": "RELEASE-METADATA-GATE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Release metadata owner",
+      "dependency": "Synchronized product metadata and release-train policy",
+      "nonclaim": "Does not claim a signed tag, updater, or published artifact exists.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/UPDATE_RELEASE_RUNBOOK.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI3-DURABLE-RECOVERY-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI3 output-lease owner",
+      "dependency": "Existing process-local receipt and owner-retirement implementation",
+      "nonclaim": "Does not claim terminal recovery survives a crash.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI3-NATIVE-INGRESS-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "AI3 ingress and hardware acceptance owner",
+      "dependency": "Canonical ingress-policy implementation and available native clients/devices",
+      "nonclaim": "Does not claim source inventory proof is physical ingress acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI3-PHYSICAL-REARM-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "AI3 project-replacement acceptance owner",
+      "dependency": "New/Load/Recovery/Backup/Take Over paths and acknowledged physical output state",
+      "nonclaim": "Does not claim output retirement or re-Arm succeeded on real output hardware.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI3-DURABLE-ACCEPTANCE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "AI3 native and hardware acceptance owner",
+      "dependency": "Durable recovery implementation plus verified native dangerous-action workflows",
+      "nonclaim": "Does not claim reply-loss, physical ACK, or five-display acceptance is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI0-COVERAGE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI control-plane owner",
+      "dependency": "AI3 completion and authoritative operation registry",
+      "nonclaim": "Does not claim all mutation sources are classified or fail closed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI1-SCHEMAS-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI control-plane owner",
+      "dependency": "AI0 source coverage and generation authority model",
+      "nonclaim": "Does not claim query/event resynchronization is implemented.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI2-COMMAND-BRIDGE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI control-plane owner",
+      "dependency": "AI1 schemas and project authority receipts",
+      "nonclaim": "Does not claim authored commands have E/R/H, owner, receipt, and Undo parity.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI4-CONSENT-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI safety and consent owner",
+      "dependency": "AI0-AI2 authority paths and the accepted local-consent decision",
+      "nonclaim": "Does not claim external disruptive automation is approved or safe.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI5-SIDECAR-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI sidecar owner",
+      "dependency": "AI0-AI4 coverage, schemas, bridge, and consent policy",
+      "nonclaim": "Does not claim an authenticated external sidecar or MCP service is available.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI6-ADMIN-UI-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI administration UI owner",
+      "dependency": "AI4 principal/grant model and AI5 sidecar health model",
+      "nonclaim": "Does not claim operators can administer principals, grants, revocation, audit, or health.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI7-ADVERSARIAL-PROOF-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "AI adversarial-review owner",
+      "dependency": "AI0-AI6 implemented paths and frozen review inputs",
+      "nonclaim": "Does not claim parity, security, rate, reply-loss, fuzz, or saturation proof passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AI8-EXTERNAL-ACCEPTANCE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "AI external acceptance owner",
+      "dependency": "AI0-AI7 completion plus clean installation and physical output hardware",
+      "nonclaim": "Does not claim real external clients, clean install, hardware, restart, or security acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "F1-INPUT-GENERATIONS-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Input-runtime owner",
+      "dependency": "Project replacement authority and input-worker lifecycle",
+      "nonclaim": "Does not claim stale MIDI, OSC, or DMX callbacks are retired.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "F2-OUTPUT-OWNERSHIP-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Output-ownership owner",
+      "dependency": "F1 input generations and AI3 output-lease authority",
+      "nonclaim": "Does not claim all Lighting, Video, Both, and Standby resources have accepted ownership semantics.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "SHOWCLOCK-DECISIONS-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "ShowClock architecture owner",
+      "dependency": "F2 local ownership boundary and the master decision log",
+      "nonclaim": "Does not claim transport, fencing, master-clock, or network decisions are frozen.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "VIDEO-FULL-GATE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Video runtime owner",
+      "dependency": "Accepted Windows Clip Slot, Layer Bus, and FX tranches",
+      "nonclaim": "Does not claim the accepted tranches have passed the full integrated gate.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "VIDEO-C2-C4-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Video transition owner",
+      "dependency": "Video full-gate reintegration and timeline authority",
+      "nonclaim": "Does not claim Clip Take or mapping/Timeline transition integration is accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "TIMELINE-FOLLOW-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Timeline runtime owner",
+      "dependency": "C2/C4 transition integration and authoritative timing model",
+      "nonclaim": "Does not claim Follow, crossfade, BPM slew, fault policy, or Guide transitions are complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "TIMELINE-PERSISTENCE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Timeline editor owner",
+      "dependency": "Timeline Follow runtime and project save/reload authority",
+      "nonclaim": "Does not claim group selection/focus persistence, Guide routing, native synchronization, fault, or viewport proof.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "MEDIA-DERIVED-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Media-derived-data owner",
+      "dependency": "Media asset authority and cancellable background-work boundary",
+      "nonclaim": "Does not claim cache, proxy, waveform, analysis, eviction, degraded operation, or performance budgets are accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "AUDIO-AUTHORED-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Audio model owner",
+      "dependency": "ShowClock master-clock decision and timeline authority",
+      "nonclaim": "Does not claim authored audio migration, clocking, resampling, seek, loop, underrun, or device-fault policy is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "VIDEO-LIVE-SOURCES-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Live-video source owner",
+      "dependency": "Video source identity model and output ownership",
+      "nonclaim": "Does not claim stable live-source identity, availability, permission, fault, reconnect, or worker retirement.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "RECORDING-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Recording runtime owner",
+      "dependency": "Audio master-clock and output ownership decisions",
+      "nonclaim": "Does not claim recording state recovery, atomic artifacts, two-PC ownership, or authoritative import is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "SHOWCLOCK-IMPLEMENTATION-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "ShowClock implementation owner",
+      "dependency": "Frozen ShowClock decisions plus Audio, Recording, and ownership semantics",
+      "nonclaim": "Does not claim peer synchronization, fencing, or two-machine fault/soak proof is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "UI-H1-REACHABILITY-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "UI reachability owner",
+      "dependency": "Supported-feature inventory and source-of-truth routing",
+      "nonclaim": "Does not claim every supported feature has a discoverable operator path.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "UI-H2-SHELL-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Shared UI shell owner",
+      "dependency": "H1 reachability and shared status/selection model",
+      "nonclaim": "Does not claim a single truthful shared shell across all workspaces and native windows.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "UI-H3-SETUP-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Setup workspace owner",
+      "dependency": "H1/H2 shell and PATCH/GDTF/output-device authority",
+      "nonclaim": "Does not claim Setup has complete I/O configuration, validation, reachability, or native proof.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "DJ-LINK-SETUP-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "DJ Link setup owner",
+      "dependency": "Authenticated DJ Link listener and project Track-to-Timeline authority",
+      "nonclaim": "Does not claim NIC binding, token rotation, diagnostics, CAS, or disconnect recovery is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "UI-H4-EDIT-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Edit workspace owner",
+      "dependency": "H1/H2 shell plus Timeline, Media, FX, Stage, and project authority",
+      "nonclaim": "Does not claim Edit workflows or their native proof are complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "UI-H5-CONTROL-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Control workspace owner",
+      "dependency": "H1/H2 shell plus live ownership, recording, and diagnostics",
+      "nonclaim": "Does not claim Control live workflows, recovery, or native proof are complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "REMOTE-SECURITY-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Remote and security owner",
+      "dependency": "AI consent/sidecar policy and output ownership boundaries",
+      "nonclaim": "Does not claim LAN/TLS exposure, RDM/TOD safety, parser fuzz, SBOM, or redaction is accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "MIGRATION-COMPATIBILITY-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Migration and recovery owner",
+      "dependency": "Version-support decisions and durable recovery/save boundaries",
+      "nonclaim": "Does not claim the supported version matrix, migration corpus, hostile-input, fuzz, or backup proof is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "OBSERVABILITY-SUPPORT-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "Supported",
+      "owner": "Observability and support owner",
+      "dependency": "Generation-stamped runtime state and release/update policy",
+      "nonclaim": "Does not claim diagnostics, updater resilience, or support runbooks are accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ACCESSIBILITY-NATIVE-001",
+      "source": { "section": "6", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Accessibility acceptance owner",
+      "dependency": "H1-H5 native UI implementation and available accessibility environments",
+      "nonclaim": "Does not claim NVDA, High Contrast, scaling, keyboard, IME, focus, or reduced-motion native acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-LICENSE-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO product and licensing owner",
+      "dependency": "Explicit GPLv3-separated artifact or Steinberg SDK decision",
+      "nonclaim": "Does not claim an ASIO distribution license, notices, or installer separation is approved.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-FORMAT-MATRIX-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO device acceptance owner",
+      "dependency": "Licensed ASIO artifact and real drivers/devices",
+      "nonclaim": "Does not claim the advertised sample-rate, buffer, format, or channel matrix passed without fallback.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-FAULT-MATRIX-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO device acceptance owner",
+      "dependency": "ASIO format matrix and real fault-injection hardware",
+      "nonclaim": "Does not claim occupied-driver, reset, XRUN, disconnect, or callback fault recovery passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-SOAK-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO performance acceptance owner",
+      "dependency": "ASIO fault matrix, WASAPI comparison path, and long-duration device access",
+      "nonclaim": "Does not claim the one-hour ASIO/WASAPI soak or latency budgets passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-LATENCY-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO latency acceptance owner",
+      "dependency": "ASIO device stream and matched TouchDesigner test environment",
+      "nonclaim": "Does not claim physical input-to-pixel latency or TouchDesigner trials were measured.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "ASIO-PERSISTENCE-PACKAGE-001",
+      "source": { "section": "7", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ASIO persistence and package owner",
+      "dependency": "ASIO artifact decision, device matrix, and final package",
+      "nonclaim": "Does not claim selection persistence, stale-device locking, telemetry, or final-package no-fallback proof.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "DMX-ARTNET-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Lighting hardware acceptance owner",
+      "dependency": "F2 output ownership and real Art-Net/sACN nodes and fixtures",
+      "nonclaim": "Does not claim physical fixture addressing, controls, reconnect, topology, or 44 Hz continuity passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "DMX-USB-RDM-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "DMX and RDM hardware acceptance owner",
+      "dependency": "F2 output ownership, Enttec/DMXKing hardware, and analyzer capture",
+      "nonclaim": "Does not claim USB DMX long-run timing, Open DMX analysis, or RDM/TOD physical behavior passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "INPUT-PHYSICAL-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Control-input acceptance owner",
+      "dependency": "F1 input generations and physical MIDI/OSC/Remote clients",
+      "nonclaim": "Does not claim physical MIDI, OSC, TouchOSC, or Remote latency and feedback acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "DJ-LINK-HARDWARE-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "DJ Link peer and hardware acceptance owner",
+      "dependency": "DJ Link setup, physical Pedal/DJ-PC/Agent topology, and exact mapping evidence",
+      "nonclaim": "Does not claim live Pedal, rekordbox Agent, Loop, Release, disconnect, State Sync, or ACK acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md"],
+      "status": "Open"
+    },
+    {
+      "id": "VIDEO-PHYSICAL-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Video hardware acceptance owner",
+      "dependency": "F2 ownership, real display topology, and capture/output devices",
+      "nonclaim": "Does not claim physical display, NDI, Spout, camera, capture-fault, or one-hour video acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "PLATFORM-MAC-LINUX-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Deferred",
+      "owner": "Cross-platform acceptance owner",
+      "dependency": "Windows-only product scope decision",
+      "nonclaim": "Does not claim macOS or Linux display, media, audio, save/reload, or package acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "VENUE-SOAK-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Venue performance acceptance owner",
+      "dependency": "Integrated video, lighting, output, and recording paths plus venue GPU",
+      "nonclaim": "Does not claim the maximum-condition venue GPU one-hour run or resource logs passed.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "SHOWCLOCK-VENUE-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "ShowClock venue acceptance owner",
+      "dependency": "ShowClock implementation, witness/fence decision, and two-machine topology",
+      "nonclaim": "Does not claim real-switch crash, partition, rejoin, device-loss, or zero-simultaneous-output rehearsal.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "COMPARE-PINNED-001",
+      "source": { "section": "8", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Comparative acceptance owner",
+      "dependency": "Pinned comparison versions, licenses, hardware, content, and exact Syndocal artifact",
+      "nonclaim": "Does not claim Daslight, SynapseRack, or TouchDesigner parity from counts or loopback.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "DIST-PLATFORM-PACKAGE-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Distribution owner",
+      "dependency": "A future distribution product goal and supported artifact matrix",
+      "nonclaim": "Does not claim a platform/package matrix is accepted or in the active Windows-local denominator.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-SIGNING-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Distribution signing owner",
+      "dependency": "A future distribution product goal and signing credentials/policy",
+      "nonclaim": "Does not claim Authenticode or Apple signing is configured or accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-NOTICES-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Distribution legal owner",
+      "dependency": "A future distribution product goal and license/SBOM disposition",
+      "nonclaim": "Does not claim BOM, SBOM, notices, or legal obligations are accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-CLEAN-MACHINE-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Distribution acceptance owner",
+      "dependency": "A future distribution product goal and signed installation artifacts",
+      "nonclaim": "Does not claim clean-machine installation, upgrade, uninstall, or repair acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-UPDATER-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Updater and distribution owner",
+      "dependency": "A future distribution product goal, signed manifests, and update service",
+      "nonclaim": "Does not claim a signed updater is enabled, published, or accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/UPDATE_RELEASE_RUNBOOK.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-PUBLICATION-001",
+      "source": { "section": "9", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Release publication owner",
+      "dependency": "A future distribution product goal, immutable tag, artifacts, and evidence manifest",
+      "nonclaim": "Does not claim a public tag, artifact, or evidence publication exists.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Deferred"
+    }
+  ]
+}

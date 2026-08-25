@@ -1809,6 +1809,16 @@ One row per requirement:
 
 The table must include every item from the referenced product vision, UI roadmap, media transition model, Video benchmark, Output Ownership document, Release Status P0 list, Daslight comparison/parity documents, and this master roadmap.
 
+The active dependency-ordered flow now has an additive machine-readable open-item
+index at `qa/SYNDOCAL_COMPLETION_LEDGER.json`. Its focused checker verifies the
+stable markers on current sections 6-9 rows, required ownership/dependency/
+non-claim/evidence fields, and tracked evidence paths. It does not replace this
+master Q1-Q5 contract, complete an unchecked row, or convert native, hardware,
+external, soak, or distribution acceptance into a source-only claim.
+At this checkpoint it reports exactly 50 `Open` rows and 8 `Deferred` rows; the
+six section-9 distribution rows remain frozen/out of scope until distribution
+becomes a product goal.
+
 ### Q2. Decision log
 
 Record irreversible or scope-changing choices with date, approver, alternatives, and consequences:

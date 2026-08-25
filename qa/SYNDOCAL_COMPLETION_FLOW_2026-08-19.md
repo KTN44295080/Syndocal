@@ -472,16 +472,24 @@ blocked every job, so no CI/platform claim is derived from that run.
 
 ## 6. Dependency-ordered remaining implementation
 
+`qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable open-item index for
+sections 6 through 9. It records exactly 50 `Open` current checkboxes and 8
+`Deferred` rows: the two explicit platform deferrals plus the six frozen
+distribution rows. Each carries one stable trailing `completion-ledger` marker
+whose `Open` or `Deferred` kind is checked against the ledger. The index is
+additive: it records dependencies, evidence paths, and non-claims without
+changing a row's open/accepted truth or replacing the master roadmap's Q1-Q5.
+
 ### Phase 0 — Rebaseline, version, warnings, and ledgers
 
 - [x] Advance and verify all product metadata as `1.2.0-alpha.1`.
 - [x] Replace stale resume instructions and percentages with current AI3 truth.
-- [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc.
+- [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc. <!-- completion-ledger: Open: COMP-Q1-Q4-001 -->
 - [x] Create the structured W0 inventory and enforce the W1 no-new-warning ratchet.
-- **Deferred outside the Windows target:** macOS dev/release warning enforcement.
+- **Deferred outside the Windows target:** macOS dev/release warning enforcement. <!-- completion-ledger: Deferred: WARN-MACOS-001 -->
   The global inventory may remain 11 enforced / 2 pending without blocking the
   current Windows completion target.
-- [ ] Extend `check:release` with tag/previous-version/updater/artifact checks.
+- [ ] Extend `check:release` with tag/previous-version/updater/artifact checks. <!-- completion-ledger: Open: RELEASE-METADATA-GATE-001 -->
 
 Exit: synchronized version metadata, warning baseline, current traceability/risk/
 evidence ledgers, clean reviewed commit, and pushed handoff.
@@ -510,7 +518,7 @@ Exit: no project/file mutation bypasses one recoverable authority/publication pa
   Lighting/Video overlap handling.
 - [x] Add process-local exact request receipts, same-ID/different-shape rejection,
   bounded lanes, rate limit, audit truth, and restart non-reclamation.
-- [ ] Add crash-safe/durable terminal recovery rather than reclaiming pre-crash
+- [ ] Add crash-safe/durable terminal recovery rather than reclaiming pre-crash <!-- completion-ledger: Open: AI3-DURABLE-RECOVERY-001 -->
   authority or presenting process-local receipts as durable truth.
 - [x] Wire lease state into AppState, generation-stamped query, canonical commands,
   registry metadata, and current-process owner retirement.
@@ -519,15 +527,15 @@ Exit: no project/file mutation bypasses one recoverable authority/publication pa
 - [x] Orphan affected leases on project identity replacement without physical change.
 - [x] Canonicalize or fail-close code-side MIDI, OSC, DMX mapping, Remote, shortcut,
   all/video/per-output release, and every other discovered energizing legacy route.
-- [ ] Verify those ingress policies through native clients and hardware rather than
+- [ ] Verify those ingress policies through native clients and hardware rather than <!-- completion-ledger: Open: AI3-NATIVE-INGRESS-001 -->
   treating the generated source inventory as physical acceptance.
 - [x] Fence project replacement through candidate/orphan receipts, generation checks,
   and an explicit re-Arm requirement.
-- [ ] Prove New/Load/Recovery/Backup/Take Over retirement and re-Arm end to end with
+- [ ] Prove New/Load/Recovery/Backup/Take Over retirement and re-Arm end to end with <!-- completion-ledger: Open: AI3-PHYSICAL-REARM-001 -->
   acknowledged physical output state.
 - [x] Prove code-side stale owner/ABA, restart non-reclamation, transfer races,
   bounded 10,000-call saturation, and candidate/teardown ACK behavior.
-- [ ] Prove durable reply-loss/crash recovery, native dangerous-action
+- [ ] Prove durable reply-loss/crash recovery, native dangerous-action <!-- completion-ledger: Open: AI3-DURABLE-ACCEPTANCE-001 -->
   Yes/No/close behavior, physical creation/teardown ACK, and the five-display
   hardware behavior. The retired Raw Input challenge is not an acceptance item.
 
@@ -535,29 +543,29 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 
 ### Phase 3 — AI0-AI8 control plane completion
 
-- [ ] AI0 complete source inventory/coverage gate; unclassified mutations fail.
-- [ ] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds.
-- [ ] AI2 authored command bridge with E/R/H, owner incarnation, receipts, Undo.
-- [ ] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed
+- [ ] AI0 complete source inventory/coverage gate; unclassified mutations fail. <!-- completion-ledger: Open: AI0-COVERAGE-001 -->
+- [ ] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds. <!-- completion-ledger: Open: AI1-SCHEMAS-001 -->
+- [ ] AI2 authored command bridge with E/R/H, owner incarnation, receipts, Undo. <!-- completion-ledger: Open: AI2-COMMAND-BRIDGE-001 -->
+- [ ] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed <!-- completion-ledger: Open: AI4-CONSENT-001 -->
   local/native consent policies, and release-build bypass absence. This does not
   restore the retired Raw Input/six-digit/Enter challenge.
-- [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery,
+- [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery, <!-- completion-ledger: Open: AI5-SIDECAR-001 -->
   bounded queues, process lifecycle, and no cached authority replay.
-- [ ] AI6 administration UI for principals/grants/revocation/audit/health.
-- [ ] AI7 adversarial parity/security/rate/reply-loss/fuzz/saturation proof across
+- [ ] AI6 administration UI for principals/grants/revocation/audit/health. <!-- completion-ledger: Open: AI6-ADMIN-UI-001 -->
+- [ ] AI7 adversarial parity/security/rate/reply-loss/fuzz/saturation proof across <!-- completion-ledger: Open: AI7-ADVERSARIAL-PROOF-001 -->
   Tauri, MIDI/OSC/DMX, Remote, shortcuts, API, and MCP.
-- [ ] AI8 release-native real external clients, clean install, hardware output,
+- [ ] AI8 release-native real external clients, clean install, hardware output, <!-- completion-ledger: Open: AI8-EXTERNAL-ACCEPTANCE-001 -->
   crash/restart, security review, and artifact inspection.
 
 Exit: AI0-AI8 accepted without weakening local Blackout or claiming unattended R4/R5.
 
 ### Phase 4 — Output ownership, project swap, and ShowClock decision freeze
 
-- [ ] F1 monotonic input generations for MIDI/OSC/DMX Learn/workers and stale callback
+- [ ] F1 monotonic input generations for MIDI/OSC/DMX Learn/workers and stale callback <!-- completion-ledger: Open: F1-INPUT-GENERATIONS-001 -->
   retirement on mapping/project replacement.
-- [ ] F2 full Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon,
+- [ ] F2 full Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon, <!-- completion-ledger: Open: F2-OUTPUT-OWNERSHIP-001 -->
   Display, native windows, SDK resources, Take Over, teardown ACK, and explicit Arm.
-- [ ] Freeze ShowClock transport/discovery/authentication/key rotation/replay,
+- [ ] Freeze ShowClock transport/discovery/authentication/key rotation/replay, <!-- completion-ledger: Open: SHOWCLOCK-DECISIONS-001 -->
   master-clock/slew/Hold, witness/fence/physical-interlock, mixed-version, and
   supported-network decisions.
 
@@ -567,23 +575,23 @@ Audio/recording/live-source clock and ownership semantics are complete.
 
 ### Phase 5 — Video, Timeline, media-derived data, audio, recording, live sources
 
-- [ ] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate.
-- [ ] C2 Clip Take and C4 mapping/Timeline integration.
-- [ ] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide.
-- [ ] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device
+- [ ] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate. <!-- completion-ledger: Open: VIDEO-FULL-GATE-001 -->
+- [ ] C2 Clip Take and C4 mapping/Timeline integration. <!-- completion-ledger: Open: VIDEO-C2-C4-001 -->
+- [ ] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide. <!-- completion-ledger: Open: TIMELINE-FOLLOW-001 -->
+- [ ] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device <!-- completion-ledger: Open: TIMELINE-PERSISTENCE-001 -->
   routing, native A/V/Lighting synchronization, fault, and viewport proof.
-- [ ] M thumbnail/waveform/proxy/analysis identity, bounded background workers,
+- [ ] M thumbnail/waveform/proxy/analysis identity, bounded background workers, <!-- completion-ledger: Open: MEDIA-DERIVED-001 -->
   cancellation, cache/eviction, predecode/prefetch/degraded operation, and cold/warm
   cache performance budgets.
-- [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS
+- [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS <!-- completion-ledger: Open: AUDIO-AUTHORED-001 -->
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
 - [x] Extend the existing Web Remote listener with authenticated DJ Link events. Map
   `DJ_MASTER_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B
   Loop from absolute `DJ_LOOP_STATE`, and make `DJ_RELEASE` idempotently disable/resume.
   Do not add a second Agent/server or send rekordbox MIDI from Syndocal.
-- [ ] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability,
+- [ ] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability, <!-- completion-ledger: Open: VIDEO-LIVE-SOURCES-001 -->
   permission/fault/reconnect truth, and old-worker retirement.
-- [ ] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`,
+- [ ] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`, <!-- completion-ledger: Open: RECORDING-001 -->
   target reservation, disk/crash/encoder/timeout recovery, verified atomic artifact,
   two-PC ownership, and authoritative asset import.
 
@@ -591,31 +599,31 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
 
 ### Phase 6 — ShowClock, UI, Remote, security, migration, and supportability
 
-- [ ] Implement ShowClock schema/simulator, authenticated peer sync and estimator,
+- [ ] Implement ShowClock schema/simulator, authenticated peer sync and estimator, <!-- completion-ledger: Open: SHOWCLOCK-IMPLEMENTATION-001 -->
   timestamped exactly-once actions, project/lease/audio/recording generation coupling,
   witness/fence, UI, and two-process then two-machine fault/soak proof.
-- [ ] H1 reachability: every supported feature has a discoverable operator path and
+- [ ] H1 reachability: every supported feature has a discoverable operator path and <!-- completion-ledger: Open: UI-H1-REACHABILITY-001 -->
   no dead/hidden route that only an internal command can reach.
-- [ ] H2 shared shell: one truthful navigation/status/error/selection/focus contract
+- [ ] H2 shared shell: one truthful navigation/status/error/selection/focus contract <!-- completion-ledger: Open: UI-H2-SHELL-001 -->
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
-- [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration,
+- [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Open: UI-H3-SETUP-001 -->
   validation, empty/error states, keyboard/pointer reachability, and native proof.
-- [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation,
+- [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation, <!-- completion-ledger: Open: DJ-LINK-SETUP-001 -->
   connection/session diagnostics, current Master Track, project Track-to-Timeline
   mapping CAS, disconnect recovery, and `Use Current Track`. No Pedal/MIDI controls.
-- [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage,
+- [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage, <!-- completion-ledger: Open: UI-H4-EDIT-001 -->
   history/Undo/Redo, import/relink, save/reload focus, and native proof.
-- [ ] H5 Control completion: live Lighting/Video/Audio, Cue/Clip/Take/Transition,
+- [ ] H5 Control completion: live Lighting/Video/Audio, Cue/Clip/Take/Transition, <!-- completion-ledger: Open: UI-H5-CONTROL-001 -->
   Blackout/Arm/Take Over, recording, diagnostics, failure/recovery, and native proof.
 
-- [ ] N Remote/Touch LAN/TLS exposure, pairing, Origin/Host, grants, rate/size bounds,
+- [ ] N Remote/Touch LAN/TLS exposure, pairing, Origin/Host, grants, rate/size bounds, <!-- completion-ledger: Open: REMOTE-SECURITY-001 -->
   RDM/TOD cancellation/ownership, parser/path/archive fuzz, dependency/SBOM/redaction.
-- [ ] O supported `.sdc`/template/cache/protocol version matrix, golden migration
+- [ ] O supported `.sdc`/template/cache/protocol version matrix, golden migration <!-- completion-ledger: Open: MIGRATION-COMPATIBILITY-001 -->
   corpus, hostile/corrupt input, fuzz, backup/recovery/upgrade compatibility.
-- [ ] P generation-stamped status, redacted diagnostic bundle, updater wrong-channel/
+- [ ] P generation-stamped status, redacted diagnostic bundle, updater wrong-channel/ <!-- completion-ledger: Open: OBSERVABILITY-SUPPORT-001 -->
   downgrade/signature/corruption/offline/rollback behavior, and operator/support
   startup/failure/takeover/recovery/shutdown runbooks.
-- [ ] H native NVDA, High Contrast, color-independent states, 125/150/200% scaling,
+- [ ] H native NVDA, High Contrast, color-independent states, 125/150/200% scaling, <!-- completion-ledger: Open: ACCESSIBILITY-NATIVE-001 -->
   keyboard-only safety workflows, IME, dialog/popout focus, and reduced motion.
 
 Exit: supported exposure, migration, recovery, accessibility, and diagnostics have
@@ -628,19 +636,19 @@ accepted strongly consistent witness/fence or physical interlock.
 ASIO is a Windows product-release requirement while remaining a separately licensed,
 non-default artifact from MIT/WASAPI.
 
-- [ ] Select GPLv3-separated artifact or Steinberg proprietary SDK agreement; package
+- [ ] Select GPLv3-separated artifact or Steinberg proprietary SDK agreement; package <!-- completion-ledger: Open: ASIO-LICENSE-001 -->
   notices/source obligations and approve installer/updater separation.
 - [x] Pass a second vendor's working driver (HOTONE 44.1 kHz / 2-channel / i32 /
   128-frame, 100 exact Start/Stop/Free cycles with no fallback).
-- [ ] Pass advertised 44.1/48/96 kHz, 64/128/256 frames, format, mono/stereo/channel
+- [ ] Pass advertised 44.1/48/96 kHz, 64/128/256 frames, format, mono/stereo/channel <!-- completion-ledger: Open: ASIO-FORMAT-MATRIX-001 -->
   selection matrix without silent fallback.
-- [ ] Pass occupied-driver, control-panel rate/buffer change, reset/resync, XRUN,
+- [ ] Pass occupied-driver, control-panel rate/buffer change, reset/resync, XRUN, <!-- completion-ledger: Open: ASIO-FAULT-MATRIX-001 -->
   unplug/replug, callback-gap, and no-callback fail-closed/recovery matrix.
-- [ ] Pass matched one-hour ASIO and WASAPI soak with overrun 0, callback p99 below
+- [ ] Pass matched one-hour ASIO and WASAPI soak with overrun 0, callback p99 below <!-- completion-ledger: Open: ASIO-SOAK-001 -->
   20% and max below 50% of buffer duration, capture-to-engine p95 <= 40 ms, and
   loss-to-zero <= 250 ms.
-- [ ] Measure physical input-to-pixel latency and five matched TouchDesigner trials.
-- [ ] Verify selection persistence, stale/ambiguous device lock, native UI telemetry,
+- [ ] Measure physical input-to-pixel latency and five matched TouchDesigner trials. <!-- completion-ledger: Open: ASIO-LATENCY-001 -->
+- [ ] Verify selection persistence, stale/ambiguous device lock, native UI telemetry, <!-- completion-ledger: Open: ASIO-PERSISTENCE-PACKAGE-001 -->
   artifact feature identity, and absence of fallback in the final package.
 
 Exit: every checkbox in `qa/ASIO_INPUT_ACCEPTANCE.md` is checked with exact artifact,
@@ -648,26 +656,26 @@ driver/device, raw logs, operator, date, and measurement source.
 
 ## 8. External hardware, comparative, platform, and venue acceptance
 
-- [ ] Real Art-Net/sACN nodes and fixtures: addressing, RGB/wheel, Pan/Tilt, intensity,
+- [ ] Real Art-Net/sACN nodes and fixtures: addressing, RGB/wheel, Pan/Tilt, intensity, <!-- completion-ledger: Open: DMX-ARTNET-001 -->
   strobe, Blackout, reconnect, multi-universe, switch topology, and 44 Hz continuity.
-- [ ] Enttec USB PRO/DMXKing long run; Open DMX logic-analyzer Break 176 us, MAB 16 us,
+- [ ] Enttec USB PRO/DMXKing long run; Open DMX logic-analyzer Break 176 us, MAB 16 us, <!-- completion-ledger: Open: DMX-USB-RDM-001 -->
   frame period/failure; RDM/TOD discovery/correlation/timeout/cancel/removal.
-- [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/
+- [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/ <!-- completion-ledger: Open: INPUT-PHYSICAL-001 -->
   Android Remote over wired/Wi-Fi with p50/p95/p99/max latency.
-- [ ] Physical DJ-PC Pedal -> `rekordbox-DJ-Link-ForPCDJ` local MIDI plus wired
+- [ ] Physical DJ-PC Pedal -> `rekordbox-DJ-Link-ForPCDJ` local MIDI plus wired <!-- completion-ledger: Open: DJ-LINK-HARDWARE-001 -->
   Agent -> Syndocal acceptance: preload/non-Master non-trigger, Master Track start,
   absolute repeated Loop divisions, Filter isolation, idempotent Release, local
   operation during disconnect, State Sync, ACK, and next-use readiness, with exact
   device/software/repository/NIC/mapping/timestamp evidence.
-- [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/
+- [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/ <!-- completion-ledger: Open: VIDEO-PHYSICAL-001 -->
   Syphon, camera, and screen-capture fault and one-hour matrices.
-- **Deferred outside the Windows target:** macOS/Linux real-machine display,
+- **Deferred outside the Windows target:** macOS/Linux real-machine display, <!-- completion-ledger: Deferred: PLATFORM-MAC-LINUX-001 -->
   media, audio, project save/reload, and package acceptance.
-- [ ] Venue GPU maximum ISF/layer/Preview/Program/output/recording one-hour run with
+- [ ] Venue GPU maximum ISF/layer/Preview/Program/output/recording one-hour run with <!-- completion-ledger: Open: VENUE-SOAK-001 -->
   frame/drop/CPU/GPU/RAM/VRAM/operator-response logs.
-- [ ] Two-machine real-switch crash/restart/partition/rejoin/device-loss rehearsal
+- [ ] Two-machine real-switch crash/restart/partition/rejoin/device-loss rehearsal <!-- completion-ledger: Open: SHOWCLOCK-VENUE-001 -->
   with zero simultaneous output and operator runbook.
-- [ ] Pinned Daslight/SynapseRack/TouchDesigner version/license/hardware/content task
+- [ ] Pinned Daslight/SynapseRack/TouchDesigner version/license/hardware/content task <!-- completion-ledger: Open: COMPARE-PINNED-001 -->
   comparisons, preserving first failures, unmeasured rows, timings, operations, and
   synchronized output evidence. Never infer parity from counts or loopback.
 
@@ -678,6 +686,17 @@ Windows-local target: platform/package matrix, Authenticode/Apple signing,
 BOM/SBOM and notices, clean-machine install/upgrade/uninstall, signed updater,
 and public tag/artifact/evidence publication. Reopen them only when distribution
 becomes a product goal; they are not counted in the active 71-item denominator.
+
+The following retain those six frozen rows as individually addressable
+`Deferred`/out-of-scope items. They do not reopen distribution work; their
+markers are deliberately checked by the completion-ledger gate.
+
+- **Frozen / out of scope for the current Windows-local completion target:** Platform/package matrix. <!-- completion-ledger: Deferred: DIST-PLATFORM-PACKAGE-001 -->
+- **Frozen / out of scope for the current Windows-local completion target:** Authenticode/Apple signing. <!-- completion-ledger: Deferred: DIST-SIGNING-001 -->
+- **Frozen / out of scope for the current Windows-local completion target:** BOM/SBOM and notices. <!-- completion-ledger: Deferred: DIST-NOTICES-001 -->
+- **Frozen / out of scope for the current Windows-local completion target:** Clean-machine install/upgrade/uninstall. <!-- completion-ledger: Deferred: DIST-CLEAN-MACHINE-001 -->
+- **Frozen / out of scope for the current Windows-local completion target:** Signed updater. <!-- completion-ledger: Deferred: DIST-UPDATER-001 -->
+- **Frozen / out of scope for the current Windows-local completion target:** Public tag/artifact/evidence publication. <!-- completion-ledger: Deferred: DIST-PUBLICATION-001 -->
 
 ## 10. Warning cleanup workstream
 
