@@ -95,17 +95,29 @@ and 806,696 bytes each; 1,613,392 bytes total, recoverable). The complete
 
 ## Evidence
 
-Each run writes three client screenshots and
+Each complete current run writes 19 client screenshots and
 `native-window-acceptance.json` under a new
-`%TEMP%\syndocal-native-acceptance-*` directory. The JSON records monitor and
-work-area dimensions, exact maximized/fullscreen/restored client dimensions,
-tolerance and screenshot paths. Generated evidence stays outside the source
-tree.
+`%TEMP%\syndocal-native-acceptance-*` directory. The first three prove the
+maximized/fullscreen/restored main-window geometry. Screenshots 04 through 09
+prove Stage-first detach/reflow/reintegration, 10 through 13 prove the reverse
+Timeline-first detach order, and 14 through 19 prove detached-record restoration
+across a real process restart, exact child adoption after main-window reload,
+direct Stage-child close reintegration, and final Timeline reintegration. The JSON
+records monitor/work-area and client dimensions, the exact Tauri label/report
+census and pane DOM contracts, process/window identities, restart and adoption
+state, tolerance, visual metrics, screenshot paths, and explicitly unverified
+native boundaries. Generated evidence stays outside the source tree.
 
 The gate fails if the QA window is not maximized, the monitor is not the
 required 1920x1080 primary surface, maximized content is smaller than
 1920x1000, F11 is not exactly 1920x1080, or Esc does not return to the exact
 original maximized dimensions.
+
+The source hardening committed at `a0c76c5` passed 81/81 deterministic self-test
+checks in both PowerShell 7 and Windows PowerShell 5.1 plus independent adversarial
+review. Those self-tests exercise pure trust/contract seams only; they do not
+constitute a native run, do not create the 19-image evidence set, and do not close
+the two explicitly unverified record-retirement boundaries in the JSON contract.
 
 ## Latest verified run
 

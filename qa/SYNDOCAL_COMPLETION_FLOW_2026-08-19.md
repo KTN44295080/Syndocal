@@ -347,13 +347,15 @@ evidence. No unavailable physical device is a passing hardware result.
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; the last synchronized committed ordinal is `1.2.0-alpha.11`.
-As of 2026-08-26, pushed HEAD is `763670c` and its committed metadata remains
-`1.2.0-alpha.11`, while the dirty uncommitted worktree synchronizes in-progress
-metadata to `1.2.0-alpha.12`. Until that advance is committed with tracked
-sources only and natively verified, `check:release` passes only with untracked
-supporting sources present, and alpha.12 must not be described as a reproducible
-checkpoint, tag, installer, or artifact. The branch name may remain historical;
-artifact metadata and tags must not derive a false version from the branch name.
+The in-progress alpha.12 tranche was based on pushed source checkpoint `763670c`,
+whose committed metadata remains `1.2.0-alpha.11`. Subsequent documentation and
+native-acceptance-harness checkpoints `0df10d2` and `a0c76c5` intentionally did
+not advance product metadata. The still-dirty implementation worktree synchronizes
+in-progress metadata to `1.2.0-alpha.12`. Until that advance is committed with
+tracked sources only and natively verified, `check:release` passes only with
+untracked supporting sources present, and alpha.12 must not be described as a
+reproducible checkpoint, tag, installer, or artifact. The branch name may remain
+historical; artifact metadata and tags must not derive a false version from it.
 
 The synchronized product-version surfaces are:
 
@@ -1694,11 +1696,13 @@ D4 Stage transaction software/native integration is accepted at
 `1.2.0-alpha.11`. The focused/static evidence recorded earlier on this branch
 remains binding; the native rows were closed on `codex/d4-stage-integration`
 at committed checkpoint HEAD `63cf795d17846602419d63a007db9f3a95cfce7b`,
-recorded before concurrent uncommitted FFmpeg script/doc changes
-(`app/scripts/check-native-window-acceptance.ps1`,
-`app/scripts/check-native-workspace-operator.ps1`,
-`qa/NATIVE_WINDOW_ACCEPTANCE.md`) that stay preserved untouched in the
-worktree.
+recorded before later hardening of the native acceptance tooling. The expanded
+`app/scripts/check-native-window-acceptance.ps1` was committed at `a0c76c5` after
+PowerShell 7 and Windows PowerShell 5.1 each passed 81/81 deterministic self-test
+checks and an independent adversarial review. That source checkpoint is not a new
+native acceptance run: the script's expanded restart/reload/pane-lifecycle matrix
+remains to be exercised against the next accepted alpha.12 executable, and the D4
+native evidence remains pinned to `63cf795d`.
 
 The native gate resolved and pinned the exact VS2022 x64 linker
 `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
