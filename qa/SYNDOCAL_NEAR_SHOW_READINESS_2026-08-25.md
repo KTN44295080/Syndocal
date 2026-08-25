@@ -270,6 +270,78 @@ These items are concurrent implementation evidence, not closure of the
 corresponding SHOW-P0 or FC rows. The next checkpoint must rerun integrated
 gates on the final on-disk state before commit and push.
 
+## 2026-08-26 02:30 JST parallel checkpoint
+
+The branch remains `codex/syndocal-v1.2`. The code/doc checkpoint underlying
+this report is the pushed `1aa2dbd099d85d237b75887954a67f67e4700bcb`; the
+integrated alpha.12 source remains intentionally dirty under disjoint owners.
+No release or native-completion claim is made from this checkpoint.
+
+- ASIO hardware soak: the exact Ampero Mini bridge-v2 candidate remained on
+  `asio:HOTONE AUDIO USB Audio Device`, 44.1 kHz, 2-channel i32, 128 frames,
+  through 39.01 minutes. It reported 806,527 callbacks (latest bridge telemetry
+  807,223), zero XRUN/API/terminal/warning/non-finite/frame-mismatch faults,
+  16 ms maximum callback gap, 4,095 ns callback p99, and 479,600 ns callback
+  maximum. The exact DLL hash and device/configuration stayed unchanged and no
+  fallback occurred. This is still an in-progress show-specific soak; the
+  authoritative matched 48 kHz ASIO/WASAPI acceptance and native UI/restart/
+  persistence/fault legs remain open.
+- Three-display observation: the runner now evaluates only the app-owned
+  `window.__syndocalReadVideoOutputWindowObservationV1()` seam on every CDP
+  page. That reader self-verifies the current Tauri window label is `main`, and
+  the runner requires exactly one successful self-verified main result while
+  every non-main page rejects. No nonexistent raw window-label command remains.
+  Windows PowerShell 5.1 self-test passes 39/39, the strict observation gate
+  passes, TypeScript passes, and focused first-party warning count is zero.
+  Independent Ox re-review and the final physical three-display run remain
+  open; the self-test is not promoted to physical acceptance.
+- Project transactions (FC-01): read-only audit confirms that the dirty
+  frontend no longer swallows the first failed Cancel, retains one exact frozen
+  terminal recovery, and blocks the next raw mutation until exact recovery.
+  The focused project-transaction gate passes. Release-blocking proof remains:
+  one Rust/native sequence must cover Commit failure, Cancel failure, worker
+  completion, same-ticket terminal recovery, and one succeeding next mutation.
+  The audit also found that a terminal Commit/Cancel receipt whose ACK reply is
+  lost can survive owner retirement and eventually exhaust the 256-receipt
+  admission cap; dead-owner terminal receipt compaction is required without
+  compacting Pending or indeterminate state.
+- Detached Stage/Timeline (SHOW-P0-3): static and browser evidence now accounts
+  for integrated Stage, Source shelf, no duplicate Timeline, main-window
+  reflow, exact-label child census, and present/absent/unknown recovery. No
+  current product-code route reproduced the original four symptoms. Closure is
+  still blocked because the real native harness executes only Stage-first
+  detachment and has no restart-with-detached-record child-present/absent leg.
+  An Ox implementation lane owns those missing native sequences; unknown child
+  presence stays explicitly unverified unless a real safe native seam proves it.
+- Live Audio/ASIO presentation: strict backend-summary and `asio_selection`
+  parsers, all-or-nothing duplicate rejection, machine-local stale-selection
+  preservation, and focused tests pass. Independent Ox review found a show-P0
+  circular lock: a restored ASIO verdict disabled the Start control even though
+  native revalidation currently occurs inside that Start request, and the same
+  verdict also disabled an explicit WASAPI request. Repair is active to keep a
+  saved fast path locked while permitting an explicit operator ASIO request to
+  perform exact native revalidation, scope the verdict to ASIO, surface
+  serialization failure, and use one shared dispatch predicate.
+- Nested Timeline authoring: engine load/removal graph validation passes the
+  full engine suite (855 passed, zero failed, two ignored) with zero first-party
+  warnings and independent review active. A separate browser-gate lane found a
+  production bug in child editing: external placement compares only root
+  Timeline event IDs after mutating the exact child Timeline, so a valid child
+  placement can be persisted and then reported as failed. The App owner is
+  repairing the before/after comparison against the active authored root or
+  exact child Timeline before the child-recursion gate can truthfully land.
+- DJ strict-v2 convergence: the focused exact-linker same-session ACTIVE dedupe
+  test now passes with zero first-party warnings after preserving the deliberate
+  TTL test boundary. Outbound truth equality and socket shutdown tests remain
+  active; the DJ-PC process remains intentionally stopped, so hardware remains
+  0/12 and no LAN acceptance is claimed while the operator sleeps.
+
+Focused gates at this checkpoint emitted zero first-party warnings. Whole-tree
+`git diff --check` passes; its output contains only existing Git LF-to-CRLF
+working-copy notices. The next source checkpoint must integrate the active
+repairs, rerun their focused negative proofs, receive independent review, and
+then create and push a meaningful code commit.
+
 ## Mandatory ASIO show blocker
 
 The next show uses ASIO, so every applicable unchecked gate in
