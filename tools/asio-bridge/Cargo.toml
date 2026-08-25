@@ -1,6 +1,6 @@
 [package]
 name = "syndocal-asio-bridge"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -9,6 +9,10 @@ build = "build.rs"
 [lib]
 name = "syndocal_asio_bridge"
 crate-type = ["cdylib", "rlib"]
+
+[package.metadata.syndocal]
+abi_version = 2
+canonical_dll = "syndocal_asio_bridge.dll"
 
 [features]
 default = []

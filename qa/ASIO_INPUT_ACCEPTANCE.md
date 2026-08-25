@@ -1,6 +1,6 @@
 # ASIO Input Acceptance
 
-Updated: 2026-08-21
+Updated: 2026-08-25
 
 ## Release boundary
 
@@ -53,13 +53,13 @@ Current pin:
 
 ## Current implementation status
 
-- Implemented: `tools/asio-bridge` is an independently locked and built Windows DLL. The normal app graph remains on Rodio 0.21.1 / CPAL 0.16; the non-default app feature dynamically loads bridge ABI v1 instead of linking CPAL 0.18.1 into that graph.
-- Implemented: bridge build support, driver enumeration, capability query, explicit stream open, applied buffer reporting, playback, Stop, backend XRUN count, and terminal event delivery are separate states across the bridge, app command layer and UI.
+- Implemented: `tools/asio-bridge` is an independently locked and built Windows DLL with ABI/schema v2 and the one canonical filename `syndocal_asio_bridge.dll`. The normal app graph remains on Rodio 0.21.1 / CPAL 0.16; ASIO stays dynamically loaded and separately licensed rather than linking CPAL 0.18.1 into that graph.
+- Implemented in the isolated v2 bridge: driver enumeration, capability query, explicit stream open, applied buffer reporting, Stop/Close, backend XRUN count, telemetry and terminal event delivery are separate typed operations. The current application loader is still ABI v1 and is deliberately incompatible with the v2 DLL until the app-integration tranche replaces it; this is not accepted as a working ASIO application path.
 - Implemented: ASIO offers no system-default selection. Driver IDs are generation-scoped, and Start revalidates the explicit driver, rate, channels, native sample format, fixed buffer, and channel mix. Mismatch or disappearance fails rather than substituting another driver, the first enumerated driver, or WASAPI.
-- Implemented: the realtime callback uses Start-time storage, feeds mono `f32` into the existing fixed capture/FFT path, and performs no heap allocation or lock acquisition in the normal callback. Terminal ASIO events and sample-adapter panics also avoid locks, allocation, formatting and engine calls: they publish a one-shot atomic fault latch and unpark the FFT worker, which owns message construction, generation validation, safety-zero publication and the single final clear. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/free and an explicit restart.
-- Implemented: the 64 px live-audio rail exposes WASAPI Shared / ASIO, driver/rate/fixed-buffer/mix configuration, requested/applied buffer frames, callback frames, overflow and backend XRUN state. `NOT BUILT`, empty catalogue, driver selection, configuration, Ready, Open, Active and Fault remain distinguishable.
-- Validated: SDK-free bridge tests 5/5, SDK-enabled bridge tests 4/4, and the app's explicit-driver catalogue/capability integration test pass. Default builds remain ASIO-free.
-- Not approved for distribution: the GPLv3-versus-proprietary license path, notices, corresponding-source obligations where applicable, and installer separation are still undecided.
+- Implemented in the isolated bridge: the realtime callback uses Start-time storage, converts the exact negotiated buffer to mono `f32`, and performs no heap allocation or lock acquisition in the normal callback. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/Close and an explicit restart.
+- Not yet integrated for ABI v2: the application-side callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, and the 64 px operator rail still use the retired ABI-v1 loader contract. Existing UI controls do not make the v2 DLL operable; the loader and UI state publication must move to v2 together before native acceptance.
+- Validated on 2026-08-25 after the current gain/parser and callback-fault repair: SDK-free tests pass 12/12; the ASIO-feature deterministic suite passes 14/14 with the one explicitly physical test ignored; Clippy `-D warnings`, ASIO all-target check, and the canonical release build report zero first-party/linker warnings with the exact VS 14.44 linker first. SDK provenance validates the pinned 48-file extraction and archive hash. The release DLL exposes exactly nine v2 symbols with v1/Play/Free absent and has SHA-256 `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. The suite covers empty/all-zero, negative, non-finite, subtly-over-one, and extreme gain rejection through both the parser and exported Start boundary. Physical-driver and application evidence still predates the final v2 checkpoint and must be rerun. Previous ABI-v1 app catalogue/capability evidence is historical only; it does not validate the present v2 boundary. Default normal builds remain ASIO-free.
+- Not approved for distribution: `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false` as the authority. The normal MIT installer/updater is fail-closed against `syndocal_asio_bridge.dll`, the retired `syndocal-asio-bridge.dll`, every other `*asio*.dll`, and every DLL wildcard/glob. Windows libav packaging is deliberately limited to the seven exact DLLs recorded in `app/src-tauri/tauri.windows.conf.json`; FFmpeg and Spout notices remain explicit normal-package resources. No ASIO distribution artifact is generated, staged, published, or accepted until a separately reviewed GPLv3 artifact path or a signed Steinberg agreement, notices, and release workflow exist.
 
 ## Hardware evidence (2026-07-14)
 
@@ -153,16 +153,17 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 
 ## Gate state
 
-- [x] Isolated non-default ASIO bridge, app integration and operator UI implemented.
+- [x] Isolated non-default ASIO bridge ABI/schema v2 implemented.
+- [ ] Application loader, callback/fault publication, persistence, and operator UI integrated against ABI/schema v2 and verified natively.
 - [x] SDK version/archive/SHA pin recorded; local build requires explicit SDK and libclang paths.
 - [x] Direct-Cargo P0 closed: `-PreflightOnly` fail-closed MSVC toolset/linker-pin preflight implemented with parser/static/self-test proof. On 2026-08-25 the live preflight passed inside a fresh `vcvars64.bat -vcvars_ver=14.44` shell with `VCToolsInstallDir` exactly `14.44.35207`, the pinned Community `Hostx64\x64\link.exe` first and Git's `link.exe` second; the full ASIO Cargo check remains part of the next native checkpoint.
-- [x] One explicit working-driver short smoke with applied buffer and XRUN telemetry.
-- [x] Unavailable explicit driver fails without another-driver or WASAPI fallback.
+- [ ] Current final ABI-v2 DLL completes one explicit working-driver short smoke with applied buffer and XRUN telemetry. The recorded ABI-v1/pre-checkpoint run is historical evidence only.
+- [ ] Current final ABI-v2 DLL proves an unavailable explicit driver fails without another-driver or WASAPI fallback. The recorded negative run predates the final v2 checkpoint.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
-- [x] A second vendor driver (`HOTONE AUDIO USB Audio Device`) completed an explicit 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Free cycles.
+- [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. The recorded Start/Stop/Free result is historical.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
-- [x] Start/Stop/Free 100 cycles completed on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback.
-- [x] Current-source native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc.
+- [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The recorded Start/Stop/Free result is historical.
+- [ ] Current-source ABI-v2 native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc. The recorded run is ABI-v1 historical evidence only.
 - [ ] Occupied-driver/control-panel/reset/resync/xrun/unplug failure matrix completed.
 - [ ] One-hour matched ASIO/WASAPI soak and callback/capture/engine percentile thresholds passed.
 - [ ] Physical input-to-pixel latency and five matched TouchDesigner trials passed.

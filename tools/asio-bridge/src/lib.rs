@@ -1,43 +1,40 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-#![cfg_attr(not(all(target_os = "windows", feature = "asio")), allow(dead_code))]
 
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     ffi::c_void,
-    mem::size_of,
     panic::{catch_unwind, AssertUnwindSafe},
     ptr, slice, str,
 };
 
-const ABI_VERSION: u32 = 1;
+const ABI_VERSION: u32 = 2;
+const JSON_SCHEMA_VERSION: u32 = 2;
 const STATUS_OK: u32 = 0;
 const STATUS_INVALID_ARGUMENT: u32 = 1;
 #[cfg(not(all(target_os = "windows", feature = "asio")))]
 const STATUS_UNSUPPORTED: u32 = 2;
+#[cfg(all(target_os = "windows", feature = "asio"))]
 const STATUS_DRIVER_NOT_FOUND: u32 = 3;
+#[cfg(all(target_os = "windows", feature = "asio"))]
 const STATUS_CONFIG_UNSUPPORTED: u32 = 4;
 const STATUS_BACKEND_ERROR: u32 = 5;
+#[cfg(all(target_os = "windows", feature = "asio"))]
 const STATUS_TERMINAL: u32 = 6;
 const STATUS_PANIC: u32 = 255;
 
-const SAMPLE_F32: u32 = 1;
-const SAMPLE_I16: u32 = 2;
-const SAMPLE_I24: u32 = 3;
-const SAMPLE_I32: u32 = 4;
-const SAMPLE_F64: u32 = 5;
-
-const MAX_DRIVER_ID_BYTES: usize = 4_096;
 const MAX_CHANNEL_MIX_ENTRIES: usize = 256;
+const MAX_CHANNEL_MIX_GAIN: f64 = 1.0;
 const MAX_FIXED_BUFFER_FRAMES: u32 = 1_048_576;
+const MAX_JSON_BYTES: usize = 65_536;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct SyndocalAsioStringV1 {
+pub struct SyndocalAsioStringV2 {
     pub ptr: *mut u8,
     pub len: usize,
 }
 
-impl Default for SyndocalAsioStringV1 {
+impl Default for SyndocalAsioStringV2 {
     fn default() -> Self {
         Self {
             ptr: ptr::null_mut(),
@@ -46,31 +43,7 @@ impl Default for SyndocalAsioStringV1 {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct SyndocalAsioChannelMixV1 {
-    pub channel_index: u32,
-    pub gain: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct SyndocalAsioStartConfigV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub driver_id: *const u8,
-    pub driver_id_len: usize,
-    pub sample_rate_hz: u32,
-    pub input_channels: u32,
-    pub sample_format: u32,
-    pub fixed_buffer_frames: u32,
-    pub channel_mix: *const SyndocalAsioChannelMixV1,
-    pub channel_mix_len: usize,
-    pub flags: u32,
-    pub reserved: u32,
-}
-
-pub type SyndocalAsioSampleCallbackV1 = Option<
+pub type SyndocalAsioSampleCallbackV2 = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
         mono_samples: *const f32,
@@ -80,7 +53,7 @@ pub type SyndocalAsioSampleCallbackV1 = Option<
     ),
 >;
 
-pub type SyndocalAsioEventCallbackV1 = Option<
+pub type SyndocalAsioEventCallbackV2 = Option<
     unsafe extern "C" fn(
         context: *mut c_void,
         severity: u32,
@@ -93,8 +66,9 @@ pub type SyndocalAsioEventCallbackV1 = Option<
 type SampleCallback = unsafe extern "C" fn(*mut c_void, *const f32, usize, u64, u32);
 type EventCallback = unsafe extern "C" fn(*mut c_void, u32, u32, *const u8, usize);
 
+#[cfg(all(target_os = "windows", feature = "asio"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SampleFormatV1 {
+enum SampleFormatV2 {
     F32,
     I16,
     I24,
@@ -102,18 +76,8 @@ enum SampleFormatV1 {
     F64,
 }
 
-impl SampleFormatV1 {
-    fn parse(value: u32) -> Option<Self> {
-        match value {
-            SAMPLE_F32 => Some(Self::F32),
-            SAMPLE_I16 => Some(Self::I16),
-            SAMPLE_I24 => Some(Self::I24),
-            SAMPLE_I32 => Some(Self::I32),
-            SAMPLE_F64 => Some(Self::F64),
-            _ => None,
-        }
-    }
-
+#[cfg(all(target_os = "windows", feature = "asio"))]
+impl SampleFormatV2 {
     fn label(self) -> &'static str {
         match self {
             Self::F32 => "f32",
@@ -125,21 +89,27 @@ impl SampleFormatV1 {
     }
 }
 
+#[cfg(all(target_os = "windows", feature = "asio"))]
 #[derive(Clone, Debug)]
 struct ChannelMix {
     channel_index: usize,
     gain: f32,
 }
 
+#[cfg(all(target_os = "windows", feature = "asio"))]
 #[derive(Clone, Debug)]
 struct StartRequest {
     driver_id: String,
     sample_rate_hz: u32,
     input_channels: u16,
-    sample_format: SampleFormatV1,
+    sample_format: SampleFormatV2,
     fixed_buffer_frames: u32,
     channel_mix: Vec<ChannelMix>,
 }
+
+#[cfg(not(all(target_os = "windows", feature = "asio")))]
+#[derive(Clone, Debug)]
+struct StartRequest;
 
 #[derive(Debug)]
 struct BridgeError {
@@ -166,6 +136,7 @@ impl BridgeError {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "asio"))]
     fn driver_not_found(message: impl Into<String>) -> Self {
         Self {
             status: STATUS_DRIVER_NOT_FOUND,
@@ -174,6 +145,7 @@ impl BridgeError {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "asio"))]
     fn config_unsupported(message: impl Into<String>) -> Self {
         Self {
             status: STATUS_CONFIG_UNSUPPORTED,
@@ -190,6 +162,7 @@ impl BridgeError {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "asio"))]
     fn terminal(message: impl Into<String>) -> Self {
         Self {
             status: STATUS_TERMINAL,
@@ -199,12 +172,43 @@ impl BridgeError {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ErrorJson<'a> {
+struct ErrorJsonV2<'a> {
+    schema_version: u32,
+    kind: &'static str,
     status: u32,
     code: &'a str,
     message: &'a str,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CapabilitiesRequestJsonV2 {
+    schema_version: u32,
+    driver_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChannelMixJsonV2 {
+    channel_index: u32,
+    // Validate the JSON number before narrowing to the realtime f32 path. This
+    // prevents an out-of-range decimal such as 1.0000000001 from rounding down
+    // to 1.0 during deserialization and bypassing the wire contract.
+    gain: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartRequestJsonV2 {
+    schema_version: u32,
+    driver_id: String,
+    sample_rate_hz: u32,
+    input_channels: u32,
+    sample_format: String,
+    fixed_buffer_frames: u32,
+    channel_mix: Vec<ChannelMixJsonV2>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -228,6 +232,8 @@ struct DriverJson {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogJson {
+    schema_version: u32,
+    kind: &'static str,
     abi_version: u32,
     backend: &'static str,
     built: bool,
@@ -246,6 +252,8 @@ struct InputConfigJson {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CapabilitiesJson {
+    schema_version: u32,
+    kind: &'static str,
     abi_version: u32,
     backend: &'static str,
     built: bool,
@@ -253,32 +261,129 @@ struct CapabilitiesJson {
     input_configs: Vec<InputConfigJson>,
 }
 
-pub struct SyndocalAsioHandle {
-    inner: backend::StreamHandle,
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartResultJsonV2 {
+    schema_version: u32,
+    kind: &'static str,
+    actual_buffer_frames: u32,
 }
 
-fn owned_bytes(bytes: Vec<u8>) -> SyndocalAsioStringV1 {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StopResultJsonV2 {
+    schema_version: u32,
+    kind: &'static str,
+    stopped: bool,
+    stream_was_active: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseResultJsonV2 {
+    schema_version: u32,
+    kind: &'static str,
+    handle_released: bool,
+    stream_was_active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PercentilesJsonV2 {
+    p50: u64,
+    p95: u64,
+    p99: u64,
+    max: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TelemetrySnapshot {
+    callbacks: u64,
+    xruns: u64,
+    callback_duration_ns: PercentilesJsonV2,
+    capture_delay_ns: PercentilesJsonV2,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TelemetryJsonV2 {
+    schema_version: u32,
+    kind: &'static str,
+    callbacks: u64,
+    xruns: u64,
+    callback_duration_ns: PercentilesJsonV2,
+    capture_delay_ns: PercentilesJsonV2,
+}
+
+trait StreamLifecycle {
+    fn actual_buffer_frames(&self) -> Result<u32, BridgeError>;
+    fn stop(&mut self) -> Result<bool, BridgeError>;
+    fn close(&mut self) -> Result<bool, BridgeError>;
+    fn telemetry(&self) -> TelemetrySnapshot;
+}
+
+fn open_stream_with<F>(
+    request: StartRequest,
+    sample_callback: SampleCallback,
+    event_callback: EventCallback,
+    context: usize,
+    factory: F,
+) -> Result<(SyndocalAsioHandle, u32), BridgeError>
+where
+    F: FnOnce(
+        StartRequest,
+        SampleCallback,
+        EventCallback,
+        usize,
+    ) -> Result<Box<dyn StreamLifecycle>, BridgeError>,
+{
+    let inner = factory(request, sample_callback, event_callback, context)?;
+    let actual_buffer_frames = inner.actual_buffer_frames()?;
+    Ok((SyndocalAsioHandle { inner }, actual_buffer_frames))
+}
+
+pub struct SyndocalAsioHandle {
+    inner: Box<dyn StreamLifecycle>,
+}
+
+fn owned_bytes(bytes: Vec<u8>) -> SyndocalAsioStringV2 {
     let boxed = bytes.into_boxed_slice();
     let len = boxed.len();
     let ptr = Box::into_raw(boxed).cast::<u8>();
-    SyndocalAsioStringV1 { ptr, len }
+    SyndocalAsioStringV2 { ptr, len }
 }
 
-unsafe fn clear_string(output: *mut SyndocalAsioStringV1) {
-    if !output.is_null() {
-        unsafe { output.write(SyndocalAsioStringV1::default()) };
+unsafe fn require_empty_output(
+    output: *mut SyndocalAsioStringV2,
+    field: &str,
+) -> Result<(), BridgeError> {
+    if output.is_null() {
+        return Err(BridgeError::invalid(format!("{field} pointer is null")));
     }
+    let current = unsafe { output.read() };
+    if !current.ptr.is_null() || current.len != 0 {
+        return Err(BridgeError::invalid(format!(
+            "{field} must be initialized to an empty SyndocalAsioStringV2"
+        )));
+    }
+    Ok(())
 }
 
-unsafe fn write_string(output: *mut SyndocalAsioStringV1, bytes: Vec<u8>) {
+unsafe fn write_string(output: *mut SyndocalAsioStringV2, bytes: Vec<u8>) {
     unsafe { output.write(owned_bytes(bytes)) };
 }
 
-fn write_error(output: *mut SyndocalAsioStringV1, error: &BridgeError) {
+fn write_error(output: *mut SyndocalAsioStringV2, error: &BridgeError) {
     if output.is_null() {
         return;
     }
-    let payload = ErrorJson {
+    let current = unsafe { output.read() };
+    if !current.ptr.is_null() || current.len != 0 {
+        return;
+    }
+    let payload = ErrorJsonV2 {
+        schema_version: JSON_SCHEMA_VERSION,
+        kind: "error",
         status: error.status,
         code: error.code,
         message: &error.message,
@@ -288,13 +393,41 @@ fn write_error(output: *mut SyndocalAsioStringV1, error: &BridgeError) {
     }
 }
 
-fn ffi_guard<F>(out_error: *mut SyndocalAsioStringV1, operation: F) -> u32
+fn ffi_guard<T, F>(
+    out_result: *mut SyndocalAsioStringV2,
+    out_error: *mut SyndocalAsioStringV2,
+    operation: F,
+) -> u32
 where
-    F: FnOnce() -> Result<(), BridgeError>,
+    T: Serialize,
+    F: FnOnce() -> Result<T, BridgeError>,
 {
-    unsafe { clear_string(out_error) };
+    if out_result == out_error {
+        let error = BridgeError::invalid("out_result and out_error must not alias");
+        write_error(out_error, &error);
+        return error.status;
+    }
+    if let Err(error) = unsafe { require_empty_output(out_result, "out_result") } {
+        write_error(out_error, &error);
+        return error.status;
+    }
+    if !out_error.is_null() {
+        if let Err(error) = unsafe { require_empty_output(out_error, "out_error") } {
+            return error.status;
+        }
+    }
     match catch_unwind(AssertUnwindSafe(operation)) {
-        Ok(Ok(())) => STATUS_OK,
+        Ok(Ok(result)) => match serde_json::to_vec(&result) {
+            Ok(bytes) => {
+                unsafe { write_string(out_result, bytes) };
+                STATUS_OK
+            }
+            Err(error) => {
+                let error = BridgeError::backend(format!("result JSON failed: {error}"));
+                write_error(out_error, &error);
+                error.status
+            }
+        },
         Ok(Err(error)) => {
             let status = error.status;
             write_error(out_error, &error);
@@ -312,54 +445,115 @@ where
     }
 }
 
-unsafe fn utf8_from_raw<'a>(
+fn ffi_start_guard<F>(
+    out_handle: *mut *mut SyndocalAsioHandle,
+    out_result: *mut SyndocalAsioStringV2,
+    out_error: *mut SyndocalAsioStringV2,
+    operation: F,
+) -> u32
+where
+    F: FnOnce() -> Result<(SyndocalAsioHandle, StartResultJsonV2), BridgeError>,
+{
+    if out_result == out_error {
+        let error = BridgeError::invalid("out_result and out_error must not alias");
+        write_error(out_error, &error);
+        return error.status;
+    }
+    if let Err(error) = unsafe { require_empty_output(out_result, "out_result") } {
+        write_error(out_error, &error);
+        return error.status;
+    }
+    if !out_error.is_null() {
+        if let Err(error) = unsafe { require_empty_output(out_error, "out_error") } {
+            return error.status;
+        }
+    }
+    if out_handle.is_null() {
+        let error = BridgeError::invalid("out_handle pointer is null");
+        write_error(out_error, &error);
+        return error.status;
+    }
+    if !unsafe { out_handle.read() }.is_null() {
+        let error = BridgeError::invalid("out_handle must point to null");
+        write_error(out_error, &error);
+        return error.status;
+    }
+
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(Ok((handle, result))) => match serde_json::to_vec(&result) {
+            Ok(bytes) => {
+                let owned_result = owned_bytes(bytes);
+                let owned_handle = Box::into_raw(Box::new(handle));
+                unsafe {
+                    out_result.write(owned_result);
+                    out_handle.write(owned_handle);
+                }
+                STATUS_OK
+            }
+            Err(error) => {
+                let error = BridgeError::backend(format!("start result JSON failed: {error}"));
+                write_error(out_error, &error);
+                error.status
+            }
+        },
+        Ok(Err(error)) => {
+            let status = error.status;
+            write_error(out_error, &error);
+            status
+        }
+        Err(_) => {
+            let error = BridgeError {
+                status: STATUS_PANIC,
+                code: "panic",
+                message: "the ASIO bridge caught an internal panic while starting".to_string(),
+            };
+            write_error(out_error, &error);
+            STATUS_PANIC
+        }
+    }
+}
+
+unsafe fn parse_json<T: DeserializeOwned>(
     pointer: *const u8,
     len: usize,
     field: &str,
-) -> Result<&'a str, BridgeError> {
+) -> Result<T, BridgeError> {
     if pointer.is_null() {
         return Err(BridgeError::invalid(format!("{field} pointer is null")));
     }
-    if len == 0 || len > MAX_DRIVER_ID_BYTES {
+    if len == 0 || len > MAX_JSON_BYTES {
         return Err(BridgeError::invalid(format!(
-            "{field} length must be between 1 and {MAX_DRIVER_ID_BYTES} bytes"
+            "{field} length must be between 1 and {MAX_JSON_BYTES} bytes"
         )));
     }
     let bytes = unsafe { slice::from_raw_parts(pointer, len) };
-    str::from_utf8(bytes).map_err(|_| BridgeError::invalid(format!("{field} is not valid UTF-8")))
+    let json = str::from_utf8(bytes)
+        .map_err(|_| BridgeError::invalid(format!("{field} is not valid UTF-8")))?;
+    serde_json::from_str(json).map_err(|error| {
+        BridgeError::invalid(format!("{field} is not strict ABI v2 JSON: {error}"))
+    })
 }
 
-unsafe fn parse_start_request(
-    config: *const SyndocalAsioStartConfigV1,
-) -> Result<StartRequest, BridgeError> {
-    if config.is_null() {
-        return Err(BridgeError::invalid("start config pointer is null"));
-    }
-
-    let reported_size = unsafe { ptr::read_unaligned(config.cast::<u32>()) } as usize;
-    if reported_size < size_of::<SyndocalAsioStartConfigV1>() {
+fn validate_schema_version(version: u32, field: &str) -> Result<(), BridgeError> {
+    if version != JSON_SCHEMA_VERSION {
         return Err(BridgeError::invalid(format!(
-            "start config struct_size is {reported_size}, expected at least {}",
-            size_of::<SyndocalAsioStartConfigV1>()
+            "{field} schemaVersion is {version}, expected {JSON_SCHEMA_VERSION}"
         )));
     }
-    let config = unsafe { &*config };
-    if config.abi_version != ABI_VERSION {
-        return Err(BridgeError::invalid(format!(
-            "start config abi_version is {}, expected {ABI_VERSION}",
-            config.abi_version
-        )));
-    }
-    if config.flags != 0 || config.reserved != 0 {
-        return Err(BridgeError::invalid(
-            "start config flags and reserved must be zero",
-        ));
-    }
+    Ok(())
+}
 
-    let driver_id = unsafe { utf8_from_raw(config.driver_id, config.driver_id_len, "driver_id") }?;
+fn parse_start_request(config: StartRequestJsonV2) -> Result<StartRequest, BridgeError> {
+    validate_schema_version(config.schema_version, "start request")?;
+    let driver_id = config.driver_id.trim();
     if !driver_id.starts_with("asio:") || driver_id.len() <= "asio:".len() {
         return Err(BridgeError::invalid(
             "driver_id must be an explicit persistent asio:<driver name> ID",
+        ));
+    }
+    if config.driver_id != driver_id {
+        return Err(BridgeError::invalid(
+            "driver_id must not contain surrounding whitespace",
         ));
     }
     if config.sample_rate_hz == 0 {
@@ -371,26 +565,38 @@ unsafe fn parse_start_request(
             u16::MAX
         )));
     }
-    let sample_format = SampleFormatV1::parse(config.sample_format)
-        .ok_or_else(|| BridgeError::invalid("sample_format is not an ABI v1 input format"))?;
+    if !matches!(
+        config.sample_format.as_str(),
+        "f32" | "i16" | "i24" | "i32" | "f64"
+    ) {
+        return Err(BridgeError::invalid(
+            "sample_format must be exactly f32, i16, i24, i32, or f64",
+        ));
+    }
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    let sample_format = match config.sample_format.as_str() {
+        "f32" => SampleFormatV2::F32,
+        "i16" => SampleFormatV2::I16,
+        "i24" => SampleFormatV2::I24,
+        "i32" => SampleFormatV2::I32,
+        "f64" => SampleFormatV2::F64,
+        _ => unreachable!("sample format was validated above"),
+    };
     if config.fixed_buffer_frames == 0 || config.fixed_buffer_frames > MAX_FIXED_BUFFER_FRAMES {
         return Err(BridgeError::invalid(format!(
             "fixed_buffer_frames must be between 1 and {MAX_FIXED_BUFFER_FRAMES}"
         )));
     }
-    if config.channel_mix.is_null() {
-        return Err(BridgeError::invalid("channel_mix pointer is null"));
-    }
-    if config.channel_mix_len == 0 || config.channel_mix_len > MAX_CHANNEL_MIX_ENTRIES {
+    if config.channel_mix.is_empty() || config.channel_mix.len() > MAX_CHANNEL_MIX_ENTRIES {
         return Err(BridgeError::invalid(format!(
             "channel_mix_len must be between 1 and {MAX_CHANNEL_MIX_ENTRIES}"
         )));
     }
 
-    let raw_mix = unsafe { slice::from_raw_parts(config.channel_mix, config.channel_mix_len) };
-    let mut channel_mix = Vec::with_capacity(raw_mix.len());
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    let mut channel_mix = Vec::with_capacity(config.channel_mix.len());
     let mut has_audible_gain = false;
-    for entry in raw_mix {
+    for entry in config.channel_mix {
         if entry.channel_index >= config.input_channels {
             return Err(BridgeError::invalid(format!(
                 "channel mix index {} is outside the {} configured input channels",
@@ -400,10 +606,16 @@ unsafe fn parse_start_request(
         if !entry.gain.is_finite() {
             return Err(BridgeError::invalid("channel mix gains must be finite"));
         }
+        if !(0.0..=MAX_CHANNEL_MIX_GAIN).contains(&entry.gain) {
+            return Err(BridgeError::invalid(format!(
+                "channel mix gains must be between 0 and {MAX_CHANNEL_MIX_GAIN}"
+            )));
+        }
         has_audible_gain |= entry.gain != 0.0;
+        #[cfg(all(target_os = "windows", feature = "asio"))]
         channel_mix.push(ChannelMix {
             channel_index: entry.channel_index as usize,
-            gain: entry.gain,
+            gain: entry.gain as f32,
         });
     }
     if !has_audible_gain {
@@ -412,106 +624,82 @@ unsafe fn parse_start_request(
         ));
     }
 
-    Ok(StartRequest {
-        driver_id: driver_id.to_owned(),
-        sample_rate_hz: config.sample_rate_hz,
-        input_channels: config.input_channels as u16,
-        sample_format,
-        fixed_buffer_frames: config.fixed_buffer_frames,
-        channel_mix,
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn syndocal_asio_abi_version() -> u32 {
-    ABI_VERSION
-}
-
-#[no_mangle]
-pub extern "C" fn syndocal_asio_build_flags() -> u32 {
-    if cfg!(all(target_os = "windows", feature = "asio")) {
-        1
-    } else {
-        0
+    #[cfg(all(target_os = "windows", feature = "asio"))]
+    {
+        Ok(StartRequest {
+            driver_id: driver_id.to_owned(),
+            sample_rate_hz: config.sample_rate_hz,
+            input_channels: config.input_channels as u16,
+            sample_format,
+            fixed_buffer_frames: config.fixed_buffer_frames,
+            channel_mix,
+        })
+    }
+    #[cfg(not(all(target_os = "windows", feature = "asio")))]
+    {
+        Ok(StartRequest)
     }
 }
 
 #[no_mangle]
-/// Returns the current driver catalog as an owned UTF-8 JSON byte string.
+pub extern "C" fn syndocal_asio_v2_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+#[no_mangle]
+pub extern "C" fn syndocal_asio_v2_build_flags() -> u32 {
+    u32::from(cfg!(all(target_os = "windows", feature = "asio")))
+}
+
+#[no_mangle]
+/// Returns the current driver catalog as strict, versioned UTF-8 JSON.
 ///
 /// # Safety
 ///
-/// `out_json` must be valid and writable. `out_error_json`, when non-null, must also be valid and
-/// writable and must not alias `out_json`. Both outputs must be empty; overwriting a string that
-/// has not been released would leak it.
-pub unsafe extern "C" fn syndocal_asio_drivers_json(
-    out_json: *mut SyndocalAsioStringV1,
-    out_error_json: *mut SyndocalAsioStringV1,
+/// Both output strings must be initialized empty and must not alias. `out_error_json` may be null.
+pub unsafe extern "C" fn syndocal_asio_v2_drivers_json(
+    out_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
 ) -> u32 {
-    ffi_guard(out_error_json, || {
-        if out_json.is_null() {
-            return Err(BridgeError::invalid("out_json pointer is null"));
-        }
-        if out_json == out_error_json {
+    ffi_guard(out_json, out_error_json, backend::drivers_json)
+}
+
+#[no_mangle]
+/// Returns capabilities for the exact driver named by strict ABI v2 request JSON.
+///
+/// # Safety
+///
+/// `request_json` must reference `request_json_len` readable bytes. Both output strings must be
+/// initialized empty and must not alias. `out_error_json` may be null.
+pub unsafe extern "C" fn syndocal_asio_v2_capabilities_json(
+    request_json: *const u8,
+    request_json_len: usize,
+    out_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
+) -> u32 {
+    ffi_guard(out_json, out_error_json, || {
+        let request: CapabilitiesRequestJsonV2 =
+            unsafe { parse_json(request_json, request_json_len, "capabilities request") }?;
+        validate_schema_version(request.schema_version, "capabilities request")?;
+        if request.driver_id.trim() != request.driver_id
+            || !request.driver_id.starts_with("asio:")
+            || request.driver_id.len() <= "asio:".len()
+        {
             return Err(BridgeError::invalid(
-                "out_json and out_error_json must not alias",
+                "driverId must be an exact persistent asio:<driver name> ID without surrounding whitespace",
             ));
         }
-        unsafe { clear_string(out_json) };
-        let json = backend::drivers_json()?;
-        let bytes = serde_json::to_vec(&json)
-            .map_err(|error| BridgeError::backend(format!("driver JSON failed: {error}")))?;
-        unsafe { write_string(out_json, bytes) };
-        Ok(())
+        backend::capabilities_json(&request.driver_id)
     })
 }
 
 #[no_mangle]
-/// Returns exact input capabilities for one explicit persistent ASIO driver ID.
+/// Releases a string returned by this exact loaded v2 bridge DLL.
 ///
 /// # Safety
 ///
-/// `driver_id` must reference `driver_id_len` readable bytes for this call. `out_json` must be
-/// valid and writable. `out_error_json`, when non-null, must be valid and writable and must not
-/// alias `out_json`. Both outputs must be empty.
-pub unsafe extern "C" fn syndocal_asio_capabilities_json(
-    driver_id: *const u8,
-    driver_id_len: usize,
-    out_json: *mut SyndocalAsioStringV1,
-    out_error_json: *mut SyndocalAsioStringV1,
-) -> u32 {
-    ffi_guard(out_error_json, || {
-        if out_json.is_null() {
-            return Err(BridgeError::invalid("out_json pointer is null"));
-        }
-        if out_json == out_error_json {
-            return Err(BridgeError::invalid(
-                "out_json and out_error_json must not alias",
-            ));
-        }
-        unsafe { clear_string(out_json) };
-        let driver_id = unsafe { utf8_from_raw(driver_id, driver_id_len, "driver_id") }?;
-        if !driver_id.starts_with("asio:") || driver_id.len() <= "asio:".len() {
-            return Err(BridgeError::invalid(
-                "driver_id must be an explicit persistent asio:<driver name> ID",
-            ));
-        }
-        let json = backend::capabilities_json(driver_id)?;
-        let bytes = serde_json::to_vec(&json)
-            .map_err(|error| BridgeError::backend(format!("capability JSON failed: {error}")))?;
-        unsafe { write_string(out_json, bytes) };
-        Ok(())
-    })
-}
-
-#[no_mangle]
-/// Releases an owned UTF-8 string returned by this exact loaded bridge DLL.
-///
-/// # Safety
-///
-/// A non-empty string must have been returned by this DLL and must be released exactly once. The
-/// DLL must remain loaded until the release completes.
-pub unsafe extern "C" fn syndocal_asio_string_free(string: SyndocalAsioStringV1) {
+/// A non-empty string must have been returned by this DLL and released exactly once.
+pub unsafe extern "C" fn syndocal_asio_v2_string_free(string: SyndocalAsioStringV2) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if string.ptr.is_null() || string.len == 0 {
             return;
@@ -522,135 +710,135 @@ pub unsafe extern "C" fn syndocal_asio_string_free(string: SyndocalAsioStringV1)
 }
 
 #[no_mangle]
-/// Revalidates, builds, and starts an exact ASIO input stream.
+/// Revalidates and starts one exact ASIO stream from strict ABI v2 request JSON.
 ///
 /// # Safety
 ///
-/// `config` and every pointer/length pair it contains must remain readable for this call.
-/// `out_handle` must be valid and writable, and `out_error_json`, when non-null, must be empty,
-/// valid, and writable. Callbacks and `context` must remain valid until the handle is freed; client
-/// callbacks must not unwind, block, or call bridge lifecycle functions.
-pub unsafe extern "C" fn syndocal_asio_start(
-    config: *const SyndocalAsioStartConfigV1,
-    sample_callback: SyndocalAsioSampleCallbackV1,
-    event_callback: SyndocalAsioEventCallbackV1,
+/// The request bytes and callbacks must remain valid for the documented durations. `out_handle`
+/// must point to a null handle. Both output strings must be initialized empty and must not alias.
+pub unsafe extern "C" fn syndocal_asio_v2_start(
+    request_json: *const u8,
+    request_json_len: usize,
+    sample_callback: SyndocalAsioSampleCallbackV2,
+    event_callback: SyndocalAsioEventCallbackV2,
     context: *mut c_void,
     out_handle: *mut *mut SyndocalAsioHandle,
-    out_error_json: *mut SyndocalAsioStringV1,
+    out_result_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
 ) -> u32 {
-    ffi_guard(out_error_json, || {
-        if out_handle.is_null() {
-            return Err(BridgeError::invalid("out_handle pointer is null"));
-        }
-        unsafe { out_handle.write(ptr::null_mut()) };
+    ffi_start_guard(out_handle, out_result_json, out_error_json, || {
         let sample_callback = sample_callback
             .ok_or_else(|| BridgeError::invalid("sample_callback must not be null"))?;
         let event_callback = event_callback
             .ok_or_else(|| BridgeError::invalid("event_callback must not be null"))?;
-        let request = unsafe { parse_start_request(config) }?;
-        let inner = backend::start(request, sample_callback, event_callback, context as usize)?;
-        let handle = Box::new(SyndocalAsioHandle { inner });
-        unsafe { out_handle.write(Box::into_raw(handle)) };
-        Ok(())
+        let config: StartRequestJsonV2 =
+            unsafe { parse_json(request_json, request_json_len, "start request") }?;
+        let request = parse_start_request(config)?;
+        let (handle, actual_buffer_frames) = open_stream_with(
+            request,
+            sample_callback,
+            event_callback,
+            context as usize,
+            backend::start,
+        )?;
+        Ok((
+            handle,
+            StartResultJsonV2 {
+                schema_version: JSON_SCHEMA_VERSION,
+                kind: "start",
+                actual_buffer_frames,
+            },
+        ))
     })
 }
 
 #[no_mangle]
-/// Returns the fixed hardware buffer applied when the stream was created.
+/// Stops delivery without releasing the handle. A stopped handle may only be queried or closed.
 ///
 /// # Safety
 ///
-/// `handle` must be a live handle returned by this DLL and `out_frames` must be valid and writable.
-/// Neither may be used concurrently with `syndocal_asio_free`.
-pub unsafe extern "C" fn syndocal_asio_actual_buffer_frames(
+/// `handle` must be live and exclusively owned for this call. Both output strings must be
+/// initialized empty and must not alias.
+pub unsafe extern "C" fn syndocal_asio_v2_stop(
+    handle: *mut SyndocalAsioHandle,
+    out_result_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
+) -> u32 {
+    ffi_guard(out_result_json, out_error_json, || {
+        if handle.is_null() {
+            return Err(BridgeError::invalid("handle must not be null"));
+        }
+        let stream_was_active = unsafe { (*handle).inner.stop() }?;
+        Ok(StopResultJsonV2 {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "stop",
+            stopped: true,
+            stream_was_active,
+        })
+    })
+}
+
+#[no_mangle]
+/// Stops if needed, releases the handle, and reports any close failure.
+///
+/// The pointer is set to null before teardown begins, including error and panic paths. There is no
+/// v2 `free` shortcut that can discard a close failure.
+///
+/// # Safety
+///
+/// `handle` must point to a live, exclusively owned handle returned by this DLL. Both output
+/// strings must be initialized empty and must not alias. Do not call from a bridge callback.
+pub unsafe extern "C" fn syndocal_asio_v2_close(
+    handle: *mut *mut SyndocalAsioHandle,
+    out_result_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
+) -> u32 {
+    ffi_guard(out_result_json, out_error_json, || {
+        if handle.is_null() {
+            return Err(BridgeError::invalid("handle pointer is null"));
+        }
+        let raw = unsafe { handle.replace(ptr::null_mut()) };
+        if raw.is_null() {
+            return Err(BridgeError::invalid("handle already points to null"));
+        }
+        let mut owned = unsafe { Box::from_raw(raw) };
+        let stream_was_active = owned.inner.close()?;
+        drop(owned);
+        Ok(CloseResultJsonV2 {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "close",
+            handle_released: true,
+            stream_was_active,
+        })
+    })
+}
+
+#[no_mangle]
+/// Returns an atomic telemetry snapshot as strict versioned UTF-8 JSON.
+///
+/// # Safety
+///
+/// `handle` must be live and not used concurrently with Close. Both output strings must be
+/// initialized empty and must not alias.
+pub unsafe extern "C" fn syndocal_asio_v2_telemetry_json(
     handle: *const SyndocalAsioHandle,
-    out_frames: *mut u32,
+    out_json: *mut SyndocalAsioStringV2,
+    out_error_json: *mut SyndocalAsioStringV2,
 ) -> u32 {
-    match catch_unwind(AssertUnwindSafe(|| {
-        if handle.is_null() || out_frames.is_null() {
-            return Err(BridgeError::invalid(
-                "handle and out_frames must not be null",
-            ));
-        }
-        let frames = unsafe { (*handle).inner.actual_buffer_frames() }?;
-        unsafe { out_frames.write(frames) };
-        Ok(())
-    })) {
-        Ok(Ok(())) => STATUS_OK,
-        Ok(Err(error)) => error.status,
-        Err(_) => STATUS_PANIC,
-    }
-}
-
-#[no_mangle]
-/// Resumes a stopped, non-terminal stream.
-///
-/// # Safety
-///
-/// `handle` must be a live handle returned by this DLL and exclusively available for this call.
-/// `out_error_json`, when non-null, must be empty, valid, and writable.
-pub unsafe extern "C" fn syndocal_asio_play(
-    handle: *mut SyndocalAsioHandle,
-    out_error_json: *mut SyndocalAsioStringV1,
-) -> u32 {
-    ffi_guard(out_error_json, || {
+    ffi_guard(out_json, out_error_json, || {
         if handle.is_null() {
             return Err(BridgeError::invalid("handle must not be null"));
         }
-        unsafe { (*handle).inner.play() }
+        let snapshot = unsafe { (*handle).inner.telemetry() };
+        Ok(TelemetryJsonV2 {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "telemetry",
+            callbacks: snapshot.callbacks,
+            xruns: snapshot.xruns,
+            callback_duration_ns: snapshot.callback_duration_ns,
+            capture_delay_ns: snapshot.capture_delay_ns,
+        })
     })
-}
-
-#[no_mangle]
-/// Stops delivery and pauses a live stream without selecting any fallback.
-///
-/// # Safety
-///
-/// `handle` must be a live handle returned by this DLL and exclusively available for this call.
-/// `out_error_json`, when non-null, must be empty, valid, and writable.
-pub unsafe extern "C" fn syndocal_asio_stop(
-    handle: *mut SyndocalAsioHandle,
-    out_error_json: *mut SyndocalAsioStringV1,
-) -> u32 {
-    ffi_guard(out_error_json, || {
-        if handle.is_null() {
-            return Err(BridgeError::invalid("handle must not be null"));
-        }
-        unsafe { (*handle).inner.stop() }
-    })
-}
-
-#[no_mangle]
-/// Returns the number of xruns observed by this stream.
-///
-/// # Safety
-///
-/// A non-null `handle` must be a live handle returned by this DLL and must not be used concurrently
-/// with `syndocal_asio_free`.
-pub unsafe extern "C" fn syndocal_asio_xrun_count(handle: *const SyndocalAsioHandle) -> u64 {
-    catch_unwind(AssertUnwindSafe(|| {
-        if handle.is_null() {
-            0
-        } else {
-            unsafe { (*handle).inner.xrun_count() }
-        }
-    }))
-    .unwrap_or(0)
-}
-
-#[no_mangle]
-/// Stops and releases a bridge stream handle.
-///
-/// # Safety
-///
-/// A non-null `handle` must have been returned by this exact loaded DLL, must be exclusively owned,
-/// and must be freed exactly once. Do not call this function from a bridge callback.
-pub unsafe extern "C" fn syndocal_asio_free(handle: *mut SyndocalAsioHandle) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        if !handle.is_null() {
-            unsafe { drop(Box::from_raw(handle)) };
-        }
-    }));
 }
 
 #[cfg(all(target_os = "windows", feature = "asio"))]
@@ -684,15 +872,113 @@ mod backend {
     const EVENT_MALFORMED_CALLBACK: u32 = 9;
     const EVENT_BUFFER_SIZE_CHANGED: u32 = 10;
     const CALLBACK_GAP_NS: u64 = 250_000_000;
+    const HISTOGRAM_BUCKETS: usize = 64;
+
+    struct AtomicHistogram {
+        buckets: [AtomicU64; HISTOGRAM_BUCKETS],
+        max: AtomicU64,
+    }
+
+    impl AtomicHistogram {
+        fn new() -> Self {
+            Self {
+                buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+                max: AtomicU64::new(0),
+            }
+        }
+
+        fn record(&self, value: u64) {
+            let bucket = if value == 0 {
+                0
+            } else {
+                (u64::BITS - value.leading_zeros()) as usize
+            }
+            .min(HISTOGRAM_BUCKETS - 1);
+            self.buckets[bucket].fetch_add(1, Ordering::Relaxed);
+            self.max.fetch_max(value, Ordering::Relaxed);
+        }
+
+        fn snapshot(&self, total: u64) -> PercentilesJsonV2 {
+            let percentile = |numerator: u64, denominator: u64| {
+                if total == 0 {
+                    return 0;
+                }
+                let target = total
+                    .saturating_mul(numerator)
+                    .saturating_add(denominator - 1)
+                    / denominator;
+                let mut observed = 0_u64;
+                for (index, bucket) in self.buckets.iter().enumerate() {
+                    observed = observed.saturating_add(bucket.load(Ordering::Acquire));
+                    if observed >= target {
+                        return match index {
+                            0 => 0,
+                            63 => u64::MAX,
+                            _ => (1_u64 << index) - 1,
+                        };
+                    }
+                }
+                self.max.load(Ordering::Acquire)
+            };
+            PercentilesJsonV2 {
+                p50: percentile(50, 100),
+                p95: percentile(95, 100),
+                p99: percentile(99, 100),
+                max: self.max.load(Ordering::Acquire),
+            }
+        }
+    }
+
+    struct TelemetryState {
+        callbacks: AtomicU64,
+        callback_duration_ns: AtomicHistogram,
+        capture_delay_ns: AtomicHistogram,
+    }
+
+    impl TelemetryState {
+        fn new() -> Self {
+            Self {
+                callbacks: AtomicU64::new(0),
+                callback_duration_ns: AtomicHistogram::new(),
+                capture_delay_ns: AtomicHistogram::new(),
+            }
+        }
+
+        fn record(&self, duration_ns: u64, capture_delay_ns: u64) {
+            self.callback_duration_ns.record(duration_ns);
+            self.capture_delay_ns.record(capture_delay_ns);
+            self.callbacks.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    struct CallbackMeasurement<'a> {
+        telemetry: &'a TelemetryState,
+        started_at: Instant,
+        capture_delay_ns: u64,
+    }
+
+    impl Drop for CallbackMeasurement<'_> {
+        fn drop(&mut self) {
+            let duration_ns = self.started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            self.telemetry.record(duration_ns, self.capture_delay_ns);
+        }
+    }
+
+    fn callback_gap_due(active: bool, terminal: bool, last_callback_ns: u64, now_ns: u64) -> bool {
+        active
+            && !terminal
+            && last_callback_ns != 0
+            && now_ns.saturating_sub(last_callback_ns) >= CALLBACK_GAP_NS
+    }
 
     #[derive(Clone)]
     struct SharedState {
         active: Arc<AtomicBool>,
         terminal: Arc<AtomicBool>,
-        seen_callback: Arc<AtomicBool>,
         last_callback_ns: Arc<AtomicU64>,
         expected_frames: Arc<AtomicU32>,
         xrun_count: Arc<AtomicU64>,
+        telemetry: Arc<TelemetryState>,
         origin: Instant,
         event_callback: EventCallback,
         context: usize,
@@ -703,10 +989,10 @@ mod backend {
             Self {
                 active: Arc::new(AtomicBool::new(false)),
                 terminal: Arc::new(AtomicBool::new(false)),
-                seen_callback: Arc::new(AtomicBool::new(false)),
                 last_callback_ns: Arc::new(AtomicU64::new(0)),
                 expected_frames: Arc::new(AtomicU32::new(0)),
                 xrun_count: Arc::new(AtomicU64::new(0)),
+                telemetry: Arc::new(TelemetryState::new()),
                 origin: Instant::now(),
                 event_callback,
                 context,
@@ -720,9 +1006,20 @@ mod backend {
         fn emit(&self, severity: u32, kind: u32, message: &'static [u8]) {
             let callback = self.event_callback;
             let context = self.context as *mut c_void;
-            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+            self.run_client_event_callback(|| unsafe {
                 callback(context, severity, kind, message.as_ptr(), message.len())
-            }));
+            });
+        }
+
+        fn run_client_event_callback(&self, operation: impl FnOnce()) {
+            if catch_unwind(AssertUnwindSafe(operation)).is_err() {
+                // The consumer violated the no-unwind callback contract. Do
+                // not attempt a recursive notification through that same
+                // callback; atomically stop delivery and latch the terminal
+                // state so every other observer fails closed.
+                self.active.store(false, Ordering::Release);
+                self.terminal.store(true, Ordering::Release);
+            }
         }
 
         fn terminal(&self, kind: u32, message: &'static [u8]) {
@@ -746,24 +1043,21 @@ mod backend {
                 .name("syndocal-asio-watchdog".to_string())
                 .spawn(move || {
                     while !thread_stop.load(Ordering::Acquire) {
-                        if !shared.active.load(Ordering::Acquire)
-                            || shared.terminal.load(Ordering::Acquire)
-                        {
+                        let active = shared.active.load(Ordering::Acquire);
+                        let terminal = shared.terminal.load(Ordering::Acquire);
+                        if !active || terminal {
                             thread::sleep(Duration::from_millis(25));
                             continue;
                         }
                         let last = shared.last_callback_ns.load(Ordering::Acquire);
-                        if last == 0 {
-                            thread::sleep(Duration::from_millis(1));
-                            continue;
-                        }
-                        let elapsed = shared.now_ns().saturating_sub(last);
-                        if elapsed >= CALLBACK_GAP_NS {
+                        let now = shared.now_ns();
+                        if callback_gap_due(active, terminal, last, now) {
                             shared.terminal(
                                 EVENT_CALLBACK_GAP,
                                 b"ASIO input callback gap exceeded 250 ms",
                             );
                         } else {
+                            let elapsed = now.saturating_sub(last);
                             thread::sleep(Duration::from_nanos(
                                 (CALLBACK_GAP_NS - elapsed).min(25_000_000),
                             ));
@@ -795,21 +1089,51 @@ mod backend {
         stream: Stream,
         shared: SharedState,
         applied_buffer_frames: u32,
+        stopped: bool,
         _watchdog: Watchdog,
     }
 
-    impl StreamHandle {
-        pub(super) fn actual_buffer_frames(&self) -> Result<u32, BridgeError> {
+    impl StreamLifecycle for StreamHandle {
+        fn actual_buffer_frames(&self) -> Result<u32, BridgeError> {
             Ok(self.applied_buffer_frames)
         }
 
-        pub(super) fn play(&mut self) -> Result<(), BridgeError> {
-            if self.shared.terminal.load(Ordering::Acquire) {
-                return Err(BridgeError::terminal(
-                    "terminal ASIO stream cannot resume; free it and start explicitly",
-                ));
+        fn stop(&mut self) -> Result<bool, BridgeError> {
+            if self.stopped {
+                return Ok(false);
             }
-            self.shared.seen_callback.store(false, Ordering::Release);
+            let was_active = self.shared.active.swap(false, Ordering::AcqRel);
+            self.stream
+                .pause()
+                .map_err(|error| cpal_error("failed to pause ASIO input stream", error))?;
+            self.stopped = true;
+            Ok(was_active)
+        }
+
+        fn close(&mut self) -> Result<bool, BridgeError> {
+            self.stop()
+        }
+
+        fn telemetry(&self) -> TelemetrySnapshot {
+            let callbacks = self.shared.telemetry.callbacks.load(Ordering::Acquire);
+            TelemetrySnapshot {
+                callbacks,
+                xruns: self.shared.xrun_count.load(Ordering::Acquire),
+                callback_duration_ns: self
+                    .shared
+                    .telemetry
+                    .callback_duration_ns
+                    .snapshot(callbacks),
+                capture_delay_ns: self.shared.telemetry.capture_delay_ns.snapshot(callbacks),
+            }
+        }
+    }
+
+    impl StreamHandle {
+        fn start_stream(&mut self) -> Result<(), BridgeError> {
+            if self.shared.terminal.load(Ordering::Acquire) {
+                return Err(BridgeError::terminal("terminal ASIO stream cannot start"));
+            }
             self.shared.active.store(false, Ordering::Release);
             if let Err(error) = self.stream.play() {
                 self.shared.active.store(false, Ordering::Release);
@@ -821,23 +1145,14 @@ mod backend {
             self.shared.active.store(true, Ordering::Release);
             Ok(())
         }
-
-        pub(super) fn stop(&mut self) -> Result<(), BridgeError> {
-            self.shared.active.store(false, Ordering::Release);
-            self.stream
-                .pause()
-                .map_err(|error| cpal_error("failed to pause ASIO input stream", error))
-        }
-
-        pub(super) fn xrun_count(&self) -> u64 {
-            self.shared.xrun_count.load(Ordering::Acquire)
-        }
     }
 
     impl Drop for StreamHandle {
         fn drop(&mut self) {
             self.shared.active.store(false, Ordering::Release);
-            let _ = self.stream.pause();
+            if !self.stopped {
+                let _ = self.stream.pause();
+            }
         }
     }
 
@@ -851,6 +1166,8 @@ mod backend {
             drivers.push(driver_details(&device)?.0);
         }
         Ok(CatalogJson {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "drivers",
             abi_version: ABI_VERSION,
             backend: "asio",
             built: true,
@@ -862,6 +1179,8 @@ mod backend {
         let device = find_explicit_device(driver_id)?;
         let (driver, input_configs) = driver_details(&device)?;
         Ok(CapabilitiesJson {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "capabilities",
             abi_version: ABI_VERSION,
             backend: "asio",
             built: true,
@@ -875,7 +1194,7 @@ mod backend {
         sample_callback: SampleCallback,
         event_callback: EventCallback,
         context: usize,
-    ) -> Result<StreamHandle, BridgeError> {
+    ) -> Result<Box<dyn StreamLifecycle>, BridgeError> {
         let device = find_explicit_device(&request.driver_id)?;
         validate_exact_config(&device, &request)?;
 
@@ -890,35 +1209,35 @@ mod backend {
             .store(request.fixed_buffer_frames, Ordering::Release);
 
         let stream = match request.sample_format {
-            SampleFormatV1::F32 => build_typed_stream::<f32>(
+            SampleFormatV2::F32 => build_typed_stream::<f32>(
                 &device,
                 stream_config,
                 request.clone(),
                 sample_callback,
                 shared.clone(),
             ),
-            SampleFormatV1::I16 => build_typed_stream::<i16>(
+            SampleFormatV2::I16 => build_typed_stream::<i16>(
                 &device,
                 stream_config,
                 request.clone(),
                 sample_callback,
                 shared.clone(),
             ),
-            SampleFormatV1::I24 => build_typed_stream::<I24>(
+            SampleFormatV2::I24 => build_typed_stream::<I24>(
                 &device,
                 stream_config,
                 request.clone(),
                 sample_callback,
                 shared.clone(),
             ),
-            SampleFormatV1::I32 => build_typed_stream::<i32>(
+            SampleFormatV2::I32 => build_typed_stream::<i32>(
                 &device,
                 stream_config,
                 request.clone(),
                 sample_callback,
                 shared.clone(),
             ),
-            SampleFormatV1::F64 => build_typed_stream::<f64>(
+            SampleFormatV2::F64 => build_typed_stream::<f64>(
                 &device,
                 stream_config,
                 request.clone(),
@@ -943,10 +1262,11 @@ mod backend {
             stream,
             shared,
             applied_buffer_frames: applied,
+            stopped: false,
             _watchdog: watchdog,
         };
-        handle.play()?;
-        Ok(handle)
+        handle.start_stream()?;
+        Ok(Box::new(handle))
     }
 
     fn asio_host() -> Result<cpal_asio::Host, BridgeError> {
@@ -1103,6 +1423,25 @@ mod backend {
                     {
                         return;
                     }
+                    let timestamp = info.timestamp();
+                    let Some(capture_delay) =
+                        timestamp.callback.checked_duration_since(timestamp.capture)
+                    else {
+                        data_shared.terminal(
+                            EVENT_MALFORMED_CALLBACK,
+                            b"ASIO callback timestamp preceded capture timestamp",
+                        );
+                        return;
+                    };
+                    let delay_ns = capture_delay.as_nanos().min(u64::MAX as u128) as u64;
+                    let _measurement = CallbackMeasurement {
+                        telemetry: &data_shared.telemetry,
+                        started_at: Instant::now(),
+                        capture_delay_ns: delay_ns,
+                    };
+                    data_shared
+                        .last_callback_ns
+                        .store(data_shared.now_ns(), Ordering::Release);
                     if channels == 0 || data.len() % channels != 0 {
                         data_shared.terminal(
                             EVENT_MALFORMED_CALLBACK,
@@ -1119,11 +1458,6 @@ mod backend {
                         );
                         return;
                     }
-
-                    data_shared
-                        .last_callback_ns
-                        .store(data_shared.now_ns(), Ordering::Release);
-                    data_shared.seen_callback.store(true, Ordering::Release);
 
                     for (frame_index, output) in mono[..frames].iter_mut().enumerate() {
                         let frame_offset = frame_index * channels;
@@ -1142,13 +1476,6 @@ mod backend {
                         *output = value.clamp(-1.0, 1.0);
                     }
 
-                    let timestamp = info.timestamp();
-                    let delay_ns = timestamp
-                        .callback
-                        .checked_duration_since(timestamp.capture)
-                        .unwrap_or_default()
-                        .as_nanos()
-                        .min(u64::MAX as u128) as u64;
                     let callback_result = catch_unwind(AssertUnwindSafe(|| unsafe {
                         sample_callback(
                             data_shared.context as *mut c_void,
@@ -1174,10 +1501,7 @@ mod backend {
     fn handle_stream_error(shared: &SharedState, error: Error) {
         let message = error.message().unwrap_or("ASIO stream error");
         match error.kind() {
-            ErrorKind::Xrun => {
-                shared.xrun_count.fetch_add(1, Ordering::Relaxed);
-                shared.terminal(EVENT_XRUN, b"ASIO input xrun");
-            }
+            ErrorKind::Xrun => latch_terminal_fault(shared, EVENT_XRUN, b"ASIO input xrun", true),
             ErrorKind::RealtimeDenied => {
                 shared.emit(
                     EVENT_WARNING,
@@ -1192,7 +1516,12 @@ mod backend {
                 shared.terminal(EVENT_RESYNC, b"ASIO driver requested resynchronization");
             }
             ErrorKind::StreamInvalidated if message.contains("reset") => {
-                shared.terminal(EVENT_RESET, b"ASIO driver requested stream reset");
+                latch_terminal_fault(
+                    shared,
+                    EVENT_RESET,
+                    b"ASIO driver requested stream reset",
+                    false,
+                );
             }
             ErrorKind::StreamInvalidated if message.contains("Sample rate changed") => {
                 shared.terminal(
@@ -1202,6 +1531,13 @@ mod backend {
             }
             _ => shared.terminal(EVENT_BACKEND, b"terminal ASIO backend error"),
         }
+    }
+
+    fn latch_terminal_fault(shared: &SharedState, kind: u32, message: &'static [u8], xrun: bool) {
+        if xrun {
+            shared.xrun_count.fetch_add(1, Ordering::Relaxed);
+        }
+        shared.terminal(kind, message);
     }
 
     fn sample_format_label(format: SampleFormat) -> Option<&'static str> {
@@ -1215,18 +1551,121 @@ mod backend {
         }
     }
 
-    fn to_cpal_sample_format(format: SampleFormatV1) -> SampleFormat {
+    fn to_cpal_sample_format(format: SampleFormatV2) -> SampleFormat {
         match format {
-            SampleFormatV1::F32 => SampleFormat::F32,
-            SampleFormatV1::I16 => SampleFormat::I16,
-            SampleFormatV1::I24 => SampleFormat::I24,
-            SampleFormatV1::I32 => SampleFormat::I32,
-            SampleFormatV1::F64 => SampleFormat::F64,
+            SampleFormatV2::F32 => SampleFormat::F32,
+            SampleFormatV2::I16 => SampleFormat::I16,
+            SampleFormatV2::I24 => SampleFormat::I24,
+            SampleFormatV2::I32 => SampleFormat::I32,
+            SampleFormatV2::F64 => SampleFormat::F64,
         }
     }
 
     fn cpal_error(context: &str, error: Error) -> BridgeError {
         BridgeError::backend(format!("{context}: {error}"))
+    }
+
+    #[cfg(test)]
+    mod deterministic_fault_tests {
+        use super::*;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct Events {
+            terminal: AtomicU64,
+            xrun: AtomicU64,
+            reset: AtomicU64,
+        }
+
+        unsafe extern "C" fn count_event(
+            context: *mut c_void,
+            severity: u32,
+            kind: u32,
+            _message: *const u8,
+            _message_len: usize,
+        ) {
+            let events = unsafe { &*context.cast::<Events>() };
+            if severity == EVENT_TERMINAL {
+                events.terminal.fetch_add(1, Ordering::Relaxed);
+            }
+            if kind == EVENT_XRUN {
+                events.xrun.fetch_add(1, Ordering::Relaxed);
+            }
+            if kind == EVENT_RESET {
+                events.reset.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        #[test]
+        fn event_callback_failure_latches_terminal_without_recursive_emit() {
+            let events = Events {
+                terminal: AtomicU64::new(0),
+                xrun: AtomicU64::new(0),
+                reset: AtomicU64::new(0),
+            };
+            let shared = SharedState::new(count_event, (&events as *const Events) as usize);
+            shared.active.store(true, Ordering::Release);
+
+            // A Rust panic may not cross an extern-C boundary. This seam tests
+            // the wrapper's catch/latch behavior without invoking undefined
+            // FFI unwinding or recursively calling the failed event callback.
+            shared.run_client_event_callback(|| panic!("injected client callback failure"));
+
+            assert!(!shared.active.load(Ordering::Acquire));
+            assert!(shared.terminal.load(Ordering::Acquire));
+            assert_eq!(events.terminal.load(Ordering::Relaxed), 0);
+        }
+
+        #[test]
+        fn xrun_and_reset_are_terminal_and_latched_once() {
+            let events = Events {
+                terminal: AtomicU64::new(0),
+                xrun: AtomicU64::new(0),
+                reset: AtomicU64::new(0),
+            };
+            let shared = SharedState::new(count_event, (&events as *const Events) as usize);
+            shared.active.store(true, Ordering::Release);
+            latch_terminal_fault(&shared, EVENT_XRUN, b"injected xrun", true);
+            latch_terminal_fault(&shared, EVENT_RESET, b"injected reset", false);
+            assert!(shared.terminal.load(Ordering::Acquire));
+            assert!(!shared.active.load(Ordering::Acquire));
+            assert_eq!(shared.xrun_count.load(Ordering::Acquire), 1);
+            assert_eq!(events.terminal.load(Ordering::Relaxed), 1);
+            assert_eq!(events.xrun.load(Ordering::Relaxed), 1);
+            assert_eq!(events.reset.load(Ordering::Relaxed), 0);
+
+            let reset_events = Events {
+                terminal: AtomicU64::new(0),
+                xrun: AtomicU64::new(0),
+                reset: AtomicU64::new(0),
+            };
+            let reset = SharedState::new(count_event, (&reset_events as *const Events) as usize);
+            latch_terminal_fault(&reset, EVENT_RESET, b"injected reset", false);
+            assert_eq!(reset_events.terminal.load(Ordering::Relaxed), 1);
+            assert_eq!(reset_events.reset.load(Ordering::Relaxed), 1);
+            assert_eq!(reset.xrun_count.load(Ordering::Acquire), 0);
+        }
+
+        #[test]
+        fn initial_no_callback_gap_fails_closed_at_250_ms() {
+            assert!(!callback_gap_due(true, false, 1, CALLBACK_GAP_NS));
+            assert!(callback_gap_due(true, false, 1, CALLBACK_GAP_NS + 1));
+            assert!(!callback_gap_due(false, false, 1, u64::MAX));
+            assert!(!callback_gap_due(true, true, 1, u64::MAX));
+            assert!(!callback_gap_due(true, false, 0, u64::MAX));
+        }
+
+        #[test]
+        fn telemetry_percentiles_are_deterministic_and_bounded() {
+            let histogram = AtomicHistogram::new();
+            for value in [1, 2, 4, 8, 16, 32, 64, 128, 256, 1_000] {
+                histogram.record(value);
+            }
+            let snapshot = histogram.snapshot(10);
+            assert_eq!(snapshot.p50, 31);
+            assert_eq!(snapshot.p95, 1_023);
+            assert_eq!(snapshot.p99, 1_023);
+            assert_eq!(snapshot.max, 1_000);
+        }
     }
 }
 
@@ -1234,28 +1673,10 @@ mod backend {
 mod backend {
     use super::*;
 
-    pub(super) struct StreamHandle;
-
-    impl StreamHandle {
-        pub(super) fn actual_buffer_frames(&self) -> Result<u32, BridgeError> {
-            Err(not_built())
-        }
-
-        pub(super) fn play(&mut self) -> Result<(), BridgeError> {
-            Err(not_built())
-        }
-
-        pub(super) fn stop(&mut self) -> Result<(), BridgeError> {
-            Err(not_built())
-        }
-
-        pub(super) fn xrun_count(&self) -> u64 {
-            0
-        }
-    }
-
     pub(super) fn drivers_json() -> Result<CatalogJson, BridgeError> {
         Ok(CatalogJson {
+            schema_version: JSON_SCHEMA_VERSION,
+            kind: "drivers",
             abi_version: ABI_VERSION,
             backend: "asio",
             built: false,
@@ -1272,7 +1693,7 @@ mod backend {
         _sample_callback: SampleCallback,
         _event_callback: EventCallback,
         _context: usize,
-    ) -> Result<StreamHandle, BridgeError> {
+    ) -> Result<Box<dyn StreamLifecycle>, BridgeError> {
         Err(not_built())
     }
 
@@ -1284,111 +1705,463 @@ mod backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    };
+
+    unsafe extern "C" fn discard_samples(
+        _context: *mut c_void,
+        _samples: *const f32,
+        _len: usize,
+        _capture_delay_ns: u64,
+        _callback_frames: u32,
+    ) {
+    }
+
+    unsafe extern "C" fn discard_event(
+        _context: *mut c_void,
+        _severity: u32,
+        _kind: u32,
+        _message: *const u8,
+        _message_len: usize,
+    ) {
+    }
+
+    fn valid_request() -> StartRequestJsonV2 {
+        StartRequestJsonV2 {
+            schema_version: JSON_SCHEMA_VERSION,
+            driver_id: "asio:Unit Test".to_string(),
+            sample_rate_hz: 48_000,
+            input_channels: 2,
+            sample_format: "f32".to_string(),
+            fixed_buffer_frames: 128,
+            channel_mix: vec![
+                ChannelMixJsonV2 {
+                    channel_index: 0,
+                    gain: 0.5,
+                },
+                ChannelMixJsonV2 {
+                    channel_index: 1,
+                    gain: 0.5,
+                },
+            ],
+        }
+    }
+
+    fn take_string(value: SyndocalAsioStringV2) -> String {
+        if value.ptr.is_null() {
+            assert_eq!(value.len, 0);
+            return String::new();
+        }
+        let bytes = unsafe { slice::from_raw_parts(value.ptr, value.len) };
+        let text = String::from_utf8(bytes.to_vec()).expect("bridge JSON must be strict UTF-8");
+        unsafe { syndocal_asio_v2_string_free(value) };
+        text
+    }
+
+    fn assert_exported_start_rejects_bytes(request: &[u8], expected_message: &str) {
+        let mut handle = ptr::null_mut();
+        let mut result = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe {
+            syndocal_asio_v2_start(
+                request.as_ptr(),
+                request.len(),
+                Some(discard_samples),
+                Some(discard_event),
+                ptr::null_mut(),
+                &mut handle,
+                &mut result,
+                &mut error,
+            )
+        };
+        assert_eq!(status, STATUS_INVALID_ARGUMENT);
+        assert!(handle.is_null());
+        assert!(result.ptr.is_null());
+        let error: serde_json::Value = serde_json::from_str(&take_string(error)).unwrap();
+        assert_eq!(error["code"], "invalid_argument");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected_message),
+            "unexpected exported Start error: {error}"
+        );
+    }
+
+    fn assert_exported_start_rejects(request: &StartRequestJsonV2, expected_message: &str) {
+        let bytes = serde_json::to_vec(request).unwrap();
+        assert_exported_start_rejects_bytes(&bytes, expected_message);
+    }
+
+    #[derive(Default)]
+    struct FakeCounters {
+        stops: AtomicU64,
+        closes: AtomicU64,
+        drops: AtomicU64,
+        fail_stop: AtomicBool,
+        fail_close: AtomicBool,
+    }
+
+    struct FakeStream {
+        counters: Arc<FakeCounters>,
+        stopped: bool,
+    }
+
+    impl Drop for FakeStream {
+        fn drop(&mut self) {
+            self.counters.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl StreamLifecycle for FakeStream {
+        fn actual_buffer_frames(&self) -> Result<u32, BridgeError> {
+            Ok(128)
+        }
+
+        fn stop(&mut self) -> Result<bool, BridgeError> {
+            self.counters.stops.fetch_add(1, Ordering::Relaxed);
+            if self.counters.fail_stop.load(Ordering::Relaxed) {
+                return Err(BridgeError::backend("injected stop failure"));
+            }
+            let was_active = !self.stopped;
+            self.stopped = true;
+            Ok(was_active)
+        }
+
+        fn close(&mut self) -> Result<bool, BridgeError> {
+            self.counters.closes.fetch_add(1, Ordering::Relaxed);
+            if self.counters.fail_close.load(Ordering::Relaxed) {
+                return Err(BridgeError::backend("injected close failure"));
+            }
+            let was_active = !self.stopped;
+            self.stopped = true;
+            Ok(was_active)
+        }
+
+        fn telemetry(&self) -> TelemetrySnapshot {
+            TelemetrySnapshot {
+                callbacks: 99,
+                xruns: 3,
+                callback_duration_ns: PercentilesJsonV2 {
+                    p50: 10,
+                    p95: 20,
+                    p99: 30,
+                    max: 40,
+                },
+                capture_delay_ns: PercentilesJsonV2 {
+                    p50: 50,
+                    p95: 60,
+                    p99: 70,
+                    max: 80,
+                },
+            }
+        }
+    }
+
+    fn fake_handle(counters: Arc<FakeCounters>) -> *mut SyndocalAsioHandle {
+        Box::into_raw(Box::new(SyndocalAsioHandle {
+            inner: Box::new(FakeStream {
+                counters,
+                stopped: false,
+            }),
+        }))
+    }
 
     #[test]
-    fn abi_version_and_struct_size_are_stable() {
-        assert_eq!(syndocal_asio_abi_version(), 1);
+    fn abi_version_and_build_identity_are_v2_only() {
+        assert_eq!(syndocal_asio_v2_abi_version(), 2);
         assert_eq!(
-            syndocal_asio_build_flags(),
+            syndocal_asio_v2_build_flags(),
             u32::from(cfg!(all(target_os = "windows", feature = "asio")))
         );
-        let expected_size = if usize::BITS == 64 { 64 } else { 48 };
-        assert_eq!(size_of::<SyndocalAsioStartConfigV1>(), expected_size);
+        assert_eq!(
+            std::mem::size_of::<SyndocalAsioStringV2>(),
+            2 * std::mem::size_of::<usize>()
+        );
     }
 
     #[cfg(not(all(target_os = "windows", feature = "asio")))]
     #[test]
     fn sdk_free_catalog_reports_not_built() {
-        let mut json = SyndocalAsioStringV1::default();
-        let mut error = SyndocalAsioStringV1::default();
-        let status = unsafe { syndocal_asio_drivers_json(&mut json, &mut error) };
+        let mut json = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe { syndocal_asio_v2_drivers_json(&mut json, &mut error) };
         assert_eq!(status, STATUS_OK);
         assert!(error.ptr.is_null());
-        let bytes = unsafe { slice::from_raw_parts(json.ptr, json.len) };
-        let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-        assert_eq!(value["abiVersion"], 1);
+        let value: serde_json::Value = serde_json::from_str(&take_string(json)).unwrap();
+        assert_eq!(value["schemaVersion"], 2);
+        assert_eq!(value["kind"], "drivers");
+        assert_eq!(value["abiVersion"], 2);
         assert_eq!(value["backend"], "asio");
         assert_eq!(value["built"], false);
         assert_eq!(value["drivers"].as_array().unwrap().len(), 0);
-        unsafe { syndocal_asio_string_free(json) };
     }
 
     #[test]
-    fn zero_sample_rate_is_rejected_before_backend_access() {
-        let driver = b"asio:Unit Test";
-        let mix = [SyndocalAsioChannelMixV1 {
-            channel_index: 0,
+    fn strict_json_rejects_invalid_utf8_unknown_fields_and_future_versions() {
+        let invalid_utf8 = [0xff];
+        let error = unsafe {
+            parse_json::<StartRequestJsonV2>(
+                invalid_utf8.as_ptr(),
+                invalid_utf8.len(),
+                "start request",
+            )
+        }
+        .unwrap_err();
+        assert!(error.message.contains("not valid UTF-8"));
+
+        let unknown = br#"{"schemaVersion":2,"driverId":"asio:x","sampleRateHz":48000,"inputChannels":1,"sampleFormat":"f32","fixedBufferFrames":128,"channelMix":[{"channelIndex":0,"gain":1.0}],"legacyFallback":true}"#;
+        let error = unsafe {
+            parse_json::<StartRequestJsonV2>(unknown.as_ptr(), unknown.len(), "start request")
+        }
+        .unwrap_err();
+        assert!(error.message.contains("unknown field"));
+
+        let mut future = valid_request();
+        future.schema_version = 3;
+        let error = parse_start_request(future).unwrap_err();
+        assert!(error.message.contains("schemaVersion is 3"));
+
+        let unknown_capability =
+            br#"{"schemaVersion":2,"driverId":"asio:x","legacyDriverName":"x"}"#;
+        let error = unsafe {
+            parse_json::<CapabilitiesRequestJsonV2>(
+                unknown_capability.as_ptr(),
+                unknown_capability.len(),
+                "capabilities request",
+            )
+        }
+        .unwrap_err();
+        assert!(error.message.contains("unknown field"));
+    }
+
+    #[test]
+    fn channel_mix_rejects_unbounded_gain_before_start() {
+        for gain in [-0.01, 1.000_000_000_1, 1.01, f64::MAX] {
+            let mut request = valid_request();
+            request.channel_mix[0].gain = gain;
+            let error = parse_start_request(request).unwrap_err();
+            assert!(error.message.contains("must be between 0 and 1"));
+        }
+
+        let mut non_finite = valid_request();
+        non_finite.channel_mix[0].gain = f64::INFINITY;
+        let error = parse_start_request(non_finite).unwrap_err();
+        assert!(error.message.contains("must be finite"));
+
+        for gain in [-0.01, 1.000_000_000_1, f64::MAX] {
+            let mut exported = valid_request();
+            exported.channel_mix[0].gain = gain;
+            assert_exported_start_rejects(&exported, "must be between 0 and 1");
+        }
+        let non_finite_json = br#"{"schemaVersion":2,"driverId":"asio:Unit Test","sampleRateHz":48000,"inputChannels":2,"sampleFormat":"f32","fixedBufferFrames":128,"channelMix":[{"channelIndex":0,"gain":1e400}]}"#;
+        assert_exported_start_rejects_bytes(non_finite_json, "strict ABI v2 JSON");
+    }
+
+    #[test]
+    fn channel_mix_rejects_empty_and_silent_before_start() {
+        let mut empty = valid_request();
+        empty.channel_mix.clear();
+        let error = parse_start_request(empty).unwrap_err();
+        assert!(error.message.contains("channel_mix_len"));
+
+        let mut silent = valid_request();
+        for entry in &mut silent.channel_mix {
+            entry.gain = 0.0;
+        }
+        let error = parse_start_request(silent).unwrap_err();
+        assert!(error.message.contains("at least one non-zero gain"));
+
+        let mut exported_empty = valid_request();
+        exported_empty.channel_mix.clear();
+        assert_exported_start_rejects(&exported_empty, "channel_mix_len");
+
+        let mut exported_silent = valid_request();
+        for entry in &mut exported_silent.channel_mix {
+            entry.gain = 0.0;
+        }
+        assert_exported_start_rejects(&exported_silent, "at least one non-zero gain");
+    }
+
+    #[test]
+    fn channel_mix_accepts_supported_single_stereo_and_full_average_shapes() {
+        let mut single = valid_request();
+        single.channel_mix = vec![ChannelMixJsonV2 {
+            channel_index: 1,
             gain: 1.0,
         }];
-        let config = SyndocalAsioStartConfigV1 {
-            struct_size: size_of::<SyndocalAsioStartConfigV1>() as u32,
-            abi_version: ABI_VERSION,
-            driver_id: driver.as_ptr(),
-            driver_id_len: driver.len(),
-            sample_rate_hz: 0,
-            input_channels: 1,
-            sample_format: SAMPLE_F32,
-            fixed_buffer_frames: 128,
-            channel_mix: mix.as_ptr(),
-            channel_mix_len: mix.len(),
-            flags: 0,
-            reserved: 0,
+        parse_start_request(single).expect("single-channel unity mix must be valid");
+
+        parse_start_request(valid_request()).expect("stereo half-gain mix must be valid");
+
+        let mut average = valid_request();
+        average.input_channels = MAX_CHANNEL_MIX_ENTRIES as u32;
+        average.channel_mix = (0..MAX_CHANNEL_MIX_ENTRIES as u32)
+            .map(|channel_index| ChannelMixJsonV2 {
+                channel_index,
+                gain: 1.0 / MAX_CHANNEL_MIX_ENTRIES as f64,
+            })
+            .collect();
+        parse_start_request(average).expect("256-channel bounded average mix must be valid");
+    }
+
+    #[cfg(not(all(target_os = "windows", feature = "asio")))]
+    #[test]
+    fn sdk_free_start_failure_is_typed_and_never_publishes_a_handle() {
+        let request = serde_json::to_vec(&valid_request()).unwrap();
+        let mut handle = ptr::null_mut();
+        let mut result = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe {
+            syndocal_asio_v2_start(
+                request.as_ptr(),
+                request.len(),
+                Some(discard_samples),
+                Some(discard_event),
+                ptr::null_mut(),
+                &mut handle,
+                &mut result,
+                &mut error,
+            )
         };
-        let error = unsafe { parse_start_request(&config) }.unwrap_err();
+        assert_eq!(status, STATUS_UNSUPPORTED);
+        assert!(handle.is_null());
+        assert!(result.ptr.is_null());
+        let error: serde_json::Value = serde_json::from_str(&take_string(error)).unwrap();
+        assert_eq!(error["schemaVersion"], 2);
+        assert_eq!(error["kind"], "error");
+        assert_eq!(error["code"], "unsupported");
+    }
+
+    #[test]
+    fn start_request_values_are_validated_before_backend_access() {
+        let mut config = valid_request();
+        config.sample_rate_hz = 0;
+        let error = parse_start_request(config).unwrap_err();
         assert_eq!(error.status, STATUS_INVALID_ARGUMENT);
         assert!(error.message.contains("sample_rate_hz"));
-    }
 
-    #[test]
-    fn raw_driver_name_is_rejected() {
-        let driver = b"Unit Test";
-        let mix = [SyndocalAsioChannelMixV1 {
-            channel_index: 0,
-            gain: 1.0,
-        }];
-        let config = SyndocalAsioStartConfigV1 {
-            struct_size: size_of::<SyndocalAsioStartConfigV1>() as u32,
-            abi_version: ABI_VERSION,
-            driver_id: driver.as_ptr(),
-            driver_id_len: driver.len(),
-            sample_rate_hz: 48_000,
-            input_channels: 1,
-            sample_format: SAMPLE_F32,
-            fixed_buffer_frames: 128,
-            channel_mix: mix.as_ptr(),
-            channel_mix_len: mix.len(),
-            flags: 0,
-            reserved: 0,
-        };
-        let error = unsafe { parse_start_request(&config) }.unwrap_err();
+        let mut config = valid_request();
+        config.driver_id = "Unit Test".to_string();
+        let error = parse_start_request(config).unwrap_err();
         assert_eq!(error.status, STATUS_INVALID_ARGUMENT);
         assert!(error.message.contains("explicit persistent"));
+
+        let mut config = valid_request();
+        config.channel_mix[0].channel_index = 2;
+        let error = parse_start_request(config).unwrap_err();
+        assert_eq!(error.status, STATUS_INVALID_ARGUMENT);
+        assert!(error.message.contains("outside"));
     }
 
     #[test]
-    fn mix_index_and_gain_are_validated() {
-        let driver = b"asio:Unit Test";
-        let mix = [SyndocalAsioChannelMixV1 {
-            channel_index: 2,
-            gain: f32::NAN,
-        }];
-        let config = SyndocalAsioStartConfigV1 {
-            struct_size: size_of::<SyndocalAsioStartConfigV1>() as u32,
-            abi_version: ABI_VERSION,
-            driver_id: driver.as_ptr(),
-            driver_id_len: driver.len(),
-            sample_rate_hz: 48_000,
-            input_channels: 2,
-            sample_format: SAMPLE_F32,
-            fixed_buffer_frames: 128,
-            channel_mix: mix.as_ptr(),
-            channel_mix_len: mix.len(),
-            flags: 0,
-            reserved: 0,
-        };
-        let error = unsafe { parse_start_request(&config) }.unwrap_err();
-        assert_eq!(error.status, STATUS_INVALID_ARGUMENT);
-        assert!(error.message.contains("outside"));
+    fn injected_start_failure_returns_no_handle() {
+        let request = parse_start_request(valid_request()).unwrap();
+        let error = open_stream_with(
+            request,
+            discard_samples,
+            discard_event,
+            0,
+            |_request, _samples, _events, _context| {
+                Err(BridgeError::backend("injected start failure"))
+            },
+        )
+        .err()
+        .expect("injected start must fail");
+        assert_eq!(error.status, STATUS_BACKEND_ERROR);
+        assert!(error.message.contains("injected start failure"));
+    }
+
+    #[test]
+    fn typed_stop_and_close_report_success_and_release_exactly_once() {
+        let counters = Arc::new(FakeCounters::default());
+        let mut handle = fake_handle(counters.clone());
+
+        let mut stop_result = SyndocalAsioStringV2::default();
+        let mut stop_error = SyndocalAsioStringV2::default();
+        let status = unsafe { syndocal_asio_v2_stop(handle, &mut stop_result, &mut stop_error) };
+        assert_eq!(status, STATUS_OK);
+        assert!(take_string(stop_error).is_empty());
+        let result: serde_json::Value = serde_json::from_str(&take_string(stop_result)).unwrap();
+        assert_eq!(result["schemaVersion"], 2);
+        assert_eq!(result["kind"], "stop");
+        assert_eq!(result["stopped"], true);
+        assert_eq!(result["streamWasActive"], true);
+
+        let mut close_result = SyndocalAsioStringV2::default();
+        let mut close_error = SyndocalAsioStringV2::default();
+        let status =
+            unsafe { syndocal_asio_v2_close(&mut handle, &mut close_result, &mut close_error) };
+        assert_eq!(status, STATUS_OK);
+        assert!(handle.is_null());
+        assert!(take_string(close_error).is_empty());
+        let result: serde_json::Value = serde_json::from_str(&take_string(close_result)).unwrap();
+        assert_eq!(result["kind"], "close");
+        assert_eq!(result["handleReleased"], true);
+        assert_eq!(result["streamWasActive"], false);
+        assert_eq!(counters.stops.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.closes.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn injected_stop_and_close_failures_are_visible_and_close_consumes_handle() {
+        let counters = Arc::new(FakeCounters::default());
+        counters.fail_stop.store(true, Ordering::Relaxed);
+        let mut handle = fake_handle(counters.clone());
+        let mut result = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe { syndocal_asio_v2_stop(handle, &mut result, &mut error) };
+        assert_eq!(status, STATUS_BACKEND_ERROR);
+        assert!(result.ptr.is_null());
+        let error: serde_json::Value = serde_json::from_str(&take_string(error)).unwrap();
+        assert_eq!(error["kind"], "error");
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("injected stop failure"));
+
+        counters.fail_stop.store(false, Ordering::Relaxed);
+        counters.fail_close.store(true, Ordering::Relaxed);
+        let mut result = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe { syndocal_asio_v2_close(&mut handle, &mut result, &mut error) };
+        assert_eq!(status, STATUS_BACKEND_ERROR);
+        assert!(handle.is_null());
+        assert!(result.ptr.is_null());
+        let error: serde_json::Value = serde_json::from_str(&take_string(error)).unwrap();
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("injected close failure"));
+        assert_eq!(counters.drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn telemetry_is_a_typed_v2_snapshot() {
+        let counters = Arc::new(FakeCounters::default());
+        let mut handle = fake_handle(counters);
+        let mut result = SyndocalAsioStringV2::default();
+        let mut error = SyndocalAsioStringV2::default();
+        let status = unsafe { syndocal_asio_v2_telemetry_json(handle, &mut result, &mut error) };
+        assert_eq!(status, STATUS_OK);
+        assert!(take_string(error).is_empty());
+        let result: serde_json::Value = serde_json::from_str(&take_string(result)).unwrap();
+        assert_eq!(result["kind"], "telemetry");
+        assert_eq!(result["callbacks"], 99);
+        assert_eq!(result["xruns"], 3);
+        assert_eq!(result["callbackDurationNs"]["p99"], 30);
+
+        let mut close_result = SyndocalAsioStringV2::default();
+        let mut close_error = SyndocalAsioStringV2::default();
+        assert_eq!(
+            unsafe { syndocal_asio_v2_close(&mut handle, &mut close_result, &mut close_error) },
+            STATUS_OK
+        );
+        take_string(close_result);
+        take_string(close_error);
     }
 
     #[cfg(all(target_os = "windows", feature = "asio"))]
@@ -1490,20 +2263,16 @@ mod tests {
                 self.0
             }
 
-            fn free(mut self) {
-                if !self.0.is_null() {
-                    unsafe { syndocal_asio_free(self.0) };
-                    self.0 = ptr::null_mut();
-                }
-            }
-        }
-
-        impl Drop for OwnedHardwareHandle {
-            fn drop(&mut self) {
-                if !self.0.is_null() {
-                    unsafe { syndocal_asio_free(self.0) };
-                    self.0 = ptr::null_mut();
-                }
+            fn close(mut self) -> (u32, String, String) {
+                let mut result = SyndocalAsioStringV2::default();
+                let mut error = SyndocalAsioStringV2::default();
+                let status =
+                    unsafe { syndocal_asio_v2_close(&mut self.0, &mut result, &mut error) };
+                (
+                    status,
+                    take_bridge_string(result),
+                    take_bridge_string(error),
+                )
             }
         }
 
@@ -1523,15 +2292,15 @@ mod tests {
             value
         }
 
-        fn take_bridge_string(value: SyndocalAsioStringV1) -> String {
+        fn take_bridge_string(value: SyndocalAsioStringV2) -> String {
             if value.ptr.is_null() {
                 assert_eq!(value.len, 0, "null bridge string had a non-zero length");
                 return String::new();
             }
             assert!(value.len != 0, "non-null bridge string had a zero length");
             let bytes = unsafe { slice::from_raw_parts(value.ptr, value.len) };
-            let text = String::from_utf8_lossy(bytes).into_owned();
-            unsafe { syndocal_asio_string_free(value) };
+            let text = String::from_utf8(bytes.to_vec()).expect("bridge output must be UTF-8");
+            unsafe { syndocal_asio_v2_string_free(value) };
             text
         }
 
@@ -1542,10 +2311,10 @@ mod tests {
             sample_format: &str,
             buffer_frames: u32,
         ) {
-            let mut catalog_json = SyndocalAsioStringV1::default();
-            let mut catalog_error = SyndocalAsioStringV1::default();
+            let mut catalog_json = SyndocalAsioStringV2::default();
+            let mut catalog_error = SyndocalAsioStringV2::default();
             let catalog_status =
-                unsafe { syndocal_asio_drivers_json(&mut catalog_json, &mut catalog_error) };
+                unsafe { syndocal_asio_v2_drivers_json(&mut catalog_json, &mut catalog_error) };
             let catalog_error = take_bridge_string(catalog_error);
             let catalog_text = take_bridge_string(catalog_json);
             assert_eq!(
@@ -1563,12 +2332,17 @@ mod tests {
                 "explicit driver {driver_id:?} was not present; catalog={catalog_text}"
             );
 
-            let mut capabilities_json = SyndocalAsioStringV1::default();
-            let mut capabilities_error = SyndocalAsioStringV1::default();
+            let request = serde_json::to_vec(&CapabilitiesRequestJsonV2 {
+                schema_version: JSON_SCHEMA_VERSION,
+                driver_id: driver_id.to_string(),
+            })
+            .unwrap();
+            let mut capabilities_json = SyndocalAsioStringV2::default();
+            let mut capabilities_error = SyndocalAsioStringV2::default();
             let capabilities_status = unsafe {
-                syndocal_asio_capabilities_json(
-                    driver_id.as_ptr(),
-                    driver_id.len(),
+                syndocal_asio_v2_capabilities_json(
+                    request.as_ptr(),
+                    request.len(),
                     &mut capabilities_json,
                     &mut capabilities_error,
                 )
@@ -1619,14 +2393,13 @@ mod tests {
                 "SYNDOCAL_ASIO_TEST_INPUT_CHANNELS must not exceed 256"
             );
             let sample_format_label = required_env("SYNDOCAL_ASIO_TEST_SAMPLE_FORMAT");
-            let sample_format = match sample_format_label.as_str() {
-                "f32" => SAMPLE_F32,
-                "i16" => SAMPLE_I16,
-                "i24" => SAMPLE_I24,
-                "i32" => SAMPLE_I32,
-                "f64" => SAMPLE_F64,
-                _ => panic!("SYNDOCAL_ASIO_TEST_SAMPLE_FORMAT must be f32, i16, i24, i32, or f64"),
-            };
+            assert!(
+                matches!(
+                    sample_format_label.as_str(),
+                    "f32" | "i16" | "i24" | "i32" | "f64"
+                ),
+                "SYNDOCAL_ASIO_TEST_SAMPLE_FORMAT must be f32, i16, i24, i32, or f64"
+            );
             let buffer_frames = required_u32("SYNDOCAL_ASIO_TEST_BUFFER_FRAMES");
             let cycles = required_u32("SYNDOCAL_ASIO_TEST_CYCLES");
             assert!(
@@ -1642,9 +2415,9 @@ mod tests {
                 buffer_frames,
             );
 
-            let mix_gain = 1.0 / input_channels as f32;
+            let mix_gain = 1.0 / input_channels as f64;
             let channel_mix = (0..input_channels)
-                .map(|channel_index| SyndocalAsioChannelMixV1 {
+                .map(|channel_index| ChannelMixJsonV2 {
                     channel_index,
                     gain: mix_gain,
                 })
@@ -1652,39 +2425,39 @@ mod tests {
             let started_at = Instant::now();
             let mut total_callbacks = 0_u64;
             let mut total_warnings = 0_u64;
-            let mut freed_cycles = 0_u32;
+            let mut closed_cycles = 0_u32;
 
             for cycle in 1..=cycles {
                 let counters = Box::new(CallbackCounters::new(buffer_frames));
                 let context = (&*counters as *const CallbackCounters)
                     .cast_mut()
                     .cast::<c_void>();
-                let config = SyndocalAsioStartConfigV1 {
-                    struct_size: size_of::<SyndocalAsioStartConfigV1>() as u32,
-                    abi_version: ABI_VERSION,
-                    driver_id: driver_id.as_ptr(),
-                    driver_id_len: driver_id.len(),
+                let config = serde_json::to_vec(&StartRequestJsonV2 {
+                    schema_version: JSON_SCHEMA_VERSION,
+                    driver_id: driver_id.clone(),
                     sample_rate_hz,
                     input_channels,
-                    sample_format,
+                    sample_format: sample_format_label.clone(),
                     fixed_buffer_frames: buffer_frames,
-                    channel_mix: channel_mix.as_ptr(),
-                    channel_mix_len: channel_mix.len(),
-                    flags: 0,
-                    reserved: 0,
-                };
+                    channel_mix: channel_mix.clone(),
+                })
+                .unwrap();
                 let mut raw_handle = ptr::null_mut();
-                let mut start_error = SyndocalAsioStringV1::default();
+                let mut start_result = SyndocalAsioStringV2::default();
+                let mut start_error = SyndocalAsioStringV2::default();
                 let start_status = unsafe {
-                    syndocal_asio_start(
-                        &config,
+                    syndocal_asio_v2_start(
+                        config.as_ptr(),
+                        config.len(),
                         Some(count_samples),
                         Some(count_events),
                         context,
                         &mut raw_handle,
+                        &mut start_result,
                         &mut start_error,
                     )
                 };
+                let start_result = take_bridge_string(start_result);
                 let start_error = take_bridge_string(start_error);
                 let handle = OwnedHardwareHandle(raw_handle);
                 assert_eq!(
@@ -1693,11 +2466,9 @@ mod tests {
                 );
                 assert!(start_error.is_empty());
                 assert!(!handle.as_ptr().is_null());
-
-                let mut actual_buffer_frames = 0_u32;
-                let actual_status = unsafe {
-                    syndocal_asio_actual_buffer_frames(handle.as_ptr(), &mut actual_buffer_frames)
-                };
+                let start_result: serde_json::Value = serde_json::from_str(&start_result).unwrap();
+                let actual_buffer_frames =
+                    start_result["actualBufferFrames"].as_u64().unwrap() as u32;
 
                 let deadline = Instant::now() + CALLBACK_TIMEOUT;
                 while counters.callbacks.load(Ordering::Relaxed) < CALLBACK_TARGET
@@ -1707,12 +2478,28 @@ mod tests {
                     thread::sleep(Duration::from_millis(1));
                 }
 
-                let mut stop_error = SyndocalAsioStringV1::default();
-                let stop_status = unsafe { syndocal_asio_stop(handle.as_ptr(), &mut stop_error) };
+                let mut stop_result = SyndocalAsioStringV2::default();
+                let mut stop_error = SyndocalAsioStringV2::default();
+                let stop_status = unsafe {
+                    syndocal_asio_v2_stop(handle.as_ptr(), &mut stop_result, &mut stop_error)
+                };
+                let stop_result = take_bridge_string(stop_result);
                 let stop_error = take_bridge_string(stop_error);
-                let xrun_count = unsafe { syndocal_asio_xrun_count(handle.as_ptr()) };
-                handle.free();
-                freed_cycles += 1;
+                let mut telemetry = SyndocalAsioStringV2::default();
+                let mut telemetry_error = SyndocalAsioStringV2::default();
+                let telemetry_status = unsafe {
+                    syndocal_asio_v2_telemetry_json(
+                        handle.as_ptr(),
+                        &mut telemetry,
+                        &mut telemetry_error,
+                    )
+                };
+                let telemetry_error = take_bridge_string(telemetry_error);
+                let telemetry: serde_json::Value =
+                    serde_json::from_str(&take_bridge_string(telemetry)).unwrap();
+                let xrun_count = telemetry["xruns"].as_u64().unwrap();
+                let (close_status, close_result, close_error) = handle.close();
+                closed_cycles += 1;
 
                 let callback_count = counters.callbacks.load(Ordering::Relaxed);
                 let frame_mismatches = counters.frame_mismatches.load(Ordering::Relaxed);
@@ -1723,10 +2510,6 @@ mod tests {
                 total_callbacks += callback_count;
                 total_warnings += warning_events;
 
-                assert_eq!(
-                    actual_status, STATUS_OK,
-                    "cycle {cycle}/{cycles} actual-buffer query failed"
-                );
                 assert_eq!(
                     actual_buffer_frames, buffer_frames,
                     "cycle {cycle}/{cycles} applied a different hardware buffer"
@@ -1753,10 +2536,24 @@ mod tests {
                 );
                 assert_eq!(xrun_count, 0, "cycle {cycle}/{cycles} reported xruns");
                 assert_eq!(
+                    telemetry_status, STATUS_OK,
+                    "telemetry failed: {telemetry_error}"
+                );
+                assert!(telemetry_error.is_empty());
+                assert_eq!(
                     stop_status, STATUS_OK,
                     "cycle {cycle}/{cycles} Stop failed: {stop_error}"
                 );
+                let stop_result: serde_json::Value = serde_json::from_str(&stop_result).unwrap();
+                assert_eq!(stop_result["stopped"], true);
                 assert!(stop_error.is_empty());
+                assert_eq!(
+                    close_status, STATUS_OK,
+                    "cycle {cycle}/{cycles} Close failed: {close_error}"
+                );
+                assert!(close_error.is_empty());
+                let close_result: serde_json::Value = serde_json::from_str(&close_result).unwrap();
+                assert_eq!(close_result["handleReleased"], true);
 
                 if cycle % 10 == 0 || cycle == cycles {
                     eprintln!(
@@ -1766,9 +2563,9 @@ mod tests {
                 }
             }
 
-            assert_eq!(freed_cycles, cycles, "not every ASIO handle was freed");
+            assert_eq!(closed_cycles, cycles, "not every ASIO handle was closed");
             eprintln!(
-                "ASIO hardware stability PASS: driver={driver_id:?}, rate={sample_rate_hz}, channels={input_channels}, format={sample_format_label}, requested_buffer={buffer_frames}, actual_buffer_each_cycle={buffer_frames}, cycles={cycles}, callbacks={total_callbacks}, stops={cycles}, frees={freed_cycles}, warnings={total_warnings}, terminal=0, xruns=0, nonfinite=0, elapsed={:?}",
+                "ASIO hardware stability PASS: driver={driver_id:?}, rate={sample_rate_hz}, channels={input_channels}, format={sample_format_label}, requested_buffer={buffer_frames}, actual_buffer_each_cycle={buffer_frames}, cycles={cycles}, callbacks={total_callbacks}, stops={cycles}, closes={closed_cycles}, warnings={total_warnings}, terminal=0, xruns=0, nonfinite=0, elapsed={:?}",
                 started_at.elapsed()
             );
         }

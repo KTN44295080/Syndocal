@@ -24,6 +24,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CPAL_ASIO_DIR");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The application loads the bridge dynamically and never links an import library.
+        // Avoiding the unused .lib/.exp pair also keeps MSVC's import-library progress line from
+        // being promoted to Rust's `linker_messages` warning while preserving the DLL exports.
+        println!("cargo:rustc-cdylib-link-arg=/NOIMPLIB");
+        println!("cargo:rustc-cdylib-link-arg=/NOEXP");
+    }
+
     if env::var_os("CARGO_FEATURE_ASIO").is_none() {
         return;
     }
