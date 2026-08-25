@@ -230,6 +230,35 @@ source worktree, branch, commits, main checkout target, protected real-4K
 evidence executable, running main-checkout Syndocal, and user-authored files
 were not removed. This cleanup makes no additional product-acceptance claim.
 
+### Rebuildable-cache cleanup tranche 5
+
+The now-targetless `C:\Users\kouty\Documents\KDMX-d4-integration` checkout was
+then audited independently from the target deletion above. Its worktree was
+clean at `0bfc1c03451373f4cb34eebbfab4c5c257878fe0`, that commit was contained by
+`codex/syndocal-v1.2`, the local branch and its remote-tracking branch remained
+available, and no process outside the inspection shell referenced the exact
+path. A normal non-forced `git worktree remove` removed the Git registration but
+reported that the directory was not empty, so no broader or forced deletion was
+attempted.
+
+The resulting orphaned residue contained 3,409 files and `117,522,049` logical
+bytes. It also contained 197 directory junctions created by pnpm. Every junction
+was individually verified to target a path inside that exact stale worktree;
+there were no external or empty targets. Those junction objects were removed
+without traversing their targets, after which the remaining exact directory was
+permanently deleted. The path was absent afterward. The measured physical
+free-space increase for this final residue-removal phase was `40,574,976` bytes;
+shared package-store/hardlink allocation means this is intentionally smaller
+than the logical file total.
+
+The local `codex/d4-stage-integration` branch and
+`origin/codex/d4-stage-integration` were retained, while the accepted commit and
+protected native evidence remain available from the main checkout. The active,
+dirty `C:\Users\kouty\Documents\KDMX-asio-persistence` worktree and its target
+were explicitly excluded from this cleanup. This deletion is irreversible at
+the filesystem-copy level but the removed clean checkout is reproducible from
+the retained branch; it makes no additional product-acceptance claim.
+
 ## Boundary and next action
 
 This closes the alpha.11 D4 merge/build/launch checkpoint only. It is not a
