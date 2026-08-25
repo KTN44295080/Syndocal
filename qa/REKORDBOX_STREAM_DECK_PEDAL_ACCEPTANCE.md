@@ -462,3 +462,63 @@ source/package re-review row. An identity-bound peer artifact (build-time
 HEAD/fingerprint binding) and the physical wired-LAN matrix remain open, so the
 authoritative status stays `Required / Peer and hardware pending`; no
 end-to-end DJ/Pedal completion claim is made by this record.
+
+## 2026-08-25 live-LAN preflight (observation only; zero accepted HW-4 rows)
+
+The KDMX checkout was clean on `codex/syndocal-v1.2` at
+`1402a93069d8d630df66b1f682d0813b2d595faa`, equal to
+`origin/codex/syndocal-v1.2`. The running exact-checkout alpha.11 executable was
+PID `114780`, size `57,888,768` bytes, and SHA-256
+`522074E96A235310C9D39D3200E2A9D9B5C68429F0160E92318B568A0FE5AEE2`, matching
+the accepted main-checkout artifact above. A read-only socket inventory found no
+TCP `9100` listener. This is not evidence that the `/dj-link` listener is absent
+from the build: the executable contains that route and its strict HELLO contract.
+The production state starts with Web Remote stopped, while the renderer defaults
+DJ Link to disabled with no selected bind IP; only the explicit `Start Remote`
+operation creates the shared Web Remote/DJ Link listener.
+
+The current FOH Show-LAN target is Ethernet 3, interface index `28`, IPv4
+`192.168.1.34/24`. With the default port, the DJ PC must connect to
+`ws://192.168.1.34:9100/dj-link`. The Ethernet 3 Windows network category was
+`Public`, and the read-only inspection found neither a Syndocal/KDMX firewall
+rule nor an exact TCP `9100` port rule. A successful local bind therefore must
+not be treated as proof that the DJ PC can reach the endpoint. Before the live
+HELLO gate, use a dedicated trusted network profile and a narrowly scoped inbound
+allowance for the exact Syndocal executable, TCP `9100`, and the DJ PC address;
+record any profile or firewall mutation as acceptance evidence.
+
+The connected DJ PC was running a development, not yet release-verified,
+`rb-output` 1.1.2 state. Its Agent was enabled; the `CustomMIDI1` port 1 route
+reported ready; the Pedal listener was armed for F13/F14/F15; and the Hook path
+reported Deck 2, BPM, playback, Loop, and mixer observations. F13 and F14
+operations were recorded and their local MIDI sends occurred. Their Syndocal
+send attempts failed because the Syndocal endpoint was disabled and not
+listening, so none of these observations proves a `/dj-link` HELLO, authenticated
+session, ACK, Timeline action, or reconnect path. The new setup API returned HTTP
+404 from the running peer, showing that the observed process was an older build
+than the current setup surface. It must be replaced by an identity-bound current
+1.1.2 artifact before acceptance; the 404 must not be described as a passing
+setup check.
+
+Two product gaps remain explicit. **P1:** Web Remote/DJ Link enabled state, bind
+selection, and listener start are not restored on application launch, while the
+machine-local token is regenerated for each Syndocal process. A previously
+configured peer therefore cannot satisfy HW-4.11 restart/next-show reuse without
+manual token rotation and reconfiguration. Completion requires secure
+machine-local secret storage outside `.sdc`, renderer storage, logs, URLs, and
+ordinary status; NIC identity plus address revalidation; stale-NIC fail-closed
+behavior; an explicit armed/autostart policy; and restart/reconnect proof.
+**P2:** the current address-only interface picker excludes loopback and link-local
+addresses but can still offer virtual adapters such as the observed WSL address
+`172.30.208.1`. It should expose adapter identity and reject or explicitly warn on
+virtual/tunnel candidates so the operator cannot silently bind the wrong network.
+
+The next acceptance action is to build and launch an identity-bound current
+`rb-output` 1.1.2 peer, confirm its setup API rather than the older 404 response,
+then in Syndocal Setup > I/O select Ethernet 3 / `192.168.1.34`, rotate and copy
+the show-once token, explicitly select `syndocal-envelope-v1` on the peer, start
+Remote, and prove the wired HELLO/ACK path before advancing through HW-4.1 to
+HW-4.12. This preflight changes no checkbox: the DJ/Pedal matrix remains exactly
+**0/12 checked (0%)**, all twelve rows remain `Required / Peer and hardware
+pending`, and the whole-product accepted denominator remains exactly
+**19/71 (26.8%)**.

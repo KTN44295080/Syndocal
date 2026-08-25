@@ -194,14 +194,41 @@ exact target path being absent while the source worktree/branch and protected
 targets remain present.
 
 The separately audited
-`C:\Users\kouty\Documents\kdmx-d4-integration\target` remains intentionally
-untouched: its release executable is still the raw artifact referenced by the
+`C:\Users\kouty\Documents\kdmx-d4-integration\target` remained intentionally
+untouched at the preceding checkpoint: its release executable was the raw
+artifact referenced by the
 authoritative D4 real-4K acceptance record. The exact executable now also has a
 same-File-ID, same-hash hardlink in the protected
 `target/qa/retained-native/d4-alpha11-real4k-63cf795d` store, governed by the
 tracked `qa/artifacts/native-executables/d4-alpha11-real4k-63cf795d.sha256`
-retention contract. The integration target may be deleted only after this
+retention contract. The integration target could be deleted only after this
 manifest is committed and pushed, followed by a fresh retained-path hash check.
+
+### Rebuildable-cache cleanup tranche 4
+
+At `2026-08-25`, after the retention manifest above was confirmed tracked on
+main HEAD `1402a93069d8d630df66b1f682d0813b2d595faa` and the main checkout was
+confirmed equal to its upstream, the exact
+`C:\Users\kouty\Documents\KDMX-d4-integration\target` directory was revalidated
+for permanent deletion. Its owning worktree was clean and equal to upstream at
+`0bfc1c03451373f4cb34eebbfab4c5c257878fe0`. The target contained 16,415 files,
+2,053 directories, and `18,381,103,174` logical bytes; it contained no reparse
+point and no running process executable referenced it.
+
+Both source-tree `syndocal.exe` links and the retained evidence executable were
+confirmed to share File ID `0x0000000000000000003c00000034208f`, size
+`57,888,768`, and SHA-256
+`1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B`.
+The exact target directory alone was then permanently deleted through
+PowerShell's `.NET Directory.Delete` API. It was absent afterward, while the
+retained executable remained present with the same hash.
+
+C: free space rose from `415,833,874,432` to `431,955,369,984` bytes, an
+observed physical gain of `16,121,495,552` bytes (15.014 GiB). The deleted
+target was rebuildable generated content; deletion is irreversible. The owning
+source worktree, branch, commits, main checkout target, protected real-4K
+evidence executable, running main-checkout Syndocal, and user-authored files
+were not removed. This cleanup makes no additional product-acceptance claim.
 
 ## Boundary and next action
 

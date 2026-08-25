@@ -1811,3 +1811,52 @@ record is
 `qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md`. Next action is
 the peer `beta-v1.1.2` commit/push and live wired-LAN acceptance, with ASIO
 alpha.12 integration continuing in parallel.
+
+## 40. 2026-08-25 DJ-Link live-LAN preflight without acceptance promotion
+
+The clean active KDMX checkout was
+`codex/syndocal-v1.2` at
+`1402a93069d8d630df66b1f682d0813b2d595faa`, equal to its upstream. The running
+exact-checkout alpha.11 executable remained PID `114780`, size `57,888,768`
+bytes, SHA-256
+`522074E96A235310C9D39D3200E2A9D9B5C68429F0160E92318B568A0FE5AEE2`. A
+read-only network observation found no TCP `9100` listener. The built product
+does contain the dedicated `/dj-link` ingress; it was not listening because
+Web Remote had not been explicitly started and DJ Link defaults to disabled
+with no selected Show-LAN bind IP. No listener or process was changed by this
+observation.
+
+FOH Ethernet 3 / interface index `28` was active at `192.168.1.34/24`, making
+`ws://192.168.1.34:9100/dj-link` the correct current DJ-PC-to-FOH URL. Its
+Windows profile was `Public`, and no exact Syndocal/KDMX or TCP `9100` firewall
+rule was present. The WSL virtual address `172.30.208.1` was also active and can
+be ambiguous in the current address-only picker. Binding must select the
+Ethernet 3 address explicitly; LAN reachability and any narrowly scoped firewall
+change remain recorded physical acceptance work, not an inference from source.
+
+The DJ PC supplied a useful Stage 1/process preflight but not a completed gate.
+Its `rb-output` state reported version 1.1.2 development/unverified, Agent
+enabled, `CustomMIDI1` port 1 ready, and Pedal F13/F14/F15 listening. Hook data
+for Deck 2, BPM, playback, Loop, and mixer was observed. F13/F14 actions were
+recorded and local MIDI was sent, but Syndocal dispatch failed because the
+endpoint was disabled and not listening. The new setup API returned 404 from
+the running peer, proving that process was an older build and must be replaced
+by an identity-bound current 1.1.2 artifact before the two-process run.
+
+Two implementation boundaries remain in addition to the physical matrix. The
+P1 restart gap is that listener enabled/bind/start state is not restored and
+the process-local token is regenerated, so a configured peer cannot perform
+restart/next-show reuse without manual repair. Close it with secure
+machine-local secret storage outside project/renderer artifacts, NIC identity
+rehydration with stale failure, an explicit armed/autostart policy, and restart
+reconnect tests. The P2 NIC ambiguity is that address-only discovery can offer
+virtual/tunnel interfaces such as WSL; expose adapter identity and reject or
+warn on those candidates.
+
+Next action is to build and launch the identity-bound current 1.1.2 peer, verify
+its setup API, explicitly select Ethernet 3 / `192.168.1.34` and
+`syndocal-envelope-v1`, rotate/copy the show-once token, start the Syndocal
+Remote listener, and first prove authenticated wired HELLO/ACK. Only then may
+the twelve-row hardware sequence proceed. This observation checks none of
+HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
+whole-product accepted denominator remains exactly 19/71 (26.8%).
