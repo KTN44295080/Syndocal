@@ -799,3 +799,22 @@ alpha.16, Bank/Scene authoring/save/restart, zero-FX native acceptance, target
 DJ-PC deployment identity, real Credential Manager/NLM restart, HW-4, ASIO,
 three displays, representative DSF show content, and the full rehearsal remain
 open.
+
+## 15. 2026-08-27 bounded media/audio playback test-module extraction
+
+Commit `6cfb71c4e23141103e5ce33542b404d759828e95` is pushed and equal to
+`origin/codex/syndocal-v1.2`. It replaces the 1,595-line inline
+`media_audio_playback_tests` block in `main.rs` with a private test-only path
+module at `app/src-tauri/src/tests/media_audio_playback_tests.rs`. All 34 helper
+and test names/order, 31 tests, and 166 assertion macros remain; normalized body
+comparison found only rustfmt wrapping differences. `main.rs` is now 128,582
+lines instead of 130,174.
+
+With exact MSVC 14.44 initialization, the absolute pin
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and `where.exe link.exe` first-path verification, the exact command `cargo test
+-p syndocal --no-default-features --locked media_audio_playback_tests` passed
+`31/31`, 1,099 filtered, and zero first-party warnings. Format/diff gates passed
+and independent Terra xHigh review returned no P0/P1/P2. No native release/Tauri build,
+release-process stop, cleanup Apply, or hardware operation occurred. The live
+alpha.15 PID `46120` and DJ socket remain protected; HW-4 stays **0/12**.

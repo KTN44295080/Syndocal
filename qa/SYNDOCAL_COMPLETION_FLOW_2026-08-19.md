@@ -2023,3 +2023,26 @@ artifact proof remain open. The operator's alpha.15 PID `46120` was not stopped
 or restarted and still owns the established DJ-PC connection. The reviewed
 HW-4 companion is `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`; it checks no
 hardware row, so HW-4 remains **0/12**.
+
+## 45. 2026-08-27 bounded media/audio playback test extraction
+
+Pushed commit `6cfb71c4e23141103e5ce33542b404d759828e95` moves the inline
+`media_audio_playback_tests` child module from `app/src-tauri/src/main.rs` to
+`app/src-tauri/src/tests/media_audio_playback_tests.rs`. The outer
+`#[cfg(test)]`, private child-module relationship, `use super::*`, all 34 helper
+and test function names/order, 31 tests, and 166 assertion-macro invocations are
+preserved. No production symbol, runtime path, feature, or visibility changed.
+`main.rs` shrank from 130,174 to 128,582 lines; the new focused test file is
+1,578 lines.
+
+Supervisor proof initialized `vcvars64.bat -vcvars_ver=14.44`, pinned the exact
+Community linker through
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and verified that exact path first in `where.exe link.exe` before Cargo. The
+exact command was `cargo test -p syndocal --no-default-features --locked
+media_audio_playback_tests`; it passed `31/31` with 1,099 tests filtered and
+zero first-party warnings. Rust formatting and diff checks passed. Independent
+Terra xHigh comparison approved with no P0/P1/P2 and a matching normalized body
+hash. This is test-only maintainability work, not a native or show acceptance
+claim; PID `46120`, HW-4 **0/12**, and every alpha.16/hardware boundary remain
+unchanged.
