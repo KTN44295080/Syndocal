@@ -14,6 +14,7 @@ import {
   projectRemoteControlStatusPoll,
   unavailableRemoteControlStatus,
 } from "../src/djLinkUiState.ts";
+import { retainDjTimelineOptions } from "../src/djTimelineOptions.ts";
 
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 const [app, types, panel, chrome, invokes, manifest, localization] = await Promise.all([
@@ -89,6 +90,8 @@ assert.equal(rejectedPollProjection.status.dj_link?.available, false);
 assert.equal(rejectedPollProjection.status.dj_link?.trackTitle, undefined);
 assert.match(app, /remoteStatusPollGeneration/);
 assert.match(app, /projectRemoteControlStatusPoll\(null\)/);
+assert.match(app, /timelineOptions=\{djTimelineOptions\(\)\}/);
+assert.doesNotMatch(app, /timelineOptions=\{\(snapshot\(\)\.timeline_bank/);
 
 assert.deepEqual(clearedDjLinkSecret(true), { token: null, copied: true });
 
@@ -122,6 +125,35 @@ retryState = acknowledgeProjectAuthorityPersist(
 );
 assert.equal(projectAuthorityHasDirtyMappings(retryState), true);
 assert.equal(projectAuthorityShouldRetryPersist(retryState, inFlight.request.identityGeneration), true);
+
+// Snapshot polling replaces the engine snapshot object. Semantically identical
+// Timeline options must retain their array and option identities so the native
+// select does not fall back to its placeholder between operator input events.
+const retainedOptions = retainDjTimelineOptions([], [
+  { id: 1, label: " Timeline 1 " },
+  { id: 2, label: "" },
+  { id: 0, label: "Rejected" },
+]);
+assert.deepEqual(retainedOptions, [
+  { id: 1, label: "Timeline 1" },
+  { id: 2, label: "Timeline 2" },
+]);
+assert.strictEqual(
+  retainDjTimelineOptions(retainedOptions, [
+    { id: 1, label: "Timeline 1" },
+    { id: 2, label: "Timeline 2" },
+  ]),
+  retainedOptions,
+  "equivalent status snapshots must not recreate Timeline option nodes",
+);
+assert.notStrictEqual(
+  retainDjTimelineOptions(retainedOptions, [
+    { id: 1, label: "Timeline 1" },
+    { id: 3, label: "Timeline 3" },
+  ]),
+  retainedOptions,
+  "an authored Timeline change must publish new options",
+);
 
 const manifestCommands = JSON.parse(manifest);
 const invokeMatch = invokes.match(/export const FRONTEND_TAURI_INVOKE_COMMANDS = \[([\s\S]*?)\];/);

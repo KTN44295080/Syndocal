@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
+import { retainDjTimelineOptions, type DjTimelineOption } from "./djTimelineOptions";
 import {
   AuthoredSetEffectEnabledCommandError,
   authoredSetEffectEnabledOperationId,
@@ -3733,6 +3734,10 @@ export default function App() {
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const initialEngineSnapshot = createInitialEngineSnapshot();
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(initialEngineSnapshot);
+  const djTimelineOptions = createMemo<DjTimelineOption[]>(
+    (previous) => retainDjTimelineOptions(previous, snapshot().timeline_bank ?? []),
+    [],
+  );
   const engineDmxPreviews = (next: EngineSnapshot) => {
     const previews = next.dmx_previews ?? [];
     const legacyPreview = next.dmx_preview ?? [];
@@ -28638,9 +28643,7 @@ export default function App() {
             djLinkToken={djLinkToken()}
             djLinkTokenCopied={djLinkTokenCopied()}
             djTrackTriggers={djTrackTriggers()}
-            timelineOptions={(snapshot().timeline_bank ?? [])
-              .filter((timeline) => Number.isSafeInteger(timeline.id) && (timeline.id ?? 0) > 0)
-              .map((timeline) => ({ id: timeline.id!, label: timeline.label?.trim() || `Timeline ${timeline.id}` }))}
+            timelineOptions={djTimelineOptions()}
             running={remoteRunning()}
             remoteUrls={remoteUrls()}
             status={remoteStatus()}
