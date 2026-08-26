@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { Socket } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { cueAudioEventTargets, hitVerifiedCdpClick, installCueAudioMock } from "./check-timeline-cue-audio-fixture-lib.mjs";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const host = "127.0.0.1";
 const vitePort = 5194;
-const cdpPort = 9244;
-const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+const phaseACdpPort = 9244;
+const phaseBCdpPort = 9245;
+const fixtureUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+const defaultUrl = `http://${host}:${vitePort}/`;
 const browserPath = [
   process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -22,7 +26,8 @@ const waitFor = async (check, label, timeoutMs = 30_000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      if (await check()) return;
+      const result = await check();
+      if (result) return result;
     } catch {
       // The Vite and CDP listeners may not have bound their ports yet.
     }
@@ -30,11 +35,67 @@ const waitFor = async (check, label, timeoutMs = 30_000) => {
   }
   throw new Error(`Timed out waiting for ${label}`);
 };
-const stopChild = async (child) => {
-  if (!child || child.exitCode !== null) return;
-  const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
-  child.kill();
-  await Promise.race([exited, sleep(2_000)]);
+const stopChild = async (child, label, endpoint = null) => {
+  if (!child) return;
+  if (child.exitCode === null) {
+    const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
+    child.kill();
+    await Promise.race([exited, sleep(2_000)]);
+  }
+  if (endpoint) {
+    await waitFor(() => {
+      if (child.exitCode !== null) return true;
+      try {
+        process.kill(child.pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, `${label} child exits exactly`, 5_000);
+    await waitFor(async () => {
+      try {
+        const response = await fetch(`http://${host}:${endpoint.port}/json/version`);
+        if (response.ok) return false;
+        const socket = await probeTcpPort(endpoint.port);
+        return !socket;
+      } catch {
+        try {
+          return !(await probeTcpPort(endpoint.port));
+        } catch {
+          return false;
+        }
+      }
+    }, `${label} endpoint stops responding`, 5_000);
+  }
+};
+const probeTcpPort = (port) => new Promise((resolveProbe, rejectProbe) => {
+  const socket = new Socket();
+  let settled = false;
+  const settle = (callback, value) => {
+    if (settled) return;
+    settled = true;
+    socket.destroy();
+    callback(value);
+  };
+  socket.setTimeout(500);
+  socket.once("connect", () => settle(resolveProbe, true));
+  socket.once("timeout", () => settle(rejectProbe, new Error(`TCP probe timed out on ${host}:${port}`)));
+  socket.once("error", (error) => {
+    if (error.code === "ECONNREFUSED") settle(resolveProbe, false);
+    else settle(rejectProbe, error);
+  });
+  socket.connect(port, host);
+});
+const assertPortUnused = async (port, label) => {
+  let serving;
+  try {
+    serving = await probeTcpPort(port);
+  } catch (error) {
+    throw new Error(`${label} CDP port ${port} is not provably unused: ${error.message}`);
+  }
+  if (serving) {
+    throw new Error(`${label} CDP port ${port} is already serving before spawn`);
+  }
 };
 
 class CdpClient {
@@ -79,101 +140,169 @@ const click = (client, selector) => evaluate(client, `(() => {
   element.click();
   return true;
 })()`);
+const cueAudioMockSource = `(${installCueAudioMock.toString()})(${JSON.stringify(cueAudioEventTargets)});`;
+const readBrowserEndpoint = async (profileDir, expectedPort, label) => {
+  const activePortPath = join(profileDir, "DevToolsActivePort");
+  const activePortContents = (await readFile(activePortPath, "utf8")).trim().split(/\r?\n/);
+  assert.equal(activePortContents.length, 2, `${label} DevToolsActivePort has exactly port and websocket path`);
+  const [activePortText, browserWebSocketPath] = activePortContents;
+  const activePort = Number(activePortText);
+  if (expectedPort !== 0) {
+    assert.equal(activePort, expectedPort, `${label} DevToolsActivePort port matches requested CDP port`);
+  }
+  assert.match(browserWebSocketPath, /^\/devtools\/browser\/[A-Za-z0-9_-]+$/, `${label} DevToolsActivePort websocket path is a browser endpoint`);
+  const response = await fetch(`http://${host}:${activePort}/json/version`);
+  assert.ok(response.ok, `${label} /json/version responds on the profile's CDP port`);
+  const version = await response.json();
+  const browserWebSocketUrl = new URL(version.webSocketDebuggerUrl);
+  assert.equal(browserWebSocketUrl.protocol, "ws:", `${label} browser websocket uses ws`);
+  assert.equal(browserWebSocketUrl.hostname, host, `${label} browser websocket host matches CDP endpoint`);
+  assert.equal(Number(browserWebSocketUrl.port), activePort, `${label} browser websocket port matches DevToolsActivePort`);
+  assert.equal(browserWebSocketUrl.pathname, browserWebSocketPath, `${label} browser websocket path matches DevToolsActivePort and /json/version`);
+  return { port: activePort, browserWebSocketPath, browserWebSocketUrl: version.webSocketDebuggerUrl };
+};
+const openTarget = async (url, endpoint, preload = false) => {
+  let created = null;
+  await readBrowserEndpoint(endpoint.profileDir, endpoint.port, endpoint.label);
+  const browserClient = new CdpClient(endpoint.browserWebSocketUrl);
+  await browserClient.ready();
+  const { targetId } = await browserClient.send("Target.createTarget", { url: "about:blank" });
+  browserClient.close();
+  await waitFor(async () => {
+    const response = await fetch(`http://${host}:${endpoint.port}/json/list`);
+    if (!response.ok) return false;
+    const targets = await response.json();
+    created = targets.find((target) => target.id === targetId && target.type === "page" && typeof target.webSocketDebuggerUrl === "string");
+    return created ?? false;
+  }, `${endpoint.label} target`);
+  const targetWebSocketUrl = new URL(created.webSocketDebuggerUrl);
+  assert.equal(targetWebSocketUrl.protocol, "ws:", `${endpoint.label} target websocket uses ws`);
+  assert.equal(targetWebSocketUrl.hostname, host, `${endpoint.label} target websocket host matches CDP endpoint`);
+  assert.equal(Number(targetWebSocketUrl.port), endpoint.port, `${endpoint.label} target websocket port matches fresh profile endpoint`);
+  const nextClient = new CdpClient(created.webSocketDebuggerUrl);
+  await nextClient.ready();
+  await nextClient.send("Page.enable");
+  await nextClient.send("Runtime.enable");
+  await nextClient.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  if (preload) {
+    await nextClient.send("Page.addScriptToEvaluateOnNewDocument", { source: cueAudioMockSource });
+  }
+  await nextClient.send("Page.navigate", { url });
+  return nextClient;
+};
+const launchBrowser = async (profilePrefix, reservedPort, label) => {
+  const nextProfileDir = await mkdtemp(join(tmpdir(), profilePrefix));
+  await assertPortUnused(reservedPort, label);
+  const nextBrowser = spawn(browserPath, [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--remote-debugging-address=127.0.0.1",
+    // Chrome writes DevToolsActivePort when it selects the port. The profile
+    // file is the authority for the actual per-phase CDP endpoint.
+    "--remote-debugging-port=0",
+    `--user-data-dir=${nextProfileDir}`,
+    "about:blank",
+  ], { stdio: "ignore" });
+  const endpoint = await waitFor(async () => {
+    try {
+      return await readBrowserEndpoint(nextProfileDir, 0, label);
+    } catch {
+      return false;
+    }
+  }, `${profilePrefix} browser endpoint`);
+  return { process: nextBrowser, profileDir: nextProfileDir, endpoint: { ...endpoint, profileDir: nextProfileDir, label } };
+};
+const prepareTimelineSurface = async (client, label) => {
+  assert.equal(await click(client, '[data-workspace-option="control"]'), true, `${label} opens Control workspace`);
+  assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true, `${label} opens Live mode`);
+  await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), `${label} Timeline Show tab`);
+  assert.equal(await click(client, ".timelineToolsDisclosure > summary"), true, `${label} opens Timeline tools`);
+  await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor') !== null"), `${label} Timeline performance disclosure`);
+};
+const openCueAudioPanel = async (client, label) => {
+  assert.equal(await click(client, ".timelineCueAudioEditor > summary"), true, `${label} opens Cue Audio`);
+  await waitFor(() => evaluate(client, `(() => [...document.querySelectorAll('.timelineCueAudioEditor button')]
+    .some((candidate) => candidate.textContent?.trim() === 'Refresh outputs'))()`), `${label} Cue Audio Refresh button`);
+};
+const runTrustedCueAudioRefresh = async (client, label) => {
+  await evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls = []; window.__syndocalCueAudioMock.captureCueAudioCalls = true; window.__syndocalCueAudioMock.manualRefreshListSeen = false;");
+  assert.equal(await evaluate(client, `(() => {
+    const button = [...document.querySelectorAll('.timelineCueAudioEditor button')]
+      .find((candidate) => candidate.textContent?.trim() === 'Refresh outputs');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.addEventListener('click', (event) => { window.__syndocalCueAudioMock.refreshClickTrusted = event.isTrusted; }, { once: true });
+    return true;
+  })()`), true, `${label} installs trusted Refresh observer`);
+  const refreshTarget = await hitVerifiedCdpClick(client, ".timelineCueAudioEditor button", "Refresh outputs", `${label} Cue Audio Refresh outputs`);
+  assert.equal(refreshTarget.pointerSequence, "mouseMoved>mousePressed>mouseReleased", `${label} Refresh uses a real CDP pointer sequence`);
+  assert.equal(await evaluate(client, "window.__syndocalCueAudioMock.refreshClickTrusted"), true, `${label} Refresh click is trusted browser input`);
+  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls.map((call) => call.command).join(',') === 'list_audio_output_devices,get_timeline_cue_audio_status'"), `${label} manual list then Cue Audio status`);
+  return refreshTarget;
+};
+const readCueAudioLedger = (client) => evaluate(client, `(() => {
+  const mock = window.__syndocalCueAudioMock;
+  const calls = mock?.calls ?? [];
+  return {
+    calls: structuredClone(calls),
+    knownCommands: structuredClone(mock?.knownCommands ?? []),
+    rejected: structuredClone(mock?.rejected ?? []),
+    ownerCallCount: calls.filter((call) => call.command === "register_project_transaction_owner").length,
+    programAudioCallCount: calls.filter((call) => call.command === "set_program_audio_handoff_config").length,
+    registrationArgs: structuredClone(mock?.registrationArgs ?? null),
+    programAudioHandoffConfigs: structuredClone(mock?.programAudioHandoffConfigs ?? []),
+    authorityBundleDeliveryCount: mock?.authorityBundleDeliveryCount ?? 0,
+    eventSubscriptions: calls
+      .filter((call) => call.command === "plugin:event|listen")
+      .map((call) => ({ event: call.args.event, target: call.args.target })),
+  };
+})()`);
+const assertCueAudioLedger = (proof, label, intentionalUnknownCount) => {
+  const unexpectedCalls = proof.calls.filter((call) =>
+    call.command !== "cue_audio_unknown_probe" && !proof.knownCommands.includes(call.command));
+  assert.deepEqual(unexpectedCalls, [], `${label} organic IPC ledger is fully allowlisted`);
+  assert.equal(
+    proof.calls.filter((call) => call.command === "cue_audio_unknown_probe").length,
+    intentionalUnknownCount,
+    `${label} has only the intentional unknown probe command`,
+  );
+  const unexpectedRejected = proof.rejected.filter((entry) => entry.command !== "cue_audio_unknown_probe");
+  assert.deepEqual(unexpectedRejected, [], `${label} has no delayed unknown or degraded IPC rejection`);
+  assert.equal(
+    proof.rejected.filter((entry) => entry.command === "cue_audio_unknown_probe").length,
+    intentionalUnknownCount,
+    `${label} has only the intentional unknown probe rejection`,
+  );
+};
 
 let vite;
 let browser;
 let client;
 let profileDir;
+let browserEndpoint;
+let phaseAProfileDir;
+let phaseABrowserPid;
+let phaseACdpEndpointPort;
+let phaseBBrowserPid;
 try {
   assert.ok(browserPath, "Chrome or Edge is required for the Cue Audio browser gate");
   vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", host, "--port", String(vitePort), "--strictPort"], { cwd: appRoot, stdio: "ignore" });
-  await waitFor(async () => (await fetch(baseUrl)).ok, "Vite fixture server");
-  profileDir = await mkdtemp(join(tmpdir(), "syndocal-timeline-cue-audio-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profileDir}`, "about:blank"], { stdio: "ignore" });
-  const target = await (async () => {
-    let created = null;
-    await waitFor(async () => {
-      const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent(baseUrl)}`, { method: "PUT" });
-      if (!response.ok) return false;
-      created = await response.json();
-      return true;
-    }, "browser target");
-    return created;
-  })();
-  client = new CdpClient(target.webSocketDebuggerUrl);
-  await client.ready();
-  await client.send("Page.enable");
-  await client.send("Runtime.enable");
-  await client.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  await waitFor(async () => (await fetch(fixtureUrl)).ok, "Vite fixture server");
+  const phaseA = await launchBrowser("syndocal-timeline-cue-audio-phase-a-", phaseACdpPort, "phase A");
+  browser = phaseA.process;
+  profileDir = phaseA.profileDir;
+  browserEndpoint = phaseA.endpoint;
+  phaseACdpEndpointPort = browserEndpoint.port;
+  phaseAProfileDir = profileDir;
+  phaseABrowserPid = browser.pid;
+  client = await openTarget(fixtureUrl, browserEndpoint);
   await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
-  assert.equal(await click(client, '[data-workspace-option="control"]'), true);
-  assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true);
-  await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab");
-  assert.equal(await click(client, ".timelineToolsDisclosure > summary"), true);
-  await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor') !== null"), "Timeline performance disclosure");
-  await evaluate(client, `(() => {
-    const clone = (value) => structuredClone(value);
-    const mock = {
-      calls: [],
-      endpoints: [],
-      settings: { version: 1, route: 'follow_program', device_name: null, topology_fingerprint: null, click_gain: 1, guide_gain: 0.85 },
-      statusRevision: 0,
-    };
-    const status = () => ({
-      runtimeIncarnation: 41,
-      statusRevision: ++mock.statusRevision,
-      desiredSettings: clone(mock.settings),
-      appliedSettings: clone(mock.settings),
-      settingsRevision: 7,
-      lifecycle: 'running',
-      requestedDeviceName: mock.settings.device_name,
-      resolvedDeviceName: mock.settings.route === 'explicit_device' ? mock.settings.device_name : 'Program Output',
-      requestedTopologyFingerprint: mock.settings.topology_fingerprint,
-      observedTopologyFingerprint: mock.endpoints.length ? 'topology-fingerprint-a' : null,
-      topologyGeneration: mock.endpoints.length ? 1 : 0,
-      endpoints: clone(mock.endpoints),
-      outputClockEpoch: 2,
-      scheduleGeneration: 3,
-      sourceFence: 4,
-      nextOutputFrame: 5,
-      callbackLive: true,
-      faultCode: 'None',
-      faultCount: 0,
-      faultSequence: 0,
-      lastError: null,
-      rotationCount: 1,
-      stallCount: 0,
-      configCount: 1,
-    });
-    window.__syndocalCueAudioMock = mock;
-    window.__TAURI_INTERNALS__ = {
-      invoke: async (command, args = {}) => {
-        mock.calls.push({ command, args: clone(args) });
-        if (command === 'list_audio_output_devices') {
-          mock.endpoints = [
-            { name: 'Duplicate Program', occurrences: 2, selectable: false },
-            { name: 'Exact Program', occurrences: 1, selectable: true },
-          ];
-          return ['Duplicate Program', 'Duplicate Program', 'Exact Program'];
-        }
-        if (command === 'get_timeline_cue_audio_status') return status();
-        if (command === 'set_machine_timeline_cue_audio_settings') {
-          mock.settings = clone(args.settings);
-          return status();
-        }
-        throw new Error('Unexpected Cue Audio invoke: ' + command);
-      },
-    };
-  })()`);
-  assert.equal(await click(client, ".timelineCueAudioEditor > summary"), true);
-  assert.equal(await evaluate(client, `(() => {
-    const button = [...document.querySelectorAll('.timelineCueAudioEditor button')]
-      .find((candidate) => candidate.textContent?.trim() === 'Refresh outputs');
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`), true);
-  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.calls.map((call) => call.command).join(',') === 'list_audio_output_devices,get_timeline_cue_audio_status'"), "manual list then Cue Audio status");
+  assert.equal(await evaluate(client, "window.__TAURI_INTERNALS__ === undefined"), true, "phase A mounts as a pure browser without a Tauri preload");
+  await prepareTimelineSurface(client, "phase A");
+  await evaluate(client, cueAudioMockSource);
+  await openCueAudioPanel(client, "phase A");
+  await runTrustedCueAudioRefresh(client, "phase A");
   assert.equal(await evaluate(client, `(() => {
     const route = document.querySelector('.timelineCueAudioEditor select');
     if (!(route instanceof HTMLSelectElement)) return false;
@@ -188,7 +317,7 @@ try {
     return {
       value: output.value,
       duplicateDisabled: duplicate?.disabled === true,
-      calls: structuredClone(window.__syndocalCueAudioMock.calls),
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
     };
   })()`);
   assert.deepEqual(pendingProof, {
@@ -206,7 +335,8 @@ try {
     output.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`), true);
-  assert.deepEqual(await evaluate(client, "structuredClone(window.__syndocalCueAudioMock.calls)"), pendingProof.calls, "ambiguous duplicate cannot be configured");
+  assert.deepEqual(await evaluate(client, "structuredClone(window.__syndocalCueAudioMock.cueAudioCalls)"), pendingProof.calls, "ambiguous duplicate cannot be configured");
+  await evaluate(client, "window.__syndocalCueAudioMock.captureCueAudioCalls = true;");
   assert.equal(await evaluate(client, `(() => {
     const output = document.querySelector('[data-timeline-cue-audio-output]');
     if (!(output instanceof HTMLSelectElement)) return false;
@@ -214,7 +344,7 @@ try {
     output.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`), true);
-  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.calls.length === 3"), "exact explicit Cue Audio settings mutation");
+  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls.length === 3"), "exact explicit Cue Audio settings mutation");
   const proof = await evaluate(client, `(() => {
     const cue = document.querySelector('.timelineCueAudioEditor');
     const panel = document.querySelector('.timelineToolsDisclosurePanel');
@@ -251,7 +381,7 @@ try {
     fixedOuter: true,
     topAuthorities: true,
   });
-  assert.deepEqual(await evaluate(client, "structuredClone(window.__syndocalCueAudioMock.calls)"), [
+  assert.deepEqual(await evaluate(client, "structuredClone(window.__syndocalCueAudioMock.cueAudioCalls)"), [
     { command: 'list_audio_output_devices', args: {} },
     { command: 'get_timeline_cue_audio_status', args: {} },
     {
@@ -260,10 +390,62 @@ try {
     },
   ], "Cue Audio invokes manual list, canonical status, then only the exact selected topology-fenced settings");
   assert.ok(proof.summaryHeight >= 43.5, "Cue Audio disclosure summary preserves a 44px target");
-  console.log("1280x720 Cue Audio: disclosure, Click/Guide authority, 44px controls, internal scroll, and no local enable passed");
+  console.log("PHASE A pure-browser fixture Cue Audio: 1280x720 disclosure, Click/Guide authority, 44px controls, internal scroll, and no local enable passed");
+  client.close();
+  client = null;
+  await stopChild(browser, "phase A browser", browserEndpoint);
+  browser = null;
+  browserEndpoint = null;
+  await rm(profileDir, { recursive: true, force: true });
+  assert.equal(existsSync(phaseAProfileDir), false, "phase B starts after phase A profile cleanup");
+  profileDir = null;
+
+  const phaseB = await launchBrowser("syndocal-timeline-cue-audio-phase-b-", phaseBCdpPort, "phase B");
+  browser = phaseB.process;
+  profileDir = phaseB.profileDir;
+  browserEndpoint = phaseB.endpoint;
+  phaseBBrowserPid = browser.pid;
+  assert.notEqual(phaseBBrowserPid, phaseABrowserPid, "phase B uses a fresh Chrome process");
+  assert.notEqual(profileDir, phaseAProfileDir, "phase B uses a fresh Chrome user-data-dir");
+  assert.notEqual(browserEndpoint.port, phaseACdpEndpointPort, "phase B uses a distinct profile-bound CDP port");
+  client = await openTarget(defaultUrl, browserEndpoint, true);
+  await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "phase B app mount");
+  assert.equal(await evaluate(client, "window.location.search"), "", "phase B uses the plain default URL without a viewport-fixture claim");
+  await waitFor(() => evaluate(client, `(() => {
+    const mock = window.__syndocalCueAudioMock;
+    return mock?.registrationArgs !== null && mock?.programAudioHandoffConfigs?.length === 1;
+  })()`), "phase B owner registration and Program Audio startup handoff");
+  const startupProof = await readCueAudioLedger(client);
+  assertCueAudioLedger(startupProof, "phase B startup milestone", 0);
+  await sleep(1_100);
+  const preProbeProof = await readCueAudioLedger(client);
+  assertCueAudioLedger(preProbeProof, "phase B pre-probe organic startup", 0);
+  assert.ok(preProbeProof.authorityBundleDeliveryCount >= 1, "phase B receives the production-shaped project authority bundle");
+  assert.equal(preProbeProof.ownerCallCount, 1, "phase B owner registration occurs exactly once");
+  assert.equal(preProbeProof.programAudioCallCount, 1, "phase B Program Audio startup occurs exactly once");
+  assert.deepEqual(Object.keys(preProbeProof.registrationArgs).sort(), ["ownerId"], "phase B owner registration payload is exact");
+  assert.match(preProbeProof.registrationArgs.ownerId, /^renderer:[A-Za-z0-9_.:-]{1,119}$/, "phase B owner registration is renderer-scoped");
+  assert.deepEqual(preProbeProof.programAudioHandoffConfigs[0], { enabled: false, volume: 0.8, deviceName: null }, "phase B clean-profile Program Audio payload is exact");
+  assert.ok(preProbeProof.eventSubscriptions.length > 0, "phase B startup registers known events");
+  for (const subscription of preProbeProof.eventSubscriptions) {
+    assert.deepEqual(subscription.target, cueAudioEventTargets[subscription.event], `phase B event target is exact for ${subscription.event}`);
+  }
+  const unknownCommandProof = await evaluate(client, `window.__TAURI_INTERNALS__.invoke("cue_audio_unknown_probe", {}).then(
+    () => ({ rejected: false, reason: null }),
+    (error) => ({ rejected: true, reason: String(error?.message ?? error) }),
+  )`);
+  assert.equal(unknownCommandProof.rejected, true, "phase B unknown Cue Audio commands fail closed");
+  assert.match(unknownCommandProof.reason, /Unexpected Cue Audio invoke/, "phase B unknown Cue Audio rejection is explicit");
+  await prepareTimelineSurface(client, "phase B");
+  await openCueAudioPanel(client, "phase B");
+  await runTrustedCueAudioRefresh(client, "phase B");
+  assert.equal(await evaluate(client, "window.__syndocalCueAudioMock.programAudioHandoffConfigs.length"), 1, "phase B clean-profile Program Audio is emitted once");
+  const finalProof = await readCueAudioLedger(client);
+  assertCueAudioLedger(finalProof, "phase B final ledger", 1);
+  console.log("PHASE B plain-default strict Tauri: production authority startup, allowlisted IPC, owner/Program Audio, unknown rejection, and trusted Refresh passed");
 } finally {
   client?.close();
-  await stopChild(browser);
-  await stopChild(vite);
+  await stopChild(browser, "active browser", browserEndpoint);
+  await stopChild(vite, "Vite");
   if (profileDir) await rm(profileDir, { recursive: true, force: true });
 }
