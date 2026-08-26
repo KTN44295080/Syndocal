@@ -177,11 +177,21 @@ no other substitute shape is accepted.
 
 For the new Agent, the nine capabilities above are the only advertised and emitted
 show contract. Syndocal temporarily accepts the former complete nine-capability
-Master-only set and its `DJ_MASTER_TRACK_ACTIVE` / `DJ_MASTER_TRACK_SYNC` events as
-one bounded migration path for the already-deployed pre-change Agent. Mixed sets,
-an eleven-capability union, and a new Agent emitting an unadvertised legacy event
-fail closed. Remove this migration after the target DJ PC has restarted on the
-generic contract and the restart/next-show row has passed.
+Master-only set and its `DJ_MASTER_TRACK_ACTIVE` / `DJ_MASTER_TRACK_SYNC` events
+only for an already-deployed v1.1.5 Agent. The controlled v1.1.6 source never
+uses that route. Mixed sets, an eleven-capability union, and a new Agent emitting
+an unadvertised legacy event fail closed.
+
+Master-v3 deletion is ineligible until all three pre-deletion gates have direct
+evidence: the target DJ PC is deployed to the controlled v1.1.6 generic peer; an
+exact show-route inventory records no v1.1.5/Master-only Agent; and a generic
+HELLO plus exact mapped any-deck/non-Master playback admits and starts one
+Timeline. Those future proofs earn no HW-4 credit by themselves. Only then, in a
+separately versioned clean-break tranche, delete the legacy capability set,
+parser/dispatch paths, tests, and documentation together without a compatibility
+shim. After that deletion, prove Master HELLO, Master fields/events, and the
+mixed eleven-capability union reject fail-closed while the generic route still
+succeeds.
 
 For the new generic capability set, `DJ_STATE_SYNC.payload` contains `released`
 and optional correlated `ownerDeck`, `ownerDeckId`, and `activePlaySessionId`.
@@ -578,7 +588,7 @@ denominator, which remains **19/71 (26.8%)**.
 | [ ] HW-4.3 | Actual exact mapped playback on any deck emits one `DJ_TRACK_ACTIVE` and starts one mapped Timeline | Required / Peer and hardware pending |
 | [ ] HW-4.4 | Concurrent playing decks cannot steal an admitted owner; terminal release permits a later mapped deck/session | Required / Peer and hardware pending |
 | [ ] HW-4.5 | Stage 1 F14 local LoopHalf plus repeated absolute measured-loop `DJ_LOOP_STATE` reports | Required / Peer and hardware pending |
-| [ ] HW-4.6 | Stage 1 F13 Filter isolation and configured local release-macro behavior | Required / Peer and hardware pending |
+| [ ] HW-4.6 | Current v1.1.6 Stage 1 F13 requires `releaseMacro.enabled=false`: direct local Stop, one independently routed `DJ_RELEASE`, and no filter/fade MIDI | Required / Peer and hardware pending |
 | [ ] HW-4.7 | Stage 1 F13 Release, ACK/rejection/timeout, and retry disposition | Required / Peer and hardware pending |
 | [ ] HW-4.8 | Stage 2 authoritative `running`; F13/F15 `-4/+4`, F14 absolute loop set, and no MIDI | Required / Peer and hardware pending |
 | [ ] HW-4.9 | Disconnect/local Stage 1 operation, reconnect State Sync, and Stage 2 fail-closed behavior | Required / Peer and hardware pending |
@@ -784,6 +794,19 @@ defined in section 2. It never uses Master state as trigger authority. The forme
 complete Master-only nine-capability set remains a bounded Syndocal ingress
 migration only; mixed capability sets and the eleven-capability union are invalid.
 
+**Master-v3 retirement milestone (not a current HW-4 pass):** legacy ingress is
+temporarily accepted only for an already-deployed v1.1.5 Agent; the controlled
+v1.1.6 source never uses it. Before deletion, require direct evidence of target
+DJ-PC v1.1.6 deployment, an exact route inventory with no legacy Agent, and a
+generic HELLO plus exact mapped any-deck/non-Master positive admission/Timeline
+start. Then remove the legacy Master-v3 capability set, parser/dispatch paths,
+tests, and documentation together in one separately versioned clean-break
+tranche, with no compatibility shim. Only after deletion, prove Master HELLO,
+Master fields/events, and the mixed eleven-capability union reject fail-closed
+while the generic route still succeeds. None of these future proofs closes an
+HW-4 row; until removal, legacy ingress is not an executable controlled-source
+route and HW-4 remains **0/12 checked (0%)**.
+
 This restatement moves the same authority out of the historical 2026-08-25
 correction record below, which stays under its SUPERSEDED label as history
 only. No HW-4 row is changed by this restatement: the matrix remains **0/12
@@ -909,7 +932,12 @@ injection distinct.
 For the current controlled v1.1.6 peer, HW-4.6 is fixed to
 `releaseMacro.enabled=false`: F13 must prove direct local Rekordbox Stop and an
 independently routed Syndocal Release. Filter-then-fade is not an executable
-choice for this matrix; it requires a separately implemented, reviewed, and
-deployed peer change. Independent Terra xHigh review approved the runbook with
-no P0/P1/P2 finding. The document itself is no hardware evidence and changes no
-checkbox: HW-4 remains exactly **0/12 checked (0%)**.
+choice for this matrix; a disabled template `sequence` field is inert and must
+not be edited or enabled. Changing that policy requires a separately implemented,
+reviewed, and deployed peer change. The companion additionally records the
+target-checkout path/SHA-256 of
+`server/public/setup/CustomMIDI1-Syndocal-v1.1.6.csv`, operator confirmation that
+it is applied in Rekordbox, the exact `CustomMIDI1` port, and F13/F14 expected
+targets; launcher preflight does not prove those Rekordbox steps. The document
+itself is no hardware evidence and changes no checkbox: HW-4 remains exactly
+**0/12 checked (0%)**.

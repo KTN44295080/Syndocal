@@ -79,8 +79,24 @@ If and only if the v1.1.6 external configuration is absent:
 ```
 
 Edit only `C:\SyndocalShow\dj-agent-v1.1.6.json`. Replace the one-time token
-placeholder and verify the exact `CustomMIDI1` name and port. Then, in the same
-PowerShell:
+placeholder. Before preflight, record the versioned Rekordbox mapping artifact
+from this exact target checkout; do not substitute the historical v1.1.5 file:
+
+```powershell
+$MidiMappingPath = Join-Path $PeerRoot 'server\public\setup\CustomMIDI1-Syndocal-v1.1.6.csv'
+if (-not (Test-Path -LiteralPath $MidiMappingPath -PathType Leaf)) {
+  throw 'Missing current v1.1.6 Rekordbox CustomMIDI mapping artifact.'
+}
+$MidiMappingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $MidiMappingPath).Hash
+[pscustomobject]@{ Path=$MidiMappingPath; SHA256=$MidiMappingHash }
+```
+
+Record that path and SHA-256 in the row evidence, then obtain operator
+confirmation that this exact CSV is applied in Rekordbox. Record the exact
+`CustomMIDI1` port and expected targets: F13 configured `stop` maps to
+Rekordbox Cue/Stop, and F14 configured `loopHalf` maps to Rekordbox LoopHalf.
+The launcher validates only the configured device name and integer port; it
+does not apply or prove the Rekordbox CSV. Then, in the same PowerShell:
 
 ```powershell
 $env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.6.json'
@@ -150,10 +166,13 @@ the checkbox open and name the missing subcheck.
   monitor and payload timestamps. A true no-response prediction is separate and
   must never replace a stale/invalid/contradictory measurement.
 - [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.6 accepts
-  only `releaseMacro.enabled=false`; prove the direct local Stop plus independent
-  Syndocal Release path. Do not enable or select filter-then-fade during HW-4:
-  that mode requires a separately implemented, reviewed, and deployed source
-  change. If the show still requires that macro, stop and leave this row open.
+  only `releaseMacro.enabled=false`; prove direct local Stop, one independently
+  routed Syndocal `DJ_RELEASE`, and no filter/fade MIDI. The disabled template
+  may retain an inert `sequence` field such as `filter-then-fade`; do not edit
+  it or enable the macro, because it does not execute while `enabled=false`.
+  Enabling/selecting that macro requires a separately implemented, reviewed,
+  and deployed peer change. If the show still requires it, stop and leave this
+  row open.
 - [ ] **HW-4.7 — Release result.** F13 produces local Stop and one correlated
   Release. Only accepted/duplicate ACK succeeds. Rejection, timeout, disconnect,
   and send failure remain visible and fail closed; withheld/rejected ACK needs a
