@@ -434,6 +434,31 @@ This checkpoint is software/package evidence only. It does not close the physica
 pedal, Rekordbox, two-process, wired-LAN, reconnect, restart, or shared-network rows;
 the HW-4 matrix remains exactly **0/12 checked (0%)**.
 
+### 2026-08-26 alpha.15 FOH/DJ transport preflight
+
+- The exact standard alpha.15 Syndocal process was running from this checkout as
+  PID `34792`; its single `Syndocal` window was responsive and maximized before
+  native UI inspection. No Web Remote/DJ listener was started.
+- The intended Show-LAN adapter was up as `192.168.50.1/24` on `イーサネット 4`
+  (`ifIndex 3`, `1 Gbps`). The target DJ PC `192.168.50.2` did not answer the
+  bounded one-packet reachability probe, and no local listener was present on TCP
+  `8787` or `9100`. UDP `22346` was not inspected in this resumed preflight.
+- `C:\Users\kouty\Desktop\rb-output` remained clean and upstream-equal at
+  `e3d390d912a2c3a9be418ecbc31771d2bf515de7`. The target-DJ-PC-only external
+  configuration `C:\SyndocalShow\dj-agent-v1.1.5.json` was absent on this FOH
+  machine and `DJ_AGENT_CONFIG_PATH` was unset. The real process-local token was
+  not exposed, copied, logged, or rotated during this preflight.
+- `pnpm --dir app run check:dj-link` passed with no first-party warning. Static
+  route tracing confirmed that the controlled live sequence is `Enable DJ Link`
+  -> refresh/select `192.168.50.1` -> rotate/copy the show-once token -> start the
+  shared Web Remote/DJ listener. Token rotation requires an explicit operator
+  confirmation because it invalidates the current credential. The copied token
+  belongs only in the checkout-external JSON on the actual `.50.2` DJ PC.
+- Moving the physical controller before this peer session is established remains
+  safe for software work, but it accepts no HW-4 row. Rows HW-4.5 through HW-4.9
+  still require the controller/pedal and configured `CustomMIDI1` route; all
+  twelve rows remain unchecked.
+
 ## 9. Native and hardware acceptance
 
 End-to-end acceptance records both repository commits/artifacts, Windows and app

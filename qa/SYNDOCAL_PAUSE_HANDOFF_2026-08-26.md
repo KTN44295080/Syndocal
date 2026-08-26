@@ -389,6 +389,19 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
   the current software/native checkpoint, but any resulting loss of Rekordbox
   MIDI In remains unverified hardware state and does not satisfy a response or
   no-response row by itself.
+- A resumed 2026-08-26 FOH preflight found `イーサネット 4` up at
+  `192.168.50.1/24` (`ifIndex 3`, `1 Gbps`), while the target DJ PC `.50.2` did
+  not answer one bounded reachability probe. No listener existed on TCP `8787`
+  or `9100`; UDP `22346` was not inspected. The exact alpha.15 process was PID
+  `34792`, and its only `Syndocal` window was responsive and maximized for Setup
+  I/O inspection.
+- The FOH machine had neither `C:\SyndocalShow\dj-agent-v1.1.5.json` nor a
+  `DJ_AGENT_CONFIG_PATH` value. The real process-local token was not exposed,
+  copied, logged, or rotated. `pnpm --dir app run check:dj-link` passed with no
+  first-party warning. The next live action is explicit operator approval of
+  token rotation, followed by `Enable DJ Link` -> refresh/select
+  `192.168.50.1` -> copy the show-once token only into the checkout-external
+  JSON on the real `.50.2` DJ PC -> start the shared Web Remote/DJ listener.
 - Physical acceptance remains `0/12`: real token, HELLO/ACK, Rekordbox track
   detection, MIDI output, pedal, the full measured/no-response loop profile,
   release, reconnect, and restart are not recorded as accepted.
