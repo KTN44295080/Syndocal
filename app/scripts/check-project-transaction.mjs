@@ -10,11 +10,12 @@ const readWorkspaceFile = (relativePath) => readFile(
   "utf8",
 );
 
-const [rust, app, transactionModule, recoveryModule, manifestText, invokeCommands] = await Promise.all([
+const [rust, app, transactionModule, recoveryModule, sceneBankSceneCreationController, manifestText, invokeCommands] = await Promise.all([
   readWorkspaceFile("app/src-tauri/src/main.rs"),
   readWorkspaceFile("app/src/App.tsx"),
   readWorkspaceFile("app/src/types.ts"),
   readWorkspaceFile("app/src/projectTransactionRecovery.ts"),
+  readWorkspaceFile("app/src/sceneBankSceneCreationController.ts"),
   readWorkspaceFile("app/src/tauri-invoke-manifest.json"),
   readWorkspaceFile("app/src/tauriInvokeCommands.ts"),
 ]);
@@ -183,7 +184,7 @@ const sliceAppHandler = (start, end) => {
 };
 const createCueListHandler = sliceAppHandler(
   "const createCueList = async",
-  "const createSceneInCueList = async",
+  "const createSceneInCueList = createSceneBankSceneCreationController(",
 );
 assert.match(
   createCueListHandler,
@@ -194,6 +195,69 @@ assert.match(
   createCueListHandler,
   /invoke<ProjectHistoryMutationResult & \{ cue_list_id: number \}>\("create_cue_list"[\s\S]*?authoritativeApplicationIsCurrent\(result\)[\s\S]*?result\.cue_list_id/s,
   "Cue List create must consume the authoritative receipt and committed Bank ID",
+);
+const createSceneInCueListFactory = sliceAppHandler(
+  "const createSceneInCueList = createSceneBankSceneCreationController({",
+  "const renameCueList = async",
+);
+{
+  const optionsInterfaceStart = sceneBankSceneCreationController.indexOf("interface SceneBankSceneCreationControllerOptions {");
+  const optionsInterfaceEnd = sceneBankSceneCreationController.indexOf("}", optionsInterfaceStart);
+  assert(optionsInterfaceStart >= 0 && optionsInterfaceEnd > optionsInterfaceStart, "could not isolate the controller options interface");
+  const controllerOptionKeys = [
+    ...sceneBankSceneCreationController
+      .slice(optionsInterfaceStart, optionsInterfaceEnd)
+      .matchAll(/^\s{2}([A-Za-z0-9]+):/gm),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    controllerOptionKeys,
+    [
+      "snapshot",
+      "setSnapshot",
+      "setSelectedCueListId",
+      "setCueLabel",
+      "setSelectedSceneCueId",
+      "setSelectedSceneEffectId",
+      "setSceneSettingsSurface",
+      "setMessage",
+      "viewportFixture",
+      "requireAuthoritativeCueList",
+      "flushProjectControlMappingsBeforeMutation",
+      "projectMappingsAuthority",
+      "authoritativeApplicationIsCurrent",
+      "refreshSnapshot",
+      "invoke",
+      "projectTransactionOwnerId",
+    ],
+    "the extracted Scene creation controller must retain its exact dependency surface",
+  );
+  for (const key of controllerOptionKeys) {
+    assert.doesNotMatch(
+      sceneBankSceneCreationController,
+      new RegExp(`^\\s{2}${key}\\?:`, "m"),
+      `controller dependency ${key} must remain a required option, not silently optional`,
+    );
+    assert.match(
+      createSceneInCueListFactory,
+      new RegExp(`^\\s{4}${key},\\s*$`, "m"),
+      `App must wire the ${key} dependency as its exact shorthand property`,
+    );
+  }
+}
+assert.match(
+  sceneBankSceneCreationController,
+  /const flushedEpoch = await options\.flushProjectControlMappingsBeforeMutation\(\);[\s\S]*?options\.invoke<ProjectHistoryMutationResult>\("create_empty_cue", \{\s*cueListId,\s*expectedEpoch: currentAuthority\.project_epoch,\s*expectedRevision: currentAuthority\.project_revision,\s*expectedCheckpointHash: currentAuthority\.checkpoint_hash,\s*ownerId: options\.projectTransactionOwnerId,/s,
+  "extracted Scene create must flush first and send the exact post-flush E/R/H/owner fence to create_empty_cue",
+);
+assert.match(
+  sceneBankSceneCreationController,
+  /if \(!options\.authoritativeApplicationIsCurrent\(result\)\) \{\s*options\.setMessage\("New Scene acknowledgement was stale; refresh before retrying\."\);\s*return false;\s*\}\s*await options\.refreshSnapshot\(\);/s,
+  "extracted Scene create must reject a stale acknowledgement before refreshing the snapshot",
+);
+assert.match(
+  sceneBankSceneCreationController,
+  /const createdCue = options\.snapshot\(\)\.cues\s*\.filter\(\(cue\) => cue\.cue_list_id === cueListId && !beforeCueIds\.has\(cue\.id\)\)[\s\S]*?if \(!createdCue\) \{\s*options\.setMessage\("New Scene was acknowledged, but the refreshed project did not contain it\."\);\s*return false;/s,
+  "extracted Scene create must verify the refreshed snapshot gained a new cue in the target Bank",
 );
 const renameCueListHandler = sliceAppHandler(
   "const renameCueList = async",

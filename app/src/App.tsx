@@ -583,6 +583,7 @@ import { createMappingRenderModel } from "./createMappingRenderModel";
 import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
 import { createMappingInteractionController } from "./createMappingInteractionController";
 import { createMappingLayoutController } from "./createMappingLayoutController";
+import { createSceneBankSceneCreationController } from "./sceneBankSceneCreationController";
 import {
   createOutputDiagnosticsController,
   defaultOutput,
@@ -18901,97 +18902,24 @@ export default function App() {
     }
   };
 
-  const createSceneInCueList = async (cueListId: number): Promise<boolean> => {
-    const cueList = requireAuthoritativeCueList(cueListId);
-    if (!cueList) {
-      return false;
-    }
-    setSelectedCueListId(cueListId);
-    if (viewportFixture === "scene-matrix") {
-      // The browser fixture deliberately supports an authored empty Scene so
-      // the bank action remains testable even when no fixture is patched. The
-      // native lane below remains the backend's exact create contract.
-      const template = snapshot().cues.find((cue) => cue.cue_list_id === cueListId)
-        ?? snapshot().cues[0]
-        ?? viewportFixtureData.cueRecallCue;
-      const cueId = nextBankAuthorityId(snapshot().cues.map((cue) => cue.id));
-      if (cueId === null) {
-        setMessage("New Scene ID could not be allocated safely.");
-        return false;
-      }
-      const cue: CueSummary = {
-        ...structuredClone(template),
-        id: cueId,
-        cue_list_id: cueListId,
-        cue_number: String(snapshot().cues.length + 1),
-        label: "New Scene",
-        group_id: null,
-        recall_mode: "Coexist",
-        fade_ms: 0,
-        authored_beats: null,
-        pre_wait_ms: 0,
-        follow_ms: null,
-        parts: [],
-        mark: false,
-        mib_fixture_ids: [],
-        palette_targets: [],
-        tracking: false,
-        notes: "",
-        targets: [],
-        video_targets: [],
-        video_output_targets: [],
-        node_graph_targets: [],
-        effect_targets: [],
-        steps: [],
-        child_timeline: null,
-        live_modifiers: null,
-      };
-      setSnapshot((current) => ({ ...current, cues: [...current.cues, cue] }));
-      setCueLabel("New Scene");
-      setSelectedSceneCueId(cueId);
-      setSelectedSceneEffectId(null);
-      setSceneSettingsSurface("contents");
-      setMessage(`Created scene in ${cueList.label}`);
-      return true;
-    }
-    const beforeCueIds = new Set(snapshot().cues.map((cue) => cue.id));
-    try {
-      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
-      const currentAuthority = projectMappingsAuthority();
-      if (flushedEpoch !== currentAuthority.project_epoch) {
-        setMessage("Project changed while creating the Scene; nothing was applied.");
-        return false;
-      }
-      const result = await invoke<ProjectHistoryMutationResult>("create_empty_cue", {
-        cueListId,
-        expectedEpoch: currentAuthority.project_epoch,
-        expectedRevision: currentAuthority.project_revision,
-        expectedCheckpointHash: currentAuthority.checkpoint_hash,
-        ownerId: projectTransactionOwnerId,
-      });
-      if (!authoritativeApplicationIsCurrent(result)) {
-        setMessage("New Scene acknowledgement was stale; refresh before retrying.");
-        return false;
-      }
-      await refreshSnapshot();
-      const createdCue = snapshot().cues
-        .filter((cue) => cue.cue_list_id === cueListId && !beforeCueIds.has(cue.id))
-        .sort((left, right) => right.id - left.id)[0];
-      if (!createdCue) {
-        setMessage("New Scene was acknowledged, but the refreshed project did not contain it.");
-        return false;
-      }
-      setCueLabel("New Scene");
-      setSelectedSceneCueId(createdCue.id);
-      setSelectedSceneEffectId(null);
-      setSceneSettingsSurface("contents");
-      setMessage(`Created scene in ${cueList.label}`);
-      return true;
-    } catch (error) {
-      setMessage(String(error));
-      return false;
-    }
-  };
+  const createSceneInCueList = createSceneBankSceneCreationController({
+    snapshot,
+    setSnapshot,
+    setSelectedCueListId,
+    setCueLabel,
+    setSelectedSceneCueId,
+    setSelectedSceneEffectId,
+    setSceneSettingsSurface,
+    setMessage,
+    viewportFixture,
+    requireAuthoritativeCueList,
+    flushProjectControlMappingsBeforeMutation,
+    projectMappingsAuthority,
+    authoritativeApplicationIsCurrent,
+    refreshSnapshot,
+    invoke,
+    projectTransactionOwnerId,
+  });
 
   const renameCueList = async (): Promise<boolean> => {
     if (!requireBankAuthority()) return false;
