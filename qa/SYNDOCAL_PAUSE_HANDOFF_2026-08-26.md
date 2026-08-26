@@ -16,13 +16,16 @@ state, and the compatibility fallback is unchanged. The separately licensed alph
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
-The current synchronized development metadata is `1.2.0-alpha.15`; the standard
-native artifact is bound to pushed, upstream-equal source commit `1d372e7`,
+The current synchronized development metadata is `1.2.0-alpha.15`; the current
+local native verification artifact is bound to pushed, upstream-equal source
+commit `c609b61`,
 while the separately licensed alpha.14 Show-ASIO artifact remains the only
 Show-ASIO artifact recorded here. Its runtime baseline includes the DVC
 controller checkpoint `652b197d3cce9cfc119a790baffefbd47f08cc8c`. The alpha.15
 artifact identity, warning ratchet, and native process gate are recorded below;
-they do not promote physical hardware or output acceptance.
+they do not promote physical hardware or output acceptance. This same-version
+rebuild is local validation evidence only; advance the prerelease ordinal before
+distributing another development artifact.
 
 ## 1. Exact checkpoints
 
@@ -31,7 +34,8 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); standard artifact identity is in section 3 |
+| Current local alpha.15 native verification runtime/source/artifact | Pushed, upstream-equal source commit `c609b61c77e44ee028ed7322c29a0cfd04b8182c` (`refactor(scene): extract bank scene creation controller`); local artifact identity is in section 3 and is not a new distributable artifact |
+| Prior alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); prior standard artifact identity is retained in section 3 |
 | Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
@@ -45,8 +49,10 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The alpha.15 standard runtime/source/artifact is
-bound to pushed commit
+Branch: `codex/syndocal-v1.2`. The current local alpha.15 native verification
+runtime/source/artifact is bound to pushed commit
+`c609b61c77e44ee028ed7322c29a0cfd04b8182c`. The prior alpha.15 standard
+runtime/source/artifact remains bound to
 `1d372e795870c1a6e5687d1116161042ddac627e`. The historical alpha.14 runtime
 source and native artifact remain bound to
 `92122f1b148d40845b2cfe3e4618a57ce132b3df`; a later commit containing only
@@ -88,21 +94,51 @@ the artifact source checkpoint as the later documentation HEAD.
 
 ## 3. Alpha.15 standard artifact; historical alpha.14 and local-only Show-ASIO artifacts
 
-### Current alpha.15 standard MIT/WASAPI artifact (2026-08-26)
+### Current local alpha.15 MIT/WASAPI verification artifact (2026-08-26)
 
-- Source checkpoint: `1d372e795870c1a6e5687d1116161042ddac627e`
+- Source checkpoint: `c609b61c77e44ee028ed7322c29a0cfd04b8182c`
 - Path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
 - Product/File version: `1.2.0-alpha.15`
 - Size: `58,523,648` bytes
-- SHA-256: `A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`
-- Native warning ratchet (`windows-native-release`): baseline/current
-  `0 total / 0 first-party / 0 third-party`.
-- Exact process gate: process count was `0` before build, exactly one
-  responsive maximized `Syndocal` window was available for QA, and the exact
-  process count was `0` after QA.
-- This proves the alpha.15 standard software/native artifact checkpoint only;
+- SHA-256: `58C059A1B52DD61F0E7FD2C51897BE58B933FCE83598CDDEE8903374D05226DC`
+- Warning counts: `frontend-typescript-vite-windows` baseline/current is
+  `0/0` first-party (`0` third-party), and the authoritative native build
+  emitted `0` first-party warning lines.
+- Exact process gate: the earlier PID `34792` was resolved to this checkout's
+  exact release executable and terminated before build. Process count was `0`
+  immediately before the authoritative rerun. The first attempt failed in
+  `ffmpeg-sys` because the FFmpeg environment was absent and was not accepted.
+  The gate was restarted from the beginning with `FFMPEG_DIR` and
+  `LIBCLANG_PATH` restored. Both attempts printed and verified the exact VS
+  Community 14.44 x64 linker as pinned and first; Git's incompatible linker was
+  second and never selected. `pnpm --dir app tauri build --no-bundle` then
+  completed in `2m 51s`.
+- The rebuilt executable ran as PID `45724`; its resolved path was exact, it was
+  responding, and exactly one maximized `Syndocal` window was available. Native
+  QA created a Scene through `Edit -> Lighting -> Bank 1 -> + Scene`:
+  the Bank count changed `0 -> 1`, literal project label `New Scene` was
+  selected, the Scene settings editor opened, and the status reported
+  `Created scene in Bank 1`. The localized accessibility description remained
+  `新しいシーン`; it did not rewrite the stored project label.
+- The temporary `Untitled.sdc` Scene was not saved. QA ended through the
+  protected `破棄して停止して閉じる` path, which discarded the change and
+  stopped live output. Exact-checkout `syndocal.exe` process count is now `0`.
+- This same-version rebuild is local verification evidence and must not be
+  distributed as a new alpha.15 artifact. Advance the prerelease ordinal before
+  the next distributed development artifact.
+- This proves the alpha.15 local software/native checkpoint only;
   physical output, DJ, representative-scene real-output, and full ASIO gates
   remain open.
+
+### Prior alpha.15 standard MIT/WASAPI artifact
+
+- Source checkpoint: `1d372e795870c1a6e5687d1116161042ddac627e`
+- Product/File version: `1.2.0-alpha.15`
+- Size: `58,523,648` bytes
+- SHA-256: `A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`
+- The current file at the release path has replaced this artifact locally; this
+  identity remains the prior standard checkpoint and is not re-bound to
+  `c609b61`.
 
 ### Historical alpha.14 standard MIT/WASAPI artifact
 
@@ -423,6 +459,15 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 - This live observation is limited to the lifetime of PID `34792`. Listener and
   token restoration after stop/restart remain unproven, so HW-4.11 is still
   unchecked within the `0/12` matrix.
+- The later native build gate resolved and terminated exact PID `34792` before
+  relinking. The rebuilt exact-path QA process was PID `45724`; after restart
+  the Setup I/O surface returned to local-only/stopped and no listener existed
+  on TCP `9100`. PID `45724` was then closed after native QA, so exact-checkout
+  process count is now `0`. This confirms that the observed listener/configuration
+  was not restored across process restart. Do not treat the earlier listener as
+  active show state. When the real `.50.2` DJ PC is ready, configure the
+  listener, rotate once, copy the show-once token directly into its external
+  config, and run HELLO/ACK without another intervening Syndocal restart.
 
 ## 8. Explicit remaining show gates
 
@@ -460,10 +505,43 @@ These are OPEN, not implicit completion claims:
 
 Current exact metrics:
 
-- `app/src/App.tsx`: `28,778` lines, `1,201,419` bytes, SHA-256
-  `FB4295521386B246629EC1B6BC5DFBD229D1E53DB2E4AB058DCD41B46495AF9E`
+- `app/src/App.tsx`: `28,719` lines, `1,199,118` bytes, SHA-256
+  `D4F603121EB49C65F4A1C1F4E0F67A31CAE8870EFFF8D21AF4789357EDDDB463`
 - `app/src-tauri/src/main.rs`: `129,413` lines, `4,965,088` bytes, SHA-256
   `A337B15E66C69A56FEC12A9FFF2D3275829BA610B28F787BE58AB56CB803E5C2`
+- Source checkpoint `c609b61c77e44ee028ed7322c29a0cfd04b8182c`
+  extracted Scene creation for a Bank from `App.tsx` into
+  `app/src/sceneBankSceneCreationController.ts` (`128` lines, `5,254` bytes,
+  SHA-256
+  `23F38FA011D27EC1659AEE125C4B39705332E0CC3A35ADA1EBE9B29979B7FACC`).
+  `App.tsx` is 72 physical lines smaller than its exact parent checkpoint.
+  Both Scene-create call sites retain the same callback. The controller keeps
+  the browser Scene Matrix fixture path and the native post-flush
+  epoch/revision/checkpoint-hash/owner fence, stale-ack rejection, refreshed
+  new-Cue difference check, selection, settings surface, and visible error
+  behavior.
+- `app/scripts/check-project-transaction.mjs` now checks the extracted module
+  and its exact 16 required dependencies instead of relying on the removed
+  inline function as a source boundary. Its final shorthand-property check
+  rejects swapped setter wiring. Independent implementation review first found
+  the stale checker boundary, independent re-review found the setter false
+  positive, and both were repaired; final review reported no P0/P1/P2.
+- Focused proof at this checkpoint: `check:project-transaction` PASS,
+  `tsc --noEmit` PASS, `check:frontend-invokes` PASS with `419` exact commands,
+  `check:timeline-source-shelf` PASS, `check:warnings -- --configuration
+  frontend-typescript-vite-windows` PASS with baseline/current
+  `0/0` first-party warnings, `git diff --check` PASS, native build PASS, and
+  the native Scene-create path described in section 3 PASS. The dedicated
+  Scene Matrix CDP viewport attempt remains unverified because its initial
+  `Page.navigate` timed out at 15 seconds; it is not counted as a pass. The
+  focused Timeline source-shelf viewport/parity route did pass, and no CDP/Vite
+  listener was left running.
+- Post-source-commit inventory: the checkout contains `207,327,554,715` bytes,
+  of which `target` contains `205,883,767,495` bytes and `app/node_modules`
+  contains `545,336,685` bytes. No deletion was performed: the recurring
+  cleanup target set is not yet eligible under the exact-path/adversarial-review
+  gate, and the current release/QA evidence must remain protected. Cleanup stays
+  open rather than treating this large inventory as disposable by assumption.
 - This tranche extracted the exact loop-profile mapping and its tests into
   `app/src-tauri/src/dj_loop_range.rs` (`102` lines, `3,504` bytes, SHA-256
   `71A7CD025FA0888A045AAF0E110CB8F337672F0F3E365AF82527DCBF601F324F`)
@@ -502,7 +580,8 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Main alpha.15 source/artifact checkpoint `1d372e7...`, DVC controller
+- Current local alpha.15 source/artifact checkpoint `c609b61...`, prior standard
+  alpha.15 source/artifact checkpoint `1d372e7...`, DVC controller
   checkpoint `652b197...`, alpha.14 artifact source checkpoint `92122f1b...`,
   and rb-output docs tip `e3d390d...` were clean and upstream-equal when
   recorded. The final documentation
