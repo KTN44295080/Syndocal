@@ -558,26 +558,31 @@ export const installCueAudioMock = (eventTargets) => {
         return [];
       }
       if (command === "list_audio_input_devices") {
-        if (!exactKeys(args, ["backend"]) || typeof args.backend !== "string" || args.backend.trim() === "") {
-          throw new Error("Cue Audio list_audio_input_devices startup payload must contain one backend");
+        if (!exactKeys(args, ["request"])
+          || !exactKeys(args.request, ["schemaVersion", "backend"])
+          || args.request.schemaVersion !== 1
+          || !["wasapiShared", "asio"].includes(args.request.backend)) {
+          throw new Error("Cue Audio list_audio_input_devices startup payload must contain one exact V1 request");
         }
         return [];
       }
       if (command === "get_live_audio_input_capabilities") {
-        if (!exactKeys(args, ["backend", "deviceId", "sampleRate"])
-          || typeof args.backend !== "string"
-          || args.backend.trim() === ""
-          || (args.deviceId !== null && typeof args.deviceId !== "string")
-          || (args.sampleRate !== null && (typeof args.sampleRate !== "number" || !Number.isFinite(args.sampleRate)))) {
-          throw new Error("Cue Audio live-audio capabilities payload differs from the exact startup contract");
+        const request = args?.request;
+        if (!exactKeys(args, ["request"])
+          || !exactKeys(request, ["schemaVersion", "backend", "deviceId", "sampleRate"])
+          || request.schemaVersion !== 1
+          || !["wasapiShared", "asio"].includes(request.backend)
+          || (request.deviceId !== null && typeof request.deviceId !== "string")
+          || (request.sampleRate !== null && (typeof request.sampleRate !== "number" || !Number.isFinite(request.sampleRate)))) {
+          throw new Error("Cue Audio live-audio capabilities payload differs from the exact V1 startup contract");
         }
         return {
-          device_id: args.deviceId,
+          device_id: request.deviceId,
           device_name: "Program Audio",
-          backend: args.backend,
-          default_config: { channels: 2, sample_rate: args.sampleRate ?? 48_000, sample_format: "f32" },
+          backend: request.backend,
+          default_config: { channels: 2, sample_rate: request.sampleRate ?? 48_000, sample_format: "f32" },
           supported_configs: [],
-          resolved_config: { channels: 2, sample_rate: args.sampleRate ?? 48_000, sample_format: "f32" },
+          resolved_config: { channels: 2, sample_rate: request.sampleRate ?? 48_000, sample_format: "f32" },
           max_capture_frames: 0,
         };
       }

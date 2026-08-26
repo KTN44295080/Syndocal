@@ -9,6 +9,7 @@ const selectionStorageSource = await readFile(
   "utf8",
 );
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const ipcV1Source = await readFile(new URL("../src/liveAudioInputIpcV1.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const clipGrid = await readFile(
@@ -1245,9 +1246,21 @@ assert.ok(
 );
 assert.ok(app.includes("const requestEpoch = liveAudioStatusRequests.beginPoll()"));
 assert.ok(app.includes("void refreshLiveAudioInputStatus();"), "status discovery must not depend on the stale frontend default");
-assert.ok(app.includes("{ backend: backendId, deviceId: deviceId || null, sampleRate }"));
+assert.ok(app.includes("buildLiveAudioInputCapabilitiesArgsV1({"));
+assert.ok(app.includes("deviceId: deviceId || null,"));
 assert.ok(app.includes('"live_audio_input_backends"'));
-assert.match(app, /list_audio_input_devices[\s\S]*?backend:\s*backendId/);
+assert.match(app, /list_audio_input_devices[\s\S]*?buildLiveAudioInputBackendArgsV1\(backendId\)/);
+assert.match(
+  app,
+  /start_live_audio_input[\s\S]*?buildLiveAudioInputStartArgsV1\(request\)/,
+  "Start must cross the strict V1 mapper instead of sending the internal snake_case request",
+);
+assert.match(ipcV1Source, /schemaVersion:\s*LIVE_AUDIO_INPUT_IPC_V1_SCHEMA_VERSION/);
+assert.doesNotMatch(
+  app,
+  /"(?:list_audio_input_devices|get_live_audio_input_capabilities)",\s*\{\s*backend:/,
+  "live-audio list/capability invokes must not retain the retired flat backend payload",
+);
 assert.ok(app.includes('backendId === "wasapi_shared"'));
 assert.ok(app.includes('backend: selectedLiveAudioInputBackend()'));
 assert.ok(app.includes('liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null'));
@@ -1345,7 +1358,7 @@ assert.ok(
   "a saved stale selection may pin only its exact backend before catalogue revalidation",
 );
 assert.ok(
-  /const devices = await invoke<LiveAudioInputDeviceSummary\[]>\("list_audio_input_devices",[\s\S]*?setLiveAudioInputDevices\(devices\);[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/.test(app),
+  /const devices = await invoke<LiveAudioInputDeviceSummary\[]>\([\s\S]*?"list_audio_input_devices",[\s\S]*?buildLiveAudioInputBackendArgsV1\(backendId\),[\s\S]*?setLiveAudioInputDevices\(devices\);[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/.test(app),
   "the exact enumerated device catalogue must publish before saved-selection revalidation; it cannot synthesize a selected option",
 );
 assert.ok(app.includes("pinnedSavedBackendId"), "backend discovery must honor the saved-selection pin");

@@ -215,6 +215,11 @@ import type {
   PoppedPanesPersistenceResult,
 } from "./browserPanePopupController";
 import {
+  buildLiveAudioInputBackendArgsV1,
+  buildLiveAudioInputCapabilitiesArgsV1,
+  buildLiveAudioInputStartArgsV1,
+} from "./liveAudioInputIpcV1";
+import {
   createOperatorPolicy,
   operatorCommandAllowed,
   operatorPolicyFromUnknown,
@@ -21892,7 +21897,11 @@ export default function App() {
     try {
       const capabilities = await invoke<LiveAudioInputCapabilities>(
         "get_live_audio_input_capabilities",
-        { backend: backendId, deviceId: deviceId || null, sampleRate },
+        buildLiveAudioInputCapabilitiesArgsV1({
+          backend: backendId,
+          deviceId: deviceId || null,
+          sampleRate,
+        }),
       );
       if (epoch === liveAudioInputCapabilitiesEpoch) {
         setLiveAudioInputCapabilities(capabilities);
@@ -22133,9 +22142,10 @@ export default function App() {
           }
           return;
         }
-        const devices = await invoke<LiveAudioInputDeviceSummary[]>("list_audio_input_devices", {
-          backend: backendId,
-        });
+        const devices = await invoke<LiveAudioInputDeviceSummary[]>(
+          "list_audio_input_devices",
+          buildLiveAudioInputBackendArgsV1(backendId),
+        );
         if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
         // Publish the exact returned catalogue before saved-selection
         // revalidation. Revalidation may apply one freshly generated device
@@ -22157,11 +22167,11 @@ export default function App() {
             try {
               probedCapabilities = await invoke<LiveAudioInputCapabilities>(
                 "get_live_audio_input_capabilities",
-                {
+                buildLiveAudioInputCapabilitiesArgsV1({
                   backend: backendId,
                   deviceId: probeDeviceId,
                   sampleRate: savedRuntime.selection.sample_rate,
-                },
+                }),
               );
             } catch {
               probedCapabilities = null;
@@ -22508,7 +22518,10 @@ export default function App() {
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
     try {
-      const nextStatus = await invoke<LiveAudioInputStatus>("start_live_audio_input", { request });
+      const nextStatus = await invoke<LiveAudioInputStatus>(
+        "start_live_audio_input",
+        buildLiveAudioInputStartArgsV1(request),
+      );
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
         setLiveAudioInputStatus(nextStatus);
         setLiveAudioInputStatusKnown(true);

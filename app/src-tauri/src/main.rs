@@ -137,6 +137,7 @@ mod dj_loop_range;
 mod dj_track_runtime;
 mod dvc_import;
 mod e3_native_acceptance;
+mod live_audio_ipc_v1;
 mod ndi_transport;
 mod output_lease;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -16027,7 +16028,7 @@ const LIVE_AUDIO_TERMINAL_KIND_BACKEND_SPECIFIC: u32 = 2;
 const LIVE_AUDIO_TERMINAL_KIND_ADAPTER_PANIC: u32 = 1;
 const LIVE_AUDIO_TERMINAL_EVENT_HANDLED: u64 = u64::MAX;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Default, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 enum LiveAudioChannelMix {
     #[default]
@@ -16076,8 +16077,25 @@ impl LiveAudioChannelMix {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+impl From<live_audio_ipc_v1::LiveAudioChannelMixV1> for LiveAudioChannelMix {
+    fn from(value: live_audio_ipc_v1::LiveAudioChannelMixV1) -> Self {
+        match value {
+            live_audio_ipc_v1::LiveAudioChannelMixV1::AverageAll => Self::AverageAll,
+            live_audio_ipc_v1::LiveAudioChannelMixV1::Single { channel_index } => {
+                Self::Single { channel_index }
+            }
+            live_audio_ipc_v1::LiveAudioChannelMixV1::StereoPair {
+                left_channel_index,
+                right_channel_index,
+            } => Self::StereoPair {
+                left_channel_index,
+                right_channel_index,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveAudioInputStartRequest {
     backend: LiveAudioInputBackend,
     device_id: Option<String>,
@@ -16088,11 +16106,20 @@ struct LiveAudioInputStartRequest {
     channel_mix: LiveAudioChannelMix,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum LiveAudioInputBackend {
     WasapiShared,
     Asio,
+}
+
+impl From<live_audio_ipc_v1::LiveAudioInputBackendV1> for LiveAudioInputBackend {
+    fn from(value: live_audio_ipc_v1::LiveAudioInputBackendV1) -> Self {
+        match value {
+            live_audio_ipc_v1::LiveAudioInputBackendV1::WasapiShared => Self::WasapiShared,
+            live_audio_ipc_v1::LiveAudioInputBackendV1::Asio => Self::Asio,
+        }
+    }
 }
 
 impl LiveAudioInputBackend {
@@ -19643,11 +19670,30 @@ fn admit_tauri_app_invoke<R: tauri::Runtime>(
     Ok(None)
 }
 
+/// The raw V1 admission must be the first dispatch action after reading the
+/// command name and body. This keeps malformed live-audio requests from
+/// reaching `admit_tauri_app_invoke`, which may acquire AppState and the
+/// project owner/external/coordinator locks for runtime mutations.
+fn continue_after_live_audio_ipc_v1_raw_admission<T>(
+    command: &str,
+    body: &tauri::ipc::InvokeBody,
+    continue_dispatch: impl FnOnce() -> T,
+) -> Result<T, String> {
+    live_audio_ipc_v1::admit_live_audio_ipc_v1_invoke_body(command, body)?;
+    Ok(continue_dispatch())
+}
+
 fn dispatch_admitted_tauri_app_invoke<R: tauri::Runtime>(
     invoke: tauri::ipc::Invoke<R>,
     generated_handler: impl Fn(tauri::ipc::Invoke<R>) -> bool,
 ) -> bool {
     let command = invoke.message.command().to_string();
+    if let Err(error) =
+        continue_after_live_audio_ipc_v1_raw_admission(&command, invoke.message.payload(), || ())
+    {
+        invoke.resolver.reject(error);
+        return true;
+    }
     if control_plane::tauri_route_admission_class(&command)
         == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
         && runtime_route_dispatch_policy(&command)
@@ -37405,11 +37451,16 @@ fn live_audio_input_backends() -> Vec<LiveAudioInputBackendSummary> {
 
 #[tauri::command]
 fn list_audio_input_devices(
+    request: live_audio_ipc_v1::StrictLiveAudioRequest<
+        live_audio_ipc_v1::ListAudioInputDevicesRequestV1,
+    >,
     state: State<'_, AppState>,
-    backend: LiveAudioInputBackend,
 ) -> Result<Vec<LiveAudioInputDeviceSummary>, String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
+    // The custom CommandArg admitted the complete outer and inner V1 shape,
+    // including schemaVersion, before this handler can inspect AppState.
+    let backend = request.into_inner().backend.into();
     require_ready_live_audio_input_backend(backend)?;
     if state
         .live_audio_input
@@ -37833,13 +37884,19 @@ fn resolve_asio_live_audio_start_config(
 
 #[tauri::command]
 fn get_live_audio_input_capabilities(
+    request: live_audio_ipc_v1::StrictLiveAudioRequest<
+        live_audio_ipc_v1::LiveAudioInputCapabilitiesRequestV1,
+    >,
     state: State<'_, AppState>,
-    backend: LiveAudioInputBackend,
-    device_id: Option<String>,
-    sample_rate: Option<u32>,
 ) -> Result<LiveAudioInputCapabilities, String> {
     use rodio::cpal::traits::DeviceTrait;
 
+    // RequiredNullable fields have already proved that every nullable key was
+    // present, and the strict CommandArg has rejected old flat/snake payloads.
+    let request = request.into_inner();
+    let backend = request.backend.into();
+    let device_id = request.device_id.into_option();
+    let sample_rate = request.sample_rate.into_option();
     require_ready_live_audio_input_backend(backend)?;
     let resolved = resolve_live_audio_input_device(&state, backend, device_id.as_deref())?;
     match &resolved.device {
@@ -38845,11 +38902,26 @@ fn build_wasapi_live_audio_capture(
 
 #[tauri::command]
 fn start_live_audio_input(
+    request: live_audio_ipc_v1::StrictLiveAudioRequest<
+        live_audio_ipc_v1::StartLiveAudioInputRequestV1,
+    >,
     state: State<'_, AppState>,
-    request: LiveAudioInputStartRequest,
 ) -> Result<LiveAudioInputStatus, String> {
     use rodio::cpal::traits::DeviceTrait;
 
+    // Keep the runtime and persisted representation unchanged: only the
+    // renderer-facing V1 DTO is camelCase. Admission completed before this
+    // conversion and before any AppState lock, catalog lookup, or stream work.
+    let request = request.into_inner();
+    let request = LiveAudioInputStartRequest {
+        backend: request.backend.into(),
+        device_id: request.device_id.into_option(),
+        sample_rate: request.sample_rate.into_option(),
+        stream_channels: request.stream_channels.into_option(),
+        sample_format: request.sample_format.into_option(),
+        buffer_frames: request.buffer_frames.into_option(),
+        channel_mix: request.channel_mix.into(),
+    };
     require_ready_live_audio_input_backend(request.backend)?;
     let _lifecycle = state
         .live_audio_input_lifecycle
@@ -79864,6 +79936,207 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn live_audio_ipc_v1_raw_admission_blocks_runtime_preflight_sensitive_access() {
+        #[derive(Debug, Default, PartialEq, Eq)]
+        struct RuntimePreflightAccesses {
+            app_state: u8,
+            project_owner: u8,
+            external_admission: u8,
+            coordinator: u8,
+            device_catalog: u8,
+            stream_lifecycle: u8,
+        }
+
+        fn sensitive_runtime_preflight(accesses: &mut RuntimePreflightAccesses) {
+            accesses.app_state += 1;
+            accesses.project_owner += 1;
+            accesses.external_admission += 1;
+            accesses.coordinator += 1;
+            accesses.device_catalog += 1;
+            accesses.stream_lifecycle += 1;
+        }
+
+        let invalid_invokes = [
+            // Missing schemaVersion.
+            (
+                "list_audio_input_devices",
+                serde_json::json!({ "request": { "backend": "wasapiShared" } }),
+            ),
+            // Required nullable keys are not optional just because null is.
+            (
+                "get_live_audio_input_capabilities",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 1,
+                        "backend": "wasapiShared",
+                        "sampleRate": null
+                    }
+                }),
+            ),
+            // A future schema version cannot access the device catalog.
+            (
+                "get_live_audio_input_capabilities",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 2,
+                        "backend": "wasapiShared",
+                        "deviceId": null,
+                        "sampleRate": null
+                    }
+                }),
+            ),
+            // Unknown request field.
+            (
+                "start_live_audio_input",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 1,
+                        "backend": "wasapiShared",
+                        "deviceId": null,
+                        "sampleRate": null,
+                        "streamChannels": null,
+                        "sampleFormat": null,
+                        "bufferFrames": null,
+                        "channelMix": { "mode": "averageAll" },
+                        "unexpected": true
+                    }
+                }),
+            ),
+            // Legacy snake_case representation.
+            (
+                "start_live_audio_input",
+                serde_json::json!({
+                    "request": {
+                        "schema_version": 1,
+                        "backend": "wasapi_shared",
+                        "device_id": null,
+                        "sample_rate": null,
+                        "stream_channels": null,
+                        "sample_format": null,
+                        "buffer_frames": null,
+                        "channel_mix": { "mode": "average_all" }
+                    }
+                }),
+            ),
+            // Direct inner payload without the exact outer request wrapper.
+            (
+                "list_audio_input_devices",
+                serde_json::json!({ "schemaVersion": 1, "backend": "wasapiShared" }),
+            ),
+            // An otherwise valid outer request with an extra outer key.
+            (
+                "get_live_audio_input_capabilities",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 1,
+                        "backend": "wasapiShared",
+                        "deviceId": null,
+                        "sampleRate": null
+                    },
+                    "extra": true
+                }),
+            ),
+        ];
+
+        for (command, payload) in invalid_invokes {
+            let mut accesses = RuntimePreflightAccesses::default();
+            let result = continue_after_live_audio_ipc_v1_raw_admission(
+                command,
+                &tauri::ipc::InvokeBody::Json(payload),
+                || sensitive_runtime_preflight(&mut accesses),
+            );
+            assert!(result.is_err(), "{command} must reject malformed V1 IPC");
+            assert_eq!(accesses, RuntimePreflightAccesses::default(), "{command}");
+        }
+
+        let mut raw_accesses = RuntimePreflightAccesses::default();
+        assert!(continue_after_live_audio_ipc_v1_raw_admission(
+            "start_live_audio_input",
+            &tauri::ipc::InvokeBody::Raw(vec![0x00]),
+            || sensitive_runtime_preflight(&mut raw_accesses),
+        )
+        .is_err());
+        assert_eq!(raw_accesses, RuntimePreflightAccesses::default());
+
+        let valid_invokes = [
+            (
+                "list_audio_input_devices",
+                serde_json::json!({
+                    "request": { "schemaVersion": 1, "backend": "wasapiShared" }
+                }),
+            ),
+            (
+                "get_live_audio_input_capabilities",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 1,
+                        "backend": "wasapiShared",
+                        "deviceId": null,
+                        "sampleRate": null
+                    }
+                }),
+            ),
+            (
+                "start_live_audio_input",
+                serde_json::json!({
+                    "request": {
+                        "schemaVersion": 1,
+                        "backend": "wasapiShared",
+                        "deviceId": null,
+                        "sampleRate": null,
+                        "streamChannels": null,
+                        "sampleFormat": null,
+                        "bufferFrames": null,
+                        "channelMix": { "mode": "averageAll" }
+                    }
+                }),
+            ),
+        ];
+        for (command, payload) in valid_invokes {
+            let mut accesses = RuntimePreflightAccesses::default();
+            continue_after_live_audio_ipc_v1_raw_admission(
+                command,
+                &tauri::ipc::InvokeBody::Json(payload),
+                || sensitive_runtime_preflight(&mut accesses),
+            )
+            .unwrap();
+            assert_eq!(
+                accesses,
+                RuntimePreflightAccesses {
+                    app_state: 1,
+                    project_owner: 1,
+                    external_admission: 1,
+                    coordinator: 1,
+                    device_catalog: 1,
+                    stream_lifecycle: 1,
+                },
+                "{command} must continue only after exact V1 admission"
+            );
+        }
+
+        let source = include_str!("main.rs");
+        let dispatch_start = source
+            .find("fn dispatch_admitted_tauri_app_invoke")
+            .expect("dispatch wrapper");
+        let dispatch_end = source[dispatch_start..]
+            .find("fn lock_project_external_command_admission_inner")
+            .map(|offset| dispatch_start + offset)
+            .expect("dispatch wrapper boundary");
+        let dispatch = &source[dispatch_start..dispatch_end];
+        let raw_admission = dispatch
+            .find("continue_after_live_audio_ipc_v1_raw_admission")
+            .expect("raw V1 admission");
+        let runtime_state_access = dispatch
+            .find("let containing_window = invoke.message.webview_ref().window().clone()")
+            .expect("runtime AppState preflight");
+        let app_admission = dispatch
+            .find("let _dispatch_admission = match admit_tauri_app_invoke(&invoke)")
+            .expect("ordinary app admission");
+        assert!(raw_admission < runtime_state_access);
+        assert!(raw_admission < app_admission);
+    }
+
+    #[test]
     fn synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch() {
         let source = include_str!("main.rs");
         assert!(OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES
@@ -117551,33 +117824,18 @@ mod live_audio_input_tests {
     }
 
     #[test]
-    fn live_audio_command_json_contract_uses_tagged_channel_mix_and_snake_case_fields() {
-        let request: LiveAudioInputStartRequest = serde_json::from_value(json!({
-            "backend": "asio",
-            "device_id": "wasapi:7:0",
-            "sample_rate": 48_000,
-            "stream_channels": 2,
-            "sample_format": "f32",
-            "buffer_frames": 128,
-            "channel_mix": {
+    fn live_audio_runtime_storage_channel_mix_stays_snake_case() {
+        assert_eq!(
+            serde_json::to_value(LiveAudioChannelMix::StereoPair {
+                left_channel_index: 0,
+                right_channel_index: 1,
+            })
+            .unwrap(),
+            json!({
                 "mode": "stereo_pair",
                 "left_channel_index": 0,
                 "right_channel_index": 1
-            }
-        }))
-        .unwrap();
-        assert_eq!(request.backend, LiveAudioInputBackend::Asio);
-        assert_eq!(request.device_id.as_deref(), Some("wasapi:7:0"));
-        assert_eq!(request.sample_rate, Some(48_000));
-        assert_eq!(request.stream_channels, Some(2));
-        assert_eq!(request.sample_format.as_deref(), Some("f32"));
-        assert_eq!(request.buffer_frames, Some(128));
-        assert_eq!(
-            request.channel_mix,
-            LiveAudioChannelMix::StereoPair {
-                left_channel_index: 0,
-                right_channel_index: 1,
-            }
+            })
         );
         assert_eq!(
             serde_json::to_value(LiveAudioChannelMix::Single { channel_index: 3 }).unwrap(),
@@ -117591,6 +117849,24 @@ mod live_audio_input_tests {
             .unwrap(),
             json!({ "kind": "range", "min_frames": 64, "max_frames": 512 })
         );
+    }
+
+    #[test]
+    fn live_audio_channel_mix_runtime_validation_stays_internal_and_fail_closed() {
+        assert_eq!(
+            LiveAudioChannelMix::StereoPair {
+                left_channel_index: 0,
+                right_channel_index: 1,
+            }
+            .validate(2),
+            Ok(())
+        );
+        assert!(LiveAudioChannelMix::StereoPair {
+            left_channel_index: 0,
+            right_channel_index: 0,
+        }
+        .validate(2)
+        .is_err());
     }
 
     #[test]
@@ -117695,36 +117971,6 @@ mod live_audio_input_tests {
     }
 
     #[test]
-    fn live_audio_request_boundary_requires_explicit_backend_and_rejects_unknown_fields() {
-        let missing_backend = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
-            "channel_mix": { "mode": "average_all" }
-        }));
-        assert!(missing_backend.is_err(), "missing backend must fail closed");
-
-        let unknown_backend = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
-            "backend": "legacy_wasapi",
-            "channel_mix": { "mode": "average_all" }
-        }));
-        assert!(unknown_backend.is_err(), "unknown backend must fail closed");
-
-        let unknown_field = serde_json::from_value::<LiveAudioInputStartRequest>(json!({
-            "backend": "wasapi_shared",
-            "channel_mix": { "mode": "average_all" },
-            "unexpected": true
-        }));
-        assert!(
-            unknown_field.is_err(),
-            "unknown request fields must fail closed"
-        );
-
-        let unknown_backend_argument =
-            serde_json::from_value::<LiveAudioInputBackend>(json!("legacy_wasapi"));
-        assert!(
-            unknown_backend_argument.is_err(),
-            "Tauri backend arguments must reject unknown backend identifiers"
-        );
-    }
-
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     const ASIO_CONTRACT_DRIVER: &str = "asio:TOPPING Pro USB Audio Device";
 
