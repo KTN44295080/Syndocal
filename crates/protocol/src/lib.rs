@@ -7977,7 +7977,7 @@ pub struct RemoteControlStatus {
 /// DJ Link is a dedicated, authenticated LAN protocol. It intentionally does
 /// not reuse the generic remote PIN or expose the credential in any status
 /// payload.
-pub const DJ_LINK_PROTOCOL_VERSION: u8 = 2;
+pub const DJ_LINK_PROTOCOL_VERSION: u8 = 3;
 /// The only peer identity production ingress accepts. Anything else fails
 /// envelope validation before authentication is attempted.
 pub const DJ_LINK_AGENT_ID: &str = "rb-output-dj-agent";
@@ -7990,10 +7990,11 @@ pub const DJ_LINK_BEATS_PER_BAR: u8 = 4;
 /// Exact capability strings every HELLO must advertise. The list must be
 /// complete, duplicate-free, and carry no extras; partial capability
 /// negotiation does not exist on this wire revision.
-pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 8] = [
+pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 9] = [
     "DJ_MASTER_TRACK_ACTIVE",
     "DJ_MASTER_TRACK_SYNC",
     "DJ_LOOP_STATE",
+    "DJ_LOOP_FALLBACK",
     "DJ_RELEASE",
     "DJ_TIMELINE_BEAT_JUMP",
     "DJ_TIMELINE_LOOP_SET",
@@ -8002,6 +8003,26 @@ pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 8] = [
 ];
 /// Mandatory source discriminator of every measured loop report.
 pub const DJ_LINK_MEASURED_LOOP_SOURCE: &str = "rekordbox-hook-measured";
+/// Exact source discriminator for the bounded Stage-1 pedal fallback. This is
+/// deliberately distinct from a measured Rekordbox report.
+pub const DJ_LINK_LOOP_FALLBACK_SOURCE: &str = "pedal-no-response-predicted";
+/// Official Rekordbox Beat Loop profile used by the DSF show. Values are
+/// exact dyadic fractions, so callers must never round a nearby value into
+/// this set.
+pub const DJ_LINK_LOOP_PROFILE_LENGTH_BEATS: [f64; 10] = [
+    8.0,
+    4.0,
+    2.0,
+    1.0,
+    1.0 / 2.0,
+    1.0 / 4.0,
+    1.0 / 8.0,
+    1.0 / 16.0,
+    1.0 / 32.0,
+    1.0 / 64.0,
+];
+pub const DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS: u64 = 50;
+pub const DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS: u64 = 1_500;
 pub const DJ_LINK_MAX_BPM: f64 = 1000.0;
 pub const DJ_LINK_MAX_POSITION_AT_SEND_SEC: f64 = 7200.0;
 pub const DJ_LINK_MAX_SAMPLE_AGE_MS: u64 = 1500;
@@ -8022,6 +8043,8 @@ pub enum DjLinkMessageType {
     MasterTrackSync,
     #[serde(rename = "DJ_LOOP_STATE")]
     LoopState,
+    #[serde(rename = "DJ_LOOP_FALLBACK")]
+    LoopFallback,
     #[serde(rename = "DJ_RELEASE")]
     Release,
     #[serde(rename = "DJ_STATE_SYNC")]
@@ -8131,6 +8154,39 @@ pub struct DjLinkLoopStatePayload {
     pub play_session_id: String,
     #[serde(rename = "loop")]
     pub loop_state: DjLinkMeasuredLoop,
+}
+
+/// Bounded absolute loop target emitted only after an F14 response window
+/// expires without a fresh, valid Rekordbox measurement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkLoopFallbackPayload {
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(rename = "masterDeckRevision")]
+    pub master_deck_revision: u64,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    /// Monotonic physical F14 intent identity. A fallback may consume this
+    /// identity only once for the current deck/session runtime.
+    #[serde(rename = "pedalIntentId")]
+    pub pedal_intent_id: u64,
+    /// The last accepted measured Rekordbox loop revision, or explicit null
+    /// when this lineage has never had accepted measured loop authority.
+    #[serde(rename = "baseMeasuredLoopRevision")]
+    pub base_measured_loop_revision: Option<u64>,
+    /// The exact effective active Syndocal loop division at that base. Null
+    /// means either no accepted loop authority or an accepted inactive
+    /// measurement; it can be non-null with a null measured revision after an
+    /// earlier no-response prediction.
+    #[serde(rename = "baseLoopDivision")]
+    pub base_loop_division: Option<u8>,
+    #[serde(rename = "targetLengthBeats")]
+    pub target_length_beats: f64,
+    #[serde(rename = "responseWindowMs")]
+    pub response_window_ms: u64,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8431,7 +8487,7 @@ fn validate_dj_link_required_identity(value: &str, label: &str) -> Result<(), St
 impl DjLinkEnvelope {
     /// Ingress is exact-only. The raw text is first scanned for duplicate
     /// object keys at every nesting level (serde alone would silently keep
-    /// the last occurrence), then deserialized into the exact v2 envelope
+    /// the last occurrence), then deserialized into the exact v3 envelope
     /// shape with unknown-field rejection, then fully payload-validated.
     pub fn parse_json(text: &str) -> Result<Self, String> {
         if text.len() > DJ_LINK_MAX_FRAME_BYTES {
@@ -8480,11 +8536,17 @@ impl DjLinkEnvelope {
                 if payload.deck_id != dj_link_deck_id(payload.deck) {
                     return Err("deckId must be rekordbox-deck-N matching deck".to_string());
                 }
-                if payload.master_deck_revision == 0 {
+                if payload.master_deck_revision == 0
+                    || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE
+                {
                     return Err("masterDeckRevision must be a positive safe integer".to_string());
                 }
                 validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
                 payload.loop_state.validate()?;
+            }
+            DjLinkMessageType::LoopFallback => {
+                let payload: DjLinkLoopFallbackPayload = parse_dj_link_payload(&self.payload)?;
+                payload.validate()?;
             }
             DjLinkMessageType::Release => {
                 let payload: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
@@ -8678,8 +8740,11 @@ fn validate_dj_link_timestamp(value: &str) -> Result<(), String> {
 
 impl DjLinkMeasuredLoop {
     pub fn validate(&self) -> Result<(), String> {
-        if self.revision == 0 {
+        if self.revision == 0 || self.revision > DJ_LINK_MAX_SEQUENCE {
             return Err("measured loop revision must be a positive safe integer".to_string());
+        }
+        if self.sample_age_ms > DJ_LINK_MAX_SAMPLE_AGE_MS {
+            return Err("measured loop sampleAgeMs exceeds the freshness bound".to_string());
         }
         if self.source != DJ_LINK_MEASURED_LOOP_SOURCE {
             return Err(format!(
@@ -8694,6 +8759,9 @@ impl DjLinkMeasuredLoop {
             if let Some(value) = value {
                 if !value.is_finite() {
                     return Err(format!("measured loop {label} must be finite"));
+                }
+                if matches!(label, "startBeat" | "endBeat") && value < 0.0 {
+                    return Err(format!("measured loop {label} must be non-negative"));
                 }
             }
         }
@@ -8742,6 +8810,77 @@ impl DjLinkMeasuredLoop {
                     .to_string(),
             );
         }
+        if !self.active
+            && (self.start_beat.is_some() || self.end_beat.is_some() || self.length_beats.is_some())
+        {
+            return Err(
+                "an inactive measured loop requires null startBeat,endBeat,lengthBeats".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl DjLinkLoopFallbackPayload {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dj_link_deck(self.deck)?;
+        if self.deck_id != dj_link_deck_id(self.deck) {
+            return Err("deckId must be rekordbox-deck-N matching deck".to_string());
+        }
+        if self.master_deck_revision == 0 || self.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
+            return Err("masterDeckRevision must be a positive safe integer".to_string());
+        }
+        validate_dj_link_required_identity(&self.play_session_id, "playSessionId")?;
+        if self.pedal_intent_id == 0 || self.pedal_intent_id > DJ_LINK_MAX_SEQUENCE {
+            return Err("fallback pedalIntentId must be a positive safe integer".to_string());
+        }
+        if let Some(revision) = self.base_measured_loop_revision {
+            if revision == 0 || revision > DJ_LINK_MAX_SEQUENCE {
+                return Err(
+                    "fallback baseMeasuredLoopRevision must be null or a positive safe integer"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(division) = self.base_loop_division {
+            if usize::from(division) >= DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() {
+                return Err(
+                    "fallback baseLoopDivision is outside the supported profile".to_string()
+                );
+            }
+        }
+        if !self.target_length_beats.is_finite() {
+            return Err("fallback targetLengthBeats must be finite".to_string());
+        }
+        if !DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.contains(&self.target_length_beats) {
+            return Err(
+                "fallback targetLengthBeats must be an exact supported Rekordbox profile value"
+                    .to_string(),
+            );
+        }
+        let expected_target_index = self
+            .base_loop_division
+            .map(|division| {
+                (usize::from(division) + 1).min(DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1)
+            })
+            .unwrap_or(0);
+        if self.target_length_beats != DJ_LINK_LOOP_PROFILE_LENGTH_BEATS[expected_target_index] {
+            return Err(
+                "fallback targetLengthBeats must be the exact next downward profile value from baseLoopDivision"
+                    .to_string(),
+            );
+        }
+        if !(DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS
+            ..=DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS)
+            .contains(&self.response_window_ms)
+        {
+            return Err("fallback responseWindowMs is outside the bounded window".to_string());
+        }
+        if self.source != DJ_LINK_LOOP_FALLBACK_SOURCE {
+            return Err(format!(
+                "fallback source must be exactly {DJ_LINK_LOOP_FALLBACK_SOURCE}"
+            ));
+        }
         Ok(())
     }
 }
@@ -8751,7 +8890,11 @@ fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<
     if payload.deck_id != dj_link_deck_id(payload.deck) {
         return Err("deckId must be rekordbox-deck-N matching deck".to_string());
     }
-    if payload.master_deck_revision == 0 || payload.position_revision == 0 {
+    if payload.master_deck_revision == 0
+        || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE
+        || payload.position_revision == 0
+        || payload.position_revision > DJ_LINK_MAX_SEQUENCE
+    {
         return Err("track revisions must be positive safe integers".to_string());
     }
     match (
@@ -17261,7 +17404,7 @@ mod tests {
     fn dj_link_envelope_is_strict_and_canonical() {
         fn envelope_text(message_type: &str, payload: &serde_json::Value) -> String {
             format!(
-                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+                r#"{{"v":3,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
             )
         }
         let active = envelope_text(
@@ -17290,7 +17433,8 @@ mod tests {
         assert_eq!(envelope.agent_id, super::DJ_LINK_AGENT_ID);
         let shape = envelope.canonical_shape().unwrap();
         assert!(shape.contains("DJ_MASTER_TRACK_ACTIVE"));
-        assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":2", "\"v\":1")).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":3", "\"v\":2")).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":3", "\"v\":4")).is_err());
         assert!(super::DjLinkEnvelope::parse_json(
             &active.replace("rb-output-dj-agent", "other-agent")
         )
@@ -17311,18 +17455,19 @@ mod tests {
     fn dj_link_peer_wire_fixtures_are_strict_and_distinct() {
         fn envelope_text(message_type: &str, payload: &serde_json::Value) -> String {
             format!(
-                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+                r#"{{"v":3,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
             )
         }
         let hello = envelope_text(
             "DJ_AGENT_HELLO",
             &serde_json::json!({
                 "authToken": "0123456789abcdef0123456789abcdef",
-                "version": 2,
+                "version": 3,
                 "capabilities": [
                     "DJ_MASTER_TRACK_ACTIVE",
                     "DJ_MASTER_TRACK_SYNC",
                     "DJ_LOOP_STATE",
+                    "DJ_LOOP_FALLBACK",
                     "DJ_RELEASE",
                     "DJ_TIMELINE_BEAT_JUMP",
                     "DJ_TIMELINE_LOOP_SET",
@@ -17384,6 +17529,27 @@ mod tests {
                 .message_type,
             super::DjLinkMessageType::LoopState
         );
+        let loop_fallback = envelope_text(
+            "DJ_LOOP_FALLBACK",
+            &serde_json::json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 3,
+                "playSessionId": "p1",
+                "pedalIntentId": 1,
+                "baseMeasuredLoopRevision": null,
+                "baseLoopDivision": 8,
+                "targetLengthBeats": 1.0 / 64.0,
+                "responseWindowMs": 250,
+                "source": "pedal-no-response-predicted",
+            }),
+        );
+        assert_eq!(
+            super::DjLinkEnvelope::parse_json(&loop_fallback)
+                .unwrap()
+                .message_type,
+            super::DjLinkMessageType::LoopFallback
+        );
         assert!(
             super::DjLinkEnvelope::parse_json(&hello.replace("DJ_AGENT_HELLO", "HELLO")).is_err()
         );
@@ -17397,7 +17563,7 @@ mod tests {
     fn dj_link_timeline_pedal_commands_require_exact_play_session_fence() {
         fn envelope_text(message_type: &str, payload: serde_json::Value) -> String {
             format!(
-                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+                r#"{{"v":3,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
             )
         }
 
@@ -17491,7 +17657,7 @@ mod tests {
     fn dj_link_duplicate_keys_are_rejected_before_serde_at_every_level() {
         let base = |payload: &str| {
             format!(
-                r#"{{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1",{payload}"sequence":1,"eventId":"e1","payload":{{}}}}"#
+                r#"{{"v":3,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1",{payload}"sequence":1,"eventId":"e1","payload":{{}}}}"#
             )
         };
         assert!(super::DjLinkEnvelope::parse_json(&base("")).is_ok());
@@ -17503,25 +17669,25 @@ mod tests {
         );
 
         let nested = format!(
-            r#"{{"v":2,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"released":false,"released":true,"masterDeck":null,"activePlaySessionId":null}}}}"#
+            r#"{{"v":3,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"released":false,"released":true,"masterDeck":null,"activePlaySessionId":null}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&nested)
             .err()
             .is_some_and(|error| error.contains("duplicate")));
 
         let deep = format!(
-            r#"{{"v":2,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":1,"contentId":"c","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00Z","playSessionId":"p1","loop":{{"active":false,"startBeat":null,"endBeat":null,"lengthBeats":null,"revision":1,"revision":2,"sampleAgeMs":0,"source":"rekordbox-hook-measured"}}}}}}"#
+            r#"{{"v":3,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":1,"contentId":"c","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00Z","playSessionId":"p1","loop":{{"active":false,"startBeat":null,"endBeat":null,"lengthBeats":null,"revision":1,"revision":2,"sampleAgeMs":0,"source":"rekordbox-hook-measured"}}}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&deep)
             .err()
             .is_some_and(|error| error.contains("duplicate")));
 
         let escaped = format!(
-            r#"{{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","agentId":"other","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+            r#"{{"v":3,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","agentId":"other","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&escaped).is_err());
         let unicode_escaped = format!(
-            r#"{{"v":2,"\u0074ype":"DJ_HEARTBEAT","type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+            r#"{{"v":3,"\u0074ype":"DJ_HEARTBEAT","type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&unicode_escaped).is_err());
     }
@@ -17545,7 +17711,7 @@ mod tests {
         });
         let envelope = |payload: &serde_json::Value| {
             format!(
-                r#"{{"v":2,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+                r#"{{"v":3,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
             )
         };
         assert!(super::DjLinkEnvelope::parse_json(&envelope(&payload)).is_ok());
@@ -17604,6 +17770,12 @@ mod tests {
         variant["masterDeckRevision"] = serde_json::json!(0);
         reject(variant);
         let mut variant = payload.clone();
+        variant["masterDeckRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["positionRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
+        reject(variant);
+        let mut variant = payload.clone();
         variant["unknownField"] = serde_json::json!(1);
         reject(variant);
 
@@ -17622,7 +17794,7 @@ mod tests {
     fn dj_link_measured_loop_rules_are_exact() {
         let loop_of = |loop_payload: serde_json::Value| {
             format!(
-                r#"{{"v":2,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":3,"contentId":"abc","trackBpm":null,"positionAtSendSec":10,"effectiveBpm":120,"positionRevision":7,"sampleAgeMs":20,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00+09:00","playSessionId":"p1","loop":{loop_payload}}}}}"#
+                r#"{{"v":3,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":3,"contentId":"abc","trackBpm":null,"positionAtSendSec":10,"effectiveBpm":120,"positionRevision":7,"sampleAgeMs":20,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00+09:00","playSessionId":"p1","loop":{loop_payload}}}}}"#
             )
         };
         let valid_active = serde_json::json!({
@@ -17635,6 +17807,11 @@ mod tests {
             "source": "rekordbox-hook-measured",
         });
         assert!(super::DjLinkEnvelope::parse_json(&loop_of(valid_active.clone())).is_ok());
+        let unsafe_outer_revision = format!(
+            r#"{{"v":3,"type":"DJ_LOOP_STATE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":{},"playSessionId":"p1","loop":{valid_active}}}}}"#,
+            super::DJ_LINK_MAX_SEQUENCE + 1
+        );
+        assert!(super::DjLinkEnvelope::parse_json(&unsafe_outer_revision).is_err());
         let valid_inactive = serde_json::json!({
             "active": false,
             "startBeat": null,
@@ -17656,6 +17833,9 @@ mod tests {
         variant["active"] = serde_json::json!(true);
         reject(variant);
         let mut variant = valid_active.clone();
+        variant["active"] = serde_json::json!(false);
+        reject(variant);
+        let mut variant = valid_active.clone();
         variant["endBeat"] = serde_json::json!(16.0);
         reject(variant);
         let mut variant = valid_active.clone();
@@ -17670,6 +17850,16 @@ mod tests {
         let mut variant = valid_active.clone();
         variant["revision"] = serde_json::json!(0);
         reject(variant);
+        let mut variant = valid_active.clone();
+        variant["revision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["sampleAgeMs"] = serde_json::json!(1501);
+        reject(variant);
+        let mut variant = valid_active.clone();
+        variant["startBeat"] = serde_json::json!(-1.0);
+        variant["endBeat"] = serde_json::json!(15.0);
+        reject(variant);
         let boundary = valid_active.clone();
         let mut variant = boundary;
         variant["lengthBeats"] = serde_json::json!(16.0005);
@@ -17677,10 +17867,109 @@ mod tests {
     }
 
     #[test]
+    fn dj_link_loop_fallback_rules_are_exact_and_bounded() {
+        let envelope_of = |payload: &serde_json::Value| {
+            format!(
+                r#"{{"v":3,"type":"DJ_LOOP_FALLBACK","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+            )
+        };
+        let payload = serde_json::json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 3,
+            "playSessionId": "p1",
+            "pedalIntentId": 1,
+            "baseMeasuredLoopRevision": null,
+            "baseLoopDivision": 0,
+            "targetLengthBeats": 4.0,
+            "responseWindowMs": 250,
+            "source": "pedal-no-response-predicted",
+        });
+        for (index, target) in super::DJ_LINK_LOOP_PROFILE_LENGTH_BEATS
+            .into_iter()
+            .enumerate()
+        {
+            let mut variant = payload.clone();
+            variant["targetLengthBeats"] = serde_json::json!(target);
+            variant["baseLoopDivision"] = if index == 0 {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(index - 1)
+            };
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_of(&variant)).is_ok(),
+                "supported target {target} must be accepted"
+            );
+        }
+        for response_window_ms in [
+            super::DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS,
+            super::DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS,
+        ] {
+            let mut variant = payload.clone();
+            variant["responseWindowMs"] = serde_json::json!(response_window_ms);
+            assert!(super::DjLinkEnvelope::parse_json(&envelope_of(&variant)).is_ok());
+        }
+
+        let reject = |mutant: serde_json::Value| {
+            assert!(
+                super::DjLinkEnvelope::parse_json(&envelope_of(&mutant)).is_err(),
+                "expected rejection for {mutant}"
+            );
+        };
+        for target in [16.0, 3.0, 1.0 / 128.0, f64::NAN, f64::INFINITY] {
+            let mut variant = payload.clone();
+            variant["targetLengthBeats"] = serde_json::json!(target);
+            reject(variant);
+        }
+        let mut variant = payload.clone();
+        variant["targetLengthBeats"] =
+            serde_json::json!(4.0 + (super::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS / 2.0));
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["responseWindowMs"] =
+            serde_json::json!(super::DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS - 1);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["responseWindowMs"] =
+            serde_json::json!(super::DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS + 1);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["source"] = serde_json::json!(super::DJ_LINK_MEASURED_LOOP_SOURCE);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["deckId"] = serde_json::json!("rekordbox-deck-2");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["masterDeckRevision"] = serde_json::json!(0);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["masterDeckRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["playSessionId"] = serde_json::json!(" ");
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["pedalIntentId"] = serde_json::json!(0);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["baseMeasuredLoopRevision"] = serde_json::json!(0);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["baseMeasuredLoopRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["baseLoopDivision"] = serde_json::json!(10);
+        reject(variant);
+        let mut variant = payload.clone();
+        variant["legacyMeasured"] = serde_json::json!(false);
+        reject(variant);
+    }
+
+    #[test]
     fn dj_link_hello_token_version_and_capabilities_are_exact() {
         let hello = |token: &str, version: u8, capabilities: &[&str]| {
             format!(
-                r#"{{"v":2,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"authToken":"{token}","version":{version},"capabilities":[{}]}}}}"#,
+                r#"{{"v":3,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"authToken":"{token}","version":{version},"capabilities":[{}]}}}}"#,
                 capabilities
                     .iter()
                     .map(|capability| format!(r#""{capability}""#))
@@ -17688,10 +17977,11 @@ mod tests {
                     .join(",")
             )
         };
-        let full_set: [&str; 8] = [
+        let full_set: [&str; 9] = [
             "DJ_MASTER_TRACK_ACTIVE",
             "DJ_MASTER_TRACK_SYNC",
             "DJ_LOOP_STATE",
+            "DJ_LOOP_FALLBACK",
             "DJ_RELEASE",
             "DJ_TIMELINE_BEAT_JUMP",
             "DJ_TIMELINE_LOOP_SET",
@@ -17700,49 +17990,50 @@ mod tests {
         ];
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
-            2,
+            3,
             &full_set
         ))
         .is_ok());
-        assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 2, &full_set)).is_err());
-        assert!(super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 2, &full_set)).is_err());
+        assert_eq!(full_set, super::DJ_LINK_REQUIRED_CAPABILITIES);
+        assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 3, &full_set)).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 3, &full_set)).is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef 0123456789abcdef",
-            2,
+            3,
             &full_set
         ))
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef\t0123456789abcdef",
-            2,
-            &full_set
-        ))
-        .is_err());
-        assert!(super::DjLinkEnvelope::parse_json(&hello(
-            "0123456789abcdef0123456789abcdef",
-            1,
+            3,
             &full_set
         ))
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             2,
-            &full_set[..7]
+            &full_set
+        ))
+        .is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            3,
+            &full_set[..8]
         ))
         .is_err());
         let mut extra = full_set.to_vec();
         extra.push("DJ_EXTRA");
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
-            2,
+            3,
             &extra
         ))
         .is_err());
         let mut duplicated = full_set.to_vec();
-        duplicated[7] = duplicated[0];
+        duplicated[8] = duplicated[0];
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
-            2,
+            3,
             &duplicated
         ))
         .is_err());
@@ -17752,14 +18043,14 @@ mod tests {
     fn dj_link_empty_payload_types_reject_extra_keys_and_ack_wire_is_exact() {
         for message_type in ["DJ_HEARTBEAT", "DJ_TIMELINE_STATE_REQUEST"] {
             let empty = format!(
-                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
+                r#"{{"v":3,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{}}}}"#
             );
             assert!(
                 super::DjLinkEnvelope::parse_json(&empty).is_ok(),
                 "{message_type}"
             );
             let extra = format!(
-                r#"{{"v":2,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"at":"now"}}}}"#
+                r#"{{"v":3,"type":"{message_type}","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"at":"now"}}}}"#
             );
             assert!(
                 super::DjLinkEnvelope::parse_json(&extra).is_err(),
@@ -17781,7 +18072,7 @@ mod tests {
         assert_eq!(
             wire,
             serde_json::json!({
-                "v": 2,
+                "v": 3,
                 "type": "ACK",
                 "eventId": "ack-event",
                 "sequence": 9,
@@ -17806,7 +18097,7 @@ mod tests {
     }
 
     #[test]
-    fn dj_link_timeline_state_output_envelope_is_exact_v2() {
+    fn dj_link_timeline_state_output_envelope_is_exact_v3() {
         let state = super::DjLinkTimelineState {
             message_type: "DJ_TIMELINE_STATE".to_string(),
             event_id: "state-event".to_string(),

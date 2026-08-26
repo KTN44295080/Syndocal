@@ -5461,7 +5461,7 @@ fn run_dj_link_ack_transport_failure_injection() -> bool {
     false
 }
 
-/// Serialize one v2 ACK to its exact wire text. There is deliberately no
+/// Serialize one v3 ACK to its exact wire text. There is deliberately no
 /// fallback representation: a render failure surfaces as an error so the
 /// caller terminates instead of emitting a fabricated `{}` frame.
 fn dj_link_ack_wire(ack: &DjLinkAck) -> Result<String, DjLinkAckPublishError> {
@@ -5504,7 +5504,7 @@ fn send_dj_link_ack<S: Read + Write>(
     send_dj_link_frame(websocket, dj_link_ack_wire(ack)?)
 }
 
-/// The outbound timeline-state frame is the exact v2 envelope whose payload
+/// The outbound timeline-state frame is the exact v3 envelope whose payload
 /// carries exactly `state`, `loopActive`, `timelineId`, `positionBars`,
 /// `playSessionId`, `pedalOwner`, and `releaseEventId`.
 fn dj_link_state_wire(
@@ -5670,7 +5670,7 @@ fn handle_dj_link_client(
         match websocket.read() {
             Ok(Message::Text(text)) => {
                 // Ingress is exact-only: anything that is not a fully valid
-                // v2 envelope from the accepted agent identity is not
+                // v3 envelope from the accepted agent identity is not
                 // correlatable and therefore receives no reply at all.
                 if let Ok(envelope) = DjLinkEnvelope::parse_json(&text) {
                     if envelope.message_type == DjLinkMessageType::Hello {
@@ -5847,7 +5847,7 @@ fn handle_dj_link_client(
                 if text.len() > DJ_LINK_MAX_FRAME_BYTES {
                     break;
                 }
-                // Frames that fail exact v2 parsing (including duplicate JSON
+                // Frames that fail exact v3 parsing (including duplicate JSON
                 // keys) are not correlatable and receive no reply.
                 let envelope = match DjLinkEnvelope::parse_json(&text) {
                     Ok(envelope)
@@ -6122,7 +6122,7 @@ fn handle_dj_link_client(
                         ack
                     }
                 };
-                // Fail-close publication: render the exact v2 ACK first, then
+                // Fail-close publication: render the exact v3 ACK first, then
                 // deliver it. A render or transport failure terminates this
                 // connection immediately — no fabricated frame is possible,
                 // no legacy payload fallback exists, and no further protocol
@@ -6761,41 +6761,32 @@ fn video_param_from_str(value: &str) -> Option<VideoParam> {
 mod tests {
     use super::*;
 
-    /// The exact v2 authority identity every fixture must use. Production
+    /// The exact v3 authority identity every fixture must use. Production
     /// ingress rejects any other `agentId` before authentication.
-    const DJ_V2_AGENT: &str = protocol::DJ_LINK_AGENT_ID;
-    const DJ_V2_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    const DJ_V3_AGENT: &str = protocol::DJ_LINK_AGENT_ID;
+    const DJ_V3_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
-    fn dj_v2_capabilities() -> Value {
-        serde_json::json!([
-            "DJ_MASTER_TRACK_ACTIVE",
-            "DJ_MASTER_TRACK_SYNC",
-            "DJ_LOOP_STATE",
-            "DJ_RELEASE",
-            "DJ_TIMELINE_BEAT_JUMP",
-            "DJ_TIMELINE_LOOP_SET",
-            "DJ_TIMELINE_STATE_REQUEST",
-            "DJ_STATE_SYNC",
-        ])
+    fn dj_v3_capabilities() -> Value {
+        serde_json::json!(protocol::DJ_LINK_REQUIRED_CAPABILITIES)
     }
 
-    fn dj_v2_hello(session: &str, event_id: &str) -> Value {
+    fn dj_v3_hello(session: &str, event_id: &str) -> Value {
         json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_AGENT_HELLO",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": session,
             "sequence": 1,
             "eventId": event_id,
             "payload": {
-                "authToken": DJ_V2_TOKEN,
-                "version": 2,
-                "capabilities": dj_v2_capabilities(),
+                "authToken": DJ_V3_TOKEN,
+                "version": 3,
+                "capabilities": dj_v3_capabilities(),
             },
         })
     }
 
-    fn dj_v2_envelope(
+    fn dj_v3_envelope(
         message_type: DjLinkMessageType,
         session: &str,
         sequence: u64,
@@ -6805,7 +6796,7 @@ mod tests {
         DjLinkEnvelope {
             v: protocol::DJ_LINK_PROTOCOL_VERSION,
             message_type,
-            agent_id: DJ_V2_AGENT.to_string(),
+            agent_id: DJ_V3_AGENT.to_string(),
             session_id: session.to_string(),
             sequence,
             event_id: event_id.to_string(),
@@ -6815,7 +6806,7 @@ mod tests {
 
     /// A small, valid physical command used by registry-level idempotency
     /// tests where the concrete command shape is irrelevant.
-    fn dj_v2_loop_set_payload(active: bool) -> Value {
+    fn dj_v3_loop_set_payload(active: bool) -> Value {
         json!({
             "active": active,
             "timelineId": "7",
@@ -6823,7 +6814,7 @@ mod tests {
         })
     }
 
-    fn dj_v2_state_sync_payload(released: bool) -> Value {
+    fn dj_v3_state_sync_payload(released: bool) -> Value {
         json!({
             "released": released,
             "masterDeck": if released { Value::Null } else { json!(1) },
@@ -6831,7 +6822,7 @@ mod tests {
         })
     }
 
-    fn dj_v2_track_active_payload(play_session: &str) -> Value {
+    fn dj_v3_track_active_payload(play_session: &str) -> Value {
         json!({
             "deck": 1,
             "deckId": "rekordbox-deck-1",
@@ -6851,7 +6842,7 @@ mod tests {
 
     /// Handler that answers timeline state requests with an authoritative
     /// state frame so sockets can complete the snapshot gate.
-    fn dj_v2_state_responder(state_generation: u64) -> DjLinkDispatchHandler {
+    fn dj_v3_state_responder(state_generation: u64) -> DjLinkDispatchHandler {
         Arc::new(move |envelope| {
             if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
                 return DjLinkDispatchOutcome::TimelineState {
@@ -6877,7 +6868,7 @@ mod tests {
     /// Drives one freshly authenticated socket through HELLO → STATE_SYNC →
     /// STATE_REQUEST (+ authoritative state frame) so physical commands pass
     /// the snapshot/order gate.
-    fn complete_dj_v2_snapshot_gate<S>(
+    fn complete_dj_v3_snapshot_gate<S>(
         client: &mut tungstenite::WebSocket<S>,
         server_port: u16,
         session: &str,
@@ -6888,20 +6879,20 @@ mod tests {
         let _ = server_port;
         client
             .send(Message::Text(
-                dj_v2_hello(session, &format!("hello-{session}")).to_string(),
+                dj_v3_hello(session, &format!("hello-{session}")).to_string(),
             ))
             .unwrap();
         read_dj_ack(client);
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_STATE_SYNC",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": session,
                     "sequence": 2,
                     "eventId": format!("sync-{session}"),
-                    "payload": dj_v2_state_sync_payload(false),
+                    "payload": dj_v3_state_sync_payload(false),
                 })
                 .to_string(),
             ))
@@ -6910,9 +6901,9 @@ mod tests {
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_TIMELINE_STATE_REQUEST",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": session,
                     "sequence": 3,
                     "eventId": format!("request-{session}"),
@@ -8113,25 +8104,25 @@ mod tests {
     fn dj_link_registry_hello_session_replay_conflict_rollback_and_ack_are_bounded() {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::default();
-        let old_generation = registry.register_test_session(DJ_V2_AGENT, "old", 1, "old-peer", now);
-        let new_generation = registry.register_test_session(DJ_V2_AGENT, "new", 1, "new-peer", now);
+        let old_generation = registry.register_test_session(DJ_V3_AGENT, "old", 1, "old-peer", now);
+        let new_generation = registry.register_test_session(DJ_V3_AGENT, "new", 1, "new-peer", now);
         assert!(new_generation > old_generation);
-        registry.close_if_current(DJ_V2_AGENT, "old", old_generation);
-        assert!(registry.is_current(DJ_V2_AGENT, "new", new_generation));
+        registry.close_if_current(DJ_V3_AGENT, "old", old_generation);
+        assert!(registry.is_current(DJ_V3_AGENT, "new", new_generation));
         // A side-effectful command exercises the idempotency tombstones;
         // heartbeats deliberately bypass them (no physical side effect).
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
 
-        let envelope = dj_v2_envelope(
+        let envelope = dj_v3_envelope(
             DjLinkMessageType::TimelineLoopSet,
             "new",
             2,
             "event-1",
-            dj_v2_loop_set_payload(true),
+            dj_v3_loop_set_payload(true),
         );
         let shape = envelope.canonical_shape().unwrap();
         assert_eq!(
@@ -8179,18 +8170,18 @@ mod tests {
         let now = Instant::now();
         let process_fence = new_dj_link_process_fence();
         let physical = |session_id: &str, sequence: u64| {
-            dj_v2_envelope(
+            dj_v3_envelope(
                 DjLinkMessageType::TimelineLoopSet,
                 session_id,
                 sequence,
                 "restart-event",
-                dj_v2_loop_set_payload(true),
+                dj_v3_loop_set_payload(true),
             )
         };
 
         let mut first_listener = DjLinkRegistry::with_process_fence(Arc::clone(&process_fence));
         let first_generation = first_listener.register_test_session(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "first-session",
             1,
             "first-peer",
@@ -8198,7 +8189,7 @@ mod tests {
         );
         first_listener
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let first = physical("first-session", 2);
@@ -8225,7 +8216,7 @@ mod tests {
         let mut replacement_listener =
             DjLinkRegistry::with_process_fence(Arc::clone(&process_fence));
         let replacement_generation = replacement_listener.register_test_session(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "replacement-session",
             1,
             "replacement-peer",
@@ -8233,7 +8224,7 @@ mod tests {
         );
         replacement_listener
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let replay = physical("replacement-session", 2);
@@ -8250,7 +8241,7 @@ mod tests {
         let mut new_owner_listener =
             DjLinkRegistry::with_process_fence(new_dj_link_process_fence());
         let new_owner_generation = new_owner_listener.register_test_session(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "new-owner-session",
             1,
             "new-owner-peer",
@@ -8258,7 +8249,7 @@ mod tests {
         );
         new_owner_listener
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let new_owner_replay = physical("new-owner-session", 2);
@@ -8281,7 +8272,7 @@ mod tests {
         let registered_at = Instant::now();
         let mut registry = DjLinkRegistry::default();
         let generation = registry.register_test_session(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "liveness-session",
             10,
             "liveness-peer",
@@ -8289,13 +8280,13 @@ mod tests {
         );
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let liveness_of = |registry: &DjLinkRegistry| {
             registry
                 .sessions
-                .get(DJ_V2_AGENT)
+                .get(DJ_V3_AGENT)
                 .expect("liveness session")
                 .last_liveness
         };
@@ -8304,12 +8295,12 @@ mod tests {
         // An admitted non-heartbeat physical frame refreshes session
         // liveness: continuous valid SYNC/command traffic can never time out.
         let admitted_at = registered_at + Duration::from_millis(500);
-        let loop_set = dj_v2_envelope(
+        let loop_set = dj_v3_envelope(
             DjLinkMessageType::TimelineLoopSet,
             "liveness-session",
             11,
             "liveness-command",
-            dj_v2_loop_set_payload(true),
+            dj_v3_loop_set_payload(true),
         );
         let loop_shape = loop_set.canonical_shape().unwrap();
         assert_eq!(
@@ -8326,12 +8317,12 @@ mod tests {
 
         // Rejected classifications never extend liveness.
         let rejected_at = admitted_at + Duration::from_millis(500);
-        let stale_sequence = dj_v2_envelope(
+        let stale_sequence = dj_v3_envelope(
             DjLinkMessageType::TimelineLoopSet,
             "liveness-session",
             5,
             "liveness-stale-sequence",
-            dj_v2_loop_set_payload(false),
+            dj_v3_loop_set_payload(false),
         );
         let stale_shape = stale_sequence.canonical_shape().unwrap();
         assert_eq!(
@@ -8340,12 +8331,12 @@ mod tests {
                 .unwrap(),
             DjLinkAdmission::Rollback
         );
-        let limited = dj_v2_envelope(
+        let limited = dj_v3_envelope(
             DjLinkMessageType::TimelineLoopSet,
             "liveness-session",
             12,
             "liveness-rate-limited",
-            dj_v2_loop_set_payload(true),
+            dj_v3_loop_set_payload(true),
         );
         let limited_shape = limited.canonical_shape().unwrap();
         assert_eq!(
@@ -8369,7 +8360,7 @@ mod tests {
 
         // Heartbeats keep working through the same shared admission path.
         let heartbeat_at = rejected_at + Duration::from_millis(500);
-        let heartbeat = dj_v2_envelope(
+        let heartbeat = dj_v3_envelope(
             DjLinkMessageType::Heartbeat,
             "liveness-session",
             13,
@@ -8400,7 +8391,7 @@ mod tests {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::with_side_effect_event_limit(8);
         let generation = registry.register_test_session(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "state-sync-session",
             1,
             "state-sync-peer",
@@ -8416,7 +8407,7 @@ mod tests {
             (4, "sync-released-deck", true, Some(4), Some("p-old")),
             (5, "sync-null-deck", false, None, Some("p2")),
         ] {
-            let envelope = dj_v2_envelope(
+            let envelope = dj_v3_envelope(
                 DjLinkMessageType::StateSync,
                 "state-sync-session",
                 sequence,
@@ -8460,11 +8451,11 @@ mod tests {
         // gate only after the session completed the handshake.
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let loop_command = |sequence: u64, event_id: &str| {
-            dj_v2_envelope(
+            dj_v3_envelope(
                 DjLinkMessageType::LoopState,
                 "state-sync-session",
                 sequence,
@@ -8515,7 +8506,7 @@ mod tests {
         let dispatches = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
-            let inner = dj_v2_state_responder(21);
+            let inner = dj_v3_state_responder(21);
             Arc::new(move |envelope| {
                 if !matches!(
                     envelope.message_type,
@@ -8533,7 +8524,7 @@ mod tests {
             max_connections: 1,
             dj_link_enabled: true,
             dj_link_bind_ip: Some("127.0.0.1".to_string()),
-            dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
             ..RemoteControlConfig::default()
         };
         let start_listener = |port, process_fence, handler: DjLinkDispatchHandler| {
@@ -8561,9 +8552,9 @@ mod tests {
         };
         let physical = |session_id: &str, sequence: u64| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_TIMELINE_LOOP_SET",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": session_id,
                 "sequence": sequence,
                 "eventId": "restart-socket-event",
@@ -8577,7 +8568,7 @@ mod tests {
         let open_and_gate = |server: &RemoteWsServer, session: &str| {
             let url = format!("ws://127.0.0.1:{port}/dj-link");
             let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-            complete_dj_v2_snapshot_gate(&mut client, port, session, server);
+            complete_dj_v3_snapshot_gate(&mut client, port, session, server);
             client
         };
 
@@ -8642,7 +8633,7 @@ mod tests {
         let dispatches = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
-            let inner = dj_v2_state_responder(31);
+            let inner = dj_v3_state_responder(31);
             Arc::new(move |envelope| {
                 if !matches!(
                     envelope.message_type,
@@ -8661,7 +8652,7 @@ mod tests {
             max_messages_per_second: 1_000,
             dj_link_enabled: true,
             dj_link_bind_ip: Some("127.0.0.1".to_string()),
-            dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
             ..RemoteControlConfig::default()
         };
         let start_listener = |port, process_fence, handler: DjLinkDispatchHandler| {
@@ -8689,9 +8680,9 @@ mod tests {
         };
         let physical = |session_id: &str, sequence: u64, event_id: &str| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_TIMELINE_LOOP_SET",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": session_id,
                 "sequence": sequence,
                 "eventId": event_id,
@@ -8704,13 +8695,13 @@ mod tests {
         };
         let url = format!("ws://127.0.0.1:{port}/dj-link");
 
-        // Every socket passes the exact-v2 snapshot/order handshake before
+        // Every socket passes the exact-v3 snapshot/order handshake before
         // physical commands, and physical identities use the shared
         // process-fence reservation path. The first two identities are
         // admitted and the third trips the small injected high-water.
         let first = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
         let (mut first_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut first_client, port, "capacity-first-session", &first);
+        complete_dj_v3_snapshot_gate(&mut first_client, port, "capacity-first-session", &first);
         for (sequence, event_id) in [(4, "capacity-first"), (5, "capacity-second")] {
             first_client
                 .send(Message::Text(
@@ -8762,7 +8753,7 @@ mod tests {
         // process fence, so the latch survives both instance-local resets.
         let replacement = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
         let (mut replacement_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(
+        complete_dj_v3_snapshot_gate(
             &mut replacement_client,
             port,
             "capacity-replacement-session",
@@ -8792,7 +8783,7 @@ mod tests {
         fresh_fence.lock().unwrap().side_effect_event_limit = 2;
         let fresh_owner = start_listener(port, Arc::clone(&fresh_fence), Arc::clone(&handler));
         let (mut fresh_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(
+        complete_dj_v3_snapshot_gate(
             &mut fresh_client,
             port,
             "capacity-fresh-session",
@@ -8826,7 +8817,7 @@ mod tests {
         let loop_dispatches = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let loop_dispatches = Arc::clone(&loop_dispatches);
-            let inner = dj_v2_state_responder(73);
+            let inner = dj_v3_state_responder(73);
             Arc::new(move |envelope| {
                 if envelope.message_type == DjLinkMessageType::LoopState {
                     loop_dispatches.fetch_add(1, Ordering::SeqCst);
@@ -8844,7 +8835,7 @@ mod tests {
             max_messages_per_second: 1_000,
             dj_link_enabled: true,
             dj_link_bind_ip: Some("127.0.0.1".to_string()),
-            dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
             ..RemoteControlConfig::default()
         };
         let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(
@@ -8865,7 +8856,7 @@ mod tests {
         let port = server.local_addr().port();
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut client, port, "quadrant-session", &server);
+        complete_dj_v3_snapshot_gate(&mut client, port, "quadrant-session", &server);
         let read_value = |client: &mut tungstenite::WebSocket<_>| -> Value {
             match client.read().unwrap() {
                 Message::Text(text) => serde_json::from_str(&text).unwrap(),
@@ -8878,9 +8869,9 @@ mod tests {
         let state_sync =
             |sequence: u64, event_id: &str, released: bool, master_deck: Option<u8>| {
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_STATE_SYNC",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "quadrant-session",
                     "sequence": sequence,
                     "eventId": event_id,
@@ -8908,9 +8899,9 @@ mod tests {
         send_frame(
             &mut client,
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_LOOP_STATE",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": "quadrant-session",
                 "sequence": 7,
                 "eventId": "quadrant-physical",
@@ -8938,9 +8929,9 @@ mod tests {
         // so repeating the exact frame cannot turn it into an inflight
         // reservation or grow the permanent fence.
         let over_limit = json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_TIMELINE_LOOP_SET",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "quadrant-session",
             "sequence": 8,
             "eventId": "quadrant-over-limit",
@@ -8994,7 +8985,7 @@ mod tests {
             let block_first_dispatch = Arc::clone(&block_first_dispatch);
             let dispatches = Arc::clone(&dispatches);
             let release_rx = Arc::clone(&release_rx);
-            let inner = dj_v2_state_responder(41);
+            let inner = dj_v3_state_responder(41);
             Arc::new(move |envelope| {
                 if envelope.message_type == DjLinkMessageType::TimelineLoopSet
                     && block_first_dispatch.swap(false, Ordering::SeqCst)
@@ -9023,7 +9014,7 @@ mod tests {
             max_messages_per_second: 1_000,
             dj_link_enabled: true,
             dj_link_bind_ip: Some("127.0.0.1".to_string()),
-            dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
             ..RemoteControlConfig::default()
         };
         let start_listener = |port, process_fence, handler: DjLinkDispatchHandler| {
@@ -9051,9 +9042,9 @@ mod tests {
         };
         let physical = |session_id: &str| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_TIMELINE_LOOP_SET",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": session_id,
                 "sequence": 4,
                 "eventId": "shutdown-physical-event",
@@ -9068,7 +9059,7 @@ mod tests {
 
         let first = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
         let (mut first_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut first_client, port, "shutdown-session", &first);
+        complete_dj_v3_snapshot_gate(&mut first_client, port, "shutdown-session", &first);
         first_client
             .send(Message::Text(physical("shutdown-session").to_string()))
             .unwrap();
@@ -9129,7 +9120,7 @@ mod tests {
         // invoke the handler a second time.
         let replacement = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
         let (mut replacement_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(
+        complete_dj_v3_snapshot_gate(
             &mut replacement_client,
             port,
             "replacement-shutdown-session",
@@ -9154,19 +9145,19 @@ mod tests {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::with_side_effect_event_limit(2);
         let generation =
-            registry.register_test_session(DJ_V2_AGENT, "rate-session", 1, "rate-peer", now);
+            registry.register_test_session(DJ_V3_AGENT, "rate-session", 1, "rate-peer", now);
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let physical = |sequence: u64, event_id: &str| {
-            dj_v2_envelope(
+            dj_v3_envelope(
                 DjLinkMessageType::TimelineLoopSet,
                 "rate-session",
                 sequence,
                 event_id,
-                dj_v2_loop_set_payload(true),
+                dj_v3_loop_set_payload(true),
             )
         };
 
@@ -9233,7 +9224,7 @@ mod tests {
                 pairing_pin: "123456".to_string(),
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -9242,13 +9233,13 @@ mod tests {
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut wrong_client, _) = tungstenite::connect(url.as_str()).unwrap();
         let wrong_hello = serde_json::json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_AGENT_HELLO",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "wrong-session",
             "sequence": 1,
             "eventId": "wrong-hello",
-            "payload": {"authToken": "0123456789abcdef0123456789abcdee", "version": 2, "capabilities": dj_v2_capabilities()}
+            "payload": {"authToken": "0123456789abcdef0123456789abcdee", "version": 3, "capabilities": dj_v3_capabilities()}
         });
         wrong_client
             .send(Message::Text(wrong_hello.to_string()))
@@ -9264,7 +9255,7 @@ mod tests {
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
         client
             .send(Message::Text(
-                dj_v2_hello("session-loopback", "hello-loopback").to_string(),
+                dj_v3_hello("session-loopback", "hello-loopback").to_string(),
             ))
             .unwrap();
         let hello_ack: DjLinkAck = match client.read().unwrap() {
@@ -9276,7 +9267,7 @@ mod tests {
         assert_eq!(hello_ack.outcome, DjLinkAckOutcome::Accepted);
         assert_eq!(
             server.dj_link_status().agent_id.as_deref(),
-            Some(DJ_V2_AGENT)
+            Some(DJ_V3_AGENT)
         );
         let status = server.dj_link_status();
         assert!(status.connected);
@@ -9287,9 +9278,9 @@ mod tests {
 
         let heartbeat = |sequence: u64, event_id: &str| {
             serde_json::json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_HEARTBEAT",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": "session-loopback",
                 "sequence": sequence,
                 "eventId": event_id,
@@ -9321,9 +9312,9 @@ mod tests {
         // A changed shape under a retained identity is a conflict, and an
         // out-of-order sequence is rejected as rollback.
         let conflict = serde_json::json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_HEARTBEAT",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "session-loopback",
             "sequence": 3,
             "eventId": "heartbeat-loopback",
@@ -9347,8 +9338,8 @@ mod tests {
     }
 
     #[test]
-    fn dj_link_ack_wire_serializes_the_exact_v2_shape() {
-        let envelope = dj_v2_envelope(
+    fn dj_link_ack_wire_serializes_the_exact_v3_shape() {
+        let envelope = dj_v3_envelope(
             DjLinkMessageType::Heartbeat,
             "ack-session",
             9,
@@ -9393,7 +9384,7 @@ mod tests {
         );
     }
 
-    /// Dedicated listener config for the hostile ACK-wire fixtures: exact v2
+    /// Dedicated listener config for the hostile ACK-wire fixtures: exact v3
     /// token and a generous connection budget so each phase owns its socket.
     fn dj_link_ack_wire_hostile_config(port: u16) -> RemoteControlConfig {
         RemoteControlConfig {
@@ -9404,7 +9395,7 @@ mod tests {
             max_messages_per_second: 1_000,
             dj_link_enabled: true,
             dj_link_bind_ip: Some("127.0.0.1".to_string()),
-            dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
             ..RemoteControlConfig::default()
         }
     }
@@ -9491,9 +9482,9 @@ mod tests {
             client
                 .send(Message::Text(
                     json!({
-                        "v": 2,
+                        "v": 3,
                         "type": "DJ_HEARTBEAT",
-                        "agentId": DJ_V2_AGENT,
+                        "agentId": DJ_V3_AGENT,
                         "sessionId": "ser-phase1",
                         "sequence": 1,
                         "eventId": "pre-hello-heartbeat",
@@ -9512,18 +9503,18 @@ mod tests {
             let mut client = connect_dj_link_hostile_client(&url);
             client
                 .send(Message::Text(
-                    dj_v2_hello("ser-phase2", "hello-ser-phase2").to_string(),
+                    dj_v3_hello("ser-phase2", "hello-ser-phase2").to_string(),
                 ))
                 .unwrap();
             assert_dj_link_connection_terminates_without_text(&mut client);
         }
 
         // The service stays healthy with the seam disarmed, and the success
-        // path still emits the exact v2 ACK shape with no `{}` anywhere.
+        // path still emits the exact v3 ACK shape with no `{}` anywhere.
         let mut healthy = connect_dj_link_hostile_client(&url);
         healthy
             .send(Message::Text(
-                dj_v2_hello("ser-healthy", "hello-ser-healthy").to_string(),
+                dj_v3_hello("ser-healthy", "hello-ser-healthy").to_string(),
             ))
             .unwrap();
         let raw_hello_ack = match healthy.read().unwrap() {
@@ -9531,7 +9522,7 @@ mod tests {
             other => panic!("expected the hello ACK text frame, got {other:?}"),
         };
         assert!(!raw_hello_ack.contains("{}"));
-        assert!(raw_hello_ack.starts_with("{\"v\":2"));
+        assert!(raw_hello_ack.starts_with("{\"v\":3"));
         let ack: DjLinkAck = serde_json::from_str(&raw_hello_ack).unwrap();
         assert_eq!(ack.outcome, DjLinkAckOutcome::Accepted);
         assert_eq!(ack.v, protocol::DJ_LINK_PROTOCOL_VERSION);
@@ -9555,7 +9546,7 @@ mod tests {
             let _failure = install_dj_link_ack_transport_failure_hook(Arc::new(|| {}));
             client
                 .send(Message::Text(
-                    dj_v2_hello("txfr-session", "hello-txfr").to_string(),
+                    dj_v3_hello("txfr-session", "hello-txfr").to_string(),
                 ))
                 .unwrap();
             assert_dj_link_connection_terminates_without_text(&mut client);
@@ -9566,7 +9557,7 @@ mod tests {
         let mut replay = connect_dj_link_hostile_client(&url);
         replay
             .send(Message::Text(
-                dj_v2_hello("txfr-session", "hello-txfr").to_string(),
+                dj_v3_hello("txfr-session", "hello-txfr").to_string(),
             ))
             .unwrap();
         let replay_ack = read_dj_ack(&mut replay);
@@ -9584,7 +9575,7 @@ mod tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
         let dispatches = Arc::new(AtomicU64::new(0));
-        let inner = dj_v2_state_responder(21);
+        let inner = dj_v3_state_responder(21);
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
             Arc::new(move |envelope| {
@@ -9603,7 +9594,7 @@ mod tests {
         // Pass the full snapshot/order gate so the physical command is
         // admitted normally, with every gate ACK rendering successfully.
         let mut first = connect_dj_link_hostile_client(&url);
-        complete_dj_v2_snapshot_gate(&mut first, port, "phys-ack-session", &server);
+        complete_dj_v3_snapshot_gate(&mut first, port, "phys-ack-session", &server);
 
         // The physical command dispatches exactly once, but its final ACK can
         // no longer be rendered: no bytes may reach the wire, no state or
@@ -9614,13 +9605,13 @@ mod tests {
             first
                 .send(Message::Text(
                     json!({
-                        "v": 2,
+                        "v": 3,
                         "type": "DJ_TIMELINE_LOOP_SET",
-                        "agentId": DJ_V2_AGENT,
+                        "agentId": DJ_V3_AGENT,
                         "sessionId": "phys-ack-session",
                         "sequence": 4,
                         "eventId": "phys-ack-event",
-                        "payload": dj_v2_loop_set_payload(true),
+                        "payload": dj_v3_loop_set_payload(true),
                     })
                     .to_string(),
                 ))
@@ -9634,17 +9625,17 @@ mod tests {
         // it into a second execution: the completed receipt makes the retry a
         // conflict, and the handler must not run again.
         let mut replay = connect_dj_link_hostile_client(&url);
-        complete_dj_v2_snapshot_gate(&mut replay, port, "phys-ack-session-b", &server);
+        complete_dj_v3_snapshot_gate(&mut replay, port, "phys-ack-session-b", &server);
         replay
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_TIMELINE_LOOP_SET",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "phys-ack-session-b",
                     "sequence": 4,
                     "eventId": "phys-ack-event",
-                    "payload": dj_v2_loop_set_payload(true),
+                    "payload": dj_v3_loop_set_payload(true),
                 })
                 .to_string(),
             ))
@@ -9669,7 +9660,7 @@ mod tests {
                 pairing_pin: "123456".to_string(),
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -9678,13 +9669,15 @@ mod tests {
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
 
-        // Pre-hello: none of these frames is a valid exact-v2 envelope, so
-        // the transport cannot correlate any of them and stays silent rather
-        // than inventing an ACK. The following valid HELLO still completes.
+        // Pre-hello: wrong identity, retired v2, future v4, duplicate keys,
+        // and unknown message shapes all fail exact-v3 parsing. The transport
+        // cannot correlate them and stays silent rather than inventing an ACK.
+        // The following valid HELLO still completes.
         for uncorrelatable in [
-            r#"{"v":2,"type":"DJ_AGENT_HELLO","agentId":"other-agent","sessionId":"s","sequence":1,"eventId":"e","payload":{}}"#,
-            r#"{"v":1,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s","sequence":1,"eventId":"e","payload":{}}"#,
-            r#"{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s","sequence":1,"sequence":2,"eventId":"e","payload":{}}"#,
+            r#"{"v":3,"type":"DJ_AGENT_HELLO","agentId":"other-agent","sessionId":"s","sequence":1,"eventId":"e","payload":{}}"#,
+            r#"{"v":2,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s","sequence":1,"eventId":"e","payload":{}}"#,
+            r#"{"v":4,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"s","sequence":1,"eventId":"e","payload":{}}"#,
+            r#"{"v":3,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"s","sequence":1,"sequence":2,"eventId":"e","payload":{}}"#,
             r#"{"type":"DJ_UNKNOWN","eventId":"unknown-event","sequence":7}"#,
         ] {
             assert!(
@@ -9697,7 +9690,7 @@ mod tests {
         }
         client
             .send(Message::Text(
-                dj_v2_hello("invalid-frame-session", "hello-after-garbage").to_string(),
+                dj_v3_hello("invalid-frame-session", "hello-after-garbage").to_string(),
             ))
             .unwrap();
         let hello_ack = read_dj_ack(&mut client);
@@ -9708,16 +9701,16 @@ mod tests {
         // next message on the socket is the heartbeat ACK that follows it.
         client
             .send(Message::Text(
-                r#"{"v":2,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"invalid-frame-session","sequence":2,"sequence":3,"eventId":"dup-key-heartbeat","payload":{}}"#
+                r#"{"v":3,"type":"DJ_HEARTBEAT","agentId":"rb-output-dj-agent","sessionId":"invalid-frame-session","sequence":2,"sequence":3,"eventId":"dup-key-heartbeat","payload":{}}"#
                     .to_string(),
             ))
             .unwrap();
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_HEARTBEAT",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "invalid-frame-session",
                     "sequence": 4,
                     "eventId": "healthy-heartbeat",
@@ -9769,7 +9762,7 @@ mod tests {
                 max_connections: 2,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -9794,7 +9787,7 @@ mod tests {
         };
         client
             .send(Message::Text(
-                dj_v2_hello("snapshot-order-session", "hello-snapshot-order").to_string(),
+                dj_v3_hello("snapshot-order-session", "hello-snapshot-order").to_string(),
             ))
             .unwrap();
         let hello_ack = read_value(&mut client);
@@ -9811,9 +9804,9 @@ mod tests {
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_STATE_SYNC",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "snapshot-order-session",
                     "sequence": 2,
                     "eventId": "sync-snapshot-order",
@@ -9832,9 +9825,9 @@ mod tests {
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_TIMELINE_STATE_REQUEST",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "snapshot-order-session",
                     "sequence": 3,
                     "eventId": "request-snapshot-order",
@@ -9848,7 +9841,7 @@ mod tests {
         let state = read_value(&mut client);
         assert_eq!(state["v"], protocol::DJ_LINK_PROTOCOL_VERSION);
         assert_eq!(state["type"], "DJ_TIMELINE_STATE");
-        assert_eq!(state["agentId"], DJ_V2_AGENT);
+        assert_eq!(state["agentId"], DJ_V3_AGENT);
         assert_eq!(state["sessionId"], "snapshot-order-session");
         assert_eq!(state["payload"]["state"], "running");
         assert_eq!(state["payload"]["timelineId"], "show-1");
@@ -9869,9 +9862,9 @@ mod tests {
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_TIMELINE_STATE",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "snapshot-order-session",
                     "sequence": 4,
                     "eventId": "server-only-state",
@@ -9883,9 +9876,9 @@ mod tests {
         client
             .send(Message::Text(
                 json!({
-                    "v": 2,
+                    "v": 3,
                     "type": "DJ_HEARTBEAT",
-                    "agentId": DJ_V2_AGENT,
+                    "agentId": DJ_V3_AGENT,
                     "sessionId": "snapshot-order-session",
                     "sequence": 5,
                     "eventId": "after-server-only-state",
@@ -9934,7 +9927,7 @@ mod tests {
                 snapshot.lock().unwrap().clone()
             }
         };
-        let handler = dj_v2_state_responder(1);
+        let handler = dj_v3_state_responder(1);
         let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(
             RemoteControlConfig {
                 bind_ip: "127.0.0.1".to_string(),
@@ -9944,7 +9937,7 @@ mod tests {
                 max_messages_per_second: 1_000,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -9963,7 +9956,7 @@ mod tests {
         let port = server.local_addr().port();
         let dj_url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut dj_client, _) = tungstenite::connect(dj_url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut dj_client, port, "unavailable-snapshot", &server);
+        complete_dj_v3_snapshot_gate(&mut dj_client, port, "unavailable-snapshot", &server);
         let read_value = |client: &mut tungstenite::WebSocket<_>| -> Value {
             match client.read().unwrap() {
                 Message::Text(text) => serde_json::from_str(&text).unwrap(),
@@ -10055,7 +10048,7 @@ mod tests {
             let snapshot = Arc::clone(&snapshot);
             move || snapshot.lock().unwrap().clone()
         };
-        let handler = dj_v2_state_responder(1);
+        let handler = dj_v3_state_responder(1);
         let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
             RemoteControlConfig {
                 bind_ip: "127.0.0.1".to_string(),
@@ -10064,7 +10057,7 @@ mod tests {
                 max_connections: 2,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -10081,7 +10074,7 @@ mod tests {
         .unwrap();
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut client, port, "engine-transition-session", &server);
+        complete_dj_v3_snapshot_gate(&mut client, port, "engine-transition-session", &server);
 
         {
             let mut changed = snapshot.lock().unwrap();
@@ -10127,7 +10120,7 @@ mod tests {
             .expect("DJ Link observer did not accept a reconnect");
         reconnect
             .send(Message::Text(
-                dj_v2_hello("engine-reconnect-session", "hello-engine-reconnect").to_string(),
+                dj_v3_hello("engine-reconnect-session", "hello-engine-reconnect").to_string(),
             ))
             .unwrap();
         let reconnect_ack = match reconnect.read().unwrap() {
@@ -10155,7 +10148,7 @@ mod tests {
             let snapshot = Arc::clone(&snapshot);
             move || snapshot.lock().unwrap().clone()
         };
-        let handler = dj_v2_state_responder(1);
+        let handler = dj_v3_state_responder(1);
         let entered = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let _barrier = install_dj_link_before_outbound_permit_hook({
@@ -10180,7 +10173,7 @@ mod tests {
                 max_connections: 2,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -10197,7 +10190,7 @@ mod tests {
         .unwrap();
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut old_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut old_client, port, "observer-old", &server);
+        complete_dj_v3_snapshot_gate(&mut old_client, port, "observer-old", &server);
         {
             let mut changed = snapshot.lock().unwrap();
             changed.timeline.playing = true;
@@ -10218,7 +10211,7 @@ mod tests {
         let (mut new_client, _) = tungstenite::connect(url.as_str()).unwrap();
         new_client
             .send(Message::Text(
-                dj_v2_hello("observer-new", "hello-observer-new").to_string(),
+                dj_v3_hello("observer-new", "hello-observer-new").to_string(),
             ))
             .unwrap();
         let new_ack = match new_client.read().unwrap() {
@@ -10261,7 +10254,7 @@ mod tests {
         let dispatches = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
-            let inner = dj_v2_state_responder(41);
+            let inner = dj_v3_state_responder(41);
             Arc::new(move |envelope| {
                 if !matches!(
                     envelope.message_type,
@@ -10280,7 +10273,7 @@ mod tests {
                 max_connections: 2,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -10304,18 +10297,18 @@ mod tests {
         };
         let active_frame = |session: &str, sequence: u64| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_MASTER_TRACK_ACTIVE",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": session,
                 "sequence": sequence,
                 "eventId": "event-active",
-                "payload": dj_v2_track_active_payload("play-1"),
+                "payload": dj_v3_track_active_payload("play-1"),
             })
         };
 
         let (mut old_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut old_client, port, "old-session", &server);
+        complete_dj_v3_snapshot_gate(&mut old_client, port, "old-session", &server);
 
         // Installed only after the snapshot gate so the barrier blocks the
         // physical command and never the gate traffic itself.
@@ -10347,7 +10340,7 @@ mod tests {
         let (mut replacement, _) = tungstenite::connect(url.as_str()).unwrap();
         replacement
             .send(Message::Text(
-                dj_v2_hello("new-session", "hello-new").to_string(),
+                dj_v3_hello("new-session", "hello-new").to_string(),
             ))
             .unwrap();
         let replacement_ack = read_ack(&mut replacement);
@@ -10364,9 +10357,9 @@ mod tests {
         assert_eq!(dispatches.load(Ordering::SeqCst), 0);
 
         let replacement_heartbeat = json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_HEARTBEAT",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "new-session",
             "sequence": 2,
             "eventId": "heartbeat-new",
@@ -10383,7 +10376,7 @@ mod tests {
         let (mut collision, _) = tungstenite::connect(url.as_str()).unwrap();
         collision
             .send(Message::Text(
-                dj_v2_hello("collision-session", "event-active").to_string(),
+                dj_v3_hello("collision-session", "event-active").to_string(),
             ))
             .unwrap();
         let collision_ack = read_ack(&mut collision);
@@ -10402,7 +10395,7 @@ mod tests {
         let dispatches = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
-            let inner = dj_v2_state_responder(41);
+            let inner = dj_v3_state_responder(41);
             Arc::new(move |envelope| {
                 if !matches!(
                     envelope.message_type,
@@ -10421,7 +10414,7 @@ mod tests {
                 max_connections: 2,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -10445,7 +10438,7 @@ mod tests {
         };
 
         let (mut old_client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut old_client, port, "old-session", &server);
+        complete_dj_v3_snapshot_gate(&mut old_client, port, "old-session", &server);
 
         // Installed only after the snapshot gate so the barrier blocks the
         // physical command and never the gate traffic itself.
@@ -10465,13 +10458,13 @@ mod tests {
         });
 
         let active = json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_MASTER_TRACK_ACTIVE",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "old-session",
             "sequence": 4,
             "eventId": "event-active",
-            "payload": dj_v2_track_active_payload("play-1"),
+            "payload": dj_v3_track_active_payload("play-1"),
         });
         old_client.send(Message::Text(active.to_string())).unwrap();
         let (entered_lock, entered_ready) = &*entered;
@@ -10485,7 +10478,7 @@ mod tests {
         let (mut replacement, _) = tungstenite::connect(url.as_str()).unwrap();
         replacement
             .send(Message::Text(
-                dj_v2_hello("new-session", "hello-new").to_string(),
+                dj_v3_hello("new-session", "hello-new").to_string(),
             ))
             .unwrap();
         let busy = read_ack(&mut replacement);
@@ -10513,7 +10506,7 @@ mod tests {
         let (mut retry, _) = tungstenite::connect(url.as_str()).unwrap();
         retry
             .send(Message::Text(
-                dj_v2_hello("new-session", "hello-new").to_string(),
+                dj_v3_hello("new-session", "hello-new").to_string(),
             ))
             .unwrap();
         let replacement_ack = read_ack(&mut retry);
@@ -10529,18 +10522,18 @@ mod tests {
         let (generation, envelope) = {
             let mut registry_guard = registry.lock().unwrap();
             let generation = registry_guard.register_test_session(
-                DJ_V2_AGENT,
+                DJ_V3_AGENT,
                 "panic-session",
                 1,
                 "panic-peer",
                 now,
             );
-            let envelope = dj_v2_envelope(
+            let envelope = dj_v3_envelope(
                 DjLinkMessageType::TimelineLoopSet,
                 "panic-session",
                 2,
                 "panic-event",
-                dj_v2_loop_set_payload(true),
+                dj_v3_loop_set_payload(true),
             );
             assert!(registry_guard.begin_dispatch(&envelope, generation).is_ok());
             (generation, envelope)
@@ -10578,7 +10571,7 @@ mod tests {
         let handler: DjLinkDispatchHandler = {
             let dispatches = Arc::clone(&dispatches);
             let panic_once = Arc::clone(&panic_once);
-            let inner = dj_v2_state_responder(7);
+            let inner = dj_v3_state_responder(7);
             Arc::new(move |envelope| {
                 // The snapshot gate's STATE_SYNC/STATE_REQUEST traffic shares
                 // this handler and must complete normally; only the physical
@@ -10601,7 +10594,7 @@ mod tests {
                 max_connections: 1,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -10624,15 +10617,15 @@ mod tests {
             }
         };
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut client, port, "session-panic", &server);
+        complete_dj_v3_snapshot_gate(&mut client, port, "session-panic", &server);
         let active = json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_MASTER_TRACK_ACTIVE",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "session-panic",
             "sequence": 4,
             "eventId": "event-panic",
-            "payload": dj_v2_track_active_payload("play-panic"),
+            "payload": dj_v3_track_active_payload("play-panic"),
         });
         client.send(Message::Text(active.to_string())).unwrap();
         let failed = read_ack(&mut client);
@@ -10669,7 +10662,7 @@ mod tests {
         let (mut fresh, _) = fresh.expect("DJ Link slot was not released after handler panic");
         fresh
             .send(Message::Text(
-                dj_v2_hello("session-fresh", "hello-fresh").to_string(),
+                dj_v3_hello("session-fresh", "hello-fresh").to_string(),
             ))
             .unwrap();
         assert_eq!(read_ack(&mut fresh).outcome, DjLinkAckOutcome::Accepted);
@@ -10742,11 +10735,11 @@ mod tests {
             pedal_owner: Some("pedal-1".to_string()),
             release_event_id: None,
         };
-        let wire_text = dj_link_state_wire(&state, DJ_V2_AGENT, "matrix-session").unwrap();
+        let wire_text = dj_link_state_wire(&state, DJ_V3_AGENT, "matrix-session").unwrap();
         let wire_value: serde_json::Value = serde_json::from_str(&wire_text).unwrap();
         assert_eq!(wire_value["v"], protocol::DJ_LINK_PROTOCOL_VERSION);
         assert_eq!(wire_value["type"], "DJ_TIMELINE_STATE");
-        assert_eq!(wire_value["agentId"], DJ_V2_AGENT);
+        assert_eq!(wire_value["agentId"], DJ_V3_AGENT);
         assert_eq!(wire_value["sessionId"], "matrix-session");
         assert_eq!(wire_value["sequence"], 11);
         assert_eq!(wire_value["payload"]["state"], "running");
@@ -11081,9 +11074,9 @@ mod tests {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::default();
         let generation =
-            registry.register_test_session(DJ_V2_AGENT, "gate-session", 1, "gate-peer", now);
+            registry.register_test_session(DJ_V3_AGENT, "gate-session", 1, "gate-peer", now);
         {
-            let session = registry.sessions.get_mut(DJ_V2_AGENT).unwrap();
+            let session = registry.sessions.get_mut(DJ_V3_AGENT).unwrap();
             session.state_sync_received = true;
             session.timeline_state_request_received = true;
             session.snapshot_ready = true;
@@ -11098,7 +11091,7 @@ mod tests {
             ..baseline.clone()
         };
         assert!(!registry.should_deliver_outbound_state(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "gate-session",
             generation,
             &replay
@@ -11108,19 +11101,19 @@ mod tests {
         // exactly once and then latches until the next truth change.
         let handoff = dj_truth_state(Some("play-1"), Some("pedal-2"), Some("release-5"));
         assert!(registry.should_deliver_outbound_state(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "gate-session",
             generation,
             &handoff
         ));
         registry.note_outbound_state(&handoff, "evt-handoff", 12);
         assert!(!registry.should_deliver_outbound_state(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "gate-session",
             generation,
             &handoff
         ));
-        let retained = registry.sessions[DJ_V2_AGENT]
+        let retained = registry.sessions[DJ_V3_AGENT]
             .last_outbound_state
             .clone()
             .expect("delivery gate must retain authoritative truth");
@@ -11130,7 +11123,7 @@ mod tests {
 
         let released = dj_truth_state(None, None, None);
         assert!(registry.should_deliver_outbound_state(
-            DJ_V2_AGENT,
+            DJ_V3_AGENT,
             "gate-session",
             generation,
             &released
@@ -11147,7 +11140,7 @@ mod tests {
             let snapshot = Arc::clone(&snapshot);
             move || snapshot.lock().unwrap().clone()
         };
-        let handler = dj_v2_state_responder(1);
+        let handler = dj_v3_state_responder(1);
         let mut server =
             RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
                 RemoteControlConfig {
@@ -11157,7 +11150,7 @@ mod tests {
                     max_connections: 2,
                     dj_link_enabled: true,
                     dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                    dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                    dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                     ..RemoteControlConfig::default()
                 },
                 |_| {},
@@ -11176,7 +11169,7 @@ mod tests {
         let (mut stalled, _) = (0..100)
             .find_map(|_| tungstenite::connect(url.as_str()).ok())
             .expect("DJ Link listener did not accept the stalled-peer socket");
-        complete_dj_v2_snapshot_gate(&mut stalled, port, "stalled-session", &server);
+        complete_dj_v3_snapshot_gate(&mut stalled, port, "stalled-session", &server);
         assert_eq!(
             server.dj_link_status().session_id.as_deref(),
             Some("stalled-session")
@@ -11217,27 +11210,27 @@ mod tests {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::default();
         let old_generation =
-            registry.register_test_session(DJ_V2_AGENT, "old-session", 1, "old-peer", now);
+            registry.register_test_session(DJ_V3_AGENT, "old-session", 1, "old-peer", now);
         let new_generation =
-            registry.register_test_session(DJ_V2_AGENT, "new-session", 1, "new-peer", now);
-        assert!(!registry.is_current(DJ_V2_AGENT, "old-session", old_generation));
-        assert!(registry.is_current(DJ_V2_AGENT, "new-session", new_generation));
-        registry.close_if_current(DJ_V2_AGENT, "old-session", old_generation);
-        assert!(registry.is_current(DJ_V2_AGENT, "new-session", new_generation));
+            registry.register_test_session(DJ_V3_AGENT, "new-session", 1, "new-peer", now);
+        assert!(!registry.is_current(DJ_V3_AGENT, "old-session", old_generation));
+        assert!(registry.is_current(DJ_V3_AGENT, "new-session", new_generation));
+        registry.close_if_current(DJ_V3_AGENT, "old-session", old_generation);
+        assert!(registry.is_current(DJ_V3_AGENT, "new-session", new_generation));
         // A side-effectful command exercises the idempotency tombstones;
         // heartbeats deliberately bypass them (no physical side effect).
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
 
-        let envelope = dj_v2_envelope(
+        let envelope = dj_v3_envelope(
             DjLinkMessageType::TimelineLoopSet,
             "new-session",
             2,
             "busy-event",
-            dj_v2_loop_set_payload(true),
+            dj_v3_loop_set_payload(true),
         );
         let shape = envelope.canonical_shape().unwrap();
         assert_eq!(
@@ -11316,7 +11309,7 @@ mod tests {
                 pairing_pin: "123456".to_string(),
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -11345,13 +11338,13 @@ mod tests {
         };
         let hello = |event_id: &str, auth_token: &str| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_AGENT_HELLO",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": "session-routing",
                 "sequence": 1,
                 "eventId": event_id,
-                "payload": {"authToken": auth_token, "version": 2, "capabilities": dj_v2_capabilities()}
+                "payload": {"authToken": auth_token, "version": 3, "capabilities": dj_v3_capabilities()}
             })
         };
 
@@ -11379,13 +11372,13 @@ mod tests {
         let (mut dj_client, _) = tungstenite::connect(dj_url.as_str()).unwrap();
         dj_client
             .send(Message::Text(
-                hello("hello-routing", DJ_V2_TOKEN).to_string(),
+                hello("hello-routing", DJ_V3_TOKEN).to_string(),
             ))
             .unwrap();
         assert_eq!(read_ack(&mut dj_client).outcome, DjLinkAckOutcome::Accepted);
         assert_eq!(
             server.dj_link_status().agent_id.as_deref(),
-            Some(DJ_V2_AGENT)
+            Some(DJ_V3_AGENT)
         );
         let _ = dj_client.close(None);
         drop(server);
@@ -11435,24 +11428,24 @@ mod tests {
         let now = Instant::now();
         let mut registry = DjLinkRegistry::default();
         let generation =
-            registry.register_test_session(DJ_V2_AGENT, "soak-session", 0, "soak-peer", now);
+            registry.register_test_session(DJ_V3_AGENT, "soak-session", 0, "soak-peer", now);
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let envelope_of =
             |message_type: DjLinkMessageType, sequence: u64, event_id: &str| DjLinkEnvelope {
                 v: protocol::DJ_LINK_PROTOCOL_VERSION,
                 message_type,
-                agent_id: DJ_V2_AGENT.to_string(),
+                agent_id: DJ_V3_AGENT.to_string(),
                 session_id: "soak-session".to_string(),
                 sequence,
                 event_id: event_id.to_string(),
                 payload: if message_type == DjLinkMessageType::Heartbeat {
                     json!({})
                 } else {
-                    dj_v2_loop_set_payload(true)
+                    dj_v3_loop_set_payload(true)
                 },
             };
         let run_accepted = |registry: &mut DjLinkRegistry,
@@ -11568,7 +11561,7 @@ mod tests {
             None,
             generation,
         );
-        let recent_key = (DJ_V2_AGENT.to_string(), recent_envelope.event_id.clone());
+        let recent_key = (DJ_V3_AGENT.to_string(), recent_envelope.event_id.clone());
         match registry
             .admit(&recent_envelope, &recent_shape, generation, now)
             .unwrap()
@@ -11640,11 +11633,11 @@ mod tests {
 
         // Reconnection resets sequence ordering but not physical identity.
         let replacement_generation =
-            registry.register_test_session(DJ_V2_AGENT, "soak-replacement", 1, "soak-peer-2", now);
+            registry.register_test_session(DJ_V3_AGENT, "soak-replacement", 1, "soak-peer-2", now);
         assert!(replacement_generation > generation);
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let reconnect_replay = DjLinkEnvelope {
@@ -11684,7 +11677,7 @@ mod tests {
             "the stale identity must be inflight before the replacement"
         );
         let final_generation =
-            registry.register_test_session(DJ_V2_AGENT, "soak-final", 1, "soak-peer-3", now);
+            registry.register_test_session(DJ_V3_AGENT, "soak-final", 1, "soak-peer-3", now);
         assert!(final_generation > replacement_generation);
         registry.reject_inflight(&stale, replacement_generation);
         assert!(registry.inflight.is_empty());
@@ -11744,19 +11737,19 @@ mod tests {
         assert_eq!(registry.seen_event_count(), 0);
         drop((max_identity, max_shape));
         let generation =
-            registry.register_test_session(DJ_V2_AGENT, "cap-session", 0, "cap-peer", now);
+            registry.register_test_session(DJ_V3_AGENT, "cap-session", 0, "cap-peer", now);
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let physical = |sequence: u64, event_id: &str| {
-            dj_v2_envelope(
+            dj_v3_envelope(
                 DjLinkMessageType::TimelineLoopSet,
                 "cap-session",
                 sequence,
                 event_id,
-                dj_v2_loop_set_payload(true),
+                dj_v3_loop_set_payload(true),
             )
         };
 
@@ -11838,10 +11831,10 @@ mod tests {
         // Session replacement does not reset the latch. Non-side-effect
         // keepalive traffic remains operational and consumes no tombstones.
         let replacement_generation =
-            registry.register_test_session(DJ_V2_AGENT, "cap-replacement", 0, "cap-peer-2", now);
+            registry.register_test_session(DJ_V3_AGENT, "cap-replacement", 0, "cap-peer-2", now);
         registry
             .sessions
-            .get_mut(DJ_V2_AGENT)
+            .get_mut(DJ_V3_AGENT)
             .unwrap()
             .snapshot_ready = true;
         let reconnect_physical = DjLinkEnvelope {
@@ -11899,7 +11892,7 @@ mod tests {
         let dispatched = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatched = Arc::clone(&dispatched);
-            let inner = dj_v2_state_responder(5);
+            let inner = dj_v3_state_responder(5);
             Arc::new(move |envelope| {
                 if envelope.message_type == DjLinkMessageType::MasterTrackActive {
                     dispatched.fetch_add(1, Ordering::SeqCst);
@@ -11916,7 +11909,7 @@ mod tests {
                 max_messages_per_second: 1000,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -11933,7 +11926,7 @@ mod tests {
         .unwrap();
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut client, port, "session-flood", &server);
+        complete_dj_v3_snapshot_gate(&mut client, port, "session-flood", &server);
         let read_ack = |client: &mut tungstenite::WebSocket<_>| -> DjLinkAck {
             match client.read().unwrap() {
                 Message::Text(text) => serde_json::from_str(&text).unwrap(),
@@ -11951,9 +11944,9 @@ mod tests {
             client
                 .send(Message::Text(
                     json!({
-                        "v": 2,
+                        "v": 3,
                         "type": "DJ_HEARTBEAT",
-                        "agentId": DJ_V2_AGENT,
+                        "agentId": DJ_V3_AGENT,
                         "sessionId": "session-flood",
                         "sequence": index + 4,
                         "eventId": format!("flood-heartbeat-{index}"),
@@ -11983,13 +11976,13 @@ mod tests {
         // exact duplicate receipt.
         thread::sleep(Duration::from_millis(1100));
         let command = json!({
-            "v": 2,
+            "v": 3,
             "type": "DJ_MASTER_TRACK_ACTIVE",
-            "agentId": DJ_V2_AGENT,
+            "agentId": DJ_V3_AGENT,
             "sessionId": "session-flood",
             "sequence": total + 4,
             "eventId": "flood-command",
-            "payload": dj_v2_track_active_payload("play-flood"),
+            "payload": dj_v3_track_active_payload("play-flood"),
         });
         client.send(Message::Text(command.to_string())).unwrap();
         assert_eq!(read_ack(&mut client).outcome, DjLinkAckOutcome::Accepted);
@@ -12013,7 +12006,7 @@ mod tests {
         let dispatched = Arc::new(AtomicU64::new(0));
         let handler: DjLinkDispatchHandler = {
             let dispatched = Arc::clone(&dispatched);
-            let inner = dj_v2_state_responder(11);
+            let inner = dj_v3_state_responder(11);
             Arc::new(move |envelope| {
                 if !matches!(
                     envelope.message_type,
@@ -12033,7 +12026,7 @@ mod tests {
                 max_messages_per_second: 3,
                 dj_link_enabled: true,
                 dj_link_bind_ip: Some("127.0.0.1".to_string()),
-                dj_link_token: Some(DJ_V2_TOKEN.to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
                 ..RemoteControlConfig::default()
             },
             |_| {},
@@ -12050,7 +12043,7 @@ mod tests {
         .unwrap();
         let url = format!("ws://127.0.0.1:{port}/dj-link");
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
-        complete_dj_v2_snapshot_gate(&mut client, port, "session-rate-socket", &server);
+        complete_dj_v3_snapshot_gate(&mut client, port, "session-rate-socket", &server);
         let read_ack = |client: &mut tungstenite::WebSocket<_>| -> DjLinkAck {
             match client.read().unwrap() {
                 Message::Text(text) => serde_json::from_str(&text).unwrap(),
@@ -12059,9 +12052,9 @@ mod tests {
         };
         let frame = |sequence: u64, event_id: &str| {
             json!({
-                "v": 2,
+                "v": 3,
                 "type": "DJ_TIMELINE_LOOP_SET",
-                "agentId": DJ_V2_AGENT,
+                "agentId": DJ_V3_AGENT,
                 "sessionId": "session-rate-socket",
                 "sequence": sequence,
                 "eventId": event_id,
@@ -12225,7 +12218,7 @@ mod tests {
         let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
         client
             .send(Message::Text(
-                dj_v2_hello("session-dj-only-empty-pin", "hello-dj-only-empty-pin").to_string(),
+                dj_v3_hello("session-dj-only-empty-pin", "hello-dj-only-empty-pin").to_string(),
             ))
             .unwrap();
         match client.read().unwrap() {
@@ -12237,7 +12230,7 @@ mod tests {
         }
         assert_eq!(
             server.dj_link_status().agent_id.as_deref(),
-            Some(DJ_V2_AGENT)
+            Some(DJ_V3_AGENT)
         );
         assert_eq!(server.status().clients.len(), 0);
         let _ = client.close(None);
@@ -12276,13 +12269,13 @@ mod tests {
         let (mut dj_client, _) = tungstenite::connect(dj_url.as_str()).unwrap();
         dj_client
             .send(Message::Text(
-                dj_v2_hello("session-dj-only-routes", "hello-dj-only-routes").to_string(),
+                dj_v3_hello("session-dj-only-routes", "hello-dj-only-routes").to_string(),
             ))
             .unwrap();
         assert_eq!(read_ack(&mut dj_client).outcome, DjLinkAckOutcome::Accepted);
         assert_eq!(
             server.dj_link_status().agent_id.as_deref(),
-            Some(DJ_V2_AGENT)
+            Some(DJ_V3_AGENT)
         );
 
         // Every other WebSocket route is rejected before any generic

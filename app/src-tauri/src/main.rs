@@ -123,6 +123,7 @@ mod capture_transport;
 mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
+mod dj_loop_range;
 mod dvc_import;
 mod e3_native_acceptance;
 mod ndi_transport;
@@ -933,6 +934,14 @@ struct DjLinkRuntime {
     /// ACK may set the release latch.
     unmapped_active_blocked: bool,
     loop_division: Option<u8>,
+    /// Last accepted measured Rekordbox loop revision. Predicted fallback
+    /// targets never advance this fence, so a later fresh measurement can
+    /// always rebase the Timeline while stale/conflicting reports fail closed.
+    loop_revision: Option<u64>,
+    /// Last consumed physical F14 identity for this session. Fallback intent
+    /// IDs are strictly monotonic, so this rejects both replays and delayed
+    /// unique older intents without retaining an unbounded history.
+    last_loop_fallback_intent_id: Option<u64>,
     last_event_id: Option<String>,
     master_deck: Option<String>,
     master_deck_number: Option<u8>,
@@ -974,6 +983,8 @@ impl DjLinkRuntime {
             released: false,
             unmapped_active_blocked: false,
             loop_division: None,
+            loop_revision: None,
+            last_loop_fallback_intent_id: None,
             last_event_id: None,
             master_deck: None,
             master_deck_number: None,
@@ -1011,6 +1022,8 @@ impl DjLinkRuntime {
             self.released = false;
             self.unmapped_active_blocked = false;
             self.loop_division = None;
+            self.loop_revision = None;
+            self.last_loop_fallback_intent_id = None;
             self.last_event_id = None;
             self.master_deck = None;
             self.master_deck_number = None;
@@ -1096,7 +1109,7 @@ fn dj_link_timeline_state_from_snapshot(
         timeline_id,
         position_bars,
         play_session_id: runtime.play_session_id.clone(),
-        // DJ Link v2 currently carries no independently verifiable pedal
+        // DJ Link v3 currently carries no independently verifiable pedal
         // identity.  Never invent one from a loop report.
         pedal_owner: runtime.pedal_owner.clone(),
         release_event_id: runtime.release_event_id.clone(),
@@ -1193,18 +1206,7 @@ fn dj_link_measured_loop_division(
     let Some(length_beats) = loop_state.length_beats else {
         return Err("active_loop_length_missing");
     };
-    // Protocol validation has already checked the measured span; only the
-    // three show-authored loop lengths are representable by the engine's
-    // absolute divisions.  Do not round or promote an approximate value.
-    if (length_beats - 8.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
-        Ok(Some(0))
-    } else if (length_beats - 4.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
-        Ok(Some(1))
-    } else if (length_beats - 2.0).abs() <= protocol::DJ_LINK_LOOP_LENGTH_TOLERANCE_BEATS {
-        Ok(Some(2))
-    } else {
-        Err("unsupported_loop_length_beats")
-    }
+    dj_loop_range::division_for_profile_length(length_beats).map(Some)
 }
 
 fn dj_link_payload_matches_runtime(
@@ -1413,7 +1415,7 @@ fn dispatch_dj_link_event(
                 Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
                 Err(code) => return dj_link_rejected(code, current_generation),
             }
-            // ACTIVE is self-contained authority in v2.  It is deliberately
+            // ACTIVE is self-contained authority in v3.  It is deliberately
             // not gated by a retired DJ_MASTER_CHANGED preamble.
             let mut next_runtime = runtime.clone();
             // Expiry is only a candidate for the next committed runtime. A
@@ -1502,6 +1504,9 @@ fn dispatch_dj_link_event(
             next_runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
             next_runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
             next_runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+            next_runtime.loop_division = None;
+            next_runtime.loop_revision = None;
+            next_runtime.last_loop_fallback_intent_id = None;
             next_runtime.loop_active = false;
             next_runtime.last_event_id = Some(envelope.event_id);
             next_runtime.state_generation = next;
@@ -1570,7 +1575,7 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("engine_publication_rejected", current_generation)
                 }
             };
-            // SYNC converges only the already-admitted v2 Timeline identity.
+            // SYNC converges only the already-admitted v3 Timeline identity.
             // It never performs another mapping lookup or retriggers START.
             runtime.track_content_id = payload.content_id.clone();
             runtime.track_title = payload.title.clone();
@@ -1630,6 +1635,20 @@ fn dispatch_dj_link_event(
                 },
                 Err(code) => return dj_link_rejected(code, current_generation),
             };
+            if let Some(current_revision) = runtime.loop_revision {
+                if payload.loop_state.revision < current_revision {
+                    return dj_link_rejected("stale_loop_revision", current_generation);
+                }
+                if payload.loop_state.revision == current_revision {
+                    let exact_duplicate = runtime.loop_active == payload.loop_state.active
+                        && (!payload.loop_state.active || runtime.loop_division == Some(division));
+                    return if exact_duplicate {
+                        dj_link_accepted(current_generation)
+                    } else {
+                        dj_link_rejected("loop_revision_conflict", current_generation)
+                    };
+                }
+            }
             let next = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
                 Err(_) => {
@@ -1643,7 +1662,100 @@ fn dispatch_dj_link_event(
                 return dj_link_rejected("engine_publication_rejected", current_generation);
             }
             runtime.loop_division = Some(division);
+            runtime.loop_revision = Some(payload.loop_state.revision);
             runtime.loop_active = payload.loop_state.active;
+            runtime.last_event_id = Some(envelope.event_id);
+            runtime.state_generation = next;
+            dj_link_accepted(next)
+        }
+        protocol::DjLinkMessageType::LoopFallback => {
+            let payload = match serde_json::from_value::<protocol::DjLinkLoopFallbackPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected("invalid_loop_fallback_payload", current_generation)
+                }
+            };
+            if runtime.unmapped_active_blocked {
+                return dj_link_rejected("dj_link_unmapped_active", current_generation);
+            }
+            if runtime.released {
+                return dj_link_rejected("dj_link_released", current_generation);
+            }
+            if payload.validate().is_err() {
+                return dj_link_rejected("invalid_loop_fallback", current_generation);
+            }
+            if !dj_link_payload_matches_runtime(
+                &runtime,
+                payload.deck,
+                &payload.deck_id,
+                payload.master_deck_revision,
+                &payload.play_session_id,
+            ) {
+                return dj_link_rejected("loop_fallback_context_mismatch", current_generation);
+            }
+            if runtime
+                .last_loop_fallback_intent_id
+                .is_some_and(|last| payload.pedal_intent_id <= last)
+            {
+                return dj_link_rejected("loop_fallback_intent_not_new", current_generation);
+            }
+            if runtime.loop_revision != payload.base_measured_loop_revision {
+                return dj_link_rejected(
+                    "loop_fallback_base_revision_mismatch",
+                    current_generation,
+                );
+            }
+            let effective_base_loop_division = runtime
+                .loop_active
+                .then_some(runtime.loop_division)
+                .flatten();
+            if effective_base_loop_division != payload.base_loop_division {
+                return dj_link_rejected(
+                    "loop_fallback_base_division_mismatch",
+                    current_generation,
+                );
+            }
+            let division =
+                match dj_loop_range::division_for_profile_length(payload.target_length_beats) {
+                    Ok(division) => division,
+                    Err(code) => return dj_link_rejected(code, current_generation),
+                };
+            let expected_division = payload
+                .base_loop_division
+                .map(|base| {
+                    base.saturating_add(1)
+                        .min((protocol::DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1) as u8)
+                })
+                .unwrap_or(0);
+            if division != expected_division {
+                return dj_link_rejected("loop_fallback_target_not_next", current_generation);
+            }
+            let next = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            if runtime.loop_active && runtime.loop_division == Some(division) {
+                // The published Stage-1 profile saturates at 1/64. A further
+                // same-target F14 is an exact no-op, but its intent is still
+                // consumed so a replay cannot later gain authority.
+                runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
+                runtime.last_event_id = Some(envelope.event_id);
+                runtime.state_generation = next;
+                return dj_link_accepted(next);
+            }
+            if engine
+                .dj_link_set_timeline_loop_absolute(division, true)
+                .is_err()
+            {
+                return dj_link_rejected("engine_publication_rejected", current_generation);
+            }
+            runtime.loop_division = Some(division);
+            runtime.loop_active = true;
+            runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
             runtime.last_event_id = Some(envelope.event_id);
             runtime.state_generation = next;
             dj_link_accepted(next)
@@ -112415,26 +112527,69 @@ f 1 2 3
 
     fn dj_link_socket_hello(token: &str, session_id: &str, event_id: &str) -> Value {
         json!({
-            "v": 1,
+            "v": protocol::DJ_LINK_PROTOCOL_VERSION,
             "type": "DJ_AGENT_HELLO",
-            "agentId": "production-stop-agent",
+            "agentId": protocol::DJ_LINK_AGENT_ID,
             "sessionId": session_id,
             "sequence": 1,
             "eventId": event_id,
-            "payload": {"authToken": token, "version": 1, "capabilities": []}
+            "payload": {
+                "authToken": token,
+                "version": protocol::DJ_LINK_PROTOCOL_VERSION,
+                "capabilities": protocol::DJ_LINK_REQUIRED_CAPABILITIES
+            }
         })
     }
 
-    fn dj_link_socket_release(session_id: &str) -> Value {
+    fn dj_link_socket_release(session_id: &str, timeline_id: &str) -> Value {
         json!({
-            "v": 1,
+            "v": protocol::DJ_LINK_PROTOCOL_VERSION,
             "type": "DJ_RELEASE",
-            "agentId": "production-stop-agent",
+            "agentId": protocol::DJ_LINK_AGENT_ID,
+            "sessionId": session_id,
+            "sequence": 4,
+            "eventId": "production-stop-physical-release",
+            "payload": {
+                "state": "released",
+                "timelineId": timeline_id,
+                "playSessionId": "production-stop-play"
+            }
+        })
+    }
+
+    fn complete_dj_link_socket_snapshot_gate(client: &mut DjLinkLoopbackClient, session_id: &str) {
+        client.send_json(&json!({
+            "v": protocol::DJ_LINK_PROTOCOL_VERSION,
+            "type": "DJ_STATE_SYNC",
+            "agentId": protocol::DJ_LINK_AGENT_ID,
             "sessionId": session_id,
             "sequence": 2,
-            "eventId": "production-stop-physical-release",
+            "eventId": format!("production-stop-sync-{session_id}"),
+            "payload": {
+                "released": false,
+                "masterDeck": 1,
+                "activePlaySessionId": "production-stop-play"
+            }
+        }));
+        assert_eq!(
+            client.read_ack().outcome,
+            protocol::DjLinkAckOutcome::Accepted
+        );
+        client.send_json(&json!({
+            "v": protocol::DJ_LINK_PROTOCOL_VERSION,
+            "type": "DJ_TIMELINE_STATE_REQUEST",
+            "agentId": protocol::DJ_LINK_AGENT_ID,
+            "sessionId": session_id,
+            "sequence": 3,
+            "eventId": format!("production-stop-state-{session_id}"),
             "payload": {}
-        })
+        }));
+        assert_eq!(
+            client.read_ack().outcome,
+            protocol::DjLinkAckOutcome::Accepted
+        );
+        let state = client.read_json();
+        assert_eq!(state["type"], "DJ_TIMELINE_STATE");
     }
 
     #[test]
@@ -112446,6 +112601,83 @@ f 1 2 3
         drop(probe);
         let token = "0123456789abcdef0123456789abcdef";
         *state.dj_link_token.lock().unwrap() = Some(token.to_string());
+        let mut production_timeline = state.engine.snapshot().timeline;
+        production_timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "DJ Link production stop phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        production_timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        state
+            .engine
+            .apply_timeline_bank_published(
+                vec![production_timeline.clone()],
+                production_timeline.id,
+                false,
+            )
+            .unwrap();
+        let production_timeline_id = state.engine.snapshot().timeline.id;
+        {
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            let mut mapping = dj_link_test_mapping(
+                "production-stop-content",
+                protocol::DjTrackSelector {
+                    content_id: Some("production-stop-content".to_string()),
+                    title: None,
+                    artist: None,
+                },
+            );
+            mapping.timeline_id = production_timeline_id;
+            coordinator.mappings.dj_track_triggers = vec![mapping];
+            state
+                .dj_link_runtime
+                .lock()
+                .unwrap()
+                .sync_project(&coordinator);
+        }
+        let production_active_outcome = dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::MasterTrackActive,
+                1,
+                "production-stop-active",
+                json!({
+                    "deck": 1,
+                    "deckId": "rekordbox-deck-1",
+                    "masterDeckRevision": 1,
+                    "contentId": "production-stop-content",
+                    "trackBpm": 120.0,
+                    "positionAtSendSec": 0.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 1,
+                    "sampleAgeMs": 0,
+                    "isPlaying": true,
+                    "master": true,
+                    "startedAt": "2026-08-26T00:00:00Z",
+                    "playSessionId": "production-stop-play",
+                    "loop": null
+                }),
+            ),
+            &state.engine,
+            state.project_coordinator.as_ref(),
+            state.dj_link_runtime.as_ref(),
+            state.project_external_command_admission.as_ref(),
+            state.project_transaction_active.as_ref(),
+        );
+        assert!(
+            matches!(
+                production_active_outcome,
+                DjLinkDispatchOutcome::TimelineState { .. }
+            ),
+            "production stop fixture ACTIVE must establish a valid v3 owner, got {production_active_outcome:?}"
+        );
+        let production_timeline_id = production_timeline_id.0.to_string();
         let config = RemoteControlConfig {
             bind_ip: "127.0.0.1".to_string(),
             port,
@@ -112468,6 +112700,7 @@ f 1 2 3
             old_client.read_ack().outcome,
             protocol::DjLinkAckOutcome::Accepted
         );
+        complete_dj_link_socket_snapshot_gate(&mut old_client, "production-stop-old");
 
         // Generic workers are retained by the same server join. Prove the
         // status provider fails closed instead of waiting behind an app-owned
@@ -112523,7 +112756,10 @@ f 1 2 3
             .expect("snapshot/audio fence did not enter");
         submission.release_publication_barrier();
 
-        old_client.send_json(&dj_link_socket_release("production-stop-old"));
+        old_client.send_json(&dj_link_socket_release(
+            "production-stop-old",
+            &production_timeline_id,
+        ));
         let inflight_deadline = Instant::now() + Duration::from_secs(1);
         loop {
             let inflight = state
@@ -112568,6 +112804,11 @@ f 1 2 3
         drop(transport_status_guard);
         drop(remote_client);
 
+        state
+            .engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
         let after_cancel = state.engine.snapshot();
         let after_cancel_audio = state.engine.video_audio_runtime_snapshot().timeline_audio;
         std::thread::sleep(Duration::from_millis(100));
@@ -112608,7 +112849,11 @@ f 1 2 3
             replacement.read_ack().outcome,
             protocol::DjLinkAckOutcome::Accepted
         );
-        replacement.send_json(&dj_link_socket_release("production-stop-replacement"));
+        complete_dj_link_socket_snapshot_gate(&mut replacement, "production-stop-replacement");
+        replacement.send_json(&dj_link_socket_release(
+            "production-stop-replacement",
+            &production_timeline_id,
+        ));
         let replay = replacement.read_ack();
         assert_eq!(replay.outcome, protocol::DjLinkAckOutcome::Rejected);
         assert_eq!(replay.code.as_deref(), Some("event_id_not_retained"));
@@ -113285,6 +113530,431 @@ f 1 2 3
         assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
         assert_eq!(runtime.lock().unwrap().release_event_id, None);
 
+        let fallback_generation_before = engine.snapshot().timeline.loop_runtime.generation;
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    53,
+                    "loop-fallback-4",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "playSessionId": "play-1",
+                        "pedalIntentId": 2,
+                        "baseMeasuredLoopRevision": 1,
+                        "baseLoopDivision": 0,
+                        "targetLengthBeats": 4.0,
+                        "responseWindowMs": 250,
+                        "source": "pedal-no-response-predicted"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(runtime.loop_division, Some(1));
+            assert_eq!(
+                runtime.loop_revision,
+                Some(1),
+                "predicted fallback must not advance measured revision authority"
+            );
+        }
+        assert!(
+            engine.snapshot().timeline.loop_runtime.generation > fallback_generation_before,
+            "bounded no-response fallback must reach the canonical absolute-loop API"
+        );
+
+        let engine_after_fallback = engine.snapshot();
+        let runtime_after_fallback = runtime.lock().unwrap().clone();
+        let replayed_fallback = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "pedalIntentId": 2,
+            "baseMeasuredLoopRevision": 1,
+            "baseLoopDivision": 0,
+            "targetLengthBeats": 4.0,
+            "responseWindowMs": 250,
+            "source": "pedal-no-response-predicted"
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    531,
+                    "loop-fallback-replayed-intent",
+                    replayed_fallback,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_intent_not_new"
+        ));
+        let skipped_fallback = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "pedalIntentId": 3,
+            "baseMeasuredLoopRevision": 1,
+            "baseLoopDivision": 1,
+            "targetLengthBeats": 1.0,
+            "responseWindowMs": 250,
+            "source": "pedal-no-response-predicted"
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    532,
+                    "loop-fallback-skipped-target",
+                    skipped_fallback,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "invalid_loop_fallback"
+        ));
+        let delayed_unique_older_fallback = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "pedalIntentId": 1,
+            "baseMeasuredLoopRevision": 1,
+            "baseLoopDivision": 1,
+            "targetLengthBeats": 2.0,
+            "responseWindowMs": 250,
+            "source": "pedal-no-response-predicted"
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    533,
+                    "loop-fallback-delayed-unique-intent",
+                    delayed_unique_older_fallback,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_intent_not_new"
+        ));
+        assert_eq!(engine.snapshot(), engine_after_fallback);
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_after_fallback,
+            "replayed or skipped fallback candidates must not mutate runtime authority"
+        );
+
+        let late_measured_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "loop": {
+                "active": true,
+                "startBeat": 0.0,
+                "endBeat": 2.0,
+                "lengthBeats": 2.0,
+                "revision": 2,
+                "sampleAgeMs": 0,
+                "source": "rekordbox-hook-measured"
+            }
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    54,
+                    "late-measured-2",
+                    late_measured_payload.clone(),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(
+                (runtime.loop_division, runtime.loop_revision),
+                (Some(2), Some(2)),
+                "fresh measured Rekordbox state must override and rebase fallback"
+            );
+        }
+
+        let engine_after_fresh_measurement = engine.snapshot();
+        let runtime_after_fresh_measurement = runtime.lock().unwrap().clone();
+        let old_fallback_after_measurement = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "pedalIntentId": 4,
+            "baseMeasuredLoopRevision": 1,
+            "baseLoopDivision": 1,
+            "targetLengthBeats": 2.0,
+            "responseWindowMs": 250,
+            "source": "pedal-no-response-predicted"
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    541,
+                    "late-old-loop-fallback",
+                    old_fallback_after_measurement,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_base_revision_mismatch"
+        ));
+        assert_eq!(engine.snapshot(), engine_after_fresh_measurement);
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_after_fresh_measurement,
+            "a late fallback based before fresh measured authority must not overwrite it"
+        );
+        let mut stale_payload = late_measured_payload.clone();
+        stale_payload["loop"]["lengthBeats"] = json!(4.0);
+        stale_payload["loop"]["endBeat"] = json!(4.0);
+        stale_payload["loop"]["revision"] = json!(1);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    55,
+                    "stale-measured-4",
+                    stale_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "stale_loop_revision"
+        ));
+        let mut conflicting_payload = late_measured_payload.clone();
+        conflicting_payload["loop"]["lengthBeats"] = json!(1.0);
+        conflicting_payload["loop"]["endBeat"] = json!(1.0);
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    56,
+                    "conflicting-measured-1",
+                    conflicting_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_revision_conflict"
+        ));
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    57,
+                    "duplicate-measured-2",
+                    late_measured_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_after_fresh_measurement,
+            "stale, conflicting, and exact-duplicate measured reports must not rerun the engine"
+        );
+        assert_eq!(
+            *runtime.lock().unwrap(),
+            runtime_after_fresh_measurement,
+            "rejected or duplicate measurements must preserve all runtime authority"
+        );
+
+        let inactive_measured_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "loop": {
+                "active": false,
+                "startBeat": null,
+                "endBeat": null,
+                "lengthBeats": null,
+                "revision": 3,
+                "sampleAgeMs": 0,
+                "source": "rekordbox-hook-measured"
+            }
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    58,
+                    "measured-loop-off",
+                    inactive_measured_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        let loop_off_runtime = runtime.lock().unwrap().clone();
+        assert_eq!(
+            (loop_off_runtime.loop_revision, loop_off_runtime.loop_active),
+            (Some(3), false)
+        );
+        let loop_off_generation = engine.snapshot().timeline.loop_runtime.generation;
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    59,
+                    "fallback-after-measured-loop-off",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "playSessionId": "play-1",
+                        "pedalIntentId": 4,
+                        "baseMeasuredLoopRevision": 3,
+                        "baseLoopDivision": null,
+                        "targetLengthBeats": 8.0,
+                        "responseWindowMs": 250,
+                        "source": "pedal-no-response-predicted"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        assert!(
+            engine.snapshot().timeline.loop_runtime.generation > loop_off_generation,
+            "an inactive measured base must permit the next standalone 8-beat fallback"
+        );
+
+        let floor_measured_payload = json!({
+            "deck": 1,
+            "deckId": "rekordbox-deck-1",
+            "masterDeckRevision": 1,
+            "playSessionId": "play-1",
+            "loop": {
+                "active": true,
+                "startBeat": 0.0,
+                "endBeat": 0.015625,
+                "lengthBeats": 0.015625,
+                "revision": 4,
+                "sampleAgeMs": 0,
+                "source": "rekordbox-hook-measured"
+            }
+        });
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopState,
+                    60,
+                    "measured-loop-floor",
+                    floor_measured_payload,
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { .. }
+        ));
+        let engine_at_floor = engine.snapshot();
+        let runtime_at_floor = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(
+                    protocol::DjLinkMessageType::LoopFallback,
+                    61,
+                    "fallback-floor-noop",
+                    json!({
+                        "deck": 1,
+                        "deckId": "rekordbox-deck-1",
+                        "masterDeckRevision": 1,
+                        "playSessionId": "play-1",
+                        "pedalIntentId": 5,
+                        "baseMeasuredLoopRevision": 4,
+                        "baseLoopDivision": 9,
+                        "targetLengthBeats": 0.015625,
+                        "responseWindowMs": 250,
+                        "source": "pedal-no-response-predicted"
+                    }),
+                ),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Accepted { state_generation }
+                if state_generation == runtime_at_floor.state_generation + 1
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            engine_at_floor,
+            "the saturated 1/64 fallback must not rerun the engine"
+        );
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(runtime.last_loop_fallback_intent_id, Some(5));
+            assert_eq!(
+                runtime.last_event_id.as_deref(),
+                Some("fallback-floor-noop")
+            );
+            assert_eq!(
+                runtime.state_generation,
+                runtime_at_floor.state_generation + 1
+            );
+        }
+
         let engine_before_released_sync = engine.snapshot();
         let sync_released = dj_link_test_envelope(
             protocol::DjLinkMessageType::StateSync,
@@ -113483,6 +114153,34 @@ f 1 2 3
         assert!(matches!(
             dispatch_dj_link_event(
                 released_loop,
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
+        ));
+        let released_fallback = dj_link_test_envelope(
+            protocol::DjLinkMessageType::LoopFallback,
+            58,
+            "fallback-after-release",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "playSessionId": "play-1",
+                "pedalIntentId": 2,
+                "baseMeasuredLoopRevision": 1,
+                "baseLoopDivision": 0,
+                "targetLengthBeats": 1.0,
+                "responseWindowMs": 250,
+                "source": "pedal-no-response-predicted"
+            }),
+        );
+        assert!(matches!(
+            dispatch_dj_link_event(
+                released_fallback,
                 &engine,
                 &coordinator,
                 &runtime,
@@ -115284,6 +115982,23 @@ f 1 2 3
                     "sampleAgeMs": 0,
                     "source": "rekordbox-hook-measured"
                 }
+            }),
+        ));
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::LoopFallback,
+            31,
+            "loop-fallback-engine-error",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "playSessionId": "play-error",
+                "pedalIntentId": 1,
+                "baseMeasuredLoopRevision": null,
+                "baseLoopDivision": null,
+                "targetLengthBeats": 8.0,
+                "responseWindowMs": 250,
+                "source": "pedal-no-response-predicted"
             }),
         ));
         assert_engine_rejection_preserves_runtime(dj_link_test_envelope(

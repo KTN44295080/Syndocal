@@ -1,12 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-26
-Branch: `codex/syndocal-v1.2`; current pushed cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` is equal to upstream, while the exact `1.2.0-alpha.12` runtime/artifact source checkpoint remains `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Later cleanup and documentation checkpoints do not redefine either native artifact's source identity.
+Branch: `codex/syndocal-v1.2`; historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` was equal to upstream, while the exact historical `1.2.0-alpha.12` runtime/artifact source checkpoint remains `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Later cleanup and documentation checkpoints do not redefine either native artifact's source identity. The current alpha.14 source/native checkpoint is recorded in the dated section below once its exact gates complete.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
-> Current continuation note (resumed 2026-08-25): the requested pause after
+> Historical continuation note (resumed 2026-08-25): the requested pause after
 > `1.2.0-alpha.10` was rescinded before final promotion. The accepted integrated
 > checkpoint advanced through alpha.11 and then to the committed, pushed
 > `1.2.0-alpha.12` runtime/artifact checkpoint
@@ -22,7 +22,21 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
-## 2026-08-26 release-metadata advance to 1.2.0-alpha.12
+## 2026-08-26 current DJ-Link v3 alpha.14 advance
+
+Current product metadata is `1.2.0-alpha.14`; `1.2.0-alpha.13` remains the
+committed/pushed Timeline UI checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`.
+Alpha.14 clean-breaks the dedicated DJ peer to exact v3, adds a separately typed
+bounded no-response fallback without weakening measured Rekordbox authority,
+supports the full `8` through `1/64` downward loop profile, and keeps Release
+delivery independent from Rekordbox Stop MIDI success. Measured loop truth is
+wire-nested under `payload.loop`; each fallback is fenced by a monotonic physical
+intent ID plus its exact measured-revision/effective-division base. The final
+independent Terra xHigh review found P0/P1/P2 none after the sender/receiver
+cross-contract correction. Focused software gates do not close native alpha.14
+or physical DJ acceptance.
+
+## HISTORICAL — 2026-08-26 release-metadata advance to 1.2.0-alpha.12
 
 Synchronized product metadata advanced from `1.2.0-alpha.11` to
 `1.2.0-alpha.12` across the root workspace Cargo version, the eight first-party
@@ -55,9 +69,11 @@ must be complete by the separate **2026-08-29 completion deadline**. Current
 work is bounded to the controlled near-show path and its explicit blockers; historical package,
 adapter, hardware, and native evidence below is not promoted into that path.
 
-- The DJ peer authority is branch `beta-v1.1.2` at pushed HEAD
-  `925880068500d42d71b2671fa8a99e5895aca4e2`; runtime checkpoint H is
-  `c6ebb0f`, and the source product version is `1.1.4`. The sole current show
+- The DJ peer authority is the clean/upstream-equal strict-v3 checkpoint on
+  branch `beta-v1.1.2`, source product version `1.1.5`: exact runtime source
+  `862cf8035dfb365a7d799f820936585882d0a1e7`, docs tip
+  `71738778c8b7637c14768e02fecbc2ef14ece7f3`. The docs-only tip does not
+  redefine the runtime identity. The sole current show
   route is the controlled source checkout on the target DJ PC, not an installer,
   shortcut, or published v1.1.3 artifact. It requires a checkout-external show
   JSON through `DJ_AGENT_CONFIG_PATH`, then no-argument `start-all.bat` for the
@@ -65,7 +81,7 @@ adapter, hardware, and native evidence below is not promoted into that path.
   `--preflight-only`. Preflight is software-only and launches no show-side
   process; a real launch still requires the current real Syndocal token. The
   current topology is FOH `192.168.50.1` and DJ PC `192.168.50.2`, with only
-  `syndocal-envelope-v2`; `generic-json` and `syndocal-envelope-v1` remain
+  `syndocal-envelope-v3`; flat, v1, and v2 adapters remain
   retired. Hardware acceptance remains exactly **0/12 open**.
 - The 44.1 kHz HOTONE/Ampero ABI-v2 bridge-only run completed for
   `3,600,031 ms`. It does not close the formal matched 48 kHz ASIO/WASAPI,

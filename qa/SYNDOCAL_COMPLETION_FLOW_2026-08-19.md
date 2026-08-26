@@ -346,7 +346,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.13`.
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.14`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -354,9 +354,12 @@ later display-stable-identity-QA, Show-ASIO hardlink-fix, cleanup
 inaccessible-process-fix, and cleanup exact-gate checkpoints (`b543067`,
 `fb25ab1`, `ef7b647`, and `c40cfd8`) intentionally did not advance product
 metadata; and those alpha.12 artifacts are never rebuilt or replaced under their
-version. This alpha.13 advance synchronizes the live metadata surfaces for the
-upcoming UI tranche and fixes the required version of the next native acceptance
-target; until alpha.13 has its own committed source checkpoint and native
+version. `1.2.0-alpha.13` is the committed and pushed Timeline context-menu UI
+checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`; its exact native binary was
+built and window-verified before this DJ-Link tranche. This alpha.14 advance
+synchronizes the strict DJ-Link v3 and Stage-1 no-response fallback surfaces and
+fixes the required version of the next native acceptance target; until alpha.14
+has its own committed source checkpoint and native
 verification, it must not be described as a reproducible tag, installer, or
 published artifact. The branch name may remain
 historical; artifact metadata and tags must not derive a false version from it.
@@ -428,7 +431,7 @@ tree. The committed `1.2.0-alpha.12` checkpoint was measured at source
 checkpoint `ff61a6d` with zero first-party warnings across its recorded Windows
 configurations (2026-08-26 pause handoff), superseding that tree's earlier
 12 open first-party large-error lints (near-show finding FC-28). The in-progress
-`1.2.0-alpha.13` worktree is unmeasured for the full
+`1.2.0-alpha.14` worktree is unmeasured for the full
 integrated checkpoint and remains unmeasured until a fresh full-gate rerun
 measures this tree again. W0 must still
 recount every supported feature and platform configuration — including the two
@@ -1904,10 +1907,10 @@ must not be used as a setup, selection, or handshake instruction.
 **Current executable next action — exclusive envelope:** build and launch the
 identity-bound current peer, verify its setup API, explicitly select the currently
 provisioned show LAN (FOH Syndocal `Ethernet 4 / 192.168.50.1`; DJ-agent local NIC
-`192.168.50.2`) and `syndocal-envelope-v2`, rotate/copy the show-once token, start
+`192.168.50.2`) and `syndocal-envelope-v3`, rotate/copy the show-once token, start
 the Syndocal Remote listener, and first prove authenticated wired HELLO/ACK. The
-current setup and handshake must explicitly reject `syndocal-envelope-v1` and
-generic-JSON envelope selection or payloads; neither may fall back, normalize, or
+current setup and handshake must explicitly reject flat, v1, and v2 envelope
+selection or payloads; none may fall back, normalize, or
 proceed. Only then may the twelve-row hardware sequence proceed. This observation
 checks none of HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
 whole-product accepted denominator remains exactly 19/71 (26.8%).
