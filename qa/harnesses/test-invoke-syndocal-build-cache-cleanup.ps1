@@ -278,6 +278,125 @@ try {
     Assert-Equal -Expected "ActiveOwnedWriter" -Actual $ownedWriterReport.Blocker.Code -Message "owned writer has a typed blocker"
     Assert-True -Condition (Test-Path -LiteralPath $ownedWriterFixture.Candidate) -Message "owned writer cannot race deletion"
 
+    $anchoredAncestorFixture = New-CleanupTestFixture
+    $anchoredAncestorRoot = $anchoredAncestorFixture.RepositoryRoot
+    $anchoredAncestorReport = Invoke-FixtureCleanup -Fixture $anchoredAncestorFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{
+                    Name = "build-launcher.exe"
+                    ProcessId = 900010
+                    ParentProcessId = 0
+                    ExecutablePath = "C:\Tools\build-launcher.exe"
+                    CommandLine = "build-launcher.exe --working-dir `"$anchoredAncestorRoot`""
+                }
+                [pscustomobject]@{
+                    Name = "node.exe"
+                    ProcessId = 900011
+                    ParentProcessId = 900010
+                    ExecutablePath = "C:\Program Files\nodejs\node.exe"
+                    CommandLine = "node build.js"
+                }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $anchoredAncestorReport.Outcome -Message "writer descended from a dedicated anchored launcher blocks Apply"
+    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $anchoredAncestorReport.Blocker.Code -Message "anchored ancestor has a typed writer blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $anchoredAncestorFixture.Candidate) -Message "anchored ancestor writer cannot race deletion"
+
+    $siblingWriterFixture = New-CleanupTestFixture
+    $siblingWriterRoot = $siblingWriterFixture.RepositoryRoot
+    $siblingWriterPlan = Invoke-FixtureCleanup -Fixture $siblingWriterFixture -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{
+                    Name = "explorer.exe"
+                    ProcessId = 900020
+                    ParentProcessId = 0
+                    ExecutablePath = (Join-Path $env:SystemRoot "explorer.exe")
+                    CommandLine = "explorer.exe --open `"$siblingWriterRoot`""
+                }
+                [pscustomobject]@{
+                    Name = "codex.exe"
+                    ProcessId = 900021
+                    ParentProcessId = 900020
+                    ExecutablePath = "C:\Program Files\WindowsApps\OpenAI.Codex_test\app\resources\codex.exe"
+                    CommandLine = "codex.exe --working-dir `"$siblingWriterRoot`""
+                }
+                [pscustomobject]@{
+                    Name = "StreamDeck.exe"
+                    ProcessId = 900022
+                    ParentProcessId = 900020
+                    ExecutablePath = "C:\Program Files\StreamDeck\StreamDeck.exe"
+                    CommandLine = "StreamDeck.exe"
+                }
+                [pscustomobject]@{
+                    Name = "node.exe"
+                    ProcessId = 900023
+                    ParentProcessId = 900022
+                    ExecutablePath = "C:\Program Files\nodejs\node.exe"
+                    CommandLine = "node C:\unrelated\server.js"
+                }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "PlanReady" -Actual $siblingWriterPlan.Outcome -Message "unrelated StreamDeck node cannot inherit Explorer or Codex sibling anchors"
+    Assert-True -Condition (Test-Path -LiteralPath $siblingWriterFixture.Candidate) -Message "unrelated sibling writer test remains Plan-only"
+
+    $duplicatePidFixture = New-CleanupTestFixture
+    $duplicatePidRoot = $duplicatePidFixture.RepositoryRoot
+    $duplicatePidReport = Invoke-FixtureCleanup -Fixture $duplicatePidFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "build-launcher.exe"; ProcessId = 900030; ParentProcessId = 0; ExecutablePath = "C:\Tools\build-launcher.exe"; CommandLine = "build-launcher.exe --working-dir `"$duplicatePidRoot`"" }
+                [pscustomobject]@{ Name = "other.exe"; ProcessId = 900030; ParentProcessId = 0; ExecutablePath = "C:\Tools\other.exe"; CommandLine = "other.exe" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 900031; ParentProcessId = 900030; ExecutablePath = "C:\Program Files\nodejs\node.exe"; CommandLine = "node build.js" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $duplicatePidReport.Outcome -Message "duplicate generic process identities block Apply"
+    Assert-Equal -Expected "CimPidAmbiguous" -Actual $duplicatePidReport.Blocker.Code -Message "duplicate generic PID has a typed blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $duplicatePidFixture.Candidate) -Message "duplicate PID ambiguity cannot race deletion"
+
+    $missingParentFixture = New-CleanupTestFixture
+    $missingParentReport = Invoke-FixtureCleanup -Fixture $missingParentFixture -Apply -Hooks @{
+        CimProvider = {
+            @([pscustomobject]@{ Name = "node.exe"; ProcessId = 900040; ParentProcessId = 900041; ExecutablePath = "C:\Program Files\nodejs\node.exe"; CommandLine = "node build.js" })
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $missingParentReport.Outcome -Message "missing positive writer parent blocks Apply"
+    Assert-Equal -Expected "WriterOwnershipTopologyUnverifiable" -Actual $missingParentReport.Blocker.Code -Message "missing writer parent has a typed topology blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $missingParentFixture.Candidate) -Message "missing writer ancestry cannot race deletion"
+
+    $cycleFixture = New-CleanupTestFixture
+    $cycleReport = Invoke-FixtureCleanup -Fixture $cycleFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 900050; ParentProcessId = 900051; ExecutablePath = "C:\Program Files\nodejs\node.exe"; CommandLine = "node build.js" }
+                [pscustomobject]@{ Name = "build-launcher.exe"; ProcessId = 900051; ParentProcessId = 900050; ExecutablePath = "C:\Tools\build-launcher.exe"; CommandLine = "build-launcher.exe" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $cycleReport.Outcome -Message "writer ancestry cycle blocks Apply"
+    Assert-Equal -Expected "WriterOwnershipTopologyUnverifiable" -Actual $cycleReport.Blocker.Code -Message "writer ancestry cycle has a typed topology blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $cycleFixture.Candidate) -Message "writer ancestry cycle cannot race deletion"
+
+    $negativeIdentityFixture = New-CleanupTestFixture
+    $negativeIdentityReport = Invoke-FixtureCleanup -Fixture $negativeIdentityFixture -Apply -Hooks @{
+        CimProvider = {
+            @([pscustomobject]@{ Name = "node.exe"; ProcessId = 900060; ParentProcessId = -1; ExecutablePath = "C:\Program Files\nodejs\node.exe"; CommandLine = "node build.js" })
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $negativeIdentityReport.Outcome -Message "negative process identity blocks Apply"
+    Assert-Equal -Expected "CimRecordIncomplete" -Actual $negativeIdentityReport.Blocker.Code -Message "negative process identity has a typed incomplete-record blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $negativeIdentityFixture.Candidate) -Message "negative process identity cannot race deletion"
+
     $unrelatedWriterFixture = New-CleanupTestFixture
     $unrelatedWriterPlan = Invoke-FixtureCleanup -Fixture $unrelatedWriterFixture -Hooks @{
         CimProvider = {
@@ -394,7 +513,7 @@ try {
         }
         StabilityDelayMilliseconds = 0
     }
-    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $codexDuplicateParentReport.Blocker.Code -Message "ambiguous Codex parent identity remains a writer"
+    Assert-Equal -Expected "CimPidAmbiguous" -Actual $codexDuplicateParentReport.Blocker.Code -Message "ambiguous Codex parent identity has the generic PID ambiguity blocker"
 
     $codexSiblingRootFixture = New-CleanupTestFixture
     $codexSiblingRoot = $codexSiblingRootFixture.RepositoryRoot

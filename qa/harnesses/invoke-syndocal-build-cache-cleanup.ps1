@@ -581,6 +581,27 @@ function Test-SyndocalCleanupOwnershipAnchor {
     return $false
 }
 
+function Test-SyndocalCleanupOwnershipBoundary {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$ExecutablePath
+    )
+
+    if ($Name -ine "explorer.exe" -or [string]::IsNullOrWhiteSpace($ExecutablePath)) {
+        return $false
+    }
+    $expectedExplorer = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "explorer.exe"))
+    try {
+        $actualExplorer = [IO.Path]::GetFullPath($ExecutablePath)
+    } catch {
+        return $false
+    }
+    return $actualExplorer.Equals($expectedExplorer, [StringComparison]::OrdinalIgnoreCase)
+}
+
 function Test-SyndocalCleanupCodexControlPlane {
     param(
         [Parameter(Mandatory)]
@@ -688,8 +709,15 @@ function Assert-SyndocalCleanupNoOwnedWriters {
             Throw-SyndocalCleanupGate -Code "CimRecordIncomplete" -Message "Win32_Process returned an incomplete identity record."
         }
         $processId = [int]$pidProperty.Value
+        $parentProcessId = [int]$parentProperty.Value
+        if ($processId -lt 0 -or $parentProcessId -lt 0) {
+            Throw-SyndocalCleanupGate -Code "CimRecordIncomplete" -Message "Win32_Process returned a negative process identity."
+        }
         if ($processId -eq $PID) {
             continue
+        }
+        if ($records.ContainsKey($processId)) {
+            Throw-SyndocalCleanupGate -Code "CimPidAmbiguous" -Message "Win32_Process returned duplicate identity records for PID $processId."
         }
         $name = [string]$nameProperty.Value
         $executableProperty = $process.PSObject.Properties["ExecutablePath"]
@@ -705,25 +733,18 @@ function Assert-SyndocalCleanupNoOwnedWriters {
 
         $isWriter = Test-SyndocalCleanupWriterName -Name $name
         $isCodexControlPlane = $isWriter -and (Test-SyndocalCleanupCodexControlPlane -Process $process -Processes $processes -RepositoryRoot $RepositoryRoot)
+        $isOwnershipBoundary = Test-SyndocalCleanupOwnershipBoundary -Name $name -ExecutablePath $executablePath
         $records[$processId] = [pscustomobject]@{
             ProcessId = $processId
-            ParentProcessId = [int]$parentProperty.Value
+            ParentProcessId = $parentProcessId
             Name = $name
             ExecutablePath = $executablePath
             CommandLine = $commandLine
             IsWriter = $isWriter -and -not $isCodexControlPlane
             IsCodexControlPlane = $isCodexControlPlane
-            IsAnchor = Test-SyndocalCleanupOwnershipAnchor -ExecutablePath $executablePath -CommandLine $commandLine -RepositoryRoot $RepositoryRoot -TargetRoot $TargetRoot
+            IsOwnershipBoundary = $isOwnershipBoundary
+            IsAnchor = (-not $isOwnershipBoundary) -and (Test-SyndocalCleanupOwnershipAnchor -ExecutablePath $executablePath -CommandLine $commandLine -RepositoryRoot $RepositoryRoot -TargetRoot $TargetRoot)
         }
-    }
-
-    $children = @{}
-    foreach ($record in $records.Values) {
-        $parentId = [int]$record.ParentProcessId
-        if (-not $children.ContainsKey($parentId)) {
-            $children[$parentId] = New-Object System.Collections.ArrayList
-        }
-        [void]$children[$parentId].Add([int]$record.ProcessId)
     }
 
     $offenders = @()
@@ -731,32 +752,31 @@ function Assert-SyndocalCleanupNoOwnedWriters {
         if (-not $record.IsWriter) {
             continue
         }
-        $queue = New-Object System.Collections.Queue
-        $seen = @{}
-        $queue.Enqueue([int]$record.ProcessId)
-        $owned = $false
-        while ($queue.Count -gt 0 -and -not $owned) {
-            $currentId = [int]$queue.Dequeue()
-            if ($seen.ContainsKey($currentId)) {
-                continue
+
+        # Ownership is directional: a writer is owned when its own command is
+        # anchored or when an ancestor is anchored. Do not walk child edges;
+        # that would turn a shared Explorer/shell parent into an undirected
+        # component and classify unrelated sibling writers as checkout-owned.
+        $owned = [bool]$record.IsAnchor
+        $ancestorId = [int]$record.ParentProcessId
+        $seen = @{ ([int]$record.ProcessId) = $true }
+        while (-not $owned -and $ancestorId -gt 0) {
+            if ($seen.ContainsKey($ancestorId)) {
+                Throw-SyndocalCleanupGate -Code "WriterOwnershipTopologyUnverifiable" -Message "Writer ancestry contains a process-identity cycle at PID $ancestorId for writer PID $($record.ProcessId)."
             }
-            $seen[$currentId] = $true
-            if ($records.ContainsKey($currentId)) {
-                $current = $records[$currentId]
-                if ($current.IsAnchor) {
-                    $owned = $true
-                    break
-                }
-                $parentId = [int]$current.ParentProcessId
-                if ($parentId -gt 0 -and $records.ContainsKey($parentId)) {
-                    $queue.Enqueue($parentId)
-                }
+            if (-not $records.ContainsKey($ancestorId)) {
+                Throw-SyndocalCleanupGate -Code "WriterOwnershipTopologyUnverifiable" -Message "Writer ancestry is missing positive parent PID $ancestorId for writer PID $($record.ProcessId)."
             }
-            if ($children.ContainsKey($currentId)) {
-                foreach ($childId in $children[$currentId]) {
-                    $queue.Enqueue([int]$childId)
-                }
+            $seen[$ancestorId] = $true
+            $ancestor = $records[$ancestorId]
+            if ($ancestor.IsOwnershipBoundary) {
+                break
             }
+            if ($ancestor.IsAnchor) {
+                $owned = $true
+                break
+            }
+            $ancestorId = [int]$ancestor.ParentProcessId
         }
         if ($owned) {
             $offenders += [pscustomobject]@{
