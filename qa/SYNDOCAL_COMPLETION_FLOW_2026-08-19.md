@@ -346,7 +346,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.14`.
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.15`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -356,7 +356,7 @@ inaccessible-process-fix, and cleanup exact-gate checkpoints (`b543067`,
 metadata; and those alpha.12 artifacts are never rebuilt or replaced under their
 version. `1.2.0-alpha.13` is the committed and pushed Timeline context-menu UI
 checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`; its exact native binary was
-built and window-verified before this DJ-Link tranche. The current alpha.14
+built and window-verified before this DJ-Link tranche. The historical alpha.14
 advance synchronizes the strict DJ-Link v3 and Stage-1 no-response fallback
 surfaces. Its committed and pushed runtime/native source checkpoint is
 `92122f1b148d40845b2cfe3e4618a57ce132b3df`; the standard native artifact was
@@ -364,6 +364,13 @@ built by the required gate and window-verified from that source. It is not a
 published tag or installer, and it does not close Show-ASIO or physical DJ
 acceptance. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from it.
+
+The current `1.2.0-alpha.15` advance is metadata-only and has no native
+artifact. Its runtime baseline includes the DVC controller checkpoint
+`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
+checkpoint is the commit containing these version surfaces and must be resolved
+after commit. The parent lane must run the required native gate before any
+alpha.15 artifact, warning, or acceptance claim.
 
 The synchronized product-version surfaces are:
 
@@ -431,7 +438,7 @@ their own recorded commits, each valid only for that frozen configuration and
 tree. The committed `1.2.0-alpha.12` checkpoint was measured at source
 checkpoint `ff61a6d` with zero first-party warnings across its recorded Windows
 configurations (2026-08-26 pause handoff), superseding that tree's earlier
-12 open first-party large-error lints (near-show finding FC-28). The committed
+12 open first-party large-error lints (near-show finding FC-28). The historical
 `1.2.0-alpha.14` standard native gate recorded zero baseline/current warnings
 at source checkpoint `92122f1b`; the broader alpha.12 configuration matrix has
 not been rerun in full on alpha.14. W0 must still recount every supported

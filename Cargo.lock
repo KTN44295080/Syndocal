@@ -276,7 +276,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "protocol",
  "thiserror 1.0.69",
@@ -1180,7 +1180,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "crossbeam-queue",
  "io",
@@ -1594,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "gdtf"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "protocol",
  "roxmltree",
@@ -2289,7 +2289,7 @@ dependencies = [
 
 [[package]]
 name = "io"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "crossbeam-queue",
  "grafton-ndi",
@@ -3700,7 +3700,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "protocol"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -4884,7 +4884,7 @@ dependencies = [
 
 [[package]]
 name = "syndocal"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "audio",
  "base64 0.22.1",
@@ -5875,7 +5875,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "video"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "bcdec_rs",
  "ffmpeg-next",
@@ -5893,7 +5893,7 @@ dependencies = [
 
 [[package]]
 name = "visualizer"
-version = "1.2.0-alpha.14"
+version = "1.2.0-alpha.15"
 dependencies = [
  "protocol",
  "serde",

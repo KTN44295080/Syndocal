@@ -24,7 +24,14 @@ The performance is **2026-08-30**. Development, acceptance, and show
 preparation must be complete by the separate **2026-08-29 completion
 deadline**. Neither date waives any named fail-closed hardware or native gate.
 
-Version-state distinction (2026-08-26): the current exact committed and pushed
+Current synchronized development metadata is `1.2.0-alpha.15`; it has no
+native artifact. Its runtime baseline includes the DVC controller checkpoint
+`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
+checkpoint is the commit containing these version surfaces and must be resolved
+after commit. The parent lane must complete the required native gate before
+alpha.15 can have an artifact or acceptance claim.
+
+Version-state distinction (2026-08-26): the historical exact committed and pushed
 `1.2.0-alpha.14` runtime/standard-artifact source checkpoint is
 `92122f1b148d40845b2cfe3e4618a57ce132b3df`. Its
 `target/release/syndocal.exe` is `58,523,648` bytes,
@@ -52,7 +59,8 @@ show-project acceptance gates.
 
 DJ-Link update (2026-08-26): `1.2.0-alpha.13` is the committed/pushed Timeline
 UI checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`. The current product
-metadata is `1.2.0-alpha.14`; its strict v3 peer is rb-output `1.1.5`, runtime
+metadata is `1.2.0-alpha.15`; the historical alpha.14 strict-v3 software
+surface remains paired with rb-output `1.1.5`, runtime
 `862cf8035dfb365a7d799f820936585882d0a1e7`, clean docs tip
 `71738778c8b7637c14768e02fecbc2ef14ece7f3`. Focused
 software gates cover exact v3 clean break, fresh measured-loop authority,
@@ -545,7 +553,8 @@ five-display topology. On 2026-08-26 both Windows PowerShell 5.1 and PowerShell
 no remaining P0/P1 in the runner or companion self-test. `git diff --check` was
 clean apart from Git's informational LF-to-CRLF notices.
 
-The exact clean alpha.14 standard artifact exists at checkpoint `92122f1b`,
+The current alpha.15 metadata has no native artifact. The exact clean historical
+alpha.14 standard artifact exists at checkpoint `92122f1b`,
 and the separate alpha.14 local-only Show-ASIO artifact exists at checkpoint
 `6b4cd1a`; configured physical acceptance remains open.
 The runner still requires the

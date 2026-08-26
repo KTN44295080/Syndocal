@@ -1,6 +1,6 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **RESUMED THROUGH THE ALPHA.14 SHOW-ASIO, TIMELINE-NATIVE, AND DVC SOFTWARE CHECKPOINT**
+Status: **ALPHA.15 METADATA ADVANCED; ALPHA.14 NATIVE/DVC CHECKPOINT PRESERVED**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
@@ -13,6 +13,14 @@ separately licensed alpha.14
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
+The current synchronized development metadata is `1.2.0-alpha.15`; this is a
+metadata-only advance and no alpha.15 native or Show-ASIO artifact has been
+built. Its runtime baseline includes the DVC controller checkpoint
+`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
+checkpoint is the commit containing these version surfaces and must be resolved
+after commit. The parent lane must run the required native gate before any
+alpha.15 artifact or acceptance claim.
+
 ## 1. Exact checkpoints
 
 The checkpoints are deliberately separate. Do not relabel a later QA/docs
@@ -20,7 +28,8 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
+| Current alpha.15 development metadata/source baseline; no artifact built | DVC controller `652b197d3cce9cfc119a790baffefbd47f08cc8c`; resolve the synchronized metadata commit with `git log -1 --format=%H -- Cargo.toml` after commit |
+| Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
 | Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `e3d390d912a2c3a9be418ecbc31771d2bf515de7` |
@@ -32,8 +41,9 @@ commit as the source identity of an already-built binary.
 | Cleanup exact Codex-control-plane gate | `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The alpha.14 runtime source and native artifact
-are bound to pushed, upstream-equal commit
+Branch: `codex/syndocal-v1.2`. The alpha.15 metadata has no native artifact;
+the historical alpha.14 runtime source and native artifact are bound to pushed,
+upstream-equal commit
 `92122f1b148d40845b2cfe3e4618a57ce132b3df`. A later commit containing only
 checkpoint documentation must not redefine that binary source identity.
 
@@ -69,7 +79,7 @@ checkpoint documentation must not redefine that binary source identity.
   `app/src-tauri/src/main.rs`. Extract the owning domain first and preserve the
   contract with focused tests.
 
-## 3. Current alpha.14 standard and local-only Show-ASIO artifacts
+## 3. Historical alpha.14 standard and local-only Show-ASIO artifacts
 
 ### Standard MIT/WASAPI artifact
 
@@ -116,7 +126,7 @@ checkpoint documentation must not redefine that binary source identity.
 
 ## 4. Completed software evidence
 
-Current alpha.14 evidence:
+Historical alpha.14 evidence:
 
 - rb-output runtime `862cf8035dfb365a7d799f820936585882d0a1e7`:
   full `npm test` `389 total / 387 pass / 0 fail / 2 intentional package
@@ -126,7 +136,7 @@ Current alpha.14 evidence:
   Cargo gates. Protocol DJ-Link passed `12/12`; the dedicated rb-output sender
   contract passed `2/2`; I/O `remote_ws` passed `57/57`; Syndocal DJ-Link
   dispatch passed `10/10`; extracted loop-range mapping passed `3/3`.
-- `pnpm --dir app run check:release` PASS: release metadata alpha.14, ASIO
+- `pnpm --dir app run check:release` PASS at the historical alpha.14 metadata, ASIO
   packaging boundary `169` assertions, and video-output observation PASS.
 - Three-display deterministic harness: `80/80`.
 - Native warning gate PASS with baseline/current warnings both
@@ -384,7 +394,7 @@ that otherwise requires touching these files.
   `92122f1b...`, and rb-output docs tip `e3d390d...` were clean and
   upstream-equal when recorded. The final documentation
   commit containing this handoff must again be pushed and rechecked clean.
-- The current exact standard alpha.14 process and window identities are in
+- The historical exact standard alpha.14 process and window identities are in
   section 3. Re-resolve them on resume; do not assume PID/HWND stability.
 
 Resume in this order:

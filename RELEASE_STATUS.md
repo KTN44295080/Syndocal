@@ -1,7 +1,7 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-26
-Branch: `codex/syndocal-v1.2`; current alpha.14 runtime/native source checkpoint `92122f1b148d40845b2cfe3e4618a57ce132b3df` is pushed and upstream-equal. The historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` and historical `1.2.0-alpha.12` runtime/artifact source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` remain immutable evidence. Later cleanup or documentation commits do not redefine an already-built binary's source identity.
+Branch: `codex/syndocal-v1.2`; current development metadata is `1.2.0-alpha.15` and has no built runtime/native artifact. Its runtime baseline includes the pushed DVC controller checkpoint `652b197d3cce9cfc119a790baffefbd47f08cc8c`; resolve the synchronized metadata checkpoint after commit with `git log -1 --format=%H -- Cargo.toml`. The metadata-only advance remains pending the parent native gate. The historical alpha.14 runtime/native source checkpoint `92122f1b148d40845b2cfe3e4618a57ce132b3df` is pushed and upstream-equal. The historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` and historical `1.2.0-alpha.12` runtime/artifact source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` remain immutable evidence. Later cleanup or documentation commits do not redefine an already-built binary's source identity.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
@@ -22,9 +22,25 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
-## 2026-08-26 current DJ-Link v3 alpha.14 advance
+## 2026-08-26 current development metadata alpha.15 advance
 
-Current product metadata is `1.2.0-alpha.14`; `1.2.0-alpha.13` remains the
+Synchronized product metadata advances from `1.2.0-alpha.14` to
+`1.2.0-alpha.15` across the root workspace, first-party lock entries, app and
+Tauri metadata, release checks, next artifact names, required three-display
+harness version, and current product documentation. This is a metadata-only
+advance: no alpha.15 standard or Show-ASIO native artifact has been built.
+The alpha.15 runtime baseline includes DVC controller checkpoint
+`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
+checkpoint is the commit containing these version surfaces and must be resolved
+after commit. The parent lane must run the required native gate before any
+alpha.15 artifact or acceptance claim.
+
+The following alpha.14 section remains historical and retains its exact
+runtime source, artifact path, hash, warning, and window evidence.
+
+## HISTORICAL — 2026-08-26 DJ-Link v3 alpha.14 advance
+
+Historical product metadata was `1.2.0-alpha.14`; `1.2.0-alpha.13` remains the
 committed/pushed Timeline UI checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`.
 Alpha.14 clean-breaks the dedicated DJ peer to exact v3, adds a separately typed
 bounded no-response fallback without weakening measured Rekordbox authority,
@@ -96,9 +112,11 @@ adapter, hardware, and native evidence below is not promoted into that path.
   XRUN/no-callback recovery, or measured-latency gates. The complete warning
   matrix executed for checkpoint `ff61a6d` recorded zero first-party warnings;
   this warning result is not physical ASIO acceptance.
-- The only built Show-ASIO artifact for the 2026-08-30 performance is the
-  historical alpha.12 artifact; no alpha.14 Show-ASIO build or acceptance is
-  implied. It is a separately licensed, non-default, local-only `show-asio`
+- The built Show-ASIO evidence for the 2026-08-30 performance consists of the
+  historical alpha.12 artifact and the separate alpha.14 local-only artifact
+  from `6b4cd1a`. The current alpha.15 metadata has no Show-ASIO artifact;
+  neither historical artifact is promoted. Show-ASIO is a separately licensed,
+  non-default, local-only `show-asio`
   feature/overlay and is outside the normal MIT
   installer and signed-updater route, which must never select, repair, replace,
   or attest it. Checkpoint `ff61a6d` built and manifest-verified

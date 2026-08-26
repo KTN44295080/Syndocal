@@ -148,7 +148,7 @@ $script:ThreeDisplayOutputTitlePrefix = "Syndocal Output - "
 $script:ThreeDisplayRequiredSamples = 3
 $script:ThreeDisplayMinimumSampleIntervalMs = 200
 $script:ThreeDisplaySchemaVersion = 1
-$script:ThreeDisplayRequiredProductVersion = "1.2.0-alpha.14"
+$script:ThreeDisplayRequiredProductVersion = "1.2.0-alpha.15"
 $script:ThreeDisplaySwMaximize = 3
 $script:ThreeDisplayMaximumDiagnosticLength = 400
 $script:ThreeDisplayAuthorityStandardRelease = "StandardRelease"
@@ -453,7 +453,7 @@ function Test-ThreeDisplayCheckoutClean {
   if ($LASTEXITCODE -ne 0) { throw "Fail closed: git status --porcelain=v1 failed for '$CheckoutRootPath'." }
   $entries = @($answer | ForEach-Object { ([string]$_).TrimEnd() } | Where-Object { $_ -ne "" })
   if ($entries.Count -ne 0) {
-    throw "Fail closed: exact alpha.14 artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
+    throw "Fail closed: exact alpha.15 artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
   }
   return $true
 }
@@ -1071,7 +1071,7 @@ function New-ThreeDisplayConfiguration {
     ($ProjectorId -gt 0) -and (-not [string]::IsNullOrWhiteSpace($ProjectorLabel)) -and
     ($CdpPort -gt 0)
   if ($IsApply -and -not $fullyConfigured) {
-    throw "Fail closed: -Apply requires exact alpha.14 hash/version/HEAD, all three stable monitor identities, both explicit live output IDs/labels, and one explicit loopback CDP port."
+    throw "Fail closed: -Apply requires exact alpha.15 hash/version/HEAD, all three stable monitor identities, both explicit live output IDs/labels, and one explicit loopback CDP port."
   }
   if ($fullyConfigured) {
     if ($EditorIdentity -eq $LedIdentity -or $EditorIdentity -eq $ProjectorIdentity -or $LedIdentity -eq $ProjectorIdentity) {
