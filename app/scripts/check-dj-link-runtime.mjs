@@ -38,11 +38,14 @@ assert.match(types, /interface DjLinkRuntimeStatus/);
 assert.match(types, /contentId/);
 assert.match(types, /timelineId/);
 assert.match(types, /outcome\?: string \| null/);
+assert.match(types, /ownerDeck\?: string \| null/);
 assert.match(types, /interface RemoteControlConfig[\s\S]*dj_link_enabled/);
 assert.match(panel, /data-io-disclosure="dj-link"/);
 assert.match(panel, /Use Current Track/);
 assert.match(panel, /once_per_play_session/);
 assert.match(panel, /status\.available !== false/);
+assert.match(panel, /Owner deck \/ playing/);
+assert.match(panel, /Legacy Master diagnostic/);
 assert.match(panel, /disabled=\{!linkStatus\(\)\?\.trackContentId/);
 for (const label of ["Available", "Enabled", "Outcome", "Peer", "Generation", "Heartbeat", "Last event"]) {
   assert.match(panel, new RegExp(`>${label}\\s`), `${label} diagnostic is not rendered`);
@@ -67,7 +70,9 @@ const connected = availableRemoteControlStatus({
     connected: true,
     peer: "192.168.1.20",
     generation: 7,
-    master: true,
+    master: false,
+    ownerDeck: "rekordbox-deck-2",
+    trackDeckId: "rekordbox-deck-2",
     trackActive: true,
     trackContentId: "content-1",
     trackTitle: "Track",
@@ -79,6 +84,9 @@ const connected = availableRemoteControlStatus({
   },
 });
 assert.equal(connected.dj_link?.connected, true);
+assert.equal(connected.dj_link?.master, false);
+assert.equal(connected.dj_link?.ownerDeck, "rekordbox-deck-2");
+assert.equal(connected.dj_link?.trackDeckId, "rekordbox-deck-2");
 const unavailableAfterRejectedPoll = unavailableRemoteControlStatus();
 assert.equal(unavailableAfterRejectedPoll.running, false);
 assert.equal(unavailableAfterRejectedPoll.dj_link?.available, false);
@@ -170,6 +178,8 @@ for (const key of [
   "DJ Link",
   "Enable DJ Link",
   "Show-LAN bind IP",
+  "Owner deck / playing",
+  "Legacy Master diagnostic",
   "Track mappings",
   "Use Current Track",
   "Rotate token",

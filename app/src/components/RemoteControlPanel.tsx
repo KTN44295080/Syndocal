@@ -377,7 +377,10 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                     <span>Peer <strong data-no-localize>{status().peer ?? "—"}</strong></span>
                     <span>Generation <strong class="tabularNums" data-no-localize>{status().generation}</strong></span>
                     <span>Heartbeat <strong class="tabularNums" data-no-localize>{status().ageMs ?? "—"} ms</strong></span>
-                    <span>Master / playing <strong>{status().master ? "Yes" : "No"} / {status().trackPlaying ? "Yes" : "No"}</strong></span>
+                    <span>Owner deck / playing <strong data-no-localize>{status().ownerDeck ?? "—"} / {status().trackPlaying ? "Yes" : "No"}</strong></span>
+                    <Show when={status().master}>
+                      <span>Legacy Master diagnostic <strong>Yes</strong></span>
+                    </Show>
                     <span>Track <strong data-no-localize>{status().trackTitle ?? "—"} · {status().trackArtist ?? "—"}</strong></span>
                     <span>Content ID <strong data-no-localize>{status().trackContentId ?? "—"}</strong></span>
                     <span>Loop / released <strong data-no-localize>{status().loopDivision ?? "—"} / {status().released ? "Yes" : "No"}</strong></span>

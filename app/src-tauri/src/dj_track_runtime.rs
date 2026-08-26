@@ -1,0 +1,412 @@
+//! Strict per-deck DJ Link admission.  The retired Master-only dispatcher
+//! remains in `main.rs`; this module deliberately accepts only payloads that
+//! contain no Master authority fields.
+
+use super::*;
+
+pub(super) fn dispatch_active(
+    payload: protocol::DjLinkTrackPayload,
+    engine: &EngineHandle,
+    runtime: &mut DjLinkRuntime,
+    current_generation: u64,
+    event_id: &str,
+    sequence: u64,
+) -> DjLinkDispatchOutcome {
+    if payload.validate().is_err() {
+        return dj_link_rejected("invalid_track_payload", current_generation);
+    }
+    if !dj_link_track_payload_is_current(&payload) {
+        return dj_link_rejected("not_current_playing_track", current_generation);
+    }
+    let position_ms = match dj_link_estimated_position_ms(&payload) {
+        Ok(position_ms) => position_ms,
+        Err(code) => return dj_link_rejected(code, current_generation),
+    };
+    let mapping = dj_link_find_track_mapping(&runtime.mappings, &payload);
+    let released_same_owner = runtime.track_active
+        && runtime.released
+        && !runtime.master
+        && runtime.track_deck_number == Some(payload.deck)
+        && runtime.track_deck_id.as_deref() == Some(payload.deck_id.as_str())
+        && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str());
+    if released_same_owner {
+        // RELEASE retires Timeline control but not the admitted receipt's
+        // identity/mapping fence. A same deck/session reannounce may only
+        // observe that receipt; it cannot relaunch another track or mapping.
+        let Some(mapping) = mapping.as_ref() else {
+            return dj_link_rejected("released_track_reannounce_mismatch", current_generation);
+        };
+        let dedupe_key = format!(
+            "{}:{}:{}:{}:{}",
+            runtime.project_epoch,
+            mapping.id,
+            payload.deck,
+            payload.deck_id,
+            payload.play_session_id
+        );
+        if !dj_link_track_identity_matches_runtime(runtime, &payload)
+            || runtime.active_dedupe_key.as_deref() != Some(dedupe_key.as_str())
+        {
+            return dj_link_rejected("released_track_reannounce_mismatch", current_generation);
+        }
+        // Release is terminal for this admitted play session. The no-op must
+        // not depend on the expiring replay cache: once the exact owner,
+        // identity, and mapping receipt match, a later ACTIVE can only observe
+        // that terminal receipt and can never reach the engine again.
+        return dj_link_accepted(current_generation);
+    }
+    let Some(mapping) = mapping else {
+        if runtime.track_active
+            && runtime.play_session_id.is_some()
+            && runtime.timeline_id.is_some()
+        {
+            return DjLinkDispatchOutcome::NoMapping {
+                state_generation: current_generation,
+            };
+        }
+        runtime.unmapped_active_blocked = true;
+        return DjLinkDispatchOutcome::NoMapping {
+            state_generation: current_generation,
+        };
+    };
+    let dedupe_key = format!(
+        "{}:{}:{}:{}:{}",
+        runtime.project_epoch, mapping.id, payload.deck, payload.deck_id, payload.play_session_id
+    );
+    if runtime.track_active && !runtime.released {
+        let same_owner = !runtime.master
+            && runtime.track_deck_number == Some(payload.deck)
+            && runtime.track_deck_id.as_deref() == Some(payload.deck_id.as_str())
+            && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str())
+            && runtime.active_dedupe_key.as_deref() == Some(dedupe_key.as_str());
+        if !same_owner {
+            return dj_link_rejected("track_owner_unreleased", current_generation);
+        }
+    }
+    match dj_link_position_revision_disposition(
+        runtime,
+        &payload.play_session_id,
+        payload.position_revision,
+        position_ms,
+    ) {
+        Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
+            return dj_link_accepted(current_generation)
+        }
+        Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
+        Err(code) => return dj_link_rejected(code, current_generation),
+    }
+    let mut next_runtime = runtime.clone();
+    next_runtime.purge_dedupe(Instant::now());
+    next_runtime.master = false;
+    next_runtime.master_deck = None;
+    next_runtime.master_deck_number = None;
+    next_runtime.master_deck_revision = None;
+    next_runtime.track_active = true;
+    next_runtime.playing = true;
+    next_runtime.track_content_id = payload.content_id.clone();
+    next_runtime.track_title = payload.title.clone();
+    next_runtime.track_artist = payload.artist.clone();
+    next_runtime.track_deck_id = Some(payload.deck_id.clone());
+    next_runtime.track_deck_number = Some(payload.deck);
+    next_runtime.track_started_at = Some(payload.started_at.clone());
+    next_runtime.track_playing = payload.is_playing;
+    next_runtime.track_bpm = payload.track_bpm;
+    next_runtime.position_sec = Some(payload.position_at_send_sec);
+    next_runtime.source_position_ms = Some(position_ms);
+    next_runtime.position_revision = Some(payload.position_revision);
+    next_runtime.play_session_id = Some(payload.play_session_id.clone());
+    if next_runtime.seen_play_sessions.contains_key(&dedupe_key) {
+        return dj_link_accepted(current_generation);
+    }
+    if next_runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT {
+        return dj_link_rejected("play_session_capacity", current_generation);
+    }
+    let next = match dj_link_next_generation(&next_runtime) {
+        Ok(next) => next,
+        Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
+    };
+    let snapshot = match engine
+        .dj_link_start_timeline_at_with_canonical_snapshot(mapping.timeline_id, position_ms)
+    {
+        Ok(snapshot) => snapshot,
+        Err(_) => return dj_link_rejected("engine_publication_rejected", current_generation),
+    };
+    next_runtime
+        .seen_play_sessions
+        .insert(dedupe_key.clone(), Instant::now());
+    next_runtime.active_dedupe_key = Some(dedupe_key);
+    next_runtime.released = false;
+    next_runtime.unmapped_active_blocked = false;
+    next_runtime.pedal_owner = Some("dj".to_string());
+    next_runtime.release_event_id = None;
+    next_runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    next_runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
+    next_runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+    next_runtime.loop_division = None;
+    next_runtime.loop_revision = None;
+    next_runtime.last_loop_fallback_intent_id = None;
+    next_runtime.loop_active = false;
+    next_runtime.last_event_id = Some(event_id.to_string());
+    next_runtime.state_generation = next;
+    *runtime = next_runtime;
+    DjLinkDispatchOutcome::TimelineState {
+        state_generation: next,
+        state: dj_link_timeline_state_from_snapshot(runtime, &snapshot, event_id, sequence),
+    }
+}
+
+pub(super) fn dispatch_sync(
+    payload: protocol::DjLinkTrackPayload,
+    engine: &EngineHandle,
+    runtime: &mut DjLinkRuntime,
+    current_generation: u64,
+    event_id: &str,
+    sequence: u64,
+) -> DjLinkDispatchOutcome {
+    if payload.validate().is_err() {
+        return dj_link_rejected("invalid_track_sync_payload", current_generation);
+    }
+    if runtime.unmapped_active_blocked {
+        return dj_link_rejected("dj_link_unmapped_active", current_generation);
+    }
+    if runtime.released {
+        return dj_link_rejected("dj_link_released", current_generation);
+    }
+    if !dj_link_track_payload_is_current(&payload)
+        || runtime.master
+        || !runtime.track_active
+        || runtime.track_deck_number != Some(payload.deck)
+        || runtime.track_deck_id.as_deref() != Some(payload.deck_id.as_str())
+        || runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str())
+        || !dj_link_track_identity_matches_runtime(runtime, &payload)
+    {
+        return dj_link_rejected("track_sync_context_mismatch", current_generation);
+    }
+    let position_ms = match dj_link_estimated_position_ms(&payload) {
+        Ok(position_ms) => position_ms,
+        Err(code) => return dj_link_rejected(code, current_generation),
+    };
+    match dj_link_position_revision_disposition(
+        runtime,
+        &payload.play_session_id,
+        payload.position_revision,
+        position_ms,
+    ) {
+        Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
+        Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
+            return dj_link_accepted(current_generation)
+        }
+        Err(code) => return dj_link_rejected(code, current_generation),
+    }
+    let Some(timeline_id) = runtime
+        .timeline_id
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(TimelineId)
+    else {
+        return dj_link_rejected("invalid_timeline_id", current_generation);
+    };
+    let snapshot = match engine
+        .dj_link_sync_timeline_position_with_canonical_snapshot(timeline_id, position_ms)
+    {
+        Ok(snapshot) => snapshot,
+        Err(_) => return dj_link_rejected("engine_publication_rejected", current_generation),
+    };
+    runtime.track_content_id = payload.content_id;
+    runtime.track_title = payload.title;
+    runtime.track_artist = payload.artist;
+    runtime.track_bpm = payload.track_bpm;
+    runtime.track_playing = payload.is_playing;
+    runtime.position_sec = Some(payload.position_at_send_sec);
+    runtime.source_position_ms = Some(position_ms);
+    runtime.position_revision = Some(payload.position_revision);
+    runtime.track_started_at = Some(payload.started_at);
+    runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+    runtime.last_event_id = Some(event_id.to_string());
+    DjLinkDispatchOutcome::TimelineState {
+        state_generation: current_generation,
+        state: dj_link_timeline_state_from_snapshot(runtime, &snapshot, event_id, sequence),
+    }
+}
+
+pub(super) fn owner_matches(
+    runtime: &DjLinkRuntime,
+    deck: u8,
+    deck_id: &str,
+    play_session_id: &str,
+) -> bool {
+    runtime.track_active
+        && !runtime.master
+        && runtime.track_deck_number == Some(deck)
+        && runtime.track_deck_id.as_deref() == Some(deck_id)
+        && runtime.play_session_id.as_deref() == Some(play_session_id)
+}
+
+pub(super) fn dispatch_loop_state(
+    payload: protocol::DjLinkTrackLoopStatePayload,
+    engine: &EngineHandle,
+    runtime: &mut DjLinkRuntime,
+    current_generation: u64,
+    event_id: &str,
+) -> DjLinkDispatchOutcome {
+    if payload.validate().is_err() {
+        return dj_link_rejected("invalid_track_loop_state_payload", current_generation);
+    }
+    if runtime.unmapped_active_blocked {
+        return dj_link_rejected("dj_link_unmapped_active", current_generation);
+    }
+    if runtime.released {
+        return dj_link_rejected("dj_link_released", current_generation);
+    }
+    if !owner_matches(
+        runtime,
+        payload.deck,
+        &payload.deck_id,
+        &payload.play_session_id,
+    ) {
+        return dj_link_rejected("track_loop_context_mismatch", current_generation);
+    }
+    if !payload.loop_state.active && runtime.loop_division.is_none() {
+        if let Some(current_revision) = runtime.loop_revision {
+            if payload.loop_state.revision < current_revision {
+                return dj_link_rejected("stale_loop_revision", current_generation);
+            }
+            if payload.loop_state.revision == current_revision {
+                return if !runtime.loop_active {
+                    dj_link_accepted(current_generation)
+                } else {
+                    dj_link_rejected("loop_revision_conflict", current_generation)
+                };
+            }
+        }
+        let next = match dj_link_next_generation(runtime) {
+            Ok(next) => next,
+            Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
+        };
+        // An initial measured no-loop state is meaningful authority for the
+        // first bounded F14 fallback, but requires no engine mutation.
+        runtime.loop_revision = Some(payload.loop_state.revision);
+        runtime.loop_active = false;
+        runtime.last_event_id = Some(event_id.to_string());
+        runtime.state_generation = next;
+        return dj_link_accepted(next);
+    }
+    let division = match dj_link_measured_loop_division(&payload.loop_state) {
+        Ok(Some(division)) => division,
+        Ok(None) => match runtime.loop_division {
+            Some(division) => division,
+            None => {
+                return dj_link_rejected("inactive_loop_without_active_context", current_generation)
+            }
+        },
+        Err(code) => return dj_link_rejected(code, current_generation),
+    };
+    if let Some(current_revision) = runtime.loop_revision {
+        if payload.loop_state.revision < current_revision {
+            return dj_link_rejected("stale_loop_revision", current_generation);
+        }
+        if payload.loop_state.revision == current_revision {
+            let exact_duplicate = runtime.loop_active == payload.loop_state.active
+                && (!payload.loop_state.active || runtime.loop_division == Some(division));
+            return if exact_duplicate {
+                dj_link_accepted(current_generation)
+            } else {
+                dj_link_rejected("loop_revision_conflict", current_generation)
+            };
+        }
+    }
+    let next = match dj_link_next_generation(runtime) {
+        Ok(next) => next,
+        Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
+    };
+    if engine
+        .dj_link_set_timeline_loop_absolute(division, payload.loop_state.active)
+        .is_err()
+    {
+        return dj_link_rejected("engine_publication_rejected", current_generation);
+    }
+    runtime.loop_division = Some(division);
+    runtime.loop_revision = Some(payload.loop_state.revision);
+    runtime.loop_active = payload.loop_state.active;
+    runtime.last_event_id = Some(event_id.to_string());
+    runtime.state_generation = next;
+    dj_link_accepted(next)
+}
+
+pub(super) fn dispatch_loop_fallback(
+    payload: protocol::DjLinkTrackLoopFallbackPayload,
+    engine: &EngineHandle,
+    runtime: &mut DjLinkRuntime,
+    current_generation: u64,
+    event_id: &str,
+) -> DjLinkDispatchOutcome {
+    if payload.validate().is_err() {
+        return dj_link_rejected("invalid_track_loop_fallback_payload", current_generation);
+    }
+    if runtime.unmapped_active_blocked {
+        return dj_link_rejected("dj_link_unmapped_active", current_generation);
+    }
+    if runtime.released {
+        return dj_link_rejected("dj_link_released", current_generation);
+    }
+    if !owner_matches(
+        runtime,
+        payload.deck,
+        &payload.deck_id,
+        &payload.play_session_id,
+    ) {
+        return dj_link_rejected("track_loop_fallback_context_mismatch", current_generation);
+    }
+    if runtime
+        .last_loop_fallback_intent_id
+        .is_some_and(|last| payload.pedal_intent_id <= last)
+    {
+        return dj_link_rejected("loop_fallback_intent_not_new", current_generation);
+    }
+    if runtime.loop_revision != payload.base_measured_loop_revision {
+        return dj_link_rejected("loop_fallback_base_revision_mismatch", current_generation);
+    }
+    let effective_base_loop_division = runtime
+        .loop_active
+        .then_some(runtime.loop_division)
+        .flatten();
+    if effective_base_loop_division != payload.base_loop_division {
+        return dj_link_rejected("loop_fallback_base_division_mismatch", current_generation);
+    }
+    let division = match dj_loop_range::division_for_profile_length(payload.target_length_beats) {
+        Ok(division) => division,
+        Err(code) => return dj_link_rejected(code, current_generation),
+    };
+    let expected_division = payload
+        .base_loop_division
+        .map(|base| {
+            base.saturating_add(1)
+                .min((protocol::DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1) as u8)
+        })
+        .unwrap_or(0);
+    if division != expected_division {
+        return dj_link_rejected("loop_fallback_target_not_next", current_generation);
+    }
+    let next = match dj_link_next_generation(runtime) {
+        Ok(next) => next,
+        Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
+    };
+    if runtime.loop_active && runtime.loop_division == Some(division) {
+        runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
+        runtime.last_event_id = Some(event_id.to_string());
+        runtime.state_generation = next;
+        return dj_link_accepted(next);
+    }
+    if engine
+        .dj_link_set_timeline_loop_absolute(division, true)
+        .is_err()
+    {
+        return dj_link_rejected("engine_publication_rejected", current_generation);
+    }
+    runtime.loop_division = Some(division);
+    runtime.loop_active = true;
+    runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
+    runtime.last_event_id = Some(event_id.to_string());
+    runtime.state_generation = next;
+    dj_link_accepted(next)
+}

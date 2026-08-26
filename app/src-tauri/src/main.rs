@@ -127,6 +127,7 @@ mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
 mod dj_loop_range;
+mod dj_track_runtime;
 mod dvc_import;
 mod e3_native_acceptance;
 mod ndi_transport;
@@ -953,6 +954,7 @@ struct DjLinkRuntime {
     track_title: Option<String>,
     track_artist: Option<String>,
     track_deck_id: Option<String>,
+    track_deck_number: Option<u8>,
     track_started_at: Option<String>,
     track_playing: bool,
     track_bpm: Option<f64>,
@@ -996,6 +998,7 @@ impl DjLinkRuntime {
             track_title: None,
             track_artist: None,
             track_deck_id: None,
+            track_deck_number: None,
             track_started_at: None,
             track_playing: false,
             track_bpm: None,
@@ -1035,6 +1038,7 @@ impl DjLinkRuntime {
             self.track_title = None;
             self.track_artist = None;
             self.track_deck_id = None;
+            self.track_deck_number = None;
             self.track_started_at = None;
             self.track_playing = false;
             self.track_bpm = None;
@@ -1150,7 +1154,7 @@ fn dj_link_next_generation(runtime: &DjLinkRuntime) -> Result<u64, String> {
 
 fn dj_link_find_track_mapping(
     mappings: &[protocol::DjTrackTriggerMapping],
-    payload: &protocol::DjLinkMasterTrackPayload,
+    payload: &protocol::DjLinkTrackPayload,
 ) -> Option<protocol::DjTrackTriggerMapping> {
     if payload
         .content_id
@@ -1194,6 +1198,27 @@ fn dj_link_find_track_mapping(
         .cloned()
 }
 
+fn dj_link_track_payload_from_master(
+    payload: &protocol::DjLinkMasterTrackPayload,
+) -> protocol::DjLinkTrackPayload {
+    protocol::DjLinkTrackPayload {
+        deck: payload.deck,
+        deck_id: payload.deck_id.clone(),
+        content_id: payload.content_id.clone(),
+        title: payload.title.clone(),
+        artist: payload.artist.clone(),
+        track_bpm: payload.track_bpm,
+        position_at_send_sec: payload.position_at_send_sec,
+        effective_bpm: payload.effective_bpm,
+        position_revision: payload.position_revision,
+        sample_age_ms: payload.sample_age_ms,
+        is_playing: payload.is_playing,
+        started_at: payload.started_at.clone(),
+        play_session_id: payload.play_session_id.clone(),
+        loop_state: payload.loop_state.clone(),
+    }
+}
+
 fn dj_link_measured_loop_division(
     loop_state: &protocol::DjLinkMeasuredLoop,
 ) -> Result<Option<u8>, &'static str> {
@@ -1227,17 +1252,32 @@ fn dj_link_payload_matches_runtime(
         && runtime.play_session_id.as_deref() == Some(play_session_id)
 }
 
-fn dj_link_track_payload_is_current(payload: &protocol::DjLinkMasterTrackPayload) -> bool {
+fn dj_link_track_payload_is_current(payload: &protocol::DjLinkTrackPayload) -> bool {
     payload.is_playing
-        && payload.master
         && !payload.play_session_id.trim().is_empty()
         && !payload.deck_id.trim().is_empty()
-        && payload.master_deck_revision > 0
         && payload.position_revision > 0
 }
 
+fn dj_link_track_identity_matches_runtime(
+    runtime: &DjLinkRuntime,
+    payload: &protocol::DjLinkTrackPayload,
+) -> bool {
+    let incoming = protocol::DjTrackSelector {
+        content_id: payload.content_id.clone(),
+        title: payload.title.clone(),
+        artist: payload.artist.clone(),
+    };
+    let admitted = protocol::DjTrackSelector {
+        content_id: runtime.track_content_id.clone(),
+        title: runtime.track_title.clone(),
+        artist: runtime.track_artist.clone(),
+    };
+    incoming.canonical_key().ok() == admitted.canonical_key().ok()
+}
+
 fn dj_link_estimated_position_ms(
-    payload: &protocol::DjLinkMasterTrackPayload,
+    payload: &protocol::DjLinkTrackPayload,
 ) -> Result<u64, &'static str> {
     if !payload.position_at_send_sec.is_finite()
         || !(0.0..=protocol::DJ_LINK_MAX_POSITION_AT_SEND_SEC)
@@ -1267,19 +1307,20 @@ enum DjLinkPositionRevisionDisposition {
 /// equal.
 fn dj_link_position_revision_disposition(
     runtime: &DjLinkRuntime,
-    payload: &protocol::DjLinkMasterTrackPayload,
+    play_session_id: &str,
+    position_revision: u64,
     source_position_ms: u64,
 ) -> Result<DjLinkPositionRevisionDisposition, &'static str> {
-    if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
+    if runtime.play_session_id.as_deref() != Some(play_session_id) {
         return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
     }
     let Some(current_revision) = runtime.position_revision else {
         return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
     };
-    if payload.position_revision < current_revision {
+    if position_revision < current_revision {
         return Err("stale_position_revision");
     }
-    if payload.position_revision > current_revision {
+    if position_revision > current_revision {
         return Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession);
     }
     if runtime.source_position_ms == Some(source_position_ms) {
@@ -1341,6 +1382,38 @@ fn dispatch_dj_link_event(
     let event_id = envelope.event_id.clone();
     let sequence = envelope.sequence;
     match envelope.message_type {
+        protocol::DjLinkMessageType::TrackActive => {
+            let payload =
+                match serde_json::from_value::<protocol::DjLinkTrackPayload>(envelope.payload) {
+                    Ok(payload) => payload,
+                    Err(_) => return dj_link_rejected("invalid_track_payload", current_generation),
+                };
+            dj_track_runtime::dispatch_active(
+                payload,
+                engine,
+                &mut runtime,
+                current_generation,
+                &event_id,
+                sequence,
+            )
+        }
+        protocol::DjLinkMessageType::TrackSync => {
+            let payload =
+                match serde_json::from_value::<protocol::DjLinkTrackPayload>(envelope.payload) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return dj_link_rejected("invalid_track_sync_payload", current_generation)
+                    }
+                };
+            dj_track_runtime::dispatch_sync(
+                payload,
+                engine,
+                &mut runtime,
+                current_generation,
+                &event_id,
+                sequence,
+            )
+        }
         protocol::DjLinkMessageType::MasterTrackActive => {
             let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
                 envelope.payload,
@@ -1350,7 +1423,8 @@ fn dispatch_dj_link_event(
                     return dj_link_rejected("invalid_master_track_payload", current_generation)
                 }
             };
-            if !dj_link_track_payload_is_current(&payload) {
+            let track_payload = dj_link_track_payload_from_master(&payload);
+            if !payload.master || !dj_link_track_payload_is_current(&track_payload) {
                 return dj_link_rejected("not_current_playing_master", current_generation);
             }
             if runtime.master_deck_revision.is_some()
@@ -1363,11 +1437,12 @@ fn dispatch_dj_link_event(
             if same_master_deck_revision && runtime.master_deck_number != Some(payload.deck) {
                 return dj_link_rejected("play_session_revision_mismatch", current_generation);
             }
-            let position_ms = match dj_link_estimated_position_ms(&payload) {
+            let position_ms = match dj_link_estimated_position_ms(&track_payload) {
                 Ok(position_ms) => position_ms,
                 Err(code) => return dj_link_rejected(code, current_generation),
             };
-            let Some(mapping) = dj_link_find_track_mapping(&runtime.mappings, &payload) else {
+            let Some(mapping) = dj_link_find_track_mapping(&runtime.mappings, &track_payload)
+            else {
                 // An unmapped ACTIVE is diagnostic input only.  It never
                 // replaces admitted track/session metadata and never inherits
                 // or releases another session's Timeline authority.
@@ -1411,7 +1486,12 @@ fn dispatch_dj_link_event(
             }
             // An exact duplicate and a position conflict must be complete
             // runtime no-ops, including the once-per-session ledger.
-            match dj_link_position_revision_disposition(&runtime, &payload, position_ms) {
+            match dj_link_position_revision_disposition(
+                &runtime,
+                &track_payload.play_session_id,
+                track_payload.position_revision,
+                position_ms,
+            ) {
                 Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
                     return dj_link_accepted(current_generation)
                 }
@@ -1533,10 +1613,11 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
+            let track_payload = dj_link_track_payload_from_master(&payload);
             if runtime.unmapped_active_blocked {
                 return dj_link_rejected("dj_link_unmapped_active", current_generation);
             }
-            if !payload.is_playing || !payload.master {
+            if !payload.master || !dj_link_track_payload_is_current(&track_payload) {
                 return dj_link_rejected("not_current_playing_master", current_generation);
             }
             if runtime.released {
@@ -1551,11 +1632,16 @@ fn dispatch_dj_link_event(
             ) {
                 return dj_link_rejected("track_sync_context_mismatch", current_generation);
             }
-            let position_ms = match dj_link_estimated_position_ms(&payload) {
+            let position_ms = match dj_link_estimated_position_ms(&track_payload) {
                 Ok(position_ms) => position_ms,
                 Err(code) => return dj_link_rejected(code, current_generation),
             };
-            match dj_link_position_revision_disposition(&runtime, &payload, position_ms) {
+            match dj_link_position_revision_disposition(
+                &runtime,
+                &track_payload.play_session_id,
+                track_payload.position_revision,
+                position_ms,
+            ) {
                 Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
                 Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
                     return dj_link_accepted(current_generation)
@@ -1599,6 +1685,26 @@ fn dispatch_dj_link_event(
             }
         }
         protocol::DjLinkMessageType::LoopState => {
+            if envelope.payload.get("masterDeckRevision").is_none() {
+                let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopStatePayload>(
+                    envelope.payload,
+                ) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return dj_link_rejected(
+                            "invalid_track_loop_state_payload",
+                            current_generation,
+                        )
+                    }
+                };
+                return dj_track_runtime::dispatch_loop_state(
+                    payload,
+                    engine,
+                    &mut runtime,
+                    current_generation,
+                    &event_id,
+                );
+            }
             let payload = match serde_json::from_value::<protocol::DjLinkLoopStatePayload>(
                 envelope.payload,
             ) {
@@ -1672,6 +1778,26 @@ fn dispatch_dj_link_event(
             dj_link_accepted(next)
         }
         protocol::DjLinkMessageType::LoopFallback => {
+            if envelope.payload.get("masterDeckRevision").is_none() {
+                let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopFallbackPayload>(
+                    envelope.payload,
+                ) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return dj_link_rejected(
+                            "invalid_track_loop_fallback_payload",
+                            current_generation,
+                        )
+                    }
+                };
+                return dj_track_runtime::dispatch_loop_fallback(
+                    payload,
+                    engine,
+                    &mut runtime,
+                    current_generation,
+                    &event_id,
+                );
+            }
             let payload = match serde_json::from_value::<protocol::DjLinkLoopFallbackPayload>(
                 envelope.payload,
             ) {
@@ -1826,6 +1952,52 @@ fn dispatch_dj_link_event(
             }
         }
         protocol::DjLinkMessageType::StateSync => {
+            if envelope.payload.get("masterDeck").is_none() {
+                let payload = match serde_json::from_value::<protocol::DjLinkTrackStateSyncPayload>(
+                    envelope.payload,
+                ) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        return dj_link_rejected(
+                            "invalid_track_state_sync_payload",
+                            current_generation,
+                        )
+                    }
+                };
+                if payload.validate().is_err() {
+                    return dj_link_rejected(
+                        "invalid_track_state_sync_payload",
+                        current_generation,
+                    );
+                }
+                if runtime.unmapped_active_blocked {
+                    return dj_link_rejected("dj_link_unmapped_active", current_generation);
+                }
+                if let (Some(deck), Some(deck_id), Some(play_session_id)) = (
+                    payload.owner_deck,
+                    payload.owner_deck_id.as_deref(),
+                    payload.active_play_session_id.as_deref(),
+                ) {
+                    let runtime_has_owner = runtime.track_active
+                        || runtime.timeline_id.is_some()
+                        || runtime.play_session_id.is_some();
+                    if runtime_has_owner
+                        && !dj_track_runtime::owner_matches(
+                            &runtime,
+                            deck,
+                            deck_id,
+                            play_session_id,
+                        )
+                    {
+                        return dj_link_rejected(
+                            "state_sync_owner_context_mismatch",
+                            current_generation,
+                        );
+                    }
+                }
+                runtime.last_event_id = Some(envelope.event_id);
+                return dj_link_accepted(current_generation);
+            }
             let payload = match serde_json::from_value::<protocol::DjLinkStateSyncPayload>(
                 envelope.payload,
             ) {
@@ -26239,6 +26411,7 @@ async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlSta
             last_event_id: runtime.last_event_id.clone().or(transport.last_event_id),
             age_ms: transport.age_ms,
             master_deck: runtime.master_deck.clone(),
+            owner_deck: runtime.track_deck_id.clone(),
             track_content_id: runtime.track_content_id.clone(),
             track_title: runtime.track_title.clone(),
             track_artist: runtime.track_artist.clone(),
@@ -112903,9 +113076,12 @@ f 1 2 3
             loop_state: None,
         };
         assert_eq!(
-            dj_link_find_track_mapping(&mappings, &content_payload)
-                .unwrap()
-                .id,
+            dj_link_find_track_mapping(
+                &mappings,
+                &dj_link_track_payload_from_master(&content_payload),
+            )
+            .unwrap()
+            .id,
             "content"
         );
         let title_payload = protocol::DjLinkMasterTrackPayload {
@@ -112915,9 +113091,12 @@ f 1 2 3
             ..content_payload.clone()
         };
         assert_eq!(
-            dj_link_find_track_mapping(&mappings, &title_payload)
-                .unwrap()
-                .id,
+            dj_link_find_track_mapping(
+                &mappings,
+                &dj_link_track_payload_from_master(&title_payload),
+            )
+            .unwrap()
+            .id,
             "title-artist"
         );
         let unmatched_content = protocol::DjLinkMasterTrackPayload {
@@ -112926,7 +113105,11 @@ f 1 2 3
             artist: None,
             ..content_payload.clone()
         };
-        assert!(dj_link_find_track_mapping(&mappings, &unmatched_content).is_none());
+        assert!(dj_link_find_track_mapping(
+            &mappings,
+            &dj_link_track_payload_from_master(&unmatched_content),
+        )
+        .is_none());
         assert!(validate_dj_track_triggers(vec![dj_link_test_mapping(
             "title-only",
             protocol::DjTrackSelector {
@@ -112937,6 +113120,8 @@ f 1 2 3
         )])
         .is_err());
     }
+
+    mod dj_track_runtime_tests;
 
     #[test]
     fn dj_link_dispatch_dedupe_nonmaster_no_mapping_and_state_sync_nontrigger() {

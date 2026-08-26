@@ -344,6 +344,7 @@ export interface DjLinkRuntimeStatus {
   outcome?: string | null;
   ageMs: number | null;
   masterDeck?: string | null;
+  ownerDeck?: string | null;
   trackContentId?: string | null;
   trackTitle?: string | null;
   trackArtist?: string | null;

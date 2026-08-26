@@ -2954,6 +2954,69 @@ pub enum DjLinkDispatchOutcome {
 
 pub type DjLinkDispatchHandler = Arc<dyn Fn(DjLinkEnvelope) -> DjLinkDispatchOutcome + Send + Sync>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DjLinkCapabilityFamily {
+    GenericPerDeck,
+    LegacyMaster,
+}
+
+fn dj_link_capability_family(
+    payload: &protocol::DjLinkHelloPayload,
+) -> Option<DjLinkCapabilityFamily> {
+    if payload.capabilities.len() == protocol::DJ_LINK_REQUIRED_CAPABILITIES.len()
+        && payload.capabilities.iter().all(|capability| {
+            protocol::DJ_LINK_REQUIRED_CAPABILITIES.contains(&capability.as_str())
+        })
+    {
+        Some(DjLinkCapabilityFamily::GenericPerDeck)
+    } else if payload.capabilities.len() == protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.len()
+        && payload.capabilities.iter().all(|capability| {
+            protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.contains(&capability.as_str())
+        })
+    {
+        Some(DjLinkCapabilityFamily::LegacyMaster)
+    } else {
+        None
+    }
+}
+
+fn dj_link_envelope_matches_capability_family(
+    envelope: &DjLinkEnvelope,
+    family: DjLinkCapabilityFamily,
+) -> bool {
+    let legacy_payload = match envelope.message_type {
+        DjLinkMessageType::LoopState | DjLinkMessageType::LoopFallback => {
+            envelope.payload.get("masterDeckRevision").is_some()
+        }
+        DjLinkMessageType::StateSync => envelope.payload.get("masterDeck").is_some(),
+        _ => false,
+    };
+    match family {
+        DjLinkCapabilityFamily::GenericPerDeck => {
+            !matches!(
+                envelope.message_type,
+                DjLinkMessageType::MasterTrackActive | DjLinkMessageType::MasterTrackSync
+            ) && !legacy_payload
+        }
+        DjLinkCapabilityFamily::LegacyMaster => {
+            !matches!(
+                envelope.message_type,
+                DjLinkMessageType::TrackActive | DjLinkMessageType::TrackSync
+            ) && !matches!(
+                envelope.message_type,
+                DjLinkMessageType::LoopState
+                    | DjLinkMessageType::LoopFallback
+                    | DjLinkMessageType::StateSync
+            ) || matches!(
+                envelope.message_type,
+                DjLinkMessageType::LoopState
+                    | DjLinkMessageType::LoopFallback
+                    | DjLinkMessageType::StateSync
+            ) && legacy_payload
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DjLinkTerminal {
     shape_digest: u64,
@@ -2979,6 +3042,7 @@ struct DjLinkInflight {
 struct DjLinkSession {
     session_id: String,
     generation: u64,
+    capability_family: DjLinkCapabilityFamily,
     last_sequence: u64,
     /// Authenticated-session liveness: the timestamp of the most recently
     /// ADMITTED frame of any kind, not only Heartbeats. Continuous valid
@@ -3393,6 +3457,7 @@ impl DjLinkRegistry {
         session_id: &str,
         sequence: u64,
         hello_event_id: &str,
+        capability_family: DjLinkCapabilityFamily,
         transport: DjLinkRegistrationTransport,
     ) -> Result<u64, String> {
         let DjLinkRegistrationTransport {
@@ -3423,6 +3488,7 @@ impl DjLinkRegistry {
             DjLinkSession {
                 session_id: session_id.to_string(),
                 generation,
+                capability_family,
                 last_sequence: sequence,
                 last_liveness: now,
                 state_sync_received: false,
@@ -4075,6 +4141,7 @@ impl DjLinkRegistry {
                 session_id,
                 sequence,
                 &event_id,
+                DjLinkCapabilityFamily::GenericPerDeck,
                 DjLinkRegistrationTransport {
                     peer: peer.to_string(),
                     outbound,
@@ -5712,6 +5779,9 @@ fn handle_dj_link_client(
     let Ok(hello_payload) = hello_payload else {
         return;
     };
+    let Some(capability_family) = dj_link_capability_family(&hello_payload) else {
+        return;
+    };
     if !constant_time_token_eq(&hello_payload.auth_token, expected_token) {
         let ack = dj_link_ack(
             &hello,
@@ -5774,6 +5844,7 @@ fn handle_dj_link_client(
             &hello.session_id,
             hello.sequence,
             &hello.event_id,
+            capability_family,
             DjLinkRegistrationTransport {
                 peer,
                 outbound: outbound_sender,
@@ -5879,6 +5950,31 @@ fn handle_dj_link_client(
                     Ok(shape) => shape,
                     Err(_) => continue,
                 };
+                let family_matches = registry.lock().is_ok_and(|registry| {
+                    registry
+                        .sessions
+                        .get(&envelope.agent_id)
+                        .is_some_and(|session| {
+                            session.session_id == envelope.session_id
+                                && session.generation == generation
+                                && dj_link_envelope_matches_capability_family(
+                                    &envelope,
+                                    session.capability_family,
+                                )
+                        })
+                });
+                if !family_matches {
+                    let ack = dj_link_ack(
+                        &envelope,
+                        DjLinkAckOutcome::Rejected,
+                        Some("capability_family_mismatch".to_string()),
+                        generation,
+                    );
+                    if send_dj_link_ack(&mut websocket, &ack).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 if rate_window_started.elapsed() >= Duration::from_secs(1) {
                     rate_window_started = Instant::now();
                     rate_window_messages = 0;
@@ -6768,6 +6864,58 @@ mod tests {
 
     fn dj_v3_capabilities() -> Value {
         serde_json::json!(protocol::DJ_LINK_REQUIRED_CAPABILITIES)
+    }
+
+    #[test]
+    fn dj_link_capability_family_rejects_cross_family_events_and_payloads() {
+        let generic_hello = protocol::DjLinkHelloPayload {
+            auth_token: DJ_V3_TOKEN.to_string(),
+            version: protocol::DJ_LINK_PROTOCOL_VERSION,
+            capabilities: protocol::DJ_LINK_REQUIRED_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect(),
+        };
+        let legacy_hello = protocol::DjLinkHelloPayload {
+            capabilities: protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect(),
+            ..generic_hello.clone()
+        };
+        let generic = dj_link_capability_family(&generic_hello).unwrap();
+        let legacy = dj_link_capability_family(&legacy_hello).unwrap();
+        let envelope = |message_type, payload| DjLinkEnvelope {
+            v: protocol::DJ_LINK_PROTOCOL_VERSION,
+            message_type,
+            agent_id: DJ_V3_AGENT.to_string(),
+            session_id: "family-session".to_string(),
+            sequence: 2,
+            event_id: "family-event".to_string(),
+            payload,
+        };
+        assert!(!dj_link_envelope_matches_capability_family(
+            &envelope(DjLinkMessageType::MasterTrackActive, serde_json::json!({})),
+            generic,
+        ));
+        assert!(!dj_link_envelope_matches_capability_family(
+            &envelope(DjLinkMessageType::TrackActive, serde_json::json!({})),
+            legacy,
+        ));
+        assert!(!dj_link_envelope_matches_capability_family(
+            &envelope(
+                DjLinkMessageType::LoopState,
+                serde_json::json!({"masterDeckRevision": 1}),
+            ),
+            generic,
+        ));
+        assert!(!dj_link_envelope_matches_capability_family(
+            &envelope(
+                DjLinkMessageType::StateSync,
+                serde_json::json!({"ownerDeck": 2, "ownerDeckId": "rekordbox-deck-2", "activePlaySessionId": "p"}),
+            ),
+            legacy,
+        ));
     }
 
     fn dj_v3_hello(session: &str, event_id: &str) -> Value {
@@ -10795,6 +10943,7 @@ mod tests {
                 "queue-old",
                 1,
                 &hello_event,
+                DjLinkCapabilityFamily::GenericPerDeck,
                 DjLinkRegistrationTransport {
                     peer: "queue-peer".to_string(),
                     outbound: sender,
@@ -10847,6 +10996,7 @@ mod tests {
                 "queue-new",
                 1,
                 &new_hello,
+                DjLinkCapabilityFamily::GenericPerDeck,
                 DjLinkRegistrationTransport {
                     peer: "queue-peer-new".to_string(),
                     outbound: new_sender,
@@ -10901,6 +11051,7 @@ mod tests {
                 session_id,
                 1,
                 &hello_event,
+                DjLinkCapabilityFamily::GenericPerDeck,
                 DjLinkRegistrationTransport {
                     peer: "truth-peer".to_string(),
                     outbound: sender,

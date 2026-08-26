@@ -7991,6 +7991,21 @@ pub const DJ_LINK_BEATS_PER_BAR: u8 = 4;
 /// complete, duplicate-free, and carry no extras; partial capability
 /// negotiation does not exist on this wire revision.
 pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 9] = [
+    "DJ_TRACK_ACTIVE",
+    "DJ_TRACK_SYNC",
+    "DJ_LOOP_STATE",
+    "DJ_LOOP_FALLBACK",
+    "DJ_RELEASE",
+    "DJ_TIMELINE_BEAT_JUMP",
+    "DJ_TIMELINE_LOOP_SET",
+    "DJ_TIMELINE_STATE_REQUEST",
+    "DJ_STATE_SYNC",
+];
+/// The retired Master-only sender contract remains accepted during the
+/// migration to exact per-deck track ownership.  Its capability set must stay
+/// complete and exact: a partial or mixed declaration cannot negotiate a
+/// permissive hybrid protocol.
+pub const DJ_LINK_LEGACY_REQUIRED_CAPABILITIES: [&str; 9] = [
     "DJ_MASTER_TRACK_ACTIVE",
     "DJ_MASTER_TRACK_SYNC",
     "DJ_LOOP_STATE",
@@ -8037,6 +8052,12 @@ pub enum DjLinkMessageType {
     Hello,
     #[serde(rename = "DJ_HEARTBEAT")]
     Heartbeat,
+    #[serde(rename = "DJ_TRACK_ACTIVE")]
+    TrackActive,
+    #[serde(rename = "DJ_TRACK_SYNC")]
+    TrackSync,
+    /// Retired Master-only events remain wire-compatible only while senders
+    /// migrate to the exact per-deck event pair above.
     #[serde(rename = "DJ_MASTER_TRACK_ACTIVE")]
     MasterTrackActive,
     #[serde(rename = "DJ_MASTER_TRACK_SYNC")]
@@ -8104,9 +8125,44 @@ pub struct DjLinkMeasuredLoop {
     pub source: String,
 }
 
-/// Strict master-track report used by both ACTIVE and SYNC events. Every
-/// listed field is required exactly once; identity is either a nonempty
-/// `contentId` alone or both `title` and `artist` together.
+/// Strict per-deck track report used by both `DJ_TRACK_ACTIVE` and
+/// `DJ_TRACK_SYNC`. Identity is exactly one nonempty `contentId` or both
+/// `title` and `artist`; Master state is deliberately absent from this route.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTrackPayload {
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(default, rename = "contentId")]
+    pub content_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default, rename = "trackBpm")]
+    pub track_bpm: Option<f64>,
+    #[serde(rename = "positionAtSendSec")]
+    pub position_at_send_sec: f64,
+    #[serde(rename = "effectiveBpm")]
+    pub effective_bpm: f64,
+    #[serde(rename = "positionRevision")]
+    pub position_revision: u64,
+    #[serde(rename = "sampleAgeMs")]
+    pub sample_age_ms: u64,
+    #[serde(rename = "isPlaying")]
+    pub is_playing: bool,
+    #[serde(rename = "startedAt")]
+    pub started_at: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    #[serde(default, rename = "loop")]
+    pub loop_state: Option<DjLinkMeasuredLoop>,
+}
+
+/// Strict retired Master-only report. New senders must use
+/// `DjLinkTrackPayload`; this shape remains accepted only to keep an already
+/// deployed DJ Agent interoperable during the migration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkMasterTrackPayload {
@@ -8140,8 +8196,22 @@ pub struct DjLinkMasterTrackPayload {
     pub loop_state: Option<DjLinkMeasuredLoop>,
 }
 
-/// External measured-loop event. The loop body is prefixed with the deck
-/// context that produced it.
+/// Canonical measured-loop event for an admitted per-deck route. It binds to
+/// the exact deck and play session, never to a Master-deck revision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTrackLoopStatePayload {
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    #[serde(rename = "loop")]
+    pub loop_state: DjLinkMeasuredLoop,
+}
+
+/// Retired Master-only measured-loop event. It remains a distinct shape so a
+/// generic route can neither receive nor synthesize masterDeckRevision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkLoopStatePayload {
@@ -8156,8 +8226,33 @@ pub struct DjLinkLoopStatePayload {
     pub loop_state: DjLinkMeasuredLoop,
 }
 
-/// Bounded absolute loop target emitted only after an F14 response window
-/// expires without a fresh, valid Rekordbox measurement.
+/// Canonical per-deck bounded absolute loop target emitted only after an F14
+/// response window expires without a fresh valid measured loop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTrackLoopFallbackPayload {
+    pub deck: u8,
+    #[serde(rename = "deckId")]
+    pub deck_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+    /// Monotonic physical F14 intent identity. A fallback may consume this
+    /// identity only once for the current deck/session runtime.
+    #[serde(rename = "pedalIntentId")]
+    pub pedal_intent_id: u64,
+    #[serde(rename = "baseMeasuredLoopRevision")]
+    pub base_measured_loop_revision: Option<u64>,
+    #[serde(rename = "baseLoopDivision")]
+    pub base_loop_division: Option<u8>,
+    #[serde(rename = "targetLengthBeats")]
+    pub target_length_beats: f64,
+    #[serde(rename = "responseWindowMs")]
+    pub response_window_ms: u64,
+    pub source: String,
+}
+
+/// Retired Master-only bounded loop target. It remains accepted only for the
+/// legacy Master route and cannot correlate to a generic per-deck owner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkLoopFallbackPayload {
@@ -8197,6 +8292,18 @@ pub struct DjLinkReleasePayload {
     pub timeline_id: String,
     #[serde(rename = "playSessionId")]
     pub play_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTrackStateSyncPayload {
+    pub released: bool,
+    #[serde(default, rename = "ownerDeck")]
+    pub owner_deck: Option<u8>,
+    #[serde(default, rename = "ownerDeckId")]
+    pub owner_deck_id: Option<String>,
+    #[serde(default, rename = "activePlaySessionId")]
+    pub active_play_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8337,6 +8444,11 @@ pub struct DjLinkRuntimeStatus {
     pub age_ms: Option<u64>,
     #[serde(default, rename = "masterDeck")]
     pub master_deck: Option<String>,
+    /// The deck that owns the admitted per-track route. Unlike `masterDeck`,
+    /// this is populated for both the current generic route and the retired
+    /// Master-only diagnostics.
+    #[serde(default, rename = "ownerDeck")]
+    pub owner_deck: Option<String>,
     #[serde(default, rename = "trackContentId")]
     pub track_content_id: Option<String>,
     #[serde(default, rename = "trackTitle")]
@@ -8484,6 +8596,59 @@ fn validate_dj_link_required_identity(value: &str, label: &str) -> Result<(), St
     Ok(())
 }
 
+/// Serde maps both a missing `Option<T>` field and an explicit JSON `null` to
+/// `None`. The generic per-deck route needs the stronger wire distinction for
+/// identity: selected keys must be present strings, while every non-selected
+/// identity key must be absent. `trackBpm` and the track-level `loop` are the
+/// only generic-track optional fields and intentionally retain omitted/null
+/// compatibility.
+fn validate_dj_link_generic_track_raw_shape(payload: &serde_json::Value) -> Result<(), String> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "generic DJ track payload must be an object".to_string())?;
+    match (
+        object.get("contentId"),
+        object.get("title"),
+        object.get("artist"),
+    ) {
+        (Some(content_id), None, None) if content_id.is_string() => Ok(()),
+        (None, Some(title), Some(artist)) if title.is_string() && artist.is_string() => Ok(()),
+        _ => Err(
+            "generic DJ track identity must be contentId alone or title+artist with non-selected keys absent"
+                .to_string(),
+        ),
+    }
+}
+
+/// Generic StateSync owner context is all-or-nothing on the raw wire. This
+/// fence runs before `Option` deserialization so explicit null cannot be
+/// laundered into the omitted-owner diagnostic form. `ownerDeck` remains the
+/// exact numeric deck identifier; the paired deck and session identities are
+/// exact strings and receive their semantic validation after deserialization.
+fn validate_dj_link_generic_state_sync_raw_shape(
+    payload: &serde_json::Value,
+) -> Result<(), String> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| "generic DJ state sync payload must be an object".to_string())?;
+    match (
+        object.get("ownerDeck"),
+        object.get("ownerDeckId"),
+        object.get("activePlaySessionId"),
+    ) {
+        (None, None, None) => Ok(()),
+        (Some(deck), Some(deck_id), Some(play_session_id))
+            if deck.as_u64().is_some() && deck_id.is_string() && play_session_id.is_string() =>
+        {
+            Ok(())
+        }
+        _ => Err(
+            "generic DJ state sync must omit owner context or provide non-null ownerDeck,ownerDeckId,activePlaySessionId together"
+                .to_string(),
+        ),
+    }
+}
+
 impl DjLinkEnvelope {
     /// Ingress is exact-only. The raw text is first scanned for duplicate
     /// object keys at every nesting level (serde alone would silently keep
@@ -8526,27 +8691,34 @@ impl DjLinkEnvelope {
             DjLinkMessageType::Heartbeat => {
                 let _: DjLinkHeartbeatPayload = parse_dj_link_payload(&self.payload)?;
             }
-            DjLinkMessageType::MasterTrackActive | DjLinkMessageType::MasterTrackSync => {
-                let payload: DjLinkMasterTrackPayload = parse_dj_link_payload(&self.payload)?;
+            DjLinkMessageType::TrackActive | DjLinkMessageType::TrackSync => {
+                validate_dj_link_generic_track_raw_shape(&self.payload)?;
+                let payload: DjLinkTrackPayload = parse_dj_link_payload(&self.payload)?;
                 validate_dj_link_track_payload(&payload)?;
             }
+            DjLinkMessageType::MasterTrackActive | DjLinkMessageType::MasterTrackSync => {
+                let payload: DjLinkMasterTrackPayload = parse_dj_link_payload(&self.payload)?;
+                validate_dj_link_master_track_payload(&payload)?;
+            }
             DjLinkMessageType::LoopState => {
-                let payload: DjLinkLoopStatePayload = parse_dj_link_payload(&self.payload)?;
-                validate_dj_link_deck(payload.deck)?;
-                if payload.deck_id != dj_link_deck_id(payload.deck) {
-                    return Err("deckId must be rekordbox-deck-N matching deck".to_string());
+                if self.payload.get("masterDeckRevision").is_some() {
+                    let payload: DjLinkLoopStatePayload = parse_dj_link_payload(&self.payload)?;
+                    validate_dj_link_legacy_loop_state_payload(&payload)?;
+                } else {
+                    let payload: DjLinkTrackLoopStatePayload =
+                        parse_dj_link_payload(&self.payload)?;
+                    payload.validate()?;
                 }
-                if payload.master_deck_revision == 0
-                    || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE
-                {
-                    return Err("masterDeckRevision must be a positive safe integer".to_string());
-                }
-                validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
-                payload.loop_state.validate()?;
             }
             DjLinkMessageType::LoopFallback => {
-                let payload: DjLinkLoopFallbackPayload = parse_dj_link_payload(&self.payload)?;
-                payload.validate()?;
+                if self.payload.get("masterDeckRevision").is_some() {
+                    let payload: DjLinkLoopFallbackPayload = parse_dj_link_payload(&self.payload)?;
+                    payload.validate()?;
+                } else {
+                    let payload: DjLinkTrackLoopFallbackPayload =
+                        parse_dj_link_payload(&self.payload)?;
+                    payload.validate()?;
+                }
             }
             DjLinkMessageType::Release => {
                 let payload: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
@@ -8557,12 +8729,29 @@ impl DjLinkEnvelope {
                 validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
             }
             DjLinkMessageType::StateSync => {
-                let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
-                if let Some(deck) = payload.master_deck {
-                    validate_dj_link_deck(deck)?;
-                }
-                if let Some(session) = payload.active_play_session_id.as_deref() {
-                    validate_dj_link_string(session, "activePlaySessionId")?;
+                if self.payload.get("masterDeck").is_some() {
+                    let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
+                    if let Some(deck) = payload.master_deck {
+                        validate_dj_link_deck(deck)?;
+                    }
+                    if let Some(session) = payload.active_play_session_id.as_deref() {
+                        validate_dj_link_string(session, "activePlaySessionId")?;
+                    }
+                } else {
+                    let owner_context_fields = ["ownerDeck", "ownerDeckId", "activePlaySessionId"]
+                        .into_iter()
+                        .filter(|field| self.payload.get(*field).is_some())
+                        .count();
+                    if !matches!(owner_context_fields, 0 | 3) {
+                        return Err(
+                            "generic DJ state sync must omit owner context or provide ownerDeck,ownerDeckId,activePlaySessionId together"
+                                .to_string(),
+                        );
+                    }
+                    validate_dj_link_generic_state_sync_raw_shape(&self.payload)?;
+                    let payload: DjLinkTrackStateSyncPayload =
+                        parse_dj_link_payload(&self.payload)?;
+                    payload.validate()?;
                 }
             }
             DjLinkMessageType::TimelineStateRequest => {
@@ -8614,15 +8803,27 @@ pub fn validate_dj_link_token(value: &str) -> Result<(), String> {
 }
 
 fn validate_dj_link_capability_set(capabilities: &[String]) -> Result<(), String> {
-    if capabilities.len() != DJ_LINK_REQUIRED_CAPABILITIES.len() {
+    let required_capabilities = if capabilities.len() == DJ_LINK_REQUIRED_CAPABILITIES.len()
+        && capabilities
+            .iter()
+            .all(|capability| DJ_LINK_REQUIRED_CAPABILITIES.contains(&capability.as_str()))
+    {
+        &DJ_LINK_REQUIRED_CAPABILITIES[..]
+    } else if capabilities.len() == DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.len()
+        && capabilities
+            .iter()
+            .all(|capability| DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.contains(&capability.as_str()))
+    {
+        &DJ_LINK_LEGACY_REQUIRED_CAPABILITIES[..]
+    } else {
         return Err(
-            "DJ Link HELLO capabilities must list exactly the required capability set".to_string(),
+            "DJ Link HELLO capabilities must list exactly one supported capability set".to_string(),
         );
-    }
+    };
     let mut seen = BTreeSet::new();
     for capability in capabilities {
         validate_dj_link_string(capability, "capability")?;
-        if !DJ_LINK_REQUIRED_CAPABILITIES.contains(&capability.as_str()) {
+        if !required_capabilities.contains(&capability.as_str()) {
             return Err(format!("unknown DJ Link HELLO capability {capability}"));
         }
         if !seen.insert(capability.as_str()) {
@@ -8821,6 +9022,33 @@ impl DjLinkMeasuredLoop {
     }
 }
 
+impl DjLinkTrackLoopStatePayload {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dj_link_deck(self.deck)?;
+        if self.deck_id != dj_link_deck_id(self.deck) {
+            return Err("deckId must be rekordbox-deck-N matching deck".to_string());
+        }
+        validate_dj_link_string(&self.play_session_id, "playSessionId")?;
+        self.loop_state.validate()
+    }
+}
+
+fn validate_dj_link_legacy_loop_state_payload(
+    payload: &DjLinkLoopStatePayload,
+) -> Result<(), String> {
+    let track_payload = DjLinkTrackLoopStatePayload {
+        deck: payload.deck,
+        deck_id: payload.deck_id.clone(),
+        play_session_id: payload.play_session_id.clone(),
+        loop_state: payload.loop_state.clone(),
+    };
+    track_payload.validate()?;
+    if payload.master_deck_revision == 0 || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
+        return Err("masterDeckRevision must be a positive safe integer".to_string());
+    }
+    Ok(())
+}
+
 impl DjLinkLoopFallbackPayload {
     pub fn validate(&self) -> Result<(), String> {
         validate_dj_link_deck(self.deck)?;
@@ -8830,72 +9058,132 @@ impl DjLinkLoopFallbackPayload {
         if self.master_deck_revision == 0 || self.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
             return Err("masterDeckRevision must be a positive safe integer".to_string());
         }
-        validate_dj_link_required_identity(&self.play_session_id, "playSessionId")?;
-        if self.pedal_intent_id == 0 || self.pedal_intent_id > DJ_LINK_MAX_SEQUENCE {
-            return Err("fallback pedalIntentId must be a positive safe integer".to_string());
-        }
-        if let Some(revision) = self.base_measured_loop_revision {
-            if revision == 0 || revision > DJ_LINK_MAX_SEQUENCE {
-                return Err(
-                    "fallback baseMeasuredLoopRevision must be null or a positive safe integer"
-                        .to_string(),
-                );
-            }
-        }
-        if let Some(division) = self.base_loop_division {
-            if usize::from(division) >= DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() {
-                return Err(
-                    "fallback baseLoopDivision is outside the supported profile".to_string()
-                );
-            }
-        }
-        if !self.target_length_beats.is_finite() {
-            return Err("fallback targetLengthBeats must be finite".to_string());
-        }
-        if !DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.contains(&self.target_length_beats) {
-            return Err(
-                "fallback targetLengthBeats must be an exact supported Rekordbox profile value"
-                    .to_string(),
-            );
-        }
-        let expected_target_index = self
-            .base_loop_division
-            .map(|division| {
-                (usize::from(division) + 1).min(DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1)
-            })
-            .unwrap_or(0);
-        if self.target_length_beats != DJ_LINK_LOOP_PROFILE_LENGTH_BEATS[expected_target_index] {
-            return Err(
-                "fallback targetLengthBeats must be the exact next downward profile value from baseLoopDivision"
-                    .to_string(),
-            );
-        }
-        if !(DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS
-            ..=DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS)
-            .contains(&self.response_window_ms)
-        {
-            return Err("fallback responseWindowMs is outside the bounded window".to_string());
-        }
-        if self.source != DJ_LINK_LOOP_FALLBACK_SOURCE {
-            return Err(format!(
-                "fallback source must be exactly {DJ_LINK_LOOP_FALLBACK_SOURCE}"
-            ));
-        }
-        Ok(())
+        validate_dj_link_loop_fallback_fields(
+            &self.play_session_id,
+            self.pedal_intent_id,
+            self.base_measured_loop_revision,
+            self.base_loop_division,
+            self.target_length_beats,
+            self.response_window_ms,
+            &self.source,
+        )
     }
 }
 
-fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
+impl DjLinkTrackLoopFallbackPayload {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dj_link_deck(self.deck)?;
+        if self.deck_id != dj_link_deck_id(self.deck) {
+            return Err("deckId must be rekordbox-deck-N matching deck".to_string());
+        }
+        validate_dj_link_loop_fallback_fields(
+            &self.play_session_id,
+            self.pedal_intent_id,
+            self.base_measured_loop_revision,
+            self.base_loop_division,
+            self.target_length_beats,
+            self.response_window_ms,
+            &self.source,
+        )
+    }
+}
+
+impl DjLinkTrackStateSyncPayload {
+    pub fn validate(&self) -> Result<(), String> {
+        match (
+            self.owner_deck,
+            self.owner_deck_id.as_deref(),
+            self.active_play_session_id.as_deref(),
+        ) {
+            (None, None, None) => Ok(()),
+            (Some(deck), Some(deck_id), Some(play_session_id)) => {
+                validate_dj_link_deck(deck)?;
+                if deck_id != dj_link_deck_id(deck) {
+                    return Err("ownerDeckId must be rekordbox-deck-N matching ownerDeck".to_string());
+                }
+                validate_dj_link_string(play_session_id, "activePlaySessionId")
+            }
+            _ => Err(
+                "generic DJ state sync must omit owner context or provide ownerDeck,ownerDeckId,activePlaySessionId together"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+fn validate_dj_link_loop_fallback_fields(
+    play_session_id: &str,
+    pedal_intent_id: u64,
+    base_measured_loop_revision: Option<u64>,
+    base_loop_division: Option<u8>,
+    target_length_beats: f64,
+    response_window_ms: u64,
+    source: &str,
+) -> Result<(), String> {
+    validate_dj_link_required_identity(play_session_id, "playSessionId")?;
+    if pedal_intent_id == 0 || pedal_intent_id > DJ_LINK_MAX_SEQUENCE {
+        return Err("fallback pedalIntentId must be a positive safe integer".to_string());
+    }
+    if let Some(revision) = base_measured_loop_revision {
+        if revision == 0 || revision > DJ_LINK_MAX_SEQUENCE {
+            return Err(
+                "fallback baseMeasuredLoopRevision must be null or a positive safe integer"
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(division) = base_loop_division {
+        if usize::from(division) >= DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() {
+            return Err("fallback baseLoopDivision is outside the supported profile".to_string());
+        }
+    }
+    if !target_length_beats.is_finite() {
+        return Err("fallback targetLengthBeats must be finite".to_string());
+    }
+    if !DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.contains(&target_length_beats) {
+        return Err(
+            "fallback targetLengthBeats must be an exact supported Rekordbox profile value"
+                .to_string(),
+        );
+    }
+    let expected_target_index = base_loop_division
+        .map(|division| {
+            (usize::from(division) + 1).min(DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1)
+        })
+        .unwrap_or(0);
+    if target_length_beats != DJ_LINK_LOOP_PROFILE_LENGTH_BEATS[expected_target_index] {
+        return Err(
+            "fallback targetLengthBeats must be the exact next downward profile value from baseLoopDivision"
+                .to_string(),
+        );
+    }
+    if !(DJ_LINK_LOOP_FALLBACK_MIN_RESPONSE_WINDOW_MS
+        ..=DJ_LINK_LOOP_FALLBACK_MAX_RESPONSE_WINDOW_MS)
+        .contains(&response_window_ms)
+    {
+        return Err("fallback responseWindowMs is outside the bounded window".to_string());
+    }
+    if source != DJ_LINK_LOOP_FALLBACK_SOURCE {
+        return Err(format!(
+            "fallback source must be exactly {DJ_LINK_LOOP_FALLBACK_SOURCE}"
+        ));
+    }
+    Ok(())
+}
+
+impl DjLinkTrackPayload {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dj_link_track_payload(self)
+    }
+}
+
+fn validate_dj_link_track_payload(payload: &DjLinkTrackPayload) -> Result<(), String> {
     validate_dj_link_deck(payload.deck)?;
     if payload.deck_id != dj_link_deck_id(payload.deck) {
         return Err("deckId must be rekordbox-deck-N matching deck".to_string());
     }
-    if payload.master_deck_revision == 0
-        || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE
-        || payload.position_revision == 0
-        || payload.position_revision > DJ_LINK_MAX_SEQUENCE
-    {
-        return Err("track revisions must be positive safe integers".to_string());
+    if payload.position_revision == 0 || payload.position_revision > DJ_LINK_MAX_SEQUENCE {
+        return Err("positionRevision must be a positive safe integer".to_string());
     }
     match (
         payload.content_id.as_deref(),
@@ -8933,13 +9221,37 @@ fn validate_dj_link_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<
     if !payload.is_playing {
         return Err("isPlaying must be true on track events".to_string());
     }
-    if !payload.master {
-        return Err("master must be true on master-track events".to_string());
-    }
     validate_dj_link_timestamp(&payload.started_at)?;
     validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
     if let Some(loop_state) = payload.loop_state.as_ref() {
         loop_state.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_dj_link_master_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
+    let track_payload = DjLinkTrackPayload {
+        deck: payload.deck,
+        deck_id: payload.deck_id.clone(),
+        content_id: payload.content_id.clone(),
+        title: payload.title.clone(),
+        artist: payload.artist.clone(),
+        track_bpm: payload.track_bpm,
+        position_at_send_sec: payload.position_at_send_sec,
+        effective_bpm: payload.effective_bpm,
+        position_revision: payload.position_revision,
+        sample_age_ms: payload.sample_age_ms,
+        is_playing: payload.is_playing,
+        started_at: payload.started_at.clone(),
+        play_session_id: payload.play_session_id.clone(),
+        loop_state: payload.loop_state.clone(),
+    };
+    validate_dj_link_track_payload(&track_payload)?;
+    if payload.master_deck_revision == 0 || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
+        return Err("masterDeckRevision must be a positive safe integer".to_string());
+    }
+    if !payload.master {
+        return Err("master must be true on master-track events".to_string());
     }
     Ok(())
 }
@@ -17977,51 +18289,55 @@ mod tests {
                     .join(",")
             )
         };
-        let full_set: [&str; 9] = [
-            "DJ_MASTER_TRACK_ACTIVE",
-            "DJ_MASTER_TRACK_SYNC",
-            "DJ_LOOP_STATE",
-            "DJ_LOOP_FALLBACK",
-            "DJ_RELEASE",
-            "DJ_TIMELINE_BEAT_JUMP",
-            "DJ_TIMELINE_LOOP_SET",
-            "DJ_TIMELINE_STATE_REQUEST",
-            "DJ_STATE_SYNC",
-        ];
+        let generic_set = super::DJ_LINK_REQUIRED_CAPABILITIES;
+        let legacy_set = super::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES;
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,
-            &full_set
+            &generic_set
         ))
         .is_ok());
-        assert_eq!(full_set, super::DJ_LINK_REQUIRED_CAPABILITIES);
-        assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 3, &full_set)).is_err());
-        assert!(super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 3, &full_set)).is_err());
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            3,
+            &legacy_set
+        ))
+        .is_ok());
+        assert!(generic_set.contains(&"DJ_TRACK_ACTIVE"));
+        assert!(generic_set.contains(&"DJ_TRACK_SYNC"));
+        assert!(!generic_set.contains(&"DJ_MASTER_TRACK_ACTIVE"));
+        assert!(legacy_set.contains(&"DJ_MASTER_TRACK_ACTIVE"));
+        assert!(legacy_set.contains(&"DJ_MASTER_TRACK_SYNC"));
+        assert!(!legacy_set.contains(&"DJ_TRACK_ACTIVE"));
+        assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 3, &generic_set)).is_err());
+        assert!(
+            super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 3, &generic_set)).is_err()
+        );
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef 0123456789abcdef",
             3,
-            &full_set
+            &generic_set
         ))
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef\t0123456789abcdef",
             3,
-            &full_set
+            &generic_set
         ))
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             2,
-            &full_set
+            &generic_set
         ))
         .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,
-            &full_set[..8]
+            &generic_set[..8]
         ))
         .is_err());
-        let mut extra = full_set.to_vec();
+        let mut extra = generic_set.to_vec();
         extra.push("DJ_EXTRA");
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
@@ -18029,12 +18345,20 @@ mod tests {
             &extra
         ))
         .is_err());
-        let mut duplicated = full_set.to_vec();
+        let mut duplicated = generic_set.to_vec();
         duplicated[8] = duplicated[0];
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,
             &duplicated
+        ))
+        .is_err());
+        let mut mixed = generic_set.to_vec();
+        mixed[0] = legacy_set[0];
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            3,
+            &mixed
         ))
         .is_err());
     }
