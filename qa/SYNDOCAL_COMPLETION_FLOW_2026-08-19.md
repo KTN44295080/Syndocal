@@ -1985,3 +1985,41 @@ test unchanged behind its non-Windows cfg, and first-party warnings remained
 zero. This is a refactor-only checkpoint: the live alpha.15 process, cleanup
 state, HW-4 **0/12** matrix, and all alpha.16 native/hardware boundaries in
 section 42 are unchanged.
+
+## 44. 2026-08-27 transaction-capacity and zero-owned-FX source checkpoint
+
+Pushed commit `33912001bfaa4c7b7d1ad10fec6bf0313e2debc2` closes the source
+capacity leak from dead-owner terminal project receipts. Compaction requires the
+exact owner triple, a closed zero-inflight Committed/Cancelled receipt, and its
+exact lane; active, missing, Pending, and indeterminate state rejects before an
+owner transition. The old terminal-residue path is not retained as a fallback.
+Exact MSVC 14.44 focused proof passed `5/5`, broader `project_transaction_`
+proof passed `10/10`, the frontend transaction checker passed, and first-party
+warnings were `0`. Independent Terra xHigh review found no P0/P1/P2.
+
+Pushed commit `627e35b32008c4087bd344f6531ccd6a5707d13d` clean-breaks the
+last-target FX policy. The Tauri production helper keeps Cue existence and
+target validation, then uses the published engine command for an empty
+replacement; effect-only Scenes now persist a valid zero-FX body, while unknown
+or malformed targets remain fail-closed. The frontend always offers Save Recall,
+shows the empty-list result beside the action row, and removes the retired
+helper, warning, and CSS path. Exact-linker focused Syndocal/engine tests passed
+with zero first-party warnings; recall checker, localization `3560/3560`,
+TypeScript/Vite build, formatting, and diff checks passed. Independent backend
+and frontend Terra xHigh reviews ended with no P0/P1/P2.
+
+The same current-source audit corrected three stale ledger descriptions without
+rerunning or promoting a native gate. Commit `aed77a2` already uses a typed,
+strict Bank rename request; preserves non-null missing Bank selection as an
+unavailable identity with dependent actions locked; and rejects dangling or
+cross-Bank active Cue references before queueing, normalization, or runtime
+activation. The focused source/unit gates are present. Fresh native
+Bank/Timeline, polling-removal/delete-successor, malformed-project, and
+no-effect-activation proof remains open.
+
+Both commits are source completion only. Native Bank/Scene authoring,
+save/restart, zero-FX UI/runtime/publication-failure acceptance, and alpha.16
+artifact proof remain open. The operator's alpha.15 PID `46120` was not stopped
+or restarted and still owns the established DJ-PC connection. The reviewed
+HW-4 companion is `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`; it checks no
+hardware row, so HW-4 remains **0/12**.

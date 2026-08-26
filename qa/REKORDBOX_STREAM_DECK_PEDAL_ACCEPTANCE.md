@@ -893,3 +893,23 @@ not rewrite the dated hardware observations above and it checks no HW-4 row.
   pushed but not deployed. Real restart/token reuse/reconnect/next-show proof is
   still pending. HW-4.1 through HW-4.12 remain exactly **0/12 checked (0%)** and
   `Required / Peer and hardware pending`.
+
+## Current HW-4 execution companion — 2026-08-27
+
+The concise operator sequence is
+`qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`. It resolves the target DJ checkout
+instead of hard-coding a user profile, then fails closed unless branch
+`beta-v1.1.2`, exact clean/upstream-equal docs tip
+`789f7724a699324cd87171ef835b69486bcd4e70`, runtime ancestor
+`ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, and source version `1.1.6` all
+match. It records no token bytes and keeps native alpha.16 build identity,
+strict-v3 authentication, physical observations, and bounded protocol/fault
+injection distinct.
+
+For the current controlled v1.1.6 peer, HW-4.6 is fixed to
+`releaseMacro.enabled=false`: F13 must prove direct local Rekordbox Stop and an
+independently routed Syndocal Release. Filter-then-fade is not an executable
+choice for this matrix; it requires a separately implemented, reviewed, and
+deployed peer change. Independent Terra xHigh review approved the runbook with
+no P0/P1/P2 finding. The document itself is no hardware evidence and changes no
+checkbox: HW-4 remains exactly **0/12 checked (0%)**.

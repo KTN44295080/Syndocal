@@ -756,3 +756,46 @@ the remaining unchanged test is `cfg(not(target_os = "windows"))`. `cargo fmt
 first-party warnings. No native build, process restart, cleanup Apply, or file
 deletion occurred; reclaimed bytes remain `0`. PID `46120` remains responsive
 with the same LISTEN and ESTABLISHED DJ-PC socket. HW-4 remains **0/12**.
+
+## 14. 2026-08-27 post-DJ P0 source checkpoint
+
+Branch `codex/syndocal-v1.2` is pushed through
+`627e35b32008c4087bd344f6531ccd6a5707d13d`. Commit `3391200` bounds
+dead-owner terminal project-receipt compaction and recovers the fixed 256-slot
+admission capacity without weakening Pending, active, indeterminate, ABA, or
+owner-incarnation authority. Commit `627e35b` removes the obsolete backend and
+frontend last-FX rejection so an effect-only Scene may publish, save, and reload
+with zero owned FX through the authoritative command. Invalid effect targets
+continue to reject unchanged; the frontend presents a visible empty-list
+warning beside the enabled Save Recall action, and obsolete helper/copy/style
+paths are gone.
+
+Supervisor gates passed: exact-linker transaction tests `5/5` and `10/10`, two
+focused Syndocal zero-FX tests, the engine published-clear test, transaction and
+recall checkers, localization `3560/3560`, TypeScript/Vite build, Rust format,
+and diff checks. First-party warnings were `0` for the Cargo configurations.
+Independent Terra xHigh backend and frontend reviews returned no P0/P1/P2 after
+three frontend P2 observations were repaired and re-reviewed.
+
+A read-only HEAD audit also confirms that the previously stale SHOW-P0-2,
+FC-26, and FC-27 source findings were repaired in `aed77a2`: Bank rename uses a
+typed strict request, a non-null missing Bank stays unavailable and locks its
+dependent actions, and malformed active Cue references reject before queue or
+runtime activation. The existing focused gates were inspected but not rerun in
+that audit; fresh exact-HEAD native proof remains open for every row.
+
+The independently approved physical operator companion is
+`qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`. It requires an exact clean peer
+identity, keeps the token out of evidence, fixes current HW-4.6 to
+`releaseMacro.enabled=false`, and distinguishes direct hardware proof from the
+bounded fault harness. It is not acceptance evidence: HW-4 remains **0/12**.
+
+The live boundary is unchanged: PID `46120` is the responsive historical
+alpha.15 executable at the exact checkout path, with LISTEN
+`192.168.50.1:9100` and ESTABLISHED peer `192.168.50.2:58211`. Do not stop it,
+run the mandatory native release build, or relabel it as alpha.16 until the
+operator returns and explicitly authorizes replacing the live session. Native
+alpha.16, Bank/Scene authoring/save/restart, zero-FX native acceptance, target
+DJ-PC deployment identity, real Credential Manager/NLM restart, HW-4, ASIO,
+three displays, representative DSF show content, and the full rehearsal remain
+open.
