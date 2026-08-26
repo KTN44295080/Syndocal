@@ -7,6 +7,7 @@ const protocol = await readFile(new URL("../../crates/protocol/src/lib.rs", impo
 const dmxInput = await readFile(new URL("../../crates/io/src/dmx_input.rs", import.meta.url), "utf8");
 const osc = await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const dvcImportController = await readFile(new URL("../src/dvcImportController.ts", import.meta.url), "utf8");
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 const panel = await readFile(new URL("../src/components/DmxInputPanel.tsx", import.meta.url), "utf8");
 const workspace = await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8");
@@ -70,7 +71,7 @@ const checks = [
     && app.includes("dmxMappings: sentMappings.dmx"),
   "dirty tracking and the authority-fenced persistence boundary include DMX mappings"],
   [backend.includes("let mappings = project_control_mappings_from_daslight_import_report(&report);")
-    && app.includes("applyLoadedProjectResult(imported.load, null)")
+    && dvcImportController.includes("applyLoadedProjectResult(imported.load, null)")
     && app.includes("if (prepared.dmx.length > 0)")
     && app.includes("setDmxInputConfig((current) => ({ ...current, merge_enabled: false }))"),
   "the paired DVC project result hydrates DMX mappings and activates control semantics without raw merge"],

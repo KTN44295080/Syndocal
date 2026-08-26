@@ -9,6 +9,7 @@ const remote = await readFile(new URL("../../crates/io/src/remote_ws.rs", import
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const dvcImportController = await readFile(new URL("../src/dvcImportController.ts", import.meta.url), "utf8");
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 const midiPanel = await readFile(new URL("../src/components/MidiControlMappingPanel.tsx", import.meta.url), "utf8");
 const controlController = await readFile(new URL("../src/createControlInputController.ts", import.meta.url), "utf8");
@@ -49,10 +50,11 @@ const checks = [
     && backend.includes("let mappings = project_control_mappings_from_daslight_import_report(&report);")
     && backend.includes("load_project_from_file_with_control_mappings_and_disposition(")
     && backend.includes("daslight_import_mapping_result_keeps_report_midi_and_dmx_in_the_project_checkpoint")
-    && app.includes("applyLoadedProjectResult(imported.load, null)")
+    && dvcImportController.includes("applyLoadedProjectResult(imported.load, null)")
+    && !dvcImportController.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])")
     && !app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"),
   "DVC import publishes MIDI and DMX mappings in the paired backend project result instead of racing a frontend replacement"],
-  [app.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
+  [dvcImportController.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
   [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
   [backend.includes('name("syndocal-midi-feedback".to_string())') && backend.includes("MIDI_FEEDBACK_REFRESH_INTERVAL") && backend.includes("TELEMETRY_DMX_TARGET_FRAME_RATE_HZ") && backend.includes("engine.inspect_snapshot"), "auto feedback reads the published snapshot without full clones at the engine's 44 Hz rate"],
   [backend.includes("fn set_midi_feedback_auto(") && backend.includes("fn midi_feedback_status("), "backend exposes explicit auto-feedback configuration and health commands"],

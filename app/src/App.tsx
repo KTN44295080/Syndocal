@@ -578,6 +578,7 @@ import {
 import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
 import { createMappingViewportModel } from "./createMappingViewportModel";
+import { createDvcImportController } from "./dvcImportController";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
 import { createMappingInteractionController } from "./createMappingInteractionController";
@@ -2207,11 +2208,6 @@ type AppliedProjectAuthorityResult = {
  */
 type SavedProjectAuthorityBaseline = ProjectAuthorityToken & {
   current_project_path: string | null;
-};
-
-type DvcImportProjectLoadResult = {
-  report: DvcImportReport;
-  load: ProjectLoadResult;
 };
 
 let flushProjectControlMappingsBeforeProjectMutation: (() => Promise<number>) | null = null;
@@ -16548,48 +16544,20 @@ export default function App() {
     }
   };
 
-  const importDaslightProject = async () => {
-    if (daslightProjectImportBusy()) {
-      return;
-    }
-    const authority = captureProjectAuthorityIdentity();
-    if (!await confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
-      setMessage("Daslight Project import canceled.");
-      return;
-    }
-    setDaslightProjectImportBusy(true);
-    setMessage("Importing Daslight Project...", "daslight-project-import-busy");
-    try {
-      const imported = await invoke<DvcImportProjectLoadResult | null>("import_daslight_project_with_result", {
-        path: null,
-        ownerId: projectTransactionOwnerId,
-        expectedEpoch: authority.project_epoch,
-        expectedRevision: authority.project_revision,
-        expectedCheckpointHash: authority.checkpoint_hash,
-      });
-      if (!imported) {
-        setMessage("Daslight Project import canceled.");
-        return;
-      }
-      // The paired backend result is the same fenced publication that owns
-      // the report mappings. Applying it directly avoids racing a later
-      // authority event/refresh and keeps imported MIDI+DMX bindings in the
-      // coordinator before the UI advertises their counts.
-      const applied = await applyLoadedProjectResult(imported.load, null);
-      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
-      const report = imported.report;
-      setWorkspaceTab("setup");
-      setSetupSubTab("patch");
-      setDvcImportReport(report);
-      setMessage(
-        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings. Save As to create a Syndocal Project (.sdc).`,
-      );
-    } catch (error) {
-      setMessage(`Daslight Project import failed: ${String(error)}`);
-    } finally {
-      setDaslightProjectImportBusy(false);
-    }
-  };
+  const { importDaslightProject } = createDvcImportController<AppliedProjectAuthorityResult>({
+    invoke,
+    projectTransactionOwnerId,
+    daslightProjectImportBusy,
+    captureProjectAuthorityIdentity,
+    confirmDiscardProjectChanges,
+    applyLoadedProjectResult,
+    projectAuthorityApplicationResultIsCurrent,
+    setDaslightProjectImportBusy,
+    setMessage,
+    setWorkspaceTab,
+    setSetupSubTab,
+    setDvcImportReport,
+  });
 
   const loadProjectPath = async (path: string) => {
     const authority = captureProjectAuthorityIdentity();
