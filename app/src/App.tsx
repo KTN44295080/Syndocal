@@ -210,6 +210,10 @@ import type {
   PaneWindowPendingCloseContext,
   PaneWindowStatusReport,
 } from "./paneWindowLifecycle";
+import type {
+  BrowserPanePopupController,
+  PoppedPanesPersistenceResult,
+} from "./browserPanePopupController";
 import {
   createOperatorPolicy,
   operatorCommandAllowed,
@@ -3936,29 +3940,123 @@ export default function App() {
   // placement is machine-specific, so persistence is localStorage, not .sdc.
   const paneWindow = paneWindowMode();
   const autoOpenPaneWindows = new URLSearchParams(window.location.search).get("syndocalAutoPaneWindows") === "1";
+  const paneWindowStorageKey = "syndocal.paneWindows.v1";
+  let initialPoppedPanesStorageError: string | null = null;
   const initialPoppedPanes = (): PaneWindowKind[] => {
     const fromParam = browserPoppedPanes();
     if (fromParam.length > 0) return fromParam;
     if (autoOpenPaneWindows) return [];
     if (!isTauriRuntime() || paneWindow) return [];
     try {
-      const raw = window.localStorage.getItem("syndocal.paneWindows.v1");
+      const raw = window.localStorage.getItem(paneWindowStorageKey);
       const parsed: unknown = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed)
         ? parsed.filter((pane): pane is PaneWindowKind =>
             typeof pane === "string" && paneWindowKinds.includes(pane as PaneWindowKind))
         : [];
-    } catch {
+    } catch (error) {
+      initialPoppedPanesStorageError = String(error);
       return [];
     }
   };
   const [poppedPanes, setPoppedPanes] = createSignal<PaneWindowKind[]>(initialPoppedPanes());
-  const persistPoppedPanes = (panes: PaneWindowKind[]) => {
+  const persistPoppedPanes = (panes: PaneWindowKind[]): PoppedPanesPersistenceResult => {
     try {
-      window.localStorage.setItem("syndocal.paneWindows.v1", JSON.stringify(panes));
-    } catch {
-      // Persistence loss only affects window restore on next launch.
+      window.localStorage.setItem(paneWindowStorageKey, JSON.stringify(panes));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
     }
+  };
+  // The browser-only popup controller stays out of the bootstrap chunk. Keep
+  // one shared import promise and one resolved controller so the browser click
+  // path can call controller.open/close synchronously. The import is started
+  // during app initialization; a click never awaits it before window.open.
+  let browserPanePopupControllerPromise: Promise<BrowserPanePopupController> | null = null;
+  let browserPanePopupController: BrowserPanePopupController | null = null;
+  let browserPanePopupControllerDisposed = false;
+  let browserPanePopupControllerLoadGeneration = 0;
+  const preloadBrowserPanePopupController = (): Promise<BrowserPanePopupController> | null => {
+    if (browserPanePopupControllerDisposed) {
+      return null;
+    }
+    if (browserPanePopupController) return Promise.resolve(browserPanePopupController);
+    if (browserPanePopupControllerPromise) return browserPanePopupControllerPromise;
+    const loadGeneration = ++browserPanePopupControllerLoadGeneration;
+    const pending = import("./browserPanePopupController").then(
+      ({ createBrowserPanePopupController }) => {
+        // Disposal can race an in-flight dynamic import. Do not construct a
+        // controller after unmount; a late module resolution must never leave
+        // a live popup owner behind the disposed App.
+        if (browserPanePopupControllerDisposed || loadGeneration !== browserPanePopupControllerLoadGeneration) {
+          throw new Error("The browser pane popup controller was disposed before it finished loading.");
+        }
+        const controller = createBrowserPanePopupController({
+          browserWindow: window,
+          browserLocation: window.location,
+          getPoppedPanes: () => poppedPanes(),
+          setPoppedPanes: (next) => setPoppedPanes(next),
+          persistPoppedPanes,
+          setMessage: (text) => setMessage(text),
+        });
+        if (browserPanePopupControllerDisposed || loadGeneration !== browserPanePopupControllerLoadGeneration) {
+          controller.dispose();
+          throw new Error("The browser pane popup controller was disposed while it finished loading.");
+        }
+        browserPanePopupController = controller;
+        return controller;
+      },
+    );
+    browserPanePopupControllerPromise = pending;
+    // Startup preload has no caller waiting on it. Attach a rejection handler
+    // that both makes the failure visible and clears the cache so a later
+    // same-document click can retry the dynamic import.
+    void pending.catch((error) => {
+      if (browserPanePopupControllerPromise !== pending) return;
+      browserPanePopupControllerPromise = null;
+      browserPanePopupController = null;
+      if (!browserPanePopupControllerDisposed) {
+        setMessage(
+          `Browser pane windows could not load their popup controller: ${String(error)}. Retry the pane action; panes remain integrated in the main window.`,
+        );
+      }
+    });
+    return pending;
+  };
+  const reportBrowserPanePopupControllerUnavailable = (pane: PaneWindowKind) => {
+    setMessage(
+      browserPanePopupControllerPromise
+        ? `Pane window ${pane} browser fallback is still loading; retry when it is ready. ${pane} remains integrated in the main window.`
+        : `Pane window ${pane} browser fallback is unavailable; retry to reload it. ${pane} remains integrated in the main window.`,
+    );
+    // A failed preload clears the shared promise above; a pending preload is
+    // retained. Either state is safe to call from a trusted click.
+    void preloadBrowserPanePopupController();
+  };
+  const openBrowserPaneWindow = (pane: PaneWindowKind): Promise<boolean> => {
+    const controller = browserPanePopupController;
+    if (!controller) {
+      reportBrowserPanePopupControllerUnavailable(pane);
+      return Promise.resolve(false);
+    }
+    return controller.open(pane);
+  };
+  const closeBrowserPaneWindow = (pane: PaneWindowKind): Promise<boolean> => {
+    const controller = browserPanePopupController;
+    if (!controller) {
+      reportBrowserPanePopupControllerUnavailable(pane);
+      return Promise.resolve(false);
+    }
+    return controller.close(pane);
+  };
+  const disposeBrowserPanePopupController = () => {
+    if (browserPanePopupControllerDisposed) return;
+    browserPanePopupControllerDisposed = true;
+    browserPanePopupControllerLoadGeneration += 1;
+    browserPanePopupControllerPromise = null;
+    const controller = browserPanePopupController;
+    browserPanePopupController = null;
+    controller?.dispose();
   };
   const acknowledgePaneWindowClosed = (pane: string) => {
     setPoppedPanes((current) => {
@@ -4148,12 +4246,13 @@ export default function App() {
     acknowledgePaneWindowClosed(pane);
     return true;
   };
-  const openPaneWindow = async (
+  const openPaneWindow = (
     pane: PaneWindowKind,
     placement: PaneWindowPlacement | null = null,
     options?: { instanceId?: string },
   ): Promise<boolean> => {
-    if (isTauriRuntime()) {
+    if (!isTauriRuntime()) return openBrowserPaneWindow(pane);
+    return (async () => {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
         return false;
@@ -4163,16 +4262,11 @@ export default function App() {
         result = await openPaneWindowCore(pane, placement, options?.instanceId);
       });
       return result;
-    }
-    const params = new URLSearchParams(window.location.search);
-    params.set("syndocalPaneWindow", pane);
-    params.delete("syndocalPoppedPanes");
-    window.open(`${window.location.pathname}?${params}`, `syndocal-pane-${pane}`);
-    markPaneWindowOpen(pane);
-    return true;
+    })();
   };
-  const closePaneWindow = async (pane: PaneWindowKind): Promise<boolean> => {
-    if (isTauriRuntime()) {
+  const closePaneWindow = (pane: PaneWindowKind): Promise<boolean> => {
+    if (!isTauriRuntime()) return closeBrowserPaneWindow(pane);
+    return (async () => {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
         return false;
@@ -4182,9 +4276,7 @@ export default function App() {
         result = await closePaneWindowCore(pane);
       });
       return result;
-    }
-    acknowledgePaneWindowClosed(pane);
-    return true;
+    })();
   };
   const togglePaneWindow = (pane: PaneWindowKind) => {
     if (workspaceApplyBusy() || paneLifecycleController.isWorkspaceApplyActive()) {
@@ -5789,6 +5881,14 @@ export default function App() {
       : appStatusFromMessage(text, key));
     return text;
   };
+  if (initialPoppedPanesStorageError !== null) {
+    setMessage(
+      `Pane windows remain integrated because reading their machine-local window state failed: ${initialPoppedPanesStorageError}`,
+    );
+  }
+  if (!isTauriRuntime() && !paneWindow) {
+    void preloadBrowserPanePopupController();
+  }
   const handleProjectTransactionForegroundRecovery = (event: Event) => {
     const detail = (event as CustomEvent<ProjectTransactionForegroundRecoveryDetail>).detail;
     if (typeof detail?.message !== "string" || detail.message.trim() === "") return;
@@ -26090,6 +26190,7 @@ export default function App() {
       protectedCloseRefreshTimeoutId = undefined;
     }
     unlistenCloseRequested?.();
+    disposeBrowserPanePopupController();
     window.removeEventListener("keydown", handleAppKeyDown);
     window.removeEventListener("contextmenu", handleAppContextMenu, true);
     window.removeEventListener("beforeunload", handleBeforeUnload);

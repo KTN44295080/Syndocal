@@ -501,7 +501,7 @@ const section = (source, start, end) => {
   return source.slice(startIndex, endIndex);
 };
 
-const closeCoreSection = section(app, "const closePaneWindowCore = async", "const openPaneWindow = async");
+const closeCoreSection = section(app, "const closePaneWindowCore = async", "const openPaneWindow = (");
 const armIndex = closeCoreSection.indexOf("paneLifecycleController.armClose(pane)");
 const closeInvokeIndex = closeCoreSection.indexOf('await invoke("close_pane_window", { pane, instanceId: arm.instanceId, requestId: arm.requestId })');
 assert.ok(armIndex >= 0 && closeInvokeIndex > armIndex, "the terminal waiter must be armed before the close invoke");
@@ -737,7 +737,7 @@ assert.match(
   /await enqueuePaneWindowOperation\(pane, async \(\) => \{\s*restored = await openPaneWindowCore\(pane, null, status\?\.instance_id \?\? undefined\);\s*\}\)/,
   "restore queues the core open directly on the same per-pane serialization queue",
 );
-const openWrapperSection = section(app, "const openPaneWindow = async", "const closePaneWindow = async");
+const openWrapperSection = section(app, "const openPaneWindow = (", "const closePaneWindow = (");
 assert.match(
   openWrapperSection,
   /if \(!await paneWindowEventsReady\) \{\s*setMessage\("Pane window events are unavailable\."\);\s*return false;\s*\}/,
@@ -748,12 +748,232 @@ assert.match(
   /await enqueuePaneWindowOperation\(pane, async \(\) => \{\s*result = await openPaneWindowCore\(pane, placement, options\?\.instanceId\);\s*\}\)/,
   "the public open wrapper keeps queueing the core open through the per-pane queue",
 );
-const closeWrapperSection = section(app, "const closePaneWindow = async", "const togglePaneWindow =");
+const browserPopupController = await readFile(
+  new URL("../src/browserPanePopupController.ts", import.meta.url),
+  "utf8",
+);
+const initialPoppedPanesSection = section(app, "const initialPoppedPanes = (", "const persistPoppedPanes =");
+assert.match(
+  initialPoppedPanesSection,
+  /catch \(error\) \{\s*initialPoppedPanesStorageError = String\(error\);\s*return \[\];\s*\}/,
+  "an initial pane-window storage read or parse failure keeps every pane integrated",
+);
+assert.match(
+  initialPoppedPanesSection,
+  /if \(!isTauriRuntime\(\) \|\| paneWindow\) return \[\];/,
+  "browser layout fallback never treats machine-local native restore records as live child proof",
+);
+const persistPoppedPanesSection = section(app, "const persistPoppedPanes =", "// The browser-only popup controller stays out of the bootstrap chunk.");
+assert.match(
+  persistPoppedPanesSection,
+  /window\.localStorage\.setItem\(paneWindowStorageKey, JSON\.stringify\(panes\)\);\s*return \{ ok: true \};/,
+  "popped-pane persistence reports only a completed exact write as success",
+);
+assert.match(
+  persistPoppedPanesSection,
+  /catch \(error\) \{\s*return \{ ok: false, error: String\(error\) \};\s*\}/,
+  "popped-pane persistence exposes storage failure instead of swallowing it",
+);
+assert.ok(
+  app.indexOf("Pane windows remain integrated because reading their machine-local window state failed:")
+    > app.indexOf("const setMessage ="),
+  "the initial pane-window storage failure reaches the visible status after status initialization",
+);
+
+// Browser fallback is deliberately layout-only. A popup or storage fault may
+// never set poppedPanes, because that would hide the sole integrated content
+// without a native-authoritative child lifecycle record.
+const browserControllerLoadSection = section(app, "const preloadBrowserPanePopupController =", "const acknowledgePaneWindowClosed");
+assert.match(app, /let browserPanePopupControllerPromise: Promise<BrowserPanePopupController> \| null = null/);
+assert.match(app, /let browserPanePopupController: BrowserPanePopupController \| null = null/);
+assert.match(browserControllerLoadSection, /const pending = import\("\.\/browserPanePopupController"\)/, "the browser controller is loaded lazily");
+assert.match(browserControllerLoadSection, /browserPanePopupControllerPromise = pending;/, "the preload shares one import promise");
+assert.match(browserControllerLoadSection, /browserPanePopupController = controller;/, "the preload stores the resolved controller synchronously for later clicks");
+assert.match(browserControllerLoadSection, /void pending\.catch\(\(error\) =>/,
+  "the startup preload observes import rejection without an unhandled promise",
+);
+assert.match(browserControllerLoadSection, /browserPanePopupControllerPromise = null;/,
+  "an import rejection clears the cached promise so same-document retry can recover",
+);
+assert.match(browserControllerLoadSection, /browserPanePopupController = null;/,
+  "an import rejection clears the cached controller reference",
+);
+const setMessageDeclarationIndex = app.indexOf("const setMessage =");
+const browserControllerPreloadInvocationIndex = app.indexOf("void preloadBrowserPanePopupController();", setMessageDeclarationIndex);
+const appReturnIndex = app.indexOf("  return (", browserControllerPreloadInvocationIndex);
+assert.ok(
+  setMessageDeclarationIndex >= 0 && browserControllerPreloadInvocationIndex > setMessageDeclarationIndex
+    && appReturnIndex > browserControllerPreloadInvocationIndex,
+  "the browser controller preload starts immediately after App status initialization",
+);
+assert.match(browserControllerLoadSection, /browserWindow: window/);
+assert.match(browserControllerLoadSection, /browserLocation: window\.location/);
+assert.match(browserControllerLoadSection, /getPoppedPanes: \(\) => poppedPanes\(\)/);
+assert.match(browserControllerLoadSection, /setPoppedPanes: \(next\) => setPoppedPanes\(next\)/);
+assert.match(browserControllerLoadSection, /persistPoppedPanes,/);
+assert.match(browserControllerLoadSection, /setMessage: \(text\) => setMessage\(text\)/);
+assert.match(app, /disposeBrowserPanePopupController\(\);/, "cleanup owns browser controller disposal");
+const browserControllerDisposeSection = section(app, "const disposeBrowserPanePopupController =", "const acknowledgePaneWindowClosed");
+assert.match(browserControllerDisposeSection, /browserPanePopupControllerDisposed = true;/, "cleanup marks the controller unavailable before disposal");
+assert.match(browserControllerDisposeSection, /browserPanePopupControllerLoadGeneration \+= 1;/, "cleanup invalidates an in-flight controller import");
+assert.match(browserControllerDisposeSection, /browserPanePopupControllerPromise = null;/, "cleanup drops the import promise");
+assert.match(browserControllerDisposeSection, /browserPanePopupController = null;/, "cleanup drops the resolved controller reference");
+assert.match(browserControllerDisposeSection, /controller\?\.dispose\(\);/, "cleanup disposes only an already-created controller");
+const browserOpenWrapperSection = section(app, "const openBrowserPaneWindow =", "const closeBrowserPaneWindow =");
+const browserOpenControllerCallIndex = browserOpenWrapperSection.indexOf("return controller.open(pane);");
+assert.ok(browserOpenControllerCallIndex >= 0, "the browser open path calls the resolved controller");
+assert.doesNotMatch(
+  browserOpenWrapperSection.slice(0, browserOpenControllerCallIndex),
+  /\bawait\b|import\(|queueMicrotask\(/,
+  "the browser click path reaches controller.open without await, microtask, or dynamic import",
+);
+const browserCloseWrapperSection = section(app, "const closeBrowserPaneWindow =", "const disposeBrowserPanePopupController =");
+const browserCloseControllerCallIndex = browserCloseWrapperSection.indexOf("return controller.close(pane);");
+assert.ok(browserCloseControllerCallIndex >= 0, "the browser close path calls the resolved controller");
+assert.doesNotMatch(
+  browserCloseWrapperSection.slice(0, browserCloseControllerCallIndex),
+  /\bawait\b|import\(|queueMicrotask\(/,
+  "the browser click path reaches controller.close without await, microtask, or dynamic import",
+);
+const closeWrapperSection = section(app, "const closePaneWindow = (", "const togglePaneWindow =");
+// The App owns only the synchronous browser-controller dispatch. Keep a
+// source-level tripwire against a stale inline fallback being reintroduced in
+// either browser wrapper or the public open/close wrapper around the native
+// path: popup construction, browser persistence, and visibility changes belong
+// exclusively to browserPanePopupController.ts.
+const appPaneWrapperInlineBrowserFallback =
+  /window\.open|browserWindow\.open|new URL\(|syndocalPaneWindowInstance|localStorage|persistPoppedPanes|setPoppedPanes|browserPanePopupOpenings|BrowserPanePopupRecord|createOpaquePaneId|waitForBrowserPanePopupReady|trackBrowserPanePopup|retireBrowserPanePopup|classList|style\.display/;
+for (const [label, source] of [
+  ["browser open wrapper", browserOpenWrapperSection],
+  ["browser close wrapper", browserCloseWrapperSection],
+  ["public open wrapper", openWrapperSection],
+  ["public close wrapper", closeWrapperSection],
+]) {
+  assert.doesNotMatch(
+    source,
+    appPaneWrapperInlineBrowserFallback,
+    `${label} contains no inline popup construction, persistence, visibility mutation, or legacy browser branch`,
+  );
+}
+const browserOpenBranchIndex = openWrapperSection.indexOf("if (!isTauriRuntime()) return openBrowserPaneWindow(pane);");
+const browserOpenNativeAwaitIndex = openWrapperSection.indexOf("await paneWindowEventsReady");
+const browserCloseBranchIndex = closeWrapperSection.indexOf("if (!isTauriRuntime()) return closeBrowserPaneWindow(pane);");
+const browserCloseNativeAwaitIndex = closeWrapperSection.indexOf("await paneWindowEventsReady");
+assert.match(
+  openWrapperSection,
+  /if \(!isTauriRuntime\(\)\) return openBrowserPaneWindow\(pane\);/,
+  "the browser open wrapper enters the synchronous resolved-controller path",
+);
+assert.match(
+  closeWrapperSection,
+  /if \(!isTauriRuntime\(\)\) return closeBrowserPaneWindow\(pane\);/,
+  "the browser close wrapper enters the synchronous resolved-controller path",
+);
+assert.ok(
+  browserOpenBranchIndex >= 0 && browserOpenNativeAwaitIndex > browserOpenBranchIndex
+    && browserCloseBranchIndex >= 0 && browserCloseNativeAwaitIndex > browserCloseBranchIndex,
+  "both browser click paths branch to their synchronous controller before any native await",
+);
+const browserOpenSection = section(browserPopupController, "const open = async", "const close = async");
+const browserOpenGuardIndex = browserOpenSection.indexOf("if (browserPanePopupOpenings.has(pane))");
+const browserOpenAcquireIndex = browserOpenSection.indexOf("browserPanePopupOpenings.add(pane);");
+const popupOpenIndex = browserOpenSection.indexOf("popup = browserWindow.open(");
+const popupNullIndex = browserOpenSection.indexOf("if (popup === null)");
+const browserReadyIndex = browserOpenSection.indexOf("await waitForBrowserPanePopupReady(pane, instanceId, popup)");
+const browserPersistIndex = browserOpenSection.indexOf("const persisted = persistPoppedPanes(next);");
+const browserTrackIndex = browserOpenSection.indexOf("trackBrowserPanePopup(pane, popupRecord);");
+const browserSetPoppedIndex = browserOpenSection.indexOf("setPoppedPanes(next);");
+const browserOpenReleaseIndex = browserOpenSection.lastIndexOf("browserPanePopupOpenings.delete(pane);");
+const browserFirstAwaitIndex = browserOpenSection.search(/\bawait\b/);
+assert.ok(
+  browserOpenGuardIndex >= 0 && browserOpenAcquireIndex > 0 && popupOpenIndex > browserOpenAcquireIndex
+    && popupNullIndex > popupOpenIndex && browserReadyIndex > popupNullIndex
+    && browserPersistIndex > browserReadyIndex && browserSetPoppedIndex > browserPersistIndex
+    && browserTrackIndex > browserSetPoppedIndex && browserOpenReleaseIndex > browserTrackIndex
+    && browserFirstAwaitIndex > popupOpenIndex,
+  "browser fallback atomically guards one pane from before popup creation through exact readiness, persistence, hiding, tracking, and release",
+);
+assert.match(
+  browserOpenSection,
+  /browserPanePopupOpenings\.add\(pane\);\s*let popupRecord: BrowserPanePopupRecord \| null = null;[\s\S]*?trackBrowserPanePopup\(pane, popupRecord\);\s*return true;\s*\} finally \{[\s\S]*?browserPanePopupOpenings\.delete\(pane\);/,
+  "the browser opening guard is released by the finally that encloses every synchronous and awaited popup failure return",
+);
+assert.match(browserOpenSection, /is already opening in the browser; wait for its exact pane content to become ready/, "a direct concurrent browser open fails visibly before minting another child");
+assert.match(browserOpenSection, /params\.set\("syndocalPaneWindowInstance", instanceId\)/, "browser popup requests receive a unique instance query");
+assert.match(browserOpenSection, /const target = `syndocal-pane-\$\{pane\}-\$\{instanceId\}`;/, "browser popup targets are bound to the exact pane instance");
+const popupNullSection = section(browserOpenSection, "if (popup === null)", "popupRecord = { popup, instanceId, target, closedPollId: null }");
+assert.match(popupNullSection, /Allow pop-ups for this site/, "a blocked popup gives the operator an actionable recovery");
+assert.match(popupNullSection, /remains integrated in the main window/, "a blocked popup explicitly retains the integrated pane");
+assert.doesNotMatch(
+  popupNullSection,
+  /persistPoppedPanes|setPoppedPanes/,
+  "a blocked popup cannot persist or hide a pane",
+);
+const browserReadinessFailureSection = section(browserOpenSection, "if (!readiness.ok)", "const current = getPoppedPanes()");
+assert.match(browserReadinessFailureSection, /retireBrowserPanePopupRecord\(pane, popupRecord\)/, "an unready browser child is retired before main content could hide");
+assert.match(browserReadinessFailureSection, /closed before its exact pane content became ready/, "a child closing before readiness stays visible");
+assert.match(browserReadinessFailureSection, /did not become ready within/, "a child readiness timeout stays visible");
+assert.match(browserReadinessFailureSection, /could not be inspected safely/, "a child inspection failure stays visible");
+assert.doesNotMatch(browserReadinessFailureSection, /persistPoppedPanes|setPoppedPanes/, "an unready browser child cannot persist or hide a pane");
+const browserPersistFailureSection = section(browserOpenSection, "if (!persisted.ok)", "setPoppedPanes(next);");
+assert.match(browserPersistFailureSection, /retireBrowserPanePopupRecord\(pane, popupRecord\)/, "a failed browser persistence retires the exact ready popup when safe");
+assert.match(browserPersistFailureSection, /Closing the just-opened pane window also failed/, "a failed compensating popup close remains visible");
+assert.match(browserPersistFailureSection, /remains integrated because saving its browser window state failed/, "a throwing localStorage write leaves main content integrated and reports why");
+assert.doesNotMatch(
+  browserPersistFailureSection,
+  /setPoppedPanes/,
+  "a failed browser persistence cannot hide the main-window pane",
+);
+assert.match(
+  browserOpenSection.slice(browserSetPoppedIndex),
+  /setPoppedPanes\(next\);\s*trackBrowserPanePopup\(pane, popupRecord\);\s*return true;/,
+  "a successful browser popup plus exact persisted set still detaches the pane",
+);
 assert.match(
   closeWrapperSection,
   /if \(!await paneWindowEventsReady\) \{\s*setMessage\("Pane window events are unavailable\."\);\s*return false;\s*\}/,
   "the public close wrapper also keeps gating on pane window events readiness",
 );
+const browserCloseSection = section(browserPopupController, "const close = async", "const isOpening =");
+assert.match(browserCloseSection, /if \(browserPanePopupOpenings\.has\(pane\)\) \{[\s\S]*?is already opening in the browser/, "close during an in-flight browser open fails visibly");
+assert.match(browserCloseSection, /const retired = retireBrowserPanePopup\(pane\);/, "browser rejoin retires its exact retained popup before restoring main content");
+const browserClosePersistIndex = browserCloseSection.indexOf("const persisted = persistPoppedPanes(next);");
+const browserCloseSetPoppedIndex = browserCloseSection.indexOf("setPoppedPanes(next);");
+const browserCloseFailureIndex = browserCloseSection.indexOf("if (!persisted.ok ||");
+assert.ok(
+  browserClosePersistIndex >= 0 && browserCloseSetPoppedIndex > browserClosePersistIndex
+    && browserCloseFailureIndex > browserCloseSetPoppedIndex,
+  "browser rejoin integrates content even when clearing localStorage fails",
+);
+assert.match(browserCloseSection, /rejoined the main window, but clearing its browser window state failed/, "a browser rejoin persistence failure stays visible");
+assert.match(
+  browserCloseSection.slice(browserCloseFailureIndex),
+  /return false;[\s\S]*?return true;/,
+  "browser rejoin reports storage failure truthfully while preserving normal success",
+);
+const togglePaneWindowSection = section(app, "const togglePaneWindow =", "const paneWindowOperationPending =");
+assert.match(
+  togglePaneWindowSection,
+  /void \(poppedPanes\(\)\.includes\(pane\) \? closePaneWindow\(pane\) : openPaneWindow\(pane\)\);/,
+  "the toggle delegates browser concurrency to the controller guard",
+);
+const browserPopupTrackingSection = section(browserPopupController, "const nextBrowserPanePopupInstanceId =", "const open = async");
+const browserPopupDisposeSection = section(browserPopupController, "const dispose = () =>", "return { open, close, isOpening, dispose }");
+assert.match(browserPopupTrackingSection, /browserPanePopups\.get\(pane\)/, "browser popup retirement keys ownership by the exact pane");
+assert.match(browserPopupDisposeSection, /browserPanePopupOpenings\.clear\(\);/, "teardown releases any browser-only opening guards");
+assert.match(browserPopupDisposeSection, /browserPanePopupPending\.clear\(\);/, "teardown clears an in-flight popup record");
+assert.match(browserPopupDisposeSection, /for \(const cancel of cancelReadinessWaiters\) cancel\(\);/, "teardown cancels readiness polling");
+assert.match(browserPopupTrackingSection, /record\.popup\.close\(\);/, "rejoin asks the retained exact popup to close");
+assert.match(browserPopupTrackingSection, /the browser reported the popup still open after close/, "a false browser close is visible rather than accepted");
+assert.match(browserPopupTrackingSection, /browserPanePopupRetirements\.has\(pane\)/, "manual close cannot race a parent-requested retirement");
+assert.match(browserPopupTrackingSection, /was closed in the browser and rejoined the main window/, "manual browser closure re-integrates main content visibly");
+assert.match(browserPopupTrackingSection, /browserWindow\.setInterval\(/, "successful browser popups install a bounded parent-side closed poll");
+assert.match(browserPopupTrackingSection, /record\.popup\.closed/, "manual close is detected only from the retained Window closed state");
+assert.match(browserPopupTrackingSection, /popup\.location\.href/, "readiness verifies the same-origin child location");
+assert.match(browserPopupTrackingSection, /syndocalPaneWindowInstance/, "readiness verifies the exact child instance query");
+assert.match(browserPopupTrackingSection, /popup\.document\.readyState === "loading"/, "readiness waits for the child document to leave loading");
+assert.match(browserPopupTrackingSection, /\.app\[data-pane-window-mode="\$\{pane\}"\]/, "readiness requires the exact mounted pane root");
+assert.doesNotMatch(browserPopupTrackingSection, /popup\.addEventListener\("beforeunload"/, "parent-side beforeunload popup ownership is fully retired");
 
 const listenerSection = section(app, 'listen<unknown>(PANE_WINDOW_TERMINAL_EVENT', "if (isTauriRuntime() && !paneWindow && autoOpenPaneWindows)");
 assert.match(listenerSection, /dispose\(String\(error\)\)/, "listener failure must settle every waiter");

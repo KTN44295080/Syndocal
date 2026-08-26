@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import ts from "typescript";
+import { runPaneBrowserFallbackRuntimeProof } from "./check-pane-browser-fallback-runtime.mjs";
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -22335,11 +22336,58 @@ async function runPaneReflowViewport(client, viewport) {
   await client.evaluate(
     `window.localStorage.setItem('syndocal.workspaceLayout.v1', ${JSON.stringify(JSON.stringify(paneReflowStorageSentinel))})`,
   );
+  // CDP-injected click() is not a trusted browser user gesture, so a real
+  // window.open() correctly returns null there. This is a layout-only success
+  // fixture; the focused pane lifecycle checker separately proves the real
+  // blocked-popup path retains integrated content.
+  const paneReflowPopupScript = await client.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      window.open = (url) => {
+        let closed = false;
+        let href = "about:blank";
+        let readyState = "loading";
+        let paneRootMounted = false;
+        const expectedPane = new URL(url, window.location.href).searchParams.get("syndocalPaneWindow");
+        const popup = {
+          get closed() { return closed; },
+          get location() { return { href }; },
+          get document() {
+            return {
+              get readyState() { return readyState; },
+              querySelector(selector) {
+                return paneRootMounted && selector === '.app[data-pane-window-mode="' + expectedPane + '"]'
+                  ? {}
+                  : null;
+              },
+            };
+          },
+          close() {
+            closed = true;
+          },
+          focus() {},
+        };
+        setTimeout(() => {
+          href = url;
+          readyState = "complete";
+          paneRootMounted = true;
+        }, 25);
+        return popup;
+      };
+    })();`,
+  });
   // Focused source assertions for pane-toggle serialization: rapid repeated
   // toggles must be queued per pane, the toggle entry point must refuse clicks
   // while that pane's operation is pending, and both band popout buttons must
   // expose truthful disabled/aria-busy state bound to the same pending signal.
   const appSourceForPaneToggles = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
+  const browserPanePopupControllerSource = readFileSync(
+    join(appRoot, "src", "browserPanePopupController.ts"),
+    "utf8",
+  );
+  const paneBrowserFallbackRuntimeSource = readFileSync(
+    join(appRoot, "scripts", "check-pane-browser-fallback-runtime.mjs"),
+    "utf8",
+  );
   const bandSourceForPaneToggles = readFileSync(
     join(appRoot, "src", "components", "MappingPersistentWorkspaceBand.tsx"),
     "utf8",
@@ -22352,6 +22400,21 @@ async function runPaneReflowViewport(client, viewport) {
       .test(appSourceForPaneToggles),
     toggleGuardedWhilePending: /const togglePaneWindow[\s\S]*?transitionOf\(pane\)[\s\S]*?phase !== "open"[\s\S]*?\? closePaneWindow\(pane\) : openPaneWindow\(pane\)/
       .test(appSourceForPaneToggles),
+    browserFallbackLazyController: appSourceForPaneToggles.includes(
+      'const pending = import("./browserPanePopupController")',
+    ) && appSourceForPaneToggles.includes("void preloadBrowserPanePopupController();") &&
+      appSourceForPaneToggles.includes("disposeBrowserPanePopupController();"),
+    browserFallbackTrustedClickPath: /const openBrowserPaneWindow[\s\S]*?return controller\.open\(pane\);/.test(appSourceForPaneToggles) &&
+      !/const openBrowserPaneWindow[\s\S]*?return controller\.open\(pane\);/.exec(appSourceForPaneToggles)[0].match(/\bawait\b|import\(|queueMicrotask\(/),
+    browserFallbackTrustedCloseClickPath: /const closeBrowserPaneWindow[\s\S]*?return controller\.close\(pane\);/.test(appSourceForPaneToggles) &&
+      !/const closeBrowserPaneWindow[\s\S]*?return controller\.close\(pane\);/.exec(appSourceForPaneToggles)[0].match(/\bawait\b|import\(|queueMicrotask\(/),
+    browserFallbackHandlesExpectedBeforeUnloadNavigation:
+      paneBrowserFallbackRuntimeSource.includes("navigateToReadyAppThroughExpectedBeforeUnload") &&
+      /let hasNavigatedScenario = false;[\s\S]*?const navigate = hasNavigatedScenario\s*\? navigateToReadyAppThroughExpectedBeforeUnload\s*:\s*navigateToReadyApp;/.test(paneBrowserFallbackRuntimeSource),
+    browserFallbackOwnsPopupLifecycle: browserPanePopupControllerSource.includes("const browserPanePopupOpenings") &&
+      browserPanePopupControllerSource.includes("const waitForBrowserPanePopupReady") &&
+      browserPanePopupControllerSource.includes("const trackBrowserPanePopup") &&
+      browserPanePopupControllerSource.includes("const dispose = () =>"),
   };
   const paneToggleTruthfulBusyButtonProof =
     bandSourceForPaneToggles.includes('aria-busy={props.paneOperationPending("stage") ? "true" : undefined}') &&
@@ -22843,10 +22906,15 @@ async function runPaneReflowViewport(client, viewport) {
       mixerPopoutBaseline.panePopoutControls.every((control) => control.present && !control.disabled && !control.busy)],
     ["paneReflowPaneTogglesSerializeWithTruthfulBusyButtons", () =>
       paneToggleSerializationProof.queueHelper &&
-      paneToggleSerializationProof.openSerialized &&
-      paneToggleSerializationProof.closeSerialized &&
-      paneToggleSerializationProof.toggleGuardedWhilePending &&
-      paneToggleTruthfulBusyButtonProof],
+       paneToggleSerializationProof.openSerialized &&
+       paneToggleSerializationProof.closeSerialized &&
+       paneToggleSerializationProof.toggleGuardedWhilePending &&
+       paneToggleSerializationProof.browserFallbackLazyController &&
+       paneToggleSerializationProof.browserFallbackTrustedClickPath &&
+       paneToggleSerializationProof.browserFallbackTrustedCloseClickPath &&
+       paneToggleSerializationProof.browserFallbackHandlesExpectedBeforeUnloadNavigation &&
+       paneToggleSerializationProof.browserFallbackOwnsPopupLifecycle &&
+       paneToggleTruthfulBusyButtonProof],
     ["paneReflowRestoreCaptureFailureStaysBoundedAndRetained", () =>
       paneRestoreReconciliationProof.boundedAttemptsConstant &&
       paneRestoreReconciliationProof.transientFailureRetainsRecords],
@@ -23181,6 +23249,7 @@ async function runPaneReflowViewport(client, viewport) {
       setupPatchBoth,
     }));
   }
+  await client.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: paneReflowPopupScript.identifier });
   return {
     viewport,
     label: `pane-reflow-${viewport.width}x${viewport.height}` + (deviceScaleFactorForViewport(viewport) === 1
@@ -36424,10 +36493,33 @@ async function main() {
       return;
     }
     if (paneReflowOnlyMode) {
+      const browserFallback = await runPaneBrowserFallbackRuntimeProof({
+        client,
+        primaryOperationalViewport,
+        fixtureUrl,
+        navigateToReadyApp,
+        navigateToReadyAppThroughExpectedBeforeUnload,
+        clickWorkspaceOption,
+        selectControlSurface,
+        clickVisibleSelector,
+        waitForClientCondition,
+        sleep,
+      });
+      console.log(`pass pane-browser-fallback-runtime passed=${browserFallback.passed ? 1 : 0}`);
       const paneReflowResults = [];
+      let paneReflowNavigationAfterTrustedRuntime = true;
       for (const viewport of viewports) {
-        await client.send("Page.navigate", { url: fixtureUrl("timeline") });
-        await waitForApp(client);
+        // The focused browser fallback proof uses trusted clicks and leaves
+        // the real App beforeunload guard eligible for the first layout-only
+        // navigation. Once that clean viewport document is mounted, reflow's
+        // layout-only probes do not make the protected-close predicate true,
+        // so subsequent navigations intentionally use the launch-style path.
+        if (paneReflowNavigationAfterTrustedRuntime) {
+          await navigateToReadyAppThroughExpectedBeforeUnload(client, fixtureUrl("timeline"));
+          paneReflowNavigationAfterTrustedRuntime = false;
+        } else {
+          await navigateToReadyApp(client, fixtureUrl("timeline"));
+        }
         const result = await runPaneReflowViewport(client, viewport);
         paneReflowResults.push(result);
         console.log(
