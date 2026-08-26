@@ -47646,6 +47646,78 @@ fn compact_retired_project_transaction(
     Ok(())
 }
 
+/// Preflight exact terminal records for a dead owner binding before the owner
+/// transition mutates any pending transaction. Pending and indeterminate
+/// receipts deliberately remain outside this compaction set.
+fn preflight_terminal_project_transaction_compaction_for_retired_owner_binding(
+    receipts: &HashMap<String, ProjectTransactionReceipt>,
+    lanes: &HashMap<String, Arc<ProjectTransactionLane>>,
+    owner_id: &str,
+    window_label: &str,
+    owner_incarnation: u64,
+) -> Result<Vec<String>, String> {
+    for (operation_id, receipt) in receipts {
+        if receipt.owner_id == owner_id
+            && receipt.window_label == window_label
+            && receipt.owner_incarnation == owner_incarnation
+            && receipt.command_indeterminate_error.is_some()
+        {
+            return Err(format!(
+                "Retired project transaction receipt {operation_id} has indeterminate command publication"
+            ));
+        }
+    }
+    let operation_ids = receipts
+        .iter()
+        .filter_map(|(operation_id, receipt)| {
+            (receipt.owner_id == owner_id
+                && receipt.window_label == window_label
+                && receipt.owner_incarnation == owner_incarnation
+                && matches!(
+                    receipt.state,
+                    ProjectTransactionReceiptState::Committed(_)
+                        | ProjectTransactionReceiptState::Cancelled(_)
+                ))
+            .then(|| operation_id.clone())
+        })
+        .collect::<Vec<_>>();
+
+    // A terminal result must already have closed its exact command lane. Do
+    // not compact a corrupted/in-flight lane and make a later recovery
+    // impossible; fail the owner transition before its pending finalizer runs.
+    for operation_id in &operation_ids {
+        let lane = lanes.get(operation_id).ok_or_else(|| {
+            format!(
+                "Retired project transaction terminal receipt {operation_id} is missing its command lane"
+            )
+        })?;
+        if !lane.closing.load(Ordering::Acquire)
+            || lane.in_flight_commands.load(Ordering::Acquire) != 0
+        {
+            return Err(format!(
+                "Retired project transaction terminal receipt {operation_id} still has an active command lane"
+            ));
+        }
+    }
+
+    Ok(operation_ids)
+}
+
+/// Remove only the exact terminal receipts whose preflight completed under the
+/// owner-lifecycle, receipt, and lane locks. The caller performs this after
+/// any Pending finalization has succeeded, so a failed Pending/indeterminate
+/// recovery leaves all terminal receipts retained.
+fn compact_preflighted_terminal_project_transactions_for_retired_owner_binding(
+    receipts: &mut HashMap<String, ProjectTransactionReceipt>,
+    lanes: &mut HashMap<String, Arc<ProjectTransactionLane>>,
+    operation_ids: &[String],
+) {
+    for operation_id in operation_ids {
+        lanes.remove(operation_id);
+        receipts.remove(operation_id);
+    }
+}
+
 /// Owner/window retirement is a terminal recovery path, not an unconditional
 /// Cancel. A known PATCH/Repair B is committed as its one intended history
 /// result; an indeterminate admitted publication remains pending and blocks
@@ -49049,6 +49121,15 @@ fn register_project_transaction_owner_for_window_label(
     } else {
         allocate_project_transaction_owner_incarnation(state)?
     };
+    let retired_incarnation = retired_preview_owner
+        .as_deref()
+        .filter(|_| !same_incarnation)
+        .map(|_| {
+            incarnations.get(window_label).copied().ok_or_else(|| {
+                "Retired project transaction owner is missing its backend incarnation".to_string()
+            })
+        })
+        .transpose()?;
     // Hold both registries through recovery and the owner/session handoff. The
     // external-admission and coordinator locks already exclude concurrent
     // operator mutations; taking owners before sessions is the only nested
@@ -49098,15 +49179,28 @@ fn register_project_transaction_owner_for_window_label(
             )
         })
         .transpose()?;
+    let retired_terminal_operation_ids = retired_preview_owner
+        .as_deref()
+        .zip(retired_incarnation)
+        .map(|(retired_owner, retired_incarnation)| {
+            preflight_terminal_project_transaction_compaction_for_retired_owner_binding(
+                &receipts,
+                &lanes,
+                retired_owner,
+                window_label,
+                retired_incarnation,
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
     let output_lease_candidate = if !same_incarnation {
         retired_preview_owner
             .as_deref()
             .map(|retired_owner| {
-                let retired_incarnation =
-                    incarnations.get(window_label).copied().ok_or_else(|| {
-                        "Retired project transaction owner is missing its backend incarnation"
-                            .to_string()
-                    })?;
+                let retired_incarnation = retired_incarnation.ok_or_else(|| {
+                    "Retired project transaction owner is missing its backend incarnation"
+                        .to_string()
+                })?;
                 preflight_output_lease_owner_retirement(
                     state,
                     &output_lease_registry,
@@ -49154,6 +49248,11 @@ fn register_project_transaction_owner_for_window_label(
             } else {
                 None
             };
+            compact_preflighted_terminal_project_transactions_for_retired_owner_binding(
+                &mut receipts,
+                &mut lanes,
+                &retired_terminal_operation_ids,
+            );
             let key = retired_binding_key.as_ref().ok_or_else(|| {
                 "Project transaction owner retirement was not preflighted".to_string()
             })?;
@@ -49161,14 +49260,14 @@ fn register_project_transaction_owner_for_window_label(
             Ok(recovered)
         },
     )?;
-    if !same_incarnation {
-        if let Some(retired_incarnation) = incarnations.get(window_label).copied() {
-            highwaters.remove(&project_transaction_operation_highwater_key(
-                &retired_preview_owner.clone().unwrap_or_default(),
-                window_label,
-                retired_incarnation,
-            ));
-        }
+    if let (Some(retired_owner), Some(retired_incarnation)) =
+        (retired_preview_owner.as_deref(), retired_incarnation)
+    {
+        highwaters.remove(&project_transaction_operation_highwater_key(
+            retired_owner,
+            window_label,
+            retired_incarnation,
+        ));
     }
     incarnations.insert(window_label.to_string(), next_incarnation);
     if let Some(candidate) = output_lease_candidate {
@@ -49326,10 +49425,32 @@ fn retire_project_transaction_owner_for_window_incarnation_under_rotation(
             )
         })
         .transpose()?;
+    let retired_incarnation = retired_preview_owner
+        .as_deref()
+        .map(|_| {
+            incarnations.get(window_label).copied().ok_or_else(|| {
+                "Retired project transaction owner is missing its backend incarnation".to_string()
+            })
+        })
+        .transpose()?;
+    let retired_terminal_operation_ids = retired_preview_owner
+        .as_deref()
+        .zip(retired_incarnation)
+        .map(|(retired_owner, retired_incarnation)| {
+            preflight_terminal_project_transaction_compaction_for_retired_owner_binding(
+                &receipts,
+                &lanes,
+                retired_owner,
+                window_label,
+                retired_incarnation,
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
     let output_lease_candidate = retired_preview_owner
         .as_deref()
         .map(|retired_owner| {
-            let retired_incarnation = incarnations.get(window_label).copied().ok_or_else(|| {
+            let retired_incarnation = retired_incarnation.ok_or_else(|| {
                 "Retired project transaction owner is missing its backend incarnation".to_string()
             })?;
             preflight_output_lease_owner_retirement(
@@ -49376,6 +49497,11 @@ fn retire_project_transaction_owner_for_window_incarnation_under_rotation(
             } else {
                 None
             };
+            compact_preflighted_terminal_project_transactions_for_retired_owner_binding(
+                &mut receipts,
+                &mut lanes,
+                &retired_terminal_operation_ids,
+            );
             let key = retired_binding_key.as_ref().ok_or_else(|| {
                 "Project transaction owner retirement was not preflighted".to_string()
             })?;
@@ -49383,10 +49509,9 @@ fn retire_project_transaction_owner_for_window_incarnation_under_rotation(
             Ok(recovered)
         },
     )?;
-    if let (Some(retired_owner), Some(retired_incarnation)) = (
-        retired_preview_owner.as_deref(),
-        incarnations.get(window_label).copied(),
-    ) {
+    if let (Some(retired_owner), Some(retired_incarnation)) =
+        (retired_preview_owner.as_deref(), retired_incarnation)
+    {
         highwaters.remove(&project_transaction_operation_highwater_key(
             retired_owner,
             window_label,
