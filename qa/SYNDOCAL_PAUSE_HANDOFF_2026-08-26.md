@@ -1,14 +1,14 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **PAUSED AFTER THE 1.2.0-alpha.14 DJ-LINK AND STANDARD-NATIVE CHECKPOINT**
+Status: **RESUMED THROUGH THE ALPHA.14 SHOW-ASIO AND TIMELINE-NATIVE CHECKPOINT**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
 not accepted as fully show-ready: the alpha.14 strict-v3 software and standard
-native artifact gates are complete, while the physical DJ, native ASIO,
-three-output, and DSF show-program gates below remain open. The separately
-licensed Show-ASIO artifact remains the historical alpha.12 artifact; no
-alpha.14 Show-ASIO build or acceptance is implied.
+native artifact gates are complete, while the physical DJ, three-output, and
+DSF show-program gates below remain open. The separately licensed alpha.14
+Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
+it does not close fault, long-duration, latency, or full ASIO acceptance.
 
 ## 1. Exact checkpoints
 
@@ -18,7 +18,8 @@ commit as the source identity of an already-built binary.
 | Layer | Exact authority |
 | --- | --- |
 | Current alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
-| Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `71738778c8b7637c14768e02fecbc2ef14ece7f3` |
+| Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
+| Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `e3d390d912a2c3a9be418ecbc31771d2bf515de7` |
 | Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
 | Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
@@ -64,7 +65,7 @@ checkpoint documentation must not redefine that binary source identity.
   `app/src-tauri/src/main.rs`. Extract the owning domain first and preserve the
   contract with focused tests.
 
-## 3. Current alpha.14 standard artifact and historical Show-ASIO artifact
+## 3. Current alpha.14 standard and local-only Show-ASIO artifacts
 
 ### Standard MIT/WASAPI artifact
 
@@ -74,29 +75,40 @@ checkpoint documentation must not redefine that binary source identity.
 - Size: `58,523,648` bytes
 - SHA-256: `B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`
 - Build timestamp: `2026-08-26T05:07:44.5595600Z`
-- Pause-time process: PID `163352`; Windows case-insensitive exact-path process
-  count `1`; all-system `syndocal.exe` count `1`; `Responding=True`; main HWND
-  `58138038`; exact window count `1`; title `Syndocal`. Computer Use reselected
-  that exact app/window, activated it, and captured work-area bounds
-  `1920x1032` at origin `0,0`, proving the verified window remained maximized.
+- Resumed native-QA process: PID `99748`; exact app path as above; responsive
+  title `Syndocal`; main HWND `6430754`. Computer Use reselected that exact
+  app/window and kept it maximized at `1920x1032`. The temporary and sample
+  project changes used below were explicitly discarded rather than saved;
+  after Close, the exact-path process count was `0`.
 
-### Historical local-only Show-ASIO artifact (not rebuilt for alpha.14)
+### Current local-only Show-ASIO artifact: bounded Ampero physical proof
 
-- Source checkpoint: `ff61a6d`
+- Source checkpoint: `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb`
 - Directory:
-  `C:\Users\kouty\Documents\KDMX\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`
-- Application: `syndocal-show-asio.exe`, `58,637,824` bytes, SHA-256
-  `1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`
+  `C:\Users\kouty\Documents\KDMX\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.14_6b4cd1afb4d2_x64`
+- Application: `syndocal-show-asio.exe`, `58,683,904` bytes, SHA-256
+  `CC2D1E28B9063250E86106F04DD082A5C860A840EB721C8208EEFEE009BD0599`
 - Bridge: `syndocal_asio_bridge.dll`, `813,568` bytes, SHA-256
   `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`
-- Manifest: `show-asio-local-manifest.json`, `8,660` bytes, SHA-256
-  `DCDFA0D381C851483D9E206637E803920ADDD6CC5B0C313780604FFC1D0EAAC4`
-- Manifest payload files: `14`; filesystem files including the manifest: `15`.
+- Manifest: `show-asio-local-manifest.json`, SHA-256
+  `BBEA830122B999A7F985A8F0E88330361E74D3EEE9C5DF2E982EB932A4B687DD`
+- Dedicated checker: PASS, `files=14`, `distributionApproved:false`.
+- Official `node app/scripts/build-windows-show-asio.mjs` route: PASS with the
+  exact VS Community 14.44 x64 linker pinned and first, `check:release` PASS,
+  and first-party build warnings `0`.
 - `distributionApproved:false`; same-host, unbundled, separately licensed,
   local show artifact only. It is not a public installer/updater artifact.
-- It was built, manifest-checked, launched, and verified as one responsive
-  maximized window, then its exact PID was stopped. Physical ASIO operator
-  acceptance remains open.
+- Explicit driver: `HOTONE AUDIO USB Audio Device`; ASIO native `i32`, two
+  channels, 44.1 kHz, fixed requested/applied `128f`.
+- First Start held five seconds stable then Stop with no pending work:
+  callback `128/128/128`; `OVR 0/0f`; `XRUN 0`; capture-to-worker `4.4/4.5 ms`;
+  `Q 0/1/4`; app/bridge process counts `0` after Close.
+- Restart restored `ASIO RESTORED` locked/no auto-start. Explicit Start emitted
+  `ASIO REVALIDATED` and ACTIVE with the same configuration; capture-to-worker
+  was `4.4/4.7 ms`, and final Stop/Close again left both process counts `0`.
+- This does not claim unplug, XRUN/fault, TOPPING, long-duration, matrix, or
+  latency-threshold rows. After this documentation commit, reuse requires a
+  clean checkout detached at `6b4cd1a` or a rebuild from the new HEAD.
 
 ## 4. Completed software evidence
 
@@ -119,10 +131,19 @@ Current alpha.14 evidence:
   `92122f1b...`.
 - The alpha.13 Timeline checkpoint `bbb684c...`, carried unchanged into
   alpha.14, implements compact grouped item submenus and outside-primary-click
-  dismissal; its focused browser contract passes. Native/manual confirmation
-  remains open in section 8.6. The `New Scene` command is localized, while a
-  user/project title literally named `New Scene` is marked as project data and
-  is not translated behind the operator's back.
+  dismissal; its focused browser contract passes. The exact standard alpha.14
+  native app then opened `samples/phase1-mini-show.sdc` maximized at
+  `1920x1032`: right-clicking point event #1 showed the compact collapsed
+  groups `選択`, `クリップボード`, `タイミング`, and `レーン`, plus only
+  `選択項目を削除` and `閉じる`. Expanding `タイミング` exposed its eight
+  nested actions; a primary click at blank coordinates `1000,500` removed both
+  the menu and the expanded actions from the accessibility tree. The sample
+  was closed with discard, remained unmodified on disk, and the exact standard
+  process count returned to `0`.
+- The Bank menu command `New Scene` rendered as `新しいシーン`. A temporary
+  user/project title literally named `New Scene` remained literal project data
+  and was not translated behind the operator's back; it was discarded without
+  saving.
 - Final independent Terra xHigh adversarial review found P0/P1/P2 none after
   fixing rapid-F14/inactive-loop races, late-fallback causality, and the
   measured-loop sender/receiver wire mismatch. Ox-alpha was not callable in
@@ -238,7 +259,7 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 - Checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - Runtime source: `862cf8035dfb365a7d799f820936585882d0a1e7`
-- HEAD/upstream docs tip: `71738778c8b7637c14768e02fecbc2ef14ece7f3`, clean at pause audit
+- HEAD/upstream docs tip: `e3d390d912a2c3a9be418ecbc31771d2bf515de7`, clean at resumed audit
 - FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
 - The controlled source path requires the external show JSON through
   `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
@@ -264,12 +285,14 @@ These are OPEN, not implicit completion claims:
 
 1. Run the full DJ-Link 12-row hardware table on `.50.1/.50.2` with the real
    show token and retain logs.
-2. Run Show-ASIO from its exact local-only artifact: enumerate/select the real
-   device; verify persistence/revalidation; negotiate native format, sample
-   rate, channels, and buffer; exercise Start/Stop/Close, exclusive contention,
-   reset/resync/XRUN/unplug/no-callback/restart, and measure latency.
-3. Treat the recorded `44.1 kHz / 3,600,031 ms` run as bridge-only. Matched
-   `48 kHz` ASIO/WASAPI and native operator acceptance remain open.
+2. Complete the remaining Show-ASIO matrix from its exact local-only artifact.
+   The bounded Ampero selection, persistence/revalidation, native format/rate/
+   channels/buffer, and short Start/Stop/Close/restart path above are proven;
+   exclusive contention, reset/resync/XRUN/unplug/no-callback, long-duration,
+   and measured latency remain open.
+3. Treat the recorded `44.1 kHz / 3,600,031 ms` run as bridge-only and the new
+   alpha.14 Ampero run as short native/operator evidence only. Matched `48 kHz`
+   ASIO/WASAPI and the remaining recovery matrix remain open.
 4. Configure and Apply the stable three-output roles, verify exact placement and
    visible content on all three physical displays, then save/restart and repeat.
 5. Import `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`; retain the import report and
@@ -278,8 +301,9 @@ These are OPEN, not implicit completion claims:
    measured/no-response loop behavior through `1/64`, release/transition
    behavior, then save/restart and run the full show
    sequence. User-authored final lighting remains outside this minimum proof.
-6. Complete native/manual QA for the remaining UI surfaces, including Timeline
-   compact Bank/Scene placement, Lighting-only Bank management, empty-bank
+6. Complete native/manual QA for the remaining UI surfaces. Timeline item-menu
+   hierarchy and outside-primary-click dismissal are now proven. Remaining work
+   includes compact Bank/Scene placement, Lighting-only Bank management, empty-bank
    control de-duplication, active-scene color, bank toolbar alignment, scene FX
    internal scroll/removal/density/width, detached Timeline/Stage/source panes,
    and integrated Stage rendering.
@@ -326,7 +350,7 @@ that otherwise requires touching these files.
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
 - Main runtime source checkpoint `92122f1b...` and rb-output docs tip
-  `71738778...` were both clean and upstream-equal. The final documentation
+  `e3d390d...` were both clean and upstream-equal. The final documentation
   commit containing this handoff must again be pushed and rechecked clean.
 - The current exact standard alpha.14 process and window identities are in
   section 3. Re-resolve them on resume; do not assume PID/HWND stability.
@@ -342,7 +366,7 @@ Resume in this order:
 5. After each meaningful pass, update authority, report warning counts,
    commit, and push.
 
-This pause does not claim public-release readiness or completed performance
+This checkpoint does not claim public-release readiness or completed performance
 acceptance. It preserves a verified alpha.14 strict-v3 standard-native
-checkpoint, the historical alpha.12 local Show-ASIO artifact, and the shortest
+checkpoint, the bounded alpha.14 local Show-ASIO Ampero proof, and the shortest
 exact route to the remaining physical show proof.

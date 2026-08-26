@@ -48,7 +48,7 @@ The performance is **2026-08-30**; development, acceptance, and show preparation
 must be complete by the separate **2026-08-29 completion deadline**. Current
 executable guidance does not wait for or use an installer: it uses only the controlled source checkout on the
 target DJ PC. Peer branch `beta-v1.1.2` is clean and upstream-equal at docs tip
-`71738778c8b7637c14768e02fecbc2ef14ece7f3`; the exact runtime-source checkpoint
+`e3d390d912a2c3a9be418ecbc31771d2bf515de7`; the exact runtime-source checkpoint
 is `862cf8035dfb365a7d799f820936585882d0a1e7`, and the source version is `1.1.5`.
 The branch name is not the product version, and the docs-only tip does not redefine
 the runtime identity.
@@ -427,7 +427,7 @@ Do not install or use this v1.1.3 package as current-final acceptance evidence: 
 internal `DJ_MASTER_CHANGED` encoder/router mismatch blocks the required negative
 proof. The replacement source version 1.1.5 is pushed on `beta-v1.1.2`; runtime
 source is `862cf8035dfb365a7d799f820936585882d0a1e7` and the clean upstream-equal
-docs tip is `71738778c8b7637c14768e02fecbc2ef14ece7f3`. No v1.1.5 tag, package, or
+docs tip is `e3d390d912a2c3a9be418ecbc31771d2bf515de7`. No v1.1.5 tag, package, or
 published release is the current show route.
 
 This checkpoint is software/package evidence only. It does not close the physical
@@ -470,7 +470,7 @@ The separately developed DJ-Link peer has no current-final accepted release. The
 immutable v1.1.3 package is blocked by its `DJ_MASTER_CHANGED` mismatch. Source
 version 1.1.5 is pushed on branch `beta-v1.1.2`; the controlled runtime-source
 checkpoint is `862cf8035dfb365a7d799f820936585882d0a1e7`, while the clean upstream-equal
-docs tip is `71738778c8b7637c14768e02fecbc2ef14ece7f3`. For the 2026-08-30 performance, with preparation
+docs tip is `e3d390d912a2c3a9be418ecbc31771d2bf515de7`. For the 2026-08-30 performance, with preparation
 complete by 2026-08-29, the only permitted path is that
 target-DJ-PC source checkout with the checkout-external configuration and real
 current token described above, not an installer. Until identity binding and the
@@ -669,7 +669,7 @@ the whole-product accepted denominator remains **19/71 (26.8%)**.
 
 The next acceptance action uses only the clean, upstream-equal target-DJ-PC source
 checkout on `beta-v1.1.2` at docs tip
-`71738778c8b7637c14768e02fecbc2ef14ece7f3`; its exact strict-v3 runtime source
+`e3d390d912a2c3a9be418ecbc31771d2bf515de7`; its exact strict-v3 runtime source
 is `862cf8035dfb365a7d799f820936585882d0a1e7`, source version `1.1.5`. Do not install the blocked
 immutable v1.1.3 package and do not substitute a shortcut or installer. In the
 same PowerShell, set `DJ_AGENT_CONFIG_PATH` to the checkout-external show JSON.

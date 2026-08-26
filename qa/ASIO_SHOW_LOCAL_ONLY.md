@@ -121,6 +121,37 @@ native/operator, driver/recovery, formal matched 48 kHz, and measured-latency
 acceptance remain open. No installer, updater, copy, archive, or public
 distribution is approved.
 
+## Alpha.14 same-host physical evidence (2026-08-26 JST)
+
+The current local-only artifact is bound to source commit
+`6b4cd1afb4d228158d04a15dbe3e4a73c922baeb`:
+`target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.14_6b4cd1afb4d2_x64`.
+Its application SHA-256 is
+`CC2D1E28B9063250E86106F04DD082A5C860A840EB721C8208EEFEE009BD0599`; its
+bridge SHA-256 is `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`;
+and its manifest SHA-256 is
+`BBEA830122B999A7F985A8F0E88330361E74D3EEE9C5DF2E982EB932A4B687DD`.
+The dedicated checker passed with `files=14` and `distributionApproved=false`.
+The official `node app/scripts/build-windows-show-asio.mjs` route passed with
+the exact VS Community 14.44 x64 linker pinned and first, `check:release` PASS,
+and first-party build warnings `0`.
+
+The explicit `HOTONE AUDIO USB Audio Device` opened ASIO native `i32`, two
+channels, 44.1 kHz, fixed requested/applied `128f`. First run telemetry was
+callback `128/128/128`, `OVR 0/0f`, `XRUN 0`, capture-to-worker `4.4/4.5 ms`,
+and `Q 0/1/4`; Start held five seconds stable, then Stop had no pending work and
+Close left application/bridge process counts `0`. Restart restored the persisted
+ASIO selection as `ASIO RESTORED`, locked and not auto-started. Explicit Start
+then reported `ASIO REVALIDATED` and ACTIVE with the same configuration;
+callback/overrun/XRUN/queue were unchanged, capture-to-worker was `4.4/4.7 ms`,
+and final Stop/Close again left both process counts `0`.
+
+This is not unplug, XRUN/fault, TOPPING, long-duration, matrix, or latency
+threshold evidence. The artifact remains `distributionApproved: false`. After
+a documentation commit changes HEAD, reuse requires a clean checkout detached
+at source `6b4cd1a`, or a rebuild from the new HEAD; no cross-source reuse is
+approved.
+
 ## Unsupported cases
 
 Installers, updater payloads, signatures, archives, copied artifacts, network

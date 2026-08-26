@@ -44,15 +44,49 @@ local-only show-ASIO build. Conversely, this build result cannot be promoted to
 normal installer/updater acceptance. Its dedicated checker must pass
 immediately before use, and physical native/operator acceptance remains open.
 
-Current evidence closes only the exact HOTONE/Ampero ABI-v2 **bridge-only**
-44.1 kHz / 2-channel `i32` / 128-frame continuous run of `3,600,031 ms`.
-Formal matched 48 kHz ASIO/WASAPI, current native application load and operator
-UI, persisted-selection revalidation, occupied/reset/resync/XRUN/unplug/
-no-callback recovery, restart, and measured capture/engine/pixel latency remain
-open. The complete warning matrix executed for runtime/artifact checkpoint
+The alpha.14 local-only artifact evidence below additionally proves a short,
+physical native/operator path on the explicitly selected HOTONE Ampero device.
+It does not promote the earlier bridge-only run or close formal matched 48 kHz
+ASIO/WASAPI, occupied/reset/resync/XRUN/unplug/no-callback recovery, TOPPING,
+long-duration, or measured capture/engine/pixel-latency rows. The complete
+warning matrix executed for runtime/artifact checkpoint
 `ff61a6d` recorded zero first-party warnings; this does not close a physical
 ASIO gate. These boundaries fail closed and do not permit WASAPI, another ASIO
 driver, an older DLL, or a legacy ABI as a substitute.
+
+### Alpha.14 local-only Show-ASIO physical Ampero evidence (2026-08-26 JST)
+
+The exact artifact was built from source commit
+`6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` into
+`target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.14_6b4cd1afb4d2_x64`.
+`syndocal-show-asio.exe` SHA-256 is
+`CC2D1E28B9063250E86106F04DD082A5C860A840EB721C8208EEFEE009BD0599`;
+`syndocal_asio_bridge.dll` SHA-256 is
+`40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`; and
+`show-asio-local-manifest.json` SHA-256 is
+`BBEA830122B999A7F985A8F0E88330361E74D3EEE9C5DF2E982EB932A4B687DD`.
+`check-show-asio-artifact.mjs` passed with `files=14` and
+`distributionApproved=false`.
+The official `node app/scripts/build-windows-show-asio.mjs` route passed with
+the exact VS Community 14.44 x64 linker pinned and first, `check:release` PASS,
+and first-party build warnings `0`.
+
+The explicit driver was `HOTONE AUDIO USB Audio Device`: ASIO native `i32`, two
+channels, 44.1 kHz, with requested/applied fixed buffer `128f`. The first run
+reported callback frames `128/128/128`, `OVR 0/0f`, `XRUN 0`,
+capture-to-worker `4.4/4.5 ms`, and queue `Q 0/1/4`. It reached Start, held a
+stable five-second run, then Stop with no pending work; application and bridge
+process counts were both `0` after Close. On restart, persisted selection was
+`ASIO RESTORED` and locked with no auto-start. An explicit Start produced
+`ASIO REVALIDATED` and ACTIVE with the same configuration, then Stop/Close
+again left application and bridge process counts at `0`. The restart reported
+the same callback/overrun/XRUN/queue values and capture-to-worker `4.4/4.7 ms`.
+
+This is one short, exact local-only native/operator proof only. It does not
+claim unplug, XRUN/fault, TOPPING, long-duration, matrix, or latency-threshold
+acceptance. The artifact is bound to source commit `6b4cd1a`: after a later
+documentation commit, reuse requires a clean checkout detached at that source
+commit, or a rebuild from the new HEAD.
 
 Cleanup safety pushed through `c40cfd8` (including predecessor `ef7b647`) does
 not authorize deletion of an ASIO build or evidence tree. Its sole current
@@ -99,7 +133,7 @@ Current pin:
 - Implemented in the isolated v2 bridge: driver enumeration, capability query, explicit stream open, applied buffer reporting, Stop/Close, backend XRUN count, telemetry and terminal event delivery are separate typed operations. The current application source now loads the canonical ABI/schema v2 bridge and routes catalog, capability, persistent-selection, Start/Stop/Close, callback, terminal-fault, and safety-zero handling through that v2 surface. Source compilation and deterministic contract coverage do not by themselves constitute native or physical ASIO acceptance.
 - Implemented: ASIO offers no system-default selection. Driver IDs are generation-scoped, and Start revalidates the explicit driver, rate, channels, native sample format, fixed buffer, and channel mix. Mismatch or disappearance fails rather than substituting another driver, the first enumerated driver, or WASAPI.
 - Implemented in the isolated bridge: the realtime callback uses Start-time storage, converts the exact negotiated buffer to mono `f32`, and performs no heap allocation or lock acquisition in the normal callback. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/Close and an explicit restart.
-- The current application-side v2 path includes the callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, persistent-selection status, and the operator rail. The remaining acceptance boundary is execution on the current native artifact with a real selected driver: callback continuity, negotiated configuration, Start/Stop/Close, occupied/reset/resync/XRUN/unplug/no-callback recovery, restart, soak, and latency remain fail-closed and unchecked until directly demonstrated.
+- The current application-side v2 path includes the callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, persistent-selection status, and the operator rail. The alpha.14 local-only artifact directly demonstrated one selected-driver callback/configuration Start/Stop/Close and restart/revalidation path. Occupied/reset/resync/XRUN/unplug/no-callback recovery, broad matrix, soak, and latency remain fail-closed and unchecked until directly demonstrated.
 - Validated on 2026-08-25 after the current gain/parser and callback-fault repair: the isolated bridge's SDK-free tests pass 12/12; its ASIO-feature deterministic suite passes 14/14 with the one explicitly physical test ignored; Clippy `-D warnings`, ASIO all-target check, and the canonical release build report zero first-party/linker warnings with the exact VS 14.44 linker first. SDK provenance validates the pinned 48-file extraction and archive hash. The release DLL exposes exactly nine v2 symbols with v1/Play/Free absent and has SHA-256 `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. That isolated bridge suite covers empty/all-zero, negative, non-finite, subtly-over-one, and extreme gain rejection through both the parser and exported Start boundary. Those results are bridge-only evidence; the current application compile/no-run checkpoint is recorded below, while physical-driver and native application execution remain unverified. Any earlier ABI-v1 hardware/native evidence is historical and does not close the present v2 hardware gate. Default normal builds remain ASIO-free.
 - Not approved for public distribution: `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false` as the authority. The exact local-only Show-ASIO artifact above exists for same-host performance acceptance, but the normal MIT installer/updater remains fail-closed against `syndocal_asio_bridge.dll`, the retired `syndocal-asio-bridge.dll`, every other `*asio*.dll`, and every DLL wildcard/glob. Windows libav packaging is deliberately limited to the seven exact DLLs recorded in `app/src-tauri/tauri.windows.conf.json`; FFmpeg and Spout notices remain explicit normal-package resources. No public ASIO artifact may be staged, published, or accepted until a separately reviewed GPLv3 distribution path or a signed Steinberg agreement, notices, and release workflow exist.
 
@@ -386,16 +420,17 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 
 - [x] Isolated non-default ASIO bridge ABI/schema v2 implemented.
 - [x] Current application source integrates the loader, callback/fault publication, persistence, and operator UI against ABI/schema v2; the 2026-08-26 fixed-linker `cargo check --features asio` and `cargo test --features asio --no-run` are warning-free. This is source compile/no-run evidence only.
-- [ ] Current ABI-v2 application path is verified natively with a real selected driver and the operator UI; hardware/native execution remains open.
+- [x] The alpha.14 local-only Show-ASIO artifact completed the bounded HOTONE Ampero native/operator Start → stable five-second run → Stop/Close proof, then persisted-selection restart/revalidation with the same explicit configuration. Broader hardware/native execution remains open.
 - [x] SDK version/archive/SHA pin recorded; local build requires explicit SDK and libclang paths.
 - [x] Direct-Cargo P0 closed: `-PreflightOnly` fail-closed MSVC toolset/linker-pin preflight implemented with parser/static/self-test proof. On 2026-08-25 the live preflight passed inside a fresh `vcvars64.bat -vcvars_ver=14.44` shell with `VCToolsInstallDir` exactly `14.44.35207`, the pinned Community `Hostx64\x64\link.exe` first and Git's `link.exe` second. The current application feature check and test-binary compile/no-run repeated that exact linker pin on 2026-08-26 with first-party warnings 0; this does not close any physical-driver or native-execution row.
 - [ ] Current final ABI-v2 DLL completes one explicit working-driver short smoke with applied buffer and XRUN telemetry. Current-source v2 bridge code passed 100 exact Ampero cycles on 2026-08-26, but native release-DLL loading and operator-path telemetry remain unverified.
 - [ ] Current final ABI-v2 DLL proves an unavailable explicit driver fails without another-driver or WASAPI fallback. The recorded negative run predates the final v2 checkpoint.
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
-- [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. Current-source v2 bridge code passed this exact 100-cycle test on 2026-08-26; final release-DLL/native-app loading remains open.
+- [ ] Current normal-distribution ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. Current-source v2 bridge code passed this exact 100-cycle test on 2026-08-26; the separate alpha.14 local-only native proof does not close the normal-distribution artifact row.
 - [x] Bridge-only HOTONE/Ampero ABI-v2 44.1 kHz / 2-channel / i32 / 128-frame continuous run completed for 3,600,031 ms. This closes only that bridge-continuity evidence row and does not check any native/operator or matched 48 kHz row.
 - [x] Local-only non-default `show-asio` artifact was built and passed its source/runtime-manifest/staging/artifact checks at exact checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`; its manifest fixes `distributionApproved: false`, `sameHostOnly: true`, and `unbundled: true`.
-- [ ] That exact local-only artifact passes its dedicated checker immediately before use and completes physical native/operator acceptance for the 2026-08-30 controlled show. The normal signed updater is explicitly out of scope and must never govern it.
+- [x] The alpha.14 local-only artifact passed its dedicated checker immediately before the bounded HOTONE Ampero native/operator proof: first Start → five seconds stable → Stop/Close, then persisted-selection restart/revalidation and final Stop/Close.
+- [ ] The alpha.14 local-only artifact completes the remaining physical native/operator matrix for the 2026-08-30 controlled show. The normal signed updater is explicitly out of scope and must never govern it.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
 - [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The current-source 2026-08-26 attempt failed explicitly on cycle 1 with the same backend hardware-malfunction result before and after the bounded vendor-control-panel isolation retry; no fallback occurred.
 - [ ] Current-source ABI-v2 native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc. The recorded run is ABI-v1 historical evidence only.
