@@ -818,3 +818,45 @@ and `where.exe link.exe` first-path verification, the exact command `cargo test
 and independent Terra xHigh review returned no P0/P1/P2. No native release/Tauri build,
 release-process stop, cleanup Apply, or hardware operation occurred. The live
 alpha.15 PID `46120` and DJ socket remain protected; HW-4 stays **0/12**.
+
+## 16. 2026-08-27 strict Live Audio IPC V1 checkpoint
+
+Commit `32cc47515bffb25c8a86e9c599ef98aeabcf7878` is pushed and equal to
+`origin/codex/syndocal-v1.2`. The retired renderer/native boundary accepted
+flat command arguments and the internal snake_case representation. The only
+supported boundary now requires the exact outer `{ request: { ... } }` shape,
+`schemaVersion: 1`, camelCase fields, present nullable keys, exact backend and
+channel-mix discriminants, and no unknown fields. Invalid, direct, raw,
+snake_case, future-version, missing-nullable, or extra-field payloads reject
+before AppState, owner/external/coordinator locks, device-catalog access, or
+stream lifecycle work. There is no legacy alias or permissive fallback.
+
+The boundary is extracted into
+`app/src-tauri/src/live_audio_ipc_v1.rs` (`520` lines) and
+`app/src/liveAudioInputIpcV1.ts` (`283` lines); `App.tsx` only wires the three
+request builders into the four production calls. The initially proposed
+unused frontend status mapper/parser was removed rather than adding a second
+response representation. The browser fixture independently rejects the
+retired nested `stereo_pair` wire shape and no longer converts an unknown mix
+to `average_all`.
+
+Supervisor proof passed: `check:live-audio-ipc-v1`, `check:live-audio`,
+`check:timeline-cue-audio`, `check:timeline-cue-audio:browser`, TypeScript/Vite
+build, Rust format, staged diff check, and the live-audio browser matrix in
+English and Japanese at `1920x1080`, measured-client `1920x1032`,
+`2048x1152`, `1366x768`, and `1280x720`, all with no failed checks. The
+frontend warning ratchet remained baseline/current `0/0`. After exact
+`vcvars64.bat -vcvars_ver=14.44` initialization, the required Community
+`14.44.35207` absolute linker pin and first `where.exe link.exe` result were
+verified, then the no-default-feature focused Rust suite passed `5/5`, 1,130
+filtered, with zero first-party warnings. Independent Terra xHigh backend and
+frontend re-reviews both returned no P0/P1/P2.
+
+This is a source/browser checkpoint, not native acceptance. PID `46120` was
+re-resolved as the same responsive historical alpha.15 executable with the
+same size/hash, LISTEN `192.168.50.1:9100`, and ESTABLISHED
+`192.168.50.2:58211` peer; it was not stopped or rebuilt. Fresh alpha.16 native
+proof remains open. The separate FC-09 defect also remains open: when a
+manually selected ASIO device disappears without a saved pin, the frontend
+must retain the missing ASIO identity and lock Start instead of selecting
+WASAPI Shared or the first returned backend.
