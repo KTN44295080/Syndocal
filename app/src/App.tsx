@@ -857,6 +857,7 @@ import {
   beginProjectAuthorityRuntimeApplication,
   createProjectRecoveryIntentConsumerProduction,
   projectAuthorityFallbackIsCurrent,
+  projectAuthorityInlineReplacementIsCurrent,
   type ProjectAuthorityBundleApplicationDisposition,
   type ProjectAuthorityRuntimeEffects,
   type ProjectAuthorityRuntimeState,
@@ -16457,15 +16458,27 @@ export default function App() {
     beginProjectReadGeneration();
     const started = beginProjectAuthorityApplication(projectAuthoritySync);
     projectAuthoritySync = started.state;
-    const bundle = await fetchProjectAuthorityBundle(result);
-    // Backend may publish B then C while B waits for the compatibility fetch.
-    // The application generation prevents B from applying even one field.
-    if (!projectAuthorityFallbackIsCurrent(
-      projectAuthorityRuntimeState(),
-      candidate,
-      started.application,
-      authorityToken(bundle),
-    )) {
+    // Paired command replies already carry their exact fenced authority image.
+    // Keep that B-over-A route synchronous. Only older backends cross the
+    // compatibility fetch boundary and therefore require the stricter guard.
+    const inlineAuthority = result.authority;
+    const bundle = inlineAuthority ?? await fetchProjectAuthorityBundle(result);
+    // A compatibility fetch may observe B then allow C to publish while B is
+    // waiting. Its stricter guard prevents B from applying even one field.
+    const authorityIsCurrent = inlineAuthority
+      ? projectAuthorityInlineReplacementIsCurrent(
+        projectAuthorityRuntimeState(),
+        candidate,
+        started.application,
+        authorityToken(bundle),
+      )
+      : projectAuthorityFallbackIsCurrent(
+        projectAuthorityRuntimeState(),
+        candidate,
+        started.application,
+        authorityToken(bundle),
+      );
+    if (!authorityIsCurrent) {
       return {
         verdict: "stale",
         token: candidate,

@@ -656,6 +656,21 @@ export const projectAuthorityFallbackIsCurrent = (
   && projectAuthorityApplicationIsCurrent(state.sync, capturedApplication);
 
 /**
+ * A paired command reply can carry B while the renderer still observes A.
+ * This predicate is used only on the inline path before any async yield: it
+ * proves the reply owns B and that no later application has started. The apply
+ * still performs the normal monotonic B-over-A admission. Compatibility fetches
+ * must use the stricter fallback predicate above after their async boundary.
+ */
+export const projectAuthorityInlineReplacementIsCurrent = (
+  state: ProjectAuthorityRuntimeState,
+  capturedAuthority: ProjectAuthorityToken,
+  capturedApplication: ProjectAuthorityApplication,
+  returnedAuthority: ProjectAuthorityToken,
+): boolean => projectAuthorityTokenIsCurrent(capturedAuthority, returnedAuthority)
+  && projectAuthorityApplicationIsCurrent(state.sync, capturedApplication);
+
+/**
  * Startup-only recovery delivery fence. A renderer may install a stored
  * recovery intent after an early B replacement event already hydrated the
  * exact same bundle. Only that duplicate startup handoff may consume the

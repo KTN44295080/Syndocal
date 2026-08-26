@@ -45,6 +45,7 @@ import {
   applyProjectAuthorityReplacementProduction,
   applyProjectAuthorityRuntimeStatusProduction,
   beginProjectAuthorityRuntimeApplication,
+  projectAuthorityInlineReplacementIsCurrent,
 } from "../src/projectAuthorityRuntime.ts";
 import {
   createProjectRecoveryCheckpoint,
@@ -1010,6 +1011,57 @@ const historyResult = applyPolledProjectAuthorityBundleProduction(
 assert.equal(historyResult.disposition, "applied", "history B takes the forced-hydrate route");
 assert.equal(historyHarness.trace.commits[0].preserveDirtyMappings, false);
 
+// A paired reply can synchronously own B while the renderer still observes A.
+// Its inline admission must allow the normal monotonic bundle apply without
+// weakening either a mismatched returned token or a later C application.
+const inlineBState = makeProductionState(productionTokenA);
+const inlineBStarted = beginProjectAuthorityRuntimeApplication(inlineBState);
+assert.equal(
+  projectAuthorityInlineReplacementIsCurrent(
+    inlineBStarted.state,
+    productionTokenB,
+    inlineBStarted.application,
+    productionTokenB,
+  ),
+  true,
+  "paired inline B is current before any later application starts",
+);
+const inlineBHarness = makeProductionEffects();
+const inlineBResult = applyProjectAuthorityBundleProduction(
+  inlineBStarted.state,
+  identityB,
+  inlineBStarted.application,
+  true,
+  false,
+  inlineBHarness.effects,
+);
+assert.equal(inlineBResult.disposition, "applied", "paired inline B applies over renderer A");
+assert.deepEqual(inlineBResult.state.authority, productionTokenB);
+assert.equal(
+  projectAuthorityInlineReplacementIsCurrent(
+    inlineBStarted.state,
+    productionTokenB,
+    inlineBStarted.application,
+    productionTokenC,
+  ),
+  false,
+  "a mismatched inline C bundle cannot satisfy paired B",
+);
+const inlineCStarted = beginProjectAuthorityRuntimeApplication({
+  ...inlineBStarted.state,
+  authority: productionTokenC,
+});
+assert.equal(
+  projectAuthorityInlineReplacementIsCurrent(
+    inlineCStarted.state,
+    productionTokenB,
+    inlineBStarted.application,
+    productionTokenB,
+  ),
+  false,
+  "paired inline B is rejected after a later C application starts",
+);
+
 // A compatibility fallback captured for B cannot apply after C advances the
 // authority/application generation; no raw refresh/storage/reset callback is
 // reachable from this guard.
@@ -1037,6 +1089,20 @@ assert.doesNotMatch(
   /create_custom_fixture_profile/,
 );
 assert.match(appSource, /captureProjectAuthorityIdentity\(\)[\s\S]*?preview_custom_fixture_profile[\s\S]*?isProjectAuthorityIdentityCurrent/);
+const loadedProjectApplicationSource = appSource.slice(
+  appSource.indexOf("const applyLoadedProjectResult"),
+  appSource.indexOf("const resetRetiredProjectControlInputUi"),
+);
+assert.match(
+  loadedProjectApplicationSource,
+  /const inlineAuthority = result\.authority;[\s\S]*?const bundle = inlineAuthority \?\? await fetchProjectAuthorityBundle\(result\);[\s\S]*?inlineAuthority[\s\S]*?projectAuthorityInlineReplacementIsCurrent[\s\S]*?: projectAuthorityFallbackIsCurrent/,
+  "paired project-load authority uses the synchronous inline guard while compatibility fetches retain the fallback guard",
+);
+assert.doesNotMatch(
+  loadedProjectApplicationSource,
+  /const bundle = await fetchProjectAuthorityBundle\(result\);/,
+  "paired project-load authority must not unconditionally yield to the compatibility fetch",
+);
 
 // Recovery invalidation uses one storage key. A v1 payload remains readable
 // until an UnsavedReplacement atomically overwrites it with a v3 tombstone;
