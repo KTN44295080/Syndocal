@@ -42,6 +42,7 @@ commit as the source identity of an already-built binary.
 | Show-ASIO Cargo hardlink fix | `fb25ab106e9994fb6215520795961f4909bea7ae` and `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Cleanup inaccessible-process fix | `ef7b6479f69e89dd134acfe39051f43c22f769aa` |
 | Cleanup exact Codex-control-plane gate | `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` |
+| Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
 Branch: `codex/syndocal-v1.2`. The alpha.15 standard runtime/source/artifact is
@@ -259,8 +260,8 @@ Historical alpha.12 broad-matrix evidence retained for reference:
   `windows-asio-bridge`, `frontend-typescript-vite-windows`, and
   `windows-native-release`. No checkpoint added a first-party warning.
 - Three-display stable-identity harness: PowerShell 7 and 5.1 both `80/80`.
-- Cleanup harness after the Codex-control-plane safety fix: PowerShell 7 and
-  5.1 both `93/93`.
+- Cleanup harness after the directional ownership repair: PowerShell 5.1 and
+  7 both `110/110`; first-party warnings were `0`.
 
 Independent Ox results:
 
@@ -271,8 +272,39 @@ Independent Ox results:
 - Exact Codex-control-plane exception: final APPROVE; all prior P2-1 through
   P2-5 resolved, no remaining P0/P1/P2. Ox independently reran `93/93` on both
   PowerShell versions.
+- Cleanup directional ownership repair: independent Terra re-review found no
+  P0/P1/P2 (Ox was unavailable); both PowerShell self-tests passed `110/110`.
+- The focused `git diff --check` was clean with only Git's informational
+  LF-to-CRLF working-copy notices.
 
 ## 5. Cleanup inventory and final result
+
+### Latest directional ownership checkpoint (2026-08-26)
+
+- The initial Plan from clean, upstream-equal `d463381` was blocked by
+  `ActiveOwnedWriter` on six StreamDeck-plugin `node` PIDs: `41276`, `40272`,
+  `41884`, `37132`, `41588`, and `31272`. The ownership graph
+  incorrectly traversed both parents and children, so the unrelated StreamDeck
+  branch reached a Codex/shell anchor. Apply was not run and nothing was deleted.
+- The fix was committed and pushed as `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b`.
+  It adds the exact SystemRoot Explorer boundary and uses directional
+  self/ancestor ownership only; generic duplicate-PID and missing-parent/cycle
+  process topologies remain fail-closed.
+- PowerShell 5.1 and PowerShell 7 self-tests both passed `110/110`; the
+  focused cleanup test output emitted `0` first-party warnings. No native build
+  or native warning configuration was rerun for this QA-only harness fix.
+  Independent Terra re-review found no P0/P1/P2 because Ox was unavailable, and
+  `git diff --check` was clean apart from Git's informational CRLF notices.
+- The final production Plan from clean, upstream-equal `0b8a992` remained
+  blocked by `HardlinkDetected` at
+  `C:\Users\kouty\Documents\KDMX\target\debug\incremental\audio-0nuw1tgmhpz4j\s-hln3a7p0dg-1xgadpp-2vnp8sov454s93u5khsbi2d9r\metadata.rmeta`;
+  link count was `2`. `Candidates=[]`, `PlannedLogicalBytes=0`, and
+  `ReclaimedLogicalBytes=0`; Apply was not run and nothing was deleted.
+- Current target inventory is `205,883,610,246` logical bytes, `135,967` files,
+  `16,377` directories including root, and `0` reparse points.
+
+The following c40cfd8 inventory and Plan are retained as historical evidence;
+they are superseded by the directional-ownership checkpoint above:
 
 Fresh read-only inventory after the alpha.14 source checkpoint, before the
 native build:

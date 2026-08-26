@@ -608,16 +608,32 @@ claim.
 
 ## Recoverable build-artifact cleanup ledger
 
-Current authority correction (2026-08-26): cleanup safety is pushed through
-`c40cfd8` (including predecessor `ef7b647`); this is evidence of the guard, not
-evidence of deletion. The production Plan admits exactly one candidate path,
-`target/debug/incremental`, but the candidate is currently blocked by
-`HardlinkDetected`. Apply was not run, no path was deleted, and reclaimed bytes
-are **0**. Every other path listed in the dated inventories below is currently
-protected; any ASIO-named path is additionally blocked until its exact owner,
-artifact identity, and evidence-retention boundary are revalidated. The older
-sizes and candidate dispositions below remain inventory history only and do not
-expand the current deletion allowlist.
+Current cleanup authority correction (2026-08-26): the initial clean,
+upstream-equal Plan at `d463381` was blocked by `ActiveOwnedWriter` on six
+StreamDeck-plugin `node` PIDs (`41276`, `40272`, `41884`, `37132`, `41588`, and
+`31272`) because the ownership graph traversed both parents and children; Apply
+was not run and nothing was deleted. The repair was committed
+and pushed as `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b`, adding the exact
+SystemRoot Explorer boundary and restricting ownership to the writer itself or
+its ancestors. Generic duplicate-PID and missing-parent/cycle topologies remain
+fail-closed. PowerShell 5.1 and 7 self-tests passed `110/110`, with `0`
+first-party warnings in the focused cleanup output. No native build or native
+warning configuration was rerun for this QA-only fix. Focused `git diff --check`
+was clean apart from informational CRLF notices, and independent Terra re-review
+found no P0/P1/P2 because Ox was unavailable.
+
+The final production Plan from clean, upstream-equal `0b8a992` remained blocked
+by `HardlinkDetected` at
+`C:\Users\kouty\Documents\KDMX\target\debug\incremental\audio-0nuw1tgmhpz4j\s-hln3a7p0dg-1xgadpp-2vnp8sov454s93u5khsbi2d9r\metadata.rmeta`
+with link count `2`. `Candidates=[]`, `PlannedLogicalBytes=0`, and
+`ReclaimedLogicalBytes=0`; Apply was not run and nothing was deleted. Current
+target inventory is `205,883,610,246` logical bytes, `135,967` files, `16,377`
+directories including root, and `0` reparse points. The prior `c40cfd8`
+cleanup authority and the older sizes and candidate dispositions below remain
+history only; they do not expand the current deletion allowlist. Every other
+path remains protected, and any ASIO-named path is additionally blocked until
+its exact owner, artifact identity, and evidence-retention boundary are
+revalidated.
 
 The workspace-size audit found no evidence that old authored source is the main
 capacity consumer. A 2026-08-25 `du -h -d 1` measurement identified Cargo
