@@ -751,6 +751,85 @@ globalThis.window.localStorage.setItem = () => {
 assert.equal(localization.saveUiLocale("en"), false);
 delete globalThis.window;
 
+class LocalizationTestElement {
+  constructor(tagName) {
+    this.tagName = tagName.toUpperCase();
+    this.attributes = new Map();
+    this.childNodes = [];
+    this.parentElement = null;
+  }
+
+  append(...nodes) {
+    for (const node of nodes) {
+      node.parentElement = this;
+      this.childNodes.push(node);
+    }
+  }
+
+  hasAttribute(name) { return this.attributes.has(name); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+
+  closest(selector) {
+    const selectors = selector.split(",").map((item) => item.trim().toLowerCase());
+    for (let current = this; current; current = current.parentElement) {
+      if (selectors.includes(current.tagName.toLowerCase()) || (selectors.includes("[data-no-localize]") && current.hasAttribute("data-no-localize"))) {
+        return current;
+      }
+    }
+    return null;
+  }
+}
+
+class LocalizationTestMutationObserver {
+  constructor() {}
+  observe() {}
+  disconnect() {}
+}
+
+const localizationRoot = new LocalizationTestElement("main");
+const chrome = new LocalizationTestElement("button");
+chrome.setAttribute("title", "Save");
+chrome.setAttribute("aria-label", "Load");
+const authored = new LocalizationTestElement("span");
+authored.setAttribute("data-no-localize", "");
+authored.setAttribute("title", "New Scene");
+const authoredControl = new LocalizationTestElement("button");
+authoredControl.setAttribute("aria-label", "New Scene");
+authored.append(authoredControl);
+localizationRoot.append(chrome, authored);
+globalThis.Element = LocalizationTestElement;
+globalThis.Text = class {};
+globalThis.NodeFilter = { SHOW_ELEMENT: 1, SHOW_TEXT: 4 };
+globalThis.MutationObserver = LocalizationTestMutationObserver;
+globalThis.document = {
+  documentElement: {},
+  createTreeWalker(root) {
+    const descendants = [];
+    const visit = (node) => {
+      for (const child of node.childNodes) {
+        descendants.push(child);
+        visit(child);
+      }
+    };
+    visit(root);
+    let index = 0;
+    return { nextNode: () => descendants[index++] ?? null };
+  },
+};
+const localizationHandle = localization.installUiLocalization(localizationRoot, () => "ja");
+assert.deepEqual(
+  [chrome.getAttribute("title"), chrome.getAttribute("aria-label"), authored.getAttribute("title"), authoredControl.getAttribute("aria-label")],
+  ["保存", "開く", "New Scene", "New Scene"],
+  "data-no-localize protects literal attributes while unmarked UI chrome remains localized",
+);
+localizationHandle.dispose();
+delete globalThis.document;
+delete globalThis.Element;
+delete globalThis.Text;
+delete globalThis.NodeFilter;
+delete globalThis.MutationObserver;
+
 const sourceRoot = new URL("../src/", import.meta.url);
 const tsxFiles = [];
 async function collectTsx(directory) {

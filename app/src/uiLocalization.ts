@@ -4014,6 +4014,7 @@ function localizeTextNode(node: Text, locale: UiLocale) {
 }
 
 function localizeElementAttributes(element: Element, locale: UiLocale) {
+  if (element.closest("script, style, textarea, [data-no-localize]")) return;
   let states = attributeStates.get(element);
   if (!states) {
     states = new Map();
