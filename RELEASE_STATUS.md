@@ -1,7 +1,7 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-26
-Branch: `codex/syndocal-v1.2`; historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` was equal to upstream, while the exact historical `1.2.0-alpha.12` runtime/artifact source checkpoint remains `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Later cleanup and documentation checkpoints do not redefine either native artifact's source identity. The current alpha.14 source/native checkpoint is recorded in the dated section below once its exact gates complete.
+Branch: `codex/syndocal-v1.2`; current alpha.14 runtime/native source checkpoint `92122f1b148d40845b2cfe3e4618a57ce132b3df` is pushed and upstream-equal. The historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` and historical `1.2.0-alpha.12` runtime/artifact source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` remain immutable evidence. Later cleanup or documentation commits do not redefine an already-built binary's source identity.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
@@ -33,8 +33,15 @@ delivery independent from Rekordbox Stop MIDI success. Measured loop truth is
 wire-nested under `payload.loop`; each fallback is fenced by a monotonic physical
 intent ID plus its exact measured-revision/effective-division base. The final
 independent Terra xHigh review found P0/P1/P2 none after the sender/receiver
-cross-contract correction. Focused software gates do not close native alpha.14
-or physical DJ acceptance.
+cross-contract correction. The exact alpha.14 source/native checkpoint is
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`; its standard
+`target/release/syndocal.exe` is `58,523,648` bytes, Product/File version
+`1.2.0-alpha.14`, SHA-256
+`B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`.
+The native warning gate built it with zero baseline/current warnings, and one
+responsive maximized exact-path `Syndocal` window was verified. This closes the
+standard native alpha.14 checkpoint, not physical DJ acceptance, the local-only
+Show-ASIO gate, three-display Apply/output, or DSF show-program acceptance.
 
 ## HISTORICAL — 2026-08-26 release-metadata advance to 1.2.0-alpha.12
 

@@ -1,12 +1,14 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **PAUSED AFTER THE CURRENT CLEANUP AND DOCUMENTATION TRANCHE**
+Status: **PAUSED AFTER THE 1.2.0-alpha.14 DJ-LINK AND STANDARD-NATIVE CHECKPOINT**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
-not accepted as fully show-ready: software gates and alpha.12 artifacts exist,
-but the physical DJ, native ASIO, three-output, and DSF show-program gates below
-remain open.
+not accepted as fully show-ready: the alpha.14 strict-v3 software and standard
+native artifact gates are complete, while the physical DJ, native ASIO,
+three-output, and DSF show-program gates below remain open. The separately
+licensed Show-ASIO artifact remains the historical alpha.12 artifact; no
+alpha.14 Show-ASIO build or acceptance is implied.
 
 ## 1. Exact checkpoints
 
@@ -15,16 +17,20 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Runtime/code and both alpha.12 artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
+| Current alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
+| Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `71738778c8b7637c14768e02fecbc2ef14ece7f3` |
+| Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
+| Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
 | Show-ASIO Cargo hardlink fix | `fb25ab106e9994fb6215520795961f4909bea7ae` and `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Cleanup inaccessible-process fix | `ef7b6479f69e89dd134acfe39051f43c22f769aa` |
 | Cleanup exact Codex-control-plane gate | `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch at cleanup checkpoint: `codex/syndocal-v1.2`; HEAD and upstream were
-both `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` before the final documentation
-commit.
+Branch: `codex/syndocal-v1.2`. The alpha.14 runtime source and native artifact
+are bound to pushed, upstream-equal commit
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`. A later commit containing only
+checkpoint documentation must not redefine that binary source identity.
 
 ## 2. Mandatory operating rules
 
@@ -58,21 +64,23 @@ commit.
   `app/src-tauri/src/main.rs`. Extract the owning domain first and preserve the
   contract with focused tests.
 
-## 3. Current alpha.12 artifacts
+## 3. Current alpha.14 standard artifact and historical Show-ASIO artifact
 
 ### Standard MIT/WASAPI artifact
 
-- Source checkpoint: `ff61a6d`
+- Source checkpoint: `92122f1b148d40845b2cfe3e4618a57ce132b3df`
 - Path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
-- Product version: `1.2.0-alpha.12`
-- Size: `58,471,936` bytes
-- SHA-256: `224F512673C8A84EAEB2557691414B2F6CA090D1201E357DCD9B38F019237680`
-- Pause-time process: PID `158832`, exact-path process count `1`, responsive
-  window count `1`, title `Syndocal`, maximized. This was reverified read-only
-  on 2026-08-26 from the exact executable path, process identity, window state,
-  version, byte count, and file hash.
+- Product/File version: `1.2.0-alpha.14`
+- Size: `58,523,648` bytes
+- SHA-256: `B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`
+- Build timestamp: `2026-08-26T05:07:44.5595600Z`
+- Pause-time process: PID `163352`; Windows case-insensitive exact-path process
+  count `1`; all-system `syndocal.exe` count `1`; `Responding=True`; main HWND
+  `58138038`; exact window count `1`; title `Syndocal`. Computer Use reselected
+  that exact app/window, activated it, and captured work-area bounds
+  `1920x1032` at origin `0,0`, proving the verified window remained maximized.
 
-### Local-only Show-ASIO artifact
+### Historical local-only Show-ASIO artifact (not rebuilt for alpha.14)
 
 - Source checkpoint: `ff61a6d`
 - Directory:
@@ -91,6 +99,42 @@ commit.
   acceptance remains open.
 
 ## 4. Completed software evidence
+
+Current alpha.14 evidence:
+
+- rb-output runtime `862cf8035dfb365a7d799f820936585882d0a1e7`:
+  full `npm test` `389 total / 387 pass / 0 fail / 2 intentional package
+  skips`; Stage-1 plus strict-v3 focused tests `33/33`; changed-JavaScript
+  `node --check` PASS; first-party warnings `0`.
+- Exact MSVC 14.44 linker was pinned and first in `where.exe link.exe` for all
+  Cargo gates. Protocol DJ-Link passed `12/12`; the dedicated rb-output sender
+  contract passed `2/2`; I/O `remote_ws` passed `57/57`; Syndocal DJ-Link
+  dispatch passed `10/10`; extracted loop-range mapping passed `3/3`.
+- `pnpm --dir app run check:release` PASS: release metadata alpha.14, ASIO
+  packaging boundary `169` assertions, and video-output observation PASS.
+- Three-display deterministic harness: `80/80`.
+- Native warning gate PASS with baseline/current warnings both
+  `0 total / 0 first-party / 0 third-party`; it executed the required
+  `pnpm --dir app tauri build --no-bundle` from clean, upstream-equal
+  `92122f1b...`.
+- The alpha.13 Timeline checkpoint `bbb684c...`, carried unchanged into
+  alpha.14, implements compact grouped item submenus and outside-primary-click
+  dismissal; its focused browser contract passes. Native/manual confirmation
+  remains open in section 8.6. The `New Scene` command is localized, while a
+  user/project title literally named `New Scene` is marked as project data and
+  is not translated behind the operator's back.
+- Final independent Terra xHigh adversarial review found P0/P1/P2 none after
+  fixing rapid-F14/inactive-loop races, late-fallback causality, and the
+  measured-loop sender/receiver wire mismatch. Ox-alpha was not callable in
+  this session, so Sol recorded this narrow review exception.
+- One non-authoritative parallel I/O attempt produced socket-reset failures;
+  it is not completion evidence. The final authoritative sequence was rerun
+  serially with `--test-threads=1`. One later sequence omitted `FFMPEG_DIR` and
+  stopped before Syndocal tests; it too is invalid. The entire sequence was
+  rerun from gate 1 with `FFMPEG_DIR`, `LIBCLANG_PATH`, and the exact linker and
+  produced the passing counts above.
+
+Historical alpha.12 broad-matrix evidence retained for reference:
 
 - protocol: `175/175`
 - I/O: `158/158`
@@ -125,7 +169,18 @@ Independent Ox results:
   P2-5 resolved, no remaining P0/P1/P2. Ox independently reran `93/93` on both
   PowerShell versions.
 
-## 5. Cleanup final result
+## 5. Cleanup inventory and final result
+
+Fresh read-only inventory after the alpha.14 source checkpoint, before the
+native build:
+
+- `C:\Users\kouty\Documents\KDMX\target`: `204,754,923,466` logical bytes,
+  `134,462` files, `16,327` directories including root, reparse points `0`.
+- `C:\Users\kouty\Desktop\rb-output\node_modules`: `81,619,354` logical
+  bytes, `6,053` files, `910` directories including root, reparse points `0`.
+- `C:\Users\kouty\Desktop\rb-output\dist`: `277,382,202` logical bytes,
+  `44` files, `12` directories including root, reparse points `0`.
+- No cleanup Apply ran; no path was deleted; reclaimed bytes remain `0`.
 
 The only reviewed production candidate was:
 
@@ -182,13 +237,26 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 
 - Checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
-- HEAD/upstream: `925880068500d42d71b2671fa8a99e5895aca4e2`, clean at pause audit
+- Runtime source: `862cf8035dfb365a7d799f820936585882d0a1e7`
+- HEAD/upstream docs tip: `71738778c8b7637c14768e02fecbc2ef14ece7f3`, clean at pause audit
 - FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
 - The controlled source path requires the external show JSON through
   `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
+- Normal production authority is fresh measured `DJ_LOOP_STATE`, nested under
+  `payload.loop`. Only actual no-response after the armed F14 window emits
+  `DJ_LOOP_FALLBACK`. Each prediction carries a monotonic intent ID and exact
+  measured-revision/effective-division base; late fresh measurement overrides
+  and rebases it. The complete profile is
+  `8 → 4 → 2 → 1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/64`; it does not stop at 2.
+- F13 `DJ_RELEASE` is independent from the Rekordbox Stop MIDI result and is
+  routed exactly once after the configured release sequence reaches Stop.
+- DJ-LINK may be started whenever needed. Moving the controller is safe for
+  the current software/native checkpoint, but any resulting loss of Rekordbox
+  MIDI In remains unverified hardware state and does not satisfy a response or
+  no-response row by itself.
 - Physical acceptance remains `0/12`: real token, HELLO/ACK, Rekordbox track
-  detection, MIDI output, pedal, 8/4/2-beat loop, release, reconnect, and restart
-  are not recorded as accepted.
+  detection, MIDI output, pedal, the full measured/no-response loop profile,
+  release, reconnect, and restart are not recorded as accepted.
 
 ## 8. Explicit remaining show gates
 
@@ -207,10 +275,11 @@ These are OPEN, not implicit completion claims:
 5. Import `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`; retain the import report and
    exact skipped/fail-closed mappings. Create representative Lighting scenes,
    LED/projector substitute media, the two required timelines, DJ trigger and
-   loop/release/transition behavior, then save/restart and run the full show
+   measured/no-response loop behavior through `1/64`, release/transition
+   behavior, then save/restart and run the full show
    sequence. User-authored final lighting remains outside this minimum proof.
-6. Complete native/manual QA for recent UI fixes, including Timeline compact
-   Bank/Scene placement, Lighting-only Bank management, context menus, empty-bank
+6. Complete native/manual QA for the remaining UI surfaces, including Timeline
+   compact Bank/Scene placement, Lighting-only Bank management, empty-bank
    control de-duplication, active-scene color, bank toolbar alignment, scene FX
    internal scroll/removal/density/width, detached Timeline/Stage/source panes,
    and integrated Stage rendering.
@@ -223,8 +292,14 @@ Current exact metrics:
 
 - `app/src/App.tsx`: `28,810` lines, `1,202,918` bytes, SHA-256
   `4BC665227797FA2F138A802DC9979B93D44881A1E2182C921B1B5BD67E5DACB2`
-- `app/src-tauri/src/main.rs`: `128,698` lines, `4,937,271` bytes, SHA-256
-  `8D5C30181151B7AB16404A4A8320607A06377524EA334D35A24A5BD7CCBDAE17`
+- `app/src-tauri/src/main.rs`: `129,413` lines, `4,965,088` bytes, SHA-256
+  `A337B15E66C69A56FEC12A9FFF2D3275829BA610B28F787BE58AB56CB803E5C2`
+- This tranche extracted the exact loop-profile mapping and its tests into
+  `app/src-tauri/src/dj_loop_range.rs` (`102` lines, `3,504` bytes, SHA-256
+  `71A7CD025FA0888A045AAF0E110CB8F337672F0F3E365AF82527DCBF601F324F`)
+  and added the cross-repository wire proof as the separate
+  `crates/protocol/tests/dj_link_v3_sender_contract.rs` (`67` lines, `2,158`
+  bytes). It did not attempt a risky whole-file rewrite before the show.
 
 This remains an architectural risk: frontend, Tauri, engine, and recovery paths
 still touch shared state through oversized compilation units. Do not attempt a
@@ -250,7 +325,11 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Main checkout had no untracked files at the `c40cfd8` cleanup checkpoint.
+- Main runtime source checkpoint `92122f1b...` and rb-output docs tip
+  `71738778...` were both clean and upstream-equal. The final documentation
+  commit containing this handoff must again be pushed and rechecked clean.
+- The current exact standard alpha.14 process and window identities are in
+  section 3. Re-resolve them on resume; do not assume PID/HWND stability.
 
 Resume in this order:
 
@@ -264,5 +343,6 @@ Resume in this order:
    commit, and push.
 
 This pause does not claim public-release readiness or completed performance
-acceptance. It preserves a verified alpha.12 software/artifact checkpoint and
-the shortest exact route to the remaining physical show proof.
+acceptance. It preserves a verified alpha.14 strict-v3 standard-native
+checkpoint, the historical alpha.12 local Show-ASIO artifact, and the shortest
+exact route to the remaining physical show proof.

@@ -24,11 +24,18 @@ The performance is **2026-08-30**. Development, acceptance, and show
 preparation must be complete by the separate **2026-08-29 completion
 deadline**. Neither date waives any named fail-closed hardware or native gate.
 
-Version-state distinction (2026-08-26): the exact committed and pushed
+Version-state distinction (2026-08-26): the current exact committed and pushed
+`1.2.0-alpha.14` runtime/standard-artifact source checkpoint is
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`. Its
+`target/release/syndocal.exe` is `58,523,648` bytes,
+ProductVersion/FileVersion `1.2.0-alpha.14`, SHA-256
+`B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`;
+the native warning gate recorded zero baseline/current warnings and exactly one
+responsive maximized exact-path window. The historical committed and pushed
 `1.2.0-alpha.12` runtime/artifact source checkpoint is
 `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Later cleanup and documentation
-checkpoints do not redefine either artifact's provenance. The standard native
-artifact is `target/release/syndocal.exe`, 58,471,936 bytes,
+checkpoints do not redefine any built artifact's provenance. The historical
+alpha.12 standard native artifact is `target/release/syndocal.exe`, 58,471,936 bytes,
 ProductVersion/FileVersion `1.2.0-alpha.12`, SHA-256
 `224F512673C8A84EAEB2557691414B2F6CA090D1201E357DCD9B38F019237680`.
 The separate same-host Show-ASIO directory is
@@ -45,7 +52,9 @@ show-project acceptance gates.
 
 DJ-Link update (2026-08-26): `1.2.0-alpha.13` is the committed/pushed Timeline
 UI checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`. The current product
-metadata is `1.2.0-alpha.14`; its strict v3 peer is rb-output `1.1.5`. Focused
+metadata is `1.2.0-alpha.14`; its strict v3 peer is rb-output `1.1.5`, runtime
+`862cf8035dfb365a7d799f820936585882d0a1e7`, clean docs tip
+`71738778c8b7637c14768e02fecbc2ef14ece7f3`. Focused
 software gates cover exact v3 clean break, fresh measured-loop authority,
 bounded no-response prediction, late-measurement rebase, independent Release,
 and the full `8 → 4 → 2 → 1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/64`

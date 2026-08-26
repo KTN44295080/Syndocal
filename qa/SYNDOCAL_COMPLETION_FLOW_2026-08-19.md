@@ -356,13 +356,14 @@ inaccessible-process-fix, and cleanup exact-gate checkpoints (`b543067`,
 metadata; and those alpha.12 artifacts are never rebuilt or replaced under their
 version. `1.2.0-alpha.13` is the committed and pushed Timeline context-menu UI
 checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`; its exact native binary was
-built and window-verified before this DJ-Link tranche. This alpha.14 advance
-synchronizes the strict DJ-Link v3 and Stage-1 no-response fallback surfaces and
-fixes the required version of the next native acceptance target; until alpha.14
-has its own committed source checkpoint and native
-verification, it must not be described as a reproducible tag, installer, or
-published artifact. The branch name may remain
-historical; artifact metadata and tags must not derive a false version from it.
+built and window-verified before this DJ-Link tranche. The current alpha.14
+advance synchronizes the strict DJ-Link v3 and Stage-1 no-response fallback
+surfaces. Its committed and pushed runtime/native source checkpoint is
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`; the standard native artifact was
+built by the required gate and window-verified from that source. It is not a
+published tag or installer, and it does not close Show-ASIO or physical DJ
+acceptance. The branch name may remain historical; artifact metadata and tags
+must not derive a false version from it.
 
 The synchronized product-version surfaces are:
 
@@ -430,12 +431,12 @@ their own recorded commits, each valid only for that frozen configuration and
 tree. The committed `1.2.0-alpha.12` checkpoint was measured at source
 checkpoint `ff61a6d` with zero first-party warnings across its recorded Windows
 configurations (2026-08-26 pause handoff), superseding that tree's earlier
-12 open first-party large-error lints (near-show finding FC-28). The in-progress
-`1.2.0-alpha.14` worktree is unmeasured for the full
-integrated checkpoint and remains unmeasured until a fresh full-gate rerun
-measures this tree again. W0 must still
-recount every supported feature and platform configuration — including the two
-pending macOS rows — and classify every first-party diagnostic.
+12 open first-party large-error lints (near-show finding FC-28). The committed
+`1.2.0-alpha.14` standard native gate recorded zero baseline/current warnings
+at source checkpoint `92122f1b`; the broader alpha.12 configuration matrix has
+not been rerun in full on alpha.14. W0 must still recount every supported
+feature and platform configuration — including the two pending macOS rows —
+and classify every first-party diagnostic.
 
 1. **W0 inventory:** capture warning code, file/line, target/feature, owner, reason,
    and removal checkpoint for default release, tests, all targets, ASIO, NDI, Spout,
