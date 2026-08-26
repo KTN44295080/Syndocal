@@ -28,29 +28,38 @@ proposed show path is a separately licensed, non-default local build selected on
 normal MIT/WASAPI artifact and it must not be reached by default features,
 normal packaging, or an automatic fallback.
 
-The local-only build must establish its own exact source identity, bridge
-identity, checkout-external runtime manifest, staging inventory, and artifact
-check. The normal signed updater never governs this artifact: it must not
-discover, install, update, repair, replace, select, or attest the local-only
-show-ASIO build. Conversely, a local-only build result cannot be promoted to a
-normal installer/updater acceptance result. No local-only show-ASIO artifact has
-been accepted yet.
+Checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` built and
+manifest-verified the exact same-host directory
+`target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
+Its application is 58,637,824 bytes, SHA-256
+`1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`;
+its ABI-v2 bridge is 813,568 bytes, SHA-256
+`40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`;
+and its manifest SHA-256 is
+`DCDFA0D381C851483D9E206637E803920ADDD6CC5B0C313780604FFC1D0EAAC4`.
+The manifest fixes `distributionApproved: false`, `sameHostOnly: true`, and
+`unbundled: true`. The normal signed updater never governs this artifact: it
+must not discover, install, update, repair, replace, select, or attest the
+local-only show-ASIO build. Conversely, this build result cannot be promoted to
+normal installer/updater acceptance. Its dedicated checker must pass
+immediately before use, and physical native/operator acceptance remains open.
 
 Current evidence closes only the exact HOTONE/Ampero ABI-v2 **bridge-only**
 44.1 kHz / 2-channel `i32` / 128-frame continuous run of `3,600,031 ms`.
 Formal matched 48 kHz ASIO/WASAPI, current native application load and operator
 UI, persisted-selection revalidation, occupied/reset/resync/XRUN/unplug/
 no-callback recovery, restart, and measured capture/engine/pixel latency remain
-open. Warning evidence is limited to the focused bridge and application
-configurations named below; the artifact-wide first-party warning gate remains
-open. These boundaries fail closed and do not permit WASAPI, another ASIO
+open. The complete warning matrix executed for runtime/artifact checkpoint
+`ff61a6d` recorded zero first-party warnings; this does not close a physical
+ASIO gate. These boundaries fail closed and do not permit WASAPI, another ASIO
 driver, an older DLL, or a legacy ABI as a substitute.
 
-Cleanup commit `7ee3b8f` does not authorize deletion of an ASIO build or
-evidence tree. Its sole current candidate is `target/debug/incremental`; Apply
-has not run and reclaimed bytes are 0. Every ASIO-named path remains protected
-until its exact owner, artifact identity, and evidence-retention boundary are
-revalidated.
+Cleanup safety pushed through `c40cfd8` (including predecessor `ef7b647`) does
+not authorize deletion of an ASIO build or evidence tree. Its sole current
+candidate is `target/debug/incremental`, currently blocked by
+`HardlinkDetected`; Apply has not run, no path was deleted, and reclaimed bytes
+are 0. Every ASIO-named path remains protected until its exact owner, artifact
+identity, and evidence-retention boundary are revalidated.
 
 ## Architecture gate
 
@@ -92,9 +101,14 @@ Current pin:
 - Implemented in the isolated bridge: the realtime callback uses Start-time storage, converts the exact negotiated buffer to mono `f32`, and performs no heap allocation or lock acquisition in the normal callback. Reset, resync, rate/device loss, xrun, nonfinite samples, callback frame change, or a 250 ms callback gap becomes a terminal event that requires Stop/Close and an explicit restart.
 - The current application-side v2 path includes the callback adapter, generation-checked one-shot fault latch, safety-zero publication, FFT-worker handoff, persistent-selection status, and the operator rail. The remaining acceptance boundary is execution on the current native artifact with a real selected driver: callback continuity, negotiated configuration, Start/Stop/Close, occupied/reset/resync/XRUN/unplug/no-callback recovery, restart, soak, and latency remain fail-closed and unchecked until directly demonstrated.
 - Validated on 2026-08-25 after the current gain/parser and callback-fault repair: the isolated bridge's SDK-free tests pass 12/12; its ASIO-feature deterministic suite passes 14/14 with the one explicitly physical test ignored; Clippy `-D warnings`, ASIO all-target check, and the canonical release build report zero first-party/linker warnings with the exact VS 14.44 linker first. SDK provenance validates the pinned 48-file extraction and archive hash. The release DLL exposes exactly nine v2 symbols with v1/Play/Free absent and has SHA-256 `F6D6C92FB6E1EDA938E3ADBB741DEC596A28DE0EE6D5712F5CBC2880817932C9`. That isolated bridge suite covers empty/all-zero, negative, non-finite, subtly-over-one, and extreme gain rejection through both the parser and exported Start boundary. Those results are bridge-only evidence; the current application compile/no-run checkpoint is recorded below, while physical-driver and native application execution remain unverified. Any earlier ABI-v1 hardware/native evidence is historical and does not close the present v2 hardware gate. Default normal builds remain ASIO-free.
-- Not approved for distribution: `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false` as the authority. The normal MIT installer/updater is fail-closed against `syndocal_asio_bridge.dll`, the retired `syndocal-asio-bridge.dll`, every other `*asio*.dll`, and every DLL wildcard/glob. Windows libav packaging is deliberately limited to the seven exact DLLs recorded in `app/src-tauri/tauri.windows.conf.json`; FFmpeg and Spout notices remain explicit normal-package resources. No ASIO distribution artifact is generated, staged, published, or accepted until a separately reviewed GPLv3 artifact path or a signed Steinberg agreement, notices, and release workflow exist.
+- Not approved for public distribution: `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false` as the authority. The exact local-only Show-ASIO artifact above exists for same-host performance acceptance, but the normal MIT installer/updater remains fail-closed against `syndocal_asio_bridge.dll`, the retired `syndocal-asio-bridge.dll`, every other `*asio*.dll`, and every DLL wildcard/glob. Windows libav packaging is deliberately limited to the seven exact DLLs recorded in `app/src-tauri/tauri.windows.conf.json`; FFmpeg and Spout notices remain explicit normal-package resources. No public ASIO artifact may be staged, published, or accepted until a separately reviewed GPLv3 distribution path or a signed Steinberg agreement, notices, and release workflow exist.
 
-## Current application integration compile checkpoint (2026-08-26)
+## Historical application integration compile checkpoint (superseded 2026-08-26)
+
+This section records the earlier source-only checkpoint. Its dirty-tree and
+release-build-required statements are historical and were superseded by the
+committed `ff61a6d` standard and local-only artifact evidence above. It does not
+override the still-open physical native/operator gates.
 
 This checkpoint covers the current KDMX application source only. It is separate
 from the isolated `tools/asio-bridge` 12/12 and 14/14 bridge evidence above.
@@ -108,9 +122,10 @@ Source identity at the checkpoint:
 - HEAD: `1200aac44e2cd0a9c2f4b7138e76750d5d68e125`
 - `origin/codex/syndocal-v1.2`: equal to HEAD
 - Working tree: dirty, including the untracked `app/src-tauri/src/asio_bridge_v2.rs`
-- The existing `target/release/syndocal.exe` is therefore not an artifact claim
-  for this dirty source checkpoint; a release build and exact-source native
-  launch remain required.
+- The then-existing `target/release/syndocal.exe` was not an artifact claim for
+  this historical dirty source checkpoint. The required release build and
+  exact-source native launch later completed at `ff61a6d`; physical ASIO
+  acceptance did not.
 
 Both commands were run from a fresh VS2022 Community 14.44 environment with
 the absolute Cargo linker pin below. `where.exe` was intentionally allowed to
@@ -379,7 +394,8 @@ Acceptance thresholds are overrun 0, callback p99 below 20% of the hardware buff
 - [ ] Distribution license/artifact path selected and notices/source obligations packaged.
 - [ ] Current final ABI-v2 DLL completes the second-vendor (`HOTONE AUDIO USB Audio Device`) 44.1 kHz / 2-channel / i32 / 128-frame stream trial and 100 clean Start/Stop/Close cycles. Current-source v2 bridge code passed this exact 100-cycle test on 2026-08-26; final release-DLL/native-app loading remains open.
 - [x] Bridge-only HOTONE/Ampero ABI-v2 44.1 kHz / 2-channel / i32 / 128-frame continuous run completed for 3,600,031 ms. This closes only that bridge-continuity evidence row and does not check any native/operator or matched 48 kHz row.
-- [ ] Local-only non-default `show-asio` artifact passes its own source/runtime-manifest/staging/artifact checks and is accepted for the 2026-08-30 controlled show. No such artifact is accepted yet; the normal signed updater is explicitly out of scope and must never govern it.
+- [x] Local-only non-default `show-asio` artifact was built and passed its source/runtime-manifest/staging/artifact checks at exact checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`; its manifest fixes `distributionApproved: false`, `sameHostOnly: true`, and `unbundled: true`.
+- [ ] That exact local-only artifact passes its dedicated checker immediately before use and completes physical native/operator acceptance for the 2026-08-30 controlled show. The normal signed updater is explicitly out of scope and must never govern it.
 - [ ] 44.1/48/96 kHz, 64/128/256 frames and channel-selection matrix completed where advertised.
 - [ ] Current final ABI-v2 DLL completes 100 Start/Stop/Close cycles on the explicit TOPPING 48 kHz / 2-channel / i32 / 128-frame configuration with zero warnings, terminal events, XRUNs, nonfinite samples, frame mismatch or fallback. The current-source 2026-08-26 attempt failed explicitly on cycle 1 with the same backend hardware-malfunction result before and after the bounded vendor-control-panel isolation retry; no fallback occurred.
 - [ ] Current-source ABI-v2 native VJ Desk configured and ran the explicit TOPPING 48 kHz / 128-frame path in F11 1920x1080, displayed zero overrun/XRUN, stopped to Ready, and returned from full screen with Esc. The recorded run is ABI-v1 historical evidence only.

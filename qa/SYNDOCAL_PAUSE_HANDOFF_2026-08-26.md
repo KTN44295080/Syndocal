@@ -1,372 +1,268 @@
-# Syndocal show-readiness pause / resume contract — 2026-08-26
+# Syndocal pause / resume authority — 2026-08-26
 
-> **Authoritative resume boundary while this file is current.** This is a
-> truthful operational handoff, not an acceptance record and not permission to
-> promote incomplete work. If the project is paused, resume from this document,
-> `AGENTS.md`, and the current worktree together. Do not infer completion from
-> a source build, a browser harness, a status label, or an earlier artifact.
+Status: **PAUSED AFTER THE CURRENT CLEANUP AND DOCUMENTATION TRANCHE**
 
-## 1. Identity at this draft checkpoint
+This is the current resumption contract for the 2026-08-30 performance. The
+show-completion deadline is **2026-08-29**, not the performance day. The code is
+not accepted as fully show-ready: software gates and alpha.12 artifacts exist,
+but the physical DJ, native ASIO, three-output, and DSF show-program gates below
+remain open.
 
-| item | recorded fact | status / required refresh |
-| --- | --- | --- |
-| KDMX branch | `codex/syndocal-v1.2` | Verify `git branch --show-current` on resume. |
-| Last already-pushed KDMX HEAD | `aed77a2626a0306fa466b3077f3fb7997919faf8` (`feat: freeze alpha.12 show-critical runtime`), equal to its upstream at the 2026-08-26 source-freeze snapshot | This is the integrated alpha.12 source checkpoint. A later small three-display GDI clean-break checkpoint and this final handoff still require their own commit/push and final refresh below. |
-| Preceding checkpoints | `7ee3b8f` (`test(cleanup): gate exact build cache reclamation`), `a0c76c5` (`test(native): harden window acceptance trust boundary`), `0df10d2` (`docs: correct current show completion authority`) | Test/documentation checkpoints preceding the integrated alpha.12 source freeze. Cache deletion and unrun physical gates are not implied. |
-| Product train | `1.2.0-alpha.12` source metadata is synchronized and the integrated source checkpoint is pushed. | Alpha.12 is a development artifact, not beta/RC/release. The final accepted standard and local-only Show-ASIO artifacts must each remain bound to the exact final pushed HEAD recorded below. |
-| DJ repository | `C:\Users\kouty\Desktop\rb-output`, branch `beta-v1.1.2`, pushed HEAD `925880068500d42d71b2671fa8a99e5895aca4e2` | Verify it remains equal to `origin/beta-v1.1.2`; do not replace it with an installer for this show-source exception. |
-| Current pre-final checkout artifact | PID `160808`, exact path `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, `1.2.0-alpha.12`, 58,471,936 bytes, SHA-256 `BBD4B9B5C803B3B00B38387A3C06A5CFFB49F6A88A3CB8AC5B4066FBB06363A1`, built from `aed77a2626a0306fa466b3077f3fb7997919faf8`; exactly one responsive maximized `Syndocal` window was observed | Valid evidence for the pushed source freeze only. The later GDI-harness checkpoint changes HEAD, so this process must be exact-path stopped and rebuilt/reverified before the final pause identity is recorded. |
+## 1. Exact checkpoints
 
-Additional protected state at this draft checkpoint:
+The checkpoints are deliberately separate. Do not relabel a later QA/docs
+commit as the source identity of an already-built binary.
 
-- `stash@{0}` is alpha.9 WIP (`e9209d6`) and `stash@{1}` is orphaned open-dmx
-  pacing. They are user/work history, not cleanup candidates; do not drop,
-  apply, or rewrite them without a separate attribution decision.
-- The companion worktree `C:\Users\kouty\Documents\KDMX-asio-persistence`
-  is on `codex/asio-persistence-v2`, HEAD/upstream
-  `0ab0ca46569b0ab4f08b3c61ca4f4f202c4a0de4`, with the following 12 tracked
-  dirty paths at the 2026-08-26 snapshot: `app/scripts/check-backend-operator-contract.mjs`,
-  `app/scripts/check-frontend-command-routing.mjs`,
-  `app/scripts/check-live-audio-input.mjs`, `app/src-tauri/src/control_plane.rs`,
-  `app/src-tauri/src/main.rs`, `app/src/App.tsx`,
-  `app/src/tauri-invoke-manifest.json`, `app/src/tauriInvokeCommands.ts`,
-  `app/src/types.ts`, `qa/ASIO_INPUT_ACCEPTANCE.md`, `qa/harnesses/README.md`,
-  and `qa/harnesses/check-asio-build.ps1`. It overlaps current App/main/ASIO
-  files and is protected concurrent evidence; do not merge, remove, clean, or
-  use it as current-checkout acceptance until its ownership is explicitly
-  reconciled.
-
-This file must be updated with the final exact commit/push/hash/process/gate
-facts immediately before any true pause. The placeholders labelled
-**IN-FLIGHT** below deliberately remain non-claims until the owner completes
-and an independent review accepts the exact frozen diff.
-
-## 2. Non-negotiable operating rules
-
-### Fail closed and make clean breaks
-
-- Invalid, ambiguous, stale, unsupported, unverified, or future state must
-  stop with a visible, actionable failure. It must not become a default,
-  guessed, normalized, or silently recovered state.
-- Do not add fallback/legacy/shim/retry paths merely to preserve an obsolete
-  route. When a clean break is selected, remove its retired entry points,
-  persisted data, schema/adapter paths, UI, tests, documentation, and generated
-  inventories in the same bounded tranche unless an explicit one-way migration
-  is required by real user data or an external protocol.
-- Current DJ wire authority is `syndocal-envelope-v2` only. Flat generic JSON,
-  `syndocal-envelope-v1`, aliases, and unknown adapters must reject without
-  conversion or fallback.
-
-### Parallel work, capability order, and ownership
-
-- The supervising Sol lane owns decomposition, integration decisions, exact
-  acceptance, and all completion claims. Delegated summaries are evidence, not
-  acceptance.
-- Capability order is **Sol > Ox (Zen / `opencode/x-preview-f-free`) > Terra >
-  Luna**. Ox is the default lane for bounded implementation, investigation, and
-  adversarial review. Terra is a secondary difficult lane; Terra changes need a
-  separate Ox review. Luna Max is only for small, explicit, low-ambiguity work.
-- Keep every safely independent lane occupied. Do not wait while an independent
-  audit, gate planning, documentation correction, or disjoint implementation is
-  available. Serialize only actual dependencies, exclusive UI/native/hardware
-  steps, destructive operations, or same-file ownership.
-- Assign files before editing. No two writers may edit the same file. Review is
-  read-only and independent until the implementation owner freezes the diff.
-- Every material implementation requires an independent adversarial review;
-  blockers found by review must be repaired and re-reviewed before integration.
-  Near the show deadline this means one bounded review of the changed authority
-  for concrete crash, wrong-output, data-loss, unsafe-process, or build-bypass
-  P0/P1 failures. Do not spend time or tokens on repeated whole-repository
-  reviews, stylistic P2 exploration, theoretical parser games, or already
-  accepted unchanged surfaces unless a focused gate supplies new evidence.
-
-### Checkpoint, version, warnings, and cleanup discipline
-
-- At every meaningful checkpoint: update the relevant QA/roadmap/release
-  documents, run focused gates, record warning counts, stage an explicit file
-  list, inspect staged diff/name list, commit, push, and verify upstream
-  equality. Preserve a failed push's commit and record the recovery rather than
-  rewriting history.
-- Advance product prerelease ordinals only for intentionally distributed
-  development artifacts. Synchronize Cargo, lockfile, frontend, Tauri, scripts,
-  artifact names, updater metadata, and current user-facing text. Run
-  `pnpm --dir app run check:release` after a version change. Product version is
-  not a schema/API/ABI version bump.
-- Warning ratchet: a modified file with a first-party warning blocks its tranche.
-  Do not use broad `allow`, `-Awarnings`, fake reads, or chunk-limit inflation.
-  Historical zero-warning measurements are not claims about the dirty alpha.12
-  tree; the full alpha.12 gate remains unmeasured and FC-28 recorded 12 open
-  first-party large-error clippy lints pending a fresh full-gate rerun.
-- Delete stale generated/cache material continuously, but only after its exact
-  recurring path set has a tracked cleanup harness, passing focused tests, and
-  an independent adversarial review. Never run cleanup deletion while the tree
-  is dirty or writers are active. Resolve each absolute target first; preserve
-  current artifacts, QA evidence, and user-authored files; record reclaimed
-  bytes. After deletion of shared dependency/cache trees, verify/rebuild the
-  active checkout from its frozen lockfile before calling cleanup safe.
-
-## 3. Windows native build and UI acceptance ceremony
-
-Before **every** Windows Cargo or Tauri native build/test, use the following
-exact local ceremony. A gate that lets Cargo use Git's `usr\bin\link.exe` is invalid
-and must be rerun from the beginning.
-
-1. Start `vcvars64.bat -vcvars_ver=14.44` in `cmd.exe /v:on`.
-2. Require the first `where.exe link.exe` result to be exactly:
-
-   ```text
-   C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
-   ```
-
-3. Set and print `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to that exact
-   absolute path. Do not use `%PATH%` after `vcvars64`; use delayed expansion
-   (`!PATH!`) so the compiler environment is retained. Fail closed if the exact
-   toolset/path is absent or not first.
-   The only edition-root exception is the official GitHub-hosted `windows-2022`
-   runner: only in that explicitly marked hosted context, require the exact
-   corresponding Visual Studio 2022 Enterprise 14.44.35207 `Hostx64\x64\link.exe`.
-   Never admit that exception on this local machine or on a self-hosted runner.
-4. Immediately before a release build, enumerate all processes, resolve their
-   executable paths, and terminate only a process whose exact resolved path is
-   this checkout's `target/release/syndocal.exe`. Never terminate Daslight or a
-   similarly named executable from another checkout.
-5. Run `pnpm --dir app tauri build --no-bundle` successfully.
-6. Launch that exact resulting `target/release/syndocal.exe`; verify exactly one
-   responsive `Syndocal` window. Maximize that verified target before any UI
-   automation/manual QA (except a deliberate restore/minimize test).
-
-Browser, Vite, TypeScript, static PowerShell, and Rust-unit results are useful
-but never substitute for this native ceremony. A native/UI/runtime tranche is
-not complete until this exact executable gate is recorded.
-
-## 4. DJ-Link controlled source-acceptance boundary
-
-The source checkpoint at `rb-output` HEAD `9258800` is pushed and the controlled
-source launcher/preflight has passed. That does **not** complete physical DJ-Link
-acceptance.
-
-- The only show route is the checked-out source launcher in the same PowerShell
-  that sets checkout-external `DJ_AGENT_CONFIG_PATH`; no installer/shortcut may
-  be substituted for the current source-acceptance exception.
-- The intended external JSON selects Syndocal host `192.168.50.1`, DJ local NIC
-  `192.168.50.2`, `CustomMIDI1` with its exact enumerated port, and the sole
-  adapter `syndocal-envelope-v2`.
-- The user must rotate/copy the currently displayed Syndocal one-time token only
-  after an accepted current native Syndocal artifact is running. A fake token may
-  prove preflight only; it must never be used for a no-argument show start.
-- The DJ process, Rekordbox, MIDI output, pedal, authenticated HELLO/ACK,
-  StateSync, Master-track trigger, timing/position/8-4-2 loop behavior, release,
-  disconnect/reconnect, and both-PC restart are **hardware acceptance 0/12**.
-  A `connected` label or preflight pass is not authenticated operation.
-
-### Exact DJ resume start
-
-1. Wake the DJ PC and attach the wired show LAN.
-2. Obtain a newly accepted/current Syndocal native artifact, explicitly bind the
-   FOH listener to `Ethernet 4 / 192.168.50.1`, and rotate/copy its one-time
-   token into the checkout-external JSON.
-3. In a fresh DJ-PC PowerShell, set `DJ_AGENT_CONFIG_PATH` to the external JSON
-   and run `start-all.bat --preflight-only`. Record the result.
-4. Only with the real token and an accepted listener, run `start-all.bat` with no
-   arguments. Verify the Setup values, then execute and record all 12 physical
-   acceptance rows. On any mismatch, stop and diagnose the authoritative route;
-   do not add a fallback launcher or adapter.
-
-## 5. Show target and explicitly deferred authoring
-
-The public performance is **2026-08-30**, but the development, native/hardware
-acceptance, and show-project preparation completion deadline is **2026-08-29**.
-August 30 is not development contingency time. The immediate operating objective
-is therefore to be show-operable by August 29 in the physical three-screen
-scenario:
-
-| role | required physical native resolution |
+| Layer | Exact authority |
 | --- | --- |
-| Editor / operator | 1920x1080 |
-| LED panel | 1920x1080 |
-| Projector | 3840x2160 |
+| Runtime/code and both alpha.12 artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
+| Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
+| Show-ASIO Cargo hardlink fix | `fb25ab106e9994fb6215520795961f4909bea7ae` and `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
+| Cleanup inaccessible-process fix | `ef7b6479f69e89dd134acfe39051f43c22f769aa` |
+| Cleanup exact Codex-control-plane gate | `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` |
+| This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-The 2026-08-26 read-only physical inventory found five connected displays and
-resolved the active show-role mapping by stable DisplayConfig identity. Its
-current GDI observations were Editor `DISPLAY2` at 1920x1080/DPI 96, LED
-`DISPLAY33` at 1920x1080/DPI 144, and Projector `DISPLAY3` at 3840x2160/DPI 144.
-GDI `DISPLAY<n>` names are transient observations, not role authority; the LED
-was previously observed as `DISPLAY5` without its physical identity changing.
-The projector is physically/currently 4K; the earlier statement that this PC
-had no 4K display confused its 150% scaling with native resolution and was
-wrong. The final native three-output acceptance must bind each role to its exact
-stable identity, then verify the current nonblank GDI name, DPI, physical
-resolution, and window binding rather than infer a route from effective CSS
-coordinates or a hardcoded GDI number.
+Branch at cleanup checkpoint: `codex/syndocal-v1.2`; HEAD and upstream were
+both `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` before the final documentation
+commit.
 
-The exact source import is
-`C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc` (not a similarly named file).
-It must be imported through the evidence-bound importer/report path. The
-authored show project is deferred until the current native product is accepted;
-do not claim it exists now. After that boundary, create representative Lighting,
-temporary deterministic LED/projector media, and the `人生オーバー` / `惑う星`
-Timelines. The final user-authored artistic scenes and videos remain outside
-software acceptance, but the software path must prove the Master trigger,
-position sync, 8/4/2 loop, pedal release to band continuation, BPM-aware
-automatic next-Timeline transition, save/restart, and physical route binding.
+## 2. Mandatory operating rules
 
-## 6. ASIO product and local-only licensing boundary
+- The capability order is **Sol > Ox-alpha (`opencode/x-preview-f-free`) >
+  Terra > Luna**. Sol owns decomposition, integration, and completion claims.
+  Ox is the default bounded implementer and independent adversarial reviewer.
+  Terra implementation requires Ox review. Luna Max is limited to small,
+  explicit, low-ambiguity units.
+- Keep independent lanes busy for material work, assign non-overlapping file
+  ownership, and do not let reviewers edit until an implementation checkpoint
+  is stable. Parallelism must reduce elapsed time, not create merge ambiguity.
+- **Fail-close**: missing, stale, ambiguous, unauthenticated, or unverified
+  state must produce an explicit typed failure. Do not silently promote it to a
+  working state.
+- **Clean-break**: remove retired designs and legacy paths when their replacement
+  is accepted. Do not add fallback or compatibility paths without a documented
+  compatibility boundary and tests.
+- The pinned Microsoft VS Community 14.44 linker must be first and
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` must be explicit. Never accept
+  Cargo selecting Git's `link.exe` merely because a build happened to finish.
+- Before each native release build, resolve and stop only this checkout's exact
+  `target/release/syndocal.exe`. After build, launch that exact binary and verify
+  exactly one responsive, maximized `Syndocal` window. Browser-only evidence is
+  not native acceptance.
+- Every meaningful checkpoint updates its QA/release authority, reports
+  first-party warnings, then commits and pushes. Published artifacts and tags
+  are immutable; prerelease ordinals advance after product changes.
+- Cleanup is exact-path, reviewed, clean-tree, upstream-equal, no-writer, and
+  literal-path only. A blocked Plan never authorizes Apply.
+- Do not add new domain policy directly to `app/src/App.tsx` or
+  `app/src-tauri/src/main.rs`. Extract the owning domain first and preserve the
+  contract with focused tests.
 
-Windows ASIO is a release requirement, not a preference. Default MIT/WASAPI and
-the separately licensed non-default ASIO bridge remain distinct.
+## 3. Current alpha.12 artifacts
 
-ASIO acceptance still requires explicit device enumeration/selection,
-sample-rate/native-format/channel/buffer negotiation, low-latency callback I/O,
-exclusive open/start/stop/free behavior, typed fail-closed disconnect/XRUN/
-no-callback recovery, stale-selection lock after persistence/re-enumeration,
-deterministic tests, and real-device QA. The authoritative ledger is
-`qa/ASIO_INPUT_ACCEPTANCE.md`.
+### Standard MIT/WASAPI artifact
 
-The show-local ASIO packaging implementation and deterministic self-tests are
-integrated, but the exact final pushed-head artifact construction and physical
-device acceptance remain **IN-FLIGHT**. It must remain
-local-only and separately licensed: no normal installer/updater/artifact may
-stage, glob, or publish the bridge until the exact DLL/hash/license/notice/
-manifest gate approves it. Do not report the existing direct-device evidence as
-fresh alpha.12 native UI, persistence, hot-plug/fault, one-hour soak, or
-input-to-pixel latency acceptance.
+- Source checkpoint: `ff61a6d`
+- Path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- Product version: `1.2.0-alpha.12`
+- Size: `58,471,936` bytes
+- SHA-256: `224F512673C8A84EAEB2557691414B2F6CA090D1201E357DCD9B38F019237680`
+- Pause-time process: PID `158832`, exact-path process count `1`, responsive
+  window count `1`, title `Syndocal`, maximized. This was reverified read-only
+  on 2026-08-26 from the exact executable path, process identity, window state,
+  version, byte count, and file hash.
 
-## 7. Stabilization tranche progress (not final acceptance)
+### Local-only Show-ASIO artifact
 
-The following were progressed while preserving the remaining work as open:
+- Source checkpoint: `ff61a6d`
+- Directory:
+  `C:\Users\kouty\Documents\KDMX\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`
+- Application: `syndocal-show-asio.exe`, `58,637,824` bytes, SHA-256
+  `1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`
+- Bridge: `syndocal_asio_bridge.dll`, `813,568` bytes, SHA-256
+  `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`
+- Manifest: `show-asio-local-manifest.json`, `8,660` bytes, SHA-256
+  `DCDFA0D381C851483D9E206637E803920ADDD6CC5B0C313780604FFC1D0EAAC4`
+- Manifest payload files: `14`; filesystem files including the manifest: `15`.
+- `distributionApproved:false`; same-host, unbundled, separately licensed,
+  local show artifact only. It is not a public installer/updater artifact.
+- It was built, manifest-checked, launched, and verified as one responsive
+  maximized window, then its exact PID was stopped. Physical ASIO operator
+  acceptance remains open.
 
-- `0df10d2` corrected active completion guidance so historical warning/v1/network
-  observations are not current instructions; its subsequent topology correction
-  makes the old `192.168.1.34` route explicitly historical and names the current
-  `.50.1/.50.2` show topology.
-- `a0c76c5` hardened the native-window acceptance trust boundary. It is a test
-  checkpoint only; it does not prove current integrated native UI, hardware, or
-  alpha.12 completion.
-- `7ee3b8f` added and independently reviewed an exact cleanup plan/test gate for
-  `target/debug/incremental`. Its current production Plan result is blocked by
-  the dirty worktree; no deletion has been run and reclaimed bytes remain zero.
-- DJ source checkpoint `9258800` documents the controlled source path and its
-  fail-closed configuration preflight. Hardware remains 0/12.
-- Integrated checkpoint `aed77a2` contains the correlated Timeline close fence,
-  protocol/engine active-cue validation, Display presentation revalidation,
-  App ASIO revalidation, runtime/packaging checks, Spout/NDI closure, and the
-  local-only ASIO build/checker route. Focused gates and independent reviews
-  found no unresolved P0/P1 in the frozen source checkpoint.
-- Protocol focused tests passed 175/175; I/O focused tests passed 158/158;
-  engine full tests passed 868 with two manual benchmarks ignored; Spout passed
-  37 with five hardware-only tests ignored; NDI passed 76. The complete warning
-  matrix recorded zero first-party warnings in every executed configuration.
-- Frontend localization passed 3568/3568, Timeline source shelf passed, and the
-  full Timeline slim matrix passed at 1920x1080, 1920x1032, 2048x1152,
-  1366x768, and 1280x720. `pnpm --dir app build`, release metadata, release
-  self-tests, and the exact-linker native release configuration passed.
-- The three-display harness now accepts only the standard exact checkout
-  artifact or the same-host manifest-verified Show-ASIO artifact. Its additional
-  GDI clean-break removes hardcoded `DISPLAY<n>` role authority and verifies
-  stable-identity renumber acceptance plus role-swap rejection. PS7 and Windows
-  PowerShell 5.1 self-tests each pass 80/80. Ox-alpha reported no P0/P1 and
-  approved the focused diff; its one accepted residual P2 is that the inventory
-  blank-GDI test invokes the shared guard directly while the selected-monitor
-  and window-metrics blank-GDI tests exercise their full sample paths. The final
-  checkpoint SHA is pending below.
-- The DJ-Link ACK writer now makes serialization/send an explicit terminating
-  Result path with zero fake bytes and no legacy retry. Hardware remains 0/12.
+## 4. Completed software evidence
 
-No item in this section promotes the product to beta/RC/release, a clean
-alpha.12 artifact, ASIO completion, DJ hardware completion, three-display
-completion, or the authored show project.
+- protocol: `175/175`
+- I/O: `158/158`
+- engine: `868` passed, `2` explicit hardware/manual ignored
+- Spout: `37` passed, `5` explicit hardware ignored
+- NDI: `76` passed
+- localization: `3568/3568`
+- Timeline shelf focused gate: PASS
+- Timeline slim layouts: PASS at `1920x1080`, `1920x1032`, `2048x1152`,
+  `1366x768`, and `1280x720`
+- frontend: `pnpm --dir app build` PASS
+- native warning gate: `pnpm --dir app run check:warnings --
+  --configuration windows-native-release` PASS; it ran
+  `pnpm --dir app tauri build --no-bundle`
+- First-party warnings were `0` for:
+  `windows-default-all-targets`, `windows-default-release`,
+  `windows-workspace-tests`, `windows-syndocal-asio`,
+  `windows-syndocal-ndi`, `windows-syndocal-spout`,
+  `windows-asio-bridge`, `frontend-typescript-vite-windows`, and
+  `windows-native-release`. No checkpoint added a first-party warning.
+- Three-display stable-identity harness: PowerShell 7 and 5.1 both `80/80`.
+- Cleanup harness after the Codex-control-plane safety fix: PowerShell 7 and
+  5.1 both `93/93`.
 
-## 8. Ordered open work at pause
+Independent Ox results:
 
-1. **Finish and push the bounded GDI clean-break checkpoint.** Preserve stable
-   DisplayConfig identity as sole role authority; rerun both PowerShell selftests
-   and one final bounded review before committing.
-2. **Construct exact final artifacts.** Rebuild/reverify the standard alpha.12
-   executable from the final pushed HEAD, then build/check the local-only
-   Show-ASIO artifact from the same clean pushed HEAD. Record exact paths,
-   versions, byte counts, hashes, manifests, and process identity.
-3. **Run native physical acceptance.** Verify the exact single maximized main
-   window, 1920 editor + 1920 LED + 3840 projector physical bindings, ASIO,
-   persistence/restart, and faults using the accepted alpha.12 executable.
-4. **Run DJ physical matrix.** Use the one-time-token source route and record all
-   12 rows; fail closed on any missing HELLO/ACK, mapping, timing, or restart
-   result.
-5. **Import and exercise DSF show material.** Import exact `DSF2026.dvc`, save
-   the importer report, construct the representative three-output project, and
-   execute the two-song scenario with temporary media before user artistic work.
-6. **Clean only after a stable pushed freeze.** Run the reviewed exact-path
-   cleanup harness only after no writers/dirty state remain; record deletion
-   targets and reclaimed bytes, then re-verify dependencies.
-7. **Retire mega-file coupling after the show-critical boundary.** `App.tsx`
-    and `main.rs` still combine multiple frontend, Tauri, engine, recovery, and
-    output authorities. The near-show gate requires an integration review of
-    their frozen hashes; a later bounded clean-break must extract authority-
-    owned modules without adding compatibility paths. This debt is not silently
-    declared solved by alpha.12.
-    - At the 2026-08-26 pre-freeze audit, `app/src/App.tsx` was 28,810 lines
-      (1,202,918 bytes) and `app/src-tauri/src/main.rs` was 128,698 lines
-      (4,937,271 bytes). The current tranche was still net-positive in both;
-      therefore the size/coupling obligation is **open**, not completed.
-    - Effective extractions already in use are `bankAuthority.ts`,
-      `projectTransactionRecovery.ts`, `liveAudioInputSelectionStorage.ts`,
-      `videoOutputWindowObservation.ts`, `asio_bridge_v2.rs`, and
-      `physical_output_fence.rs`. They are evidence of partial reduction only.
-    - From the next tranche onward, no new domain policy or authority may be
-      added directly to `App.tsx` or `main.rs`. New work must enter an owned
-      module; changes to the mega-files are limited to thin wiring until the
-      remaining seams are removed.
-    - Post-show extraction order is: native live-audio runtime, native display
-      output, cue-list authority mutation, frontend project-transaction
-      controller, then frontend bank/live-audio hooks. Each extraction is a
-      clean break with focused tests; no parallel legacy route or silent
-      fallback may be retained.
+- Display stable identity: APPROVE; no P0/P1/P2 after blank-GDI coverage.
+- Show-ASIO hardlink topology: initial REJECT identified P0/P1; the final exact
+  app/bridge hardlink pair passed follow-up review with no P0/P1.
+- Cleanup inaccessible-process metadata: APPROVE; no P0/P1/P2.
+- Exact Codex-control-plane exception: final APPROVE; all prior P2-1 through
+  P2-5 resolved, no remaining P0/P1/P2. Ox independently reran `93/93` on both
+  PowerShell versions.
 
-## 9. Exact resume checklist
+## 5. Cleanup final result
 
-Before allocating any new implementation task:
+The only reviewed production candidate was:
+
+`C:\Users\kouty\Documents\KDMX\target\debug\incremental`
+
+Read-only inventory measured `57,544,180,106` logical bytes, `29,401` files,
+and `593` directories. From clean, upstream-equal checkpoint `c40cfd8`, the
+production Plan was run with:
 
 ```powershell
-Set-Location C:\Users\kouty\Documents\KDMX
-git branch --show-current
-git rev-parse HEAD
-git status --short
-git rev-parse --abbrev-ref --symbolic-full-name '@{u}'
-git rev-list --left-right --count '@{u}'...HEAD
-
-git -C C:\Users\kouty\Desktop\rb-output branch --show-current
-git -C C:\Users\kouty\Desktop\rb-output rev-parse HEAD
-git -C C:\Users\kouty\Desktop\rb-output status --short
+& .\qa\harnesses\invoke-syndocal-build-cache-cleanup.ps1
 ```
 
-Then:
+Final result:
 
-1. Compare all results against Section 1. If any identity, upstream, owner, or
-   process differs, update this handoff before editing and treat unexpected work
-   as someone else’s until attributed.
-2. List active agents and assign non-overlapping files. Fill safe independent
-   Ox lanes first; assign a separate read-only Ox reviewer for each material
-   frozen change.
-3. Re-run or explicitly mark stale every recorded gate. Never reuse alpha.11,
-   browser-only, previous device, or previous LAN evidence as alpha.12 proof.
-4. Apply the exact-linker ceremony before any Cargo/Tauri operation; verify the
-   exact native process path before terminating it.
-5. Before any pause, replace every **IN-FLIGHT** label with either an exact
-   owner/frozen-diff/gate/review state or an explicit blocked reason; update
-   branch/HEAD/upstream, artifacts, processes, warnings, hardware results,
-   deletion results, and the first next action. Commit/push that handoff, then
-   terminate delegated continuation work if an actual stop is requested.
+- Mode: `Plan`
+- Outcome: `Blocked`
+- Blocker: `HardlinkDetected`
+- Exact first blocker:
+  `C:\Users\kouty\Documents\KDMX\target\debug\incremental\audio-0nuw1tgmhpz4j\s-hln3a7p0dg-1xgadpp-2vnp8sov454s93u5khsbi2d9r\metadata.rmeta`
+- Link count: `2`; the second name is
+  `C:\Users\kouty\Documents\KDMX\target\debug\deps\libaudio-37f836d0d4d0a1f2.rmeta`.
+- Apply: **not run**
+- Reclaimed: `0` bytes
+- Recovery: not applicable because nothing was deleted.
 
-## 10. Final pause fields — **IN-FLIGHT / MUST REFRESH**
+Do not bypass this blocker with an ad-hoc `Remove-Item`. Resumption may design a
+reviewed hardlink-aware candidate proof, but that is new work and was
+deliberately not added to this stop tranche.
 
-| field | final value required before a true stop |
-| --- | --- |
-| KDMX branch / HEAD / upstream equality | **IN-FLIGHT** |
-| Staged and unstaged owned files by agent | **IN-FLIGHT** |
-| Protected untracked evidence / stashes | **IN-FLIGHT** |
-| Running process paths, PID, version, SHA-256 | **IN-FLIGHT** |
-| Exact gate commands, pass/fail counts, first-party warning counts | **IN-FLIGHT** |
-| Independent Ox reviews and unresolved P0/P1/P2 | **IN-FLIGHT** |
-| DJ 12-row hardware evidence | **IN-FLIGHT; currently 0/12** |
-| ASIO physical-device evidence | **IN-FLIGHT** |
-| Three-display and DSF show-project evidence | **IN-FLIGHT** |
-| Cleanup absolute paths and reclaimed bytes | **IN-FLIGHT; do not delete while dirty/writers exist** |
+## 6. Exact physical display authority
+
+Five active displays were observed. Stable DisplayConfig identity is authority;
+GDI `DISPLAYn` numbers are current observations and may change.
+
+| Role/status | Stable identity | Current GDI | Mode | DPI |
+| --- | --- | --- | --- | --- |
+| available | `\\?\DISPLAY#IOC9125#5&eb37e8d&1&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` | `DISPLAY1` | `2560x1440` | `120` |
+| intended projector | `\\?\DISPLAY#MSI3DD2#5&eb37e8d&1&UID4357#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` | `DISPLAY3` | `3840x2160` | `144` |
+| intended editor | `\\?\DISPLAY#PXO2500#5&eb37e8d&1&UID4355#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` | `DISPLAY2` | `1920x1080` | `96` |
+| intended LED | `\\?\DISPLAY#PXO1560#5&2c959af3&0&UID768#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` | `DISPLAY33` | `1920x1080` | `144` |
+| available | `\\?\DISPLAY#CRXED00#5&2c959af3&0&UID772#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` | `DISPLAY34` | `2560x720` | `96` |
+
+The earlier assertion that Windows had no `3840x2160` mode was wrong; DPI
+scaling caused the confusion. Syndocal must still bind roles by stable identity,
+not infer roles from resolution.
+
+Discovery-only evidence exists for both artifacts and correctly returned
+`not-configured`, `accepted:false`, `native_hardware_claim:false`. A real Apply
+with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
+`3840x2160` has not been accepted.
+
+## 7. DJ-Link authority
+
+- Checkout: `C:\Users\kouty\Desktop\rb-output`
+- Branch: `beta-v1.1.2`
+- HEAD/upstream: `925880068500d42d71b2671fa8a99e5895aca4e2`, clean at pause audit
+- FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
+- The controlled source path requires the external show JSON through
+  `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
+- Physical acceptance remains `0/12`: real token, HELLO/ACK, Rekordbox track
+  detection, MIDI output, pedal, 8/4/2-beat loop, release, reconnect, and restart
+  are not recorded as accepted.
+
+## 8. Explicit remaining show gates
+
+These are OPEN, not implicit completion claims:
+
+1. Run the full DJ-Link 12-row hardware table on `.50.1/.50.2` with the real
+   show token and retain logs.
+2. Run Show-ASIO from its exact local-only artifact: enumerate/select the real
+   device; verify persistence/revalidation; negotiate native format, sample
+   rate, channels, and buffer; exercise Start/Stop/Close, exclusive contention,
+   reset/resync/XRUN/unplug/no-callback/restart, and measure latency.
+3. Treat the recorded `44.1 kHz / 3,600,031 ms` run as bridge-only. Matched
+   `48 kHz` ASIO/WASAPI and native operator acceptance remain open.
+4. Configure and Apply the stable three-output roles, verify exact placement and
+   visible content on all three physical displays, then save/restart and repeat.
+5. Import `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`; retain the import report and
+   exact skipped/fail-closed mappings. Create representative Lighting scenes,
+   LED/projector substitute media, the two required timelines, DJ trigger and
+   loop/release/transition behavior, then save/restart and run the full show
+   sequence. User-authored final lighting remains outside this minimum proof.
+6. Complete native/manual QA for recent UI fixes, including Timeline compact
+   Bank/Scene placement, Lighting-only Bank management, context menus, empty-bank
+   control de-duplication, active-scene color, bank toolbar alignment, scene FX
+   internal scroll/removal/density/width, detached Timeline/Stage/source panes,
+   and integrated Stage rendering.
+7. Decide and prove a hardlink-aware cleanup contract before deleting the
+   current incremental cache; otherwise leave it untouched.
+
+## 9. Giant-file debt is not resolved
+
+Current exact metrics:
+
+- `app/src/App.tsx`: `28,810` lines, `1,202,918` bytes, SHA-256
+  `4BC665227797FA2F138A802DC9979B93D44881A1E2182C921B1B5BD67E5DACB2`
+- `app/src-tauri/src/main.rs`: `128,698` lines, `4,937,271` bytes, SHA-256
+  `8D5C30181151B7AB16404A4A8320607A06377524EA334D35A24A5BD7CCBDAE17`
+
+This remains an architectural risk: frontend, Tauri, engine, and recovery paths
+still touch shared state through oversized compilation units. Do not attempt a
+whole-file rewrite before the show. New work must extract one owned domain at a
+time behind existing contracts, beginning with the smallest show-critical seam
+that otherwise requires touching these files.
+
+## 10. Preserved Git state and resumption order
+
+- Companion worktree:
+  `C:\Users\kouty\Documents\KDMX-asio-persistence`, branch
+  `codex/asio-persistence-v2`, HEAD/upstream
+  `0ab0ca46569b0ab4f08b3c61ca4f4f202c4a0de4`.
+- Its exact 12 dirty tracked paths are:
+  `app/scripts/check-backend-operator-contract.mjs`,
+  `app/scripts/check-frontend-command-routing.mjs`,
+  `app/scripts/check-live-audio-input.mjs`,
+  `app/src-tauri/src/control_plane.rs`, `app/src-tauri/src/main.rs`,
+  `app/src/App.tsx`, `app/src/tauri-invoke-manifest.json`,
+  `app/src/tauriInvokeCommands.ts`, `app/src/types.ts`,
+  `qa/ASIO_INPUT_ACCEPTANCE.md`, `qa/harnesses/README.md`, and
+  `qa/harnesses/check-asio-build.ps1`. Preserve these user/agent-owned edits.
+- Preserved stashes:
+  `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
+  pacing WIP. Do not drop or apply them without a separate adjudication.
+- Main checkout had no untracked files at the `c40cfd8` cleanup checkpoint.
+
+Resume in this order:
+
+1. Read this file, `qa/ASIO_INPUT_ACCEPTANCE.md`, and the DJ acceptance table.
+2. Recheck main/companion/DJ branch, HEAD, upstream, dirty ownership, stashes,
+   exact artifact hashes, and exact running process identity.
+3. Prioritize physical acceptance over installer polish or broad refactoring:
+   DJ 12-row table, native ASIO, stable three-output Apply, then DSF show flow.
+4. Fix only evidence-backed blockers; keep unsupported mappings fail-closed.
+5. After each meaningful pass, update authority, report warning counts,
+   commit, and push.
+
+This pause does not claim public-release readiness or completed performance
+acceptance. It preserves a verified alpha.12 software/artifact checkpoint and
+the shortest exact route to the remaining physical show proof.

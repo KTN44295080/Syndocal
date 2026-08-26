@@ -5,11 +5,11 @@ Updated: 2026-08-26
 Status: Required; immutable published v1.1.3 is blocked by its DJ_MASTER_CHANGED mismatch; source version 1.1.4 is pushed on peer branch `beta-v1.1.2` at `925880068500d42d71b2671fa8a99e5895aca4e2` (runtime checkpoint H `c6ebb0f`); the controlled target-DJ-PC source route is the sole current show path; KDMX integration and hardware acceptance remain pending at 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-Current-train notice (updated 2026-08-26): KDMX pushed HEAD
-`07a9b75f25e74e58739be251aad3b3f1e98986f7` metadata
-remains `1.2.0-alpha.11`; the dirty uncommitted worktree synchronizes
-in-progress `1.2.0-alpha.12` metadata that is not yet a reproducible checkpoint
-or native artifact. The alpha.10 pause was rescinded before promotion. Follow
+Current-train notice (updated 2026-08-26): the exact KDMX
+`1.2.0-alpha.12` runtime/artifact source checkpoint is
+`ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`; later cleanup and documentation
+checkpoints do not redefine its native artifact identity. The alpha.10 pause
+was rescinded before promotion. Follow
 `AGENTS.md` and `qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` for current work.
 This file remains the detailed DJ/pedal gate. The alpha.8 references in the
 2026-08-24 checkpoint below are historical evidence only, not a claim that

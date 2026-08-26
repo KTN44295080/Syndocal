@@ -101,13 +101,25 @@ The actual route requires all of the following, with no guessing:
 - application integration feature `show-asio = ["asio"]`, while
   `default = ["libav", "spout"]` remains unchanged.
 
-The earlier `SHOW_ASIO_FEATURE_MISSING` block is resolved:
-`app/src-tauri/Cargo.toml` now defines the exact `show-asio = ["asio"]` feature
-while the normal defaults remain unchanged. No real Show-ASIO artifact has been
-built yet. The current observed route remains blocked before Cargo by the
-missing explicit `FFMPEG_DIR` and by the requirement for a completely clean,
-pushed worktree whose `HEAD` exactly equals its upstream. These are hard
-preconditions, not fallback invitations.
+The earlier `SHOW_ASIO_FEATURE_MISSING` and pre-build prerequisite blocks were
+resolved for exact committed/pushed checkpoint
+`ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`.
+`app/src-tauri/Cargo.toml` defines the exact `show-asio = ["asio"]` feature while
+the normal defaults remain unchanged. That checkpoint built and
+manifest-verified
+`target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
+Its application `syndocal-show-asio.exe` is 58,637,824 bytes, SHA-256
+`1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`;
+its ABI-v2 `syndocal_asio_bridge.dll` is 813,568 bytes, SHA-256
+`40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`;
+and `show-asio-local-manifest.json` has SHA-256
+`DCDFA0D381C851483D9E206637E803920ADDD6CC5B0C313780604FFC1D0EAAC4`.
+The manifest records `distributionApproved: false`, `sameHostOnly: true`, and
+`unbundled: true`. This closes the exact build/manifest checkpoint only. The
+dedicated checker must still pass immediately before use, and current physical
+native/operator, driver/recovery, formal matched 48 kHz, and measured-latency
+acceptance remain open. No installer, updater, copy, archive, or public
+distribution is approved.
 
 ## Unsupported cases
 

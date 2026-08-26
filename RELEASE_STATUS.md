@@ -1,18 +1,18 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-26
-Branch: `codex/syndocal-v1.2` at pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7` (committed metadata remains `1.2.0-alpha.11`; the dirty uncommitted worktree synchronizes in-progress metadata to `1.2.0-alpha.12`, which is not yet a reproducible checkpoint, tag, or native artifact; last accepted native checkpoint/artifact: alpha.11)
+Branch: `codex/syndocal-v1.2`; current pushed cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` is equal to upstream, while the exact `1.2.0-alpha.12` runtime/artifact source checkpoint remains `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Later cleanup and documentation checkpoints do not redefine either native artifact's source identity.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
 
 > Current continuation note (resumed 2026-08-25): the requested pause after
 > `1.2.0-alpha.10` was rescinded before final promotion. The accepted integrated
-> checkpoint advanced through alpha.11; pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7` metadata
-> remains `1.2.0-alpha.11`, while only the uncommitted dirty worktree
-> synchronizes in-progress `1.2.0-alpha.12` metadata (2026-08-26), which is not
-> yet a reproducible checkpoint or artifact. Alpha.10 and alpha.11 remain
-> immutable source checkpoints and historical artifacts. The
+> checkpoint advanced through alpha.11 and then to the committed, pushed
+> `1.2.0-alpha.12` runtime/artifact checkpoint
+> `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Alpha.10 and alpha.11 remain
+> immutable source checkpoints and historical artifacts; cleanup-only commits
+> after `ff61a6d` do not change the alpha.12 binary provenance. The
 > [completion flow](qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md) is again the active
 > dependency-ordered work authority. The [post-alpha.10 snapshot](qa/SYNDOCAL_POST_ALPHA10_PAUSE_HANDOFF_2026-08-24.md),
 > [2026-08-19 Codex handoff](qa/CODEX_HANDOFF_2026-08-19.md),
@@ -38,15 +38,15 @@ intentional rejected-inventory alpha.11 fixture in
 claims no native build, installer, or hardware acceptance; concurrent
 implementation lanes own that verification.
 
-Boundary correction (2026-08-26): this advance currently exists only as
-uncommitted working-tree state on top of pushed HEAD `07a9b75f25e74e58739be251aad3b3f1e98986f7`, whose committed
-metadata remains `1.2.0-alpha.11`. `pnpm --dir app run check:release` and its
-self-test pass only while their supporting checker sources (for example the
-untracked `check-windows-release-artifacts.mjs`, `windows-runtime-inventory.mjs`,
-`strict-json.mjs`, and `check-asio-packaging.mjs`) are present in the worktree,
-so this is not yet a reproducible committed checkpoint, tag, installer, or
-native artifact; no alpha.12 binary/source equivalence or native acceptance is
-claimed, and no product version file was changed by this documentation note.
+Boundary correction (2026-08-26): this advance is committed and pushed in the
+exact runtime/artifact source checkpoint
+`ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`. Its complete executed warning
+matrix recorded zero first-party warnings. The standard native artifact is
+`target/release/syndocal.exe`, 58,471,936 bytes, ProductVersion/FileVersion
+`1.2.0-alpha.12`, SHA-256
+`224F512673C8A84EAEB2557691414B2F6CA090D1201E357DCD9B38F019237680`.
+The separate same-host Show-ASIO artifact is recorded below. Neither artifact
+closes physical DJ, ASIO, display, or DSF acceptance.
 
 ## 2026-08-26 current near-show authority correction
 
@@ -70,19 +70,27 @@ adapter, hardware, and native evidence below is not promoted into that path.
 - The 44.1 kHz HOTONE/Ampero ABI-v2 bridge-only run completed for
   `3,600,031 ms`. It does not close the formal matched 48 kHz ASIO/WASAPI,
   current native operator, persistence/revalidation, occupied/reset/unplug/
-  XRUN/no-callback recovery, or measured-latency gates. Warning evidence is
-  configuration-focused only; the artifact-wide first-party warning gate is
-  still open.
-- The proposed show-ASIO build for the 2026-08-30 performance is a separately
+  XRUN/no-callback recovery, or measured-latency gates. The complete warning
+  matrix executed for checkpoint `ff61a6d` recorded zero first-party warnings;
+  this warning result is not physical ASIO acceptance.
+- The Show-ASIO build for the 2026-08-30 performance is a separately
   licensed, non-default, local-only `show-asio` feature/overlay. It is outside the normal MIT
   installer and signed-updater route, which must never select, repair, replace,
-  or attest it. Its own source identity, runtime manifest, staging, and artifact
-  checker must pass; **no show-ASIO artifact is accepted yet**.
-- Commit `7ee3b8f` tracks and independently reviewed only the cleanup safety
-  harness. Its current exact candidate set contains only
-  `target/debug/incremental`; no Apply deletion has run and reclaimed bytes are
-  **0**. Every other previously listed build or ASIO path remains protected or
-  blocked on exact ASIO ownership/evidence review.
+  or attest it. Checkpoint `ff61a6d` built and manifest-verified
+  `target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
+  Its application is 58,637,824 bytes, SHA-256
+  `1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`;
+  its ABI-v2 bridge is 813,568 bytes, SHA-256
+  `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`.
+  The manifest remains `distributionApproved: false`, `sameHostOnly: true`, and
+  `unbundled: true`. It must pass its dedicated checker immediately before use;
+  physical native/operator acceptance remains open.
+- Cleanup safety is pushed through `c40cfd8` (including predecessor `ef7b647`).
+  The production Plan's only candidate remains `target/debug/incremental`, but
+  it is currently blocked by `HardlinkDetected`; no Apply deletion has run, no
+  path was deleted, and reclaimed bytes are **0**. Every other previously listed
+  build or ASIO path remains protected or blocked on exact ownership/evidence
+  review.
 
 ## 2026-08-25 exact Windows linker checkpoint
 

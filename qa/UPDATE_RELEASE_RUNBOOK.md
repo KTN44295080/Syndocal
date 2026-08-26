@@ -52,12 +52,15 @@ or attest a local-only show-ASIO build. Do not create a `stable`, `beta`, or
 `nightly` endpoint that serves it, and do not interpret updater metadata or a
 normal MIT package check as show-ASIO provenance.
 
-The local-only path requires its own exact source identity, separately licensed
-bridge identity, checkout-external runtime manifest, staging inventory, and
-artifact checker. No show-ASIO artifact is accepted yet. If that local-only
-artifact changes, rebuild and re-run its dedicated proof; never fall back to an
-older DLL, the normal WASAPI artifact, another driver, or the signed updater.
-This boundary does not approve public distribution.
+Checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` built and
+manifest-verified the exact same-host artifact
+`target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
+Its manifest fixes `distributionApproved: false`, `sameHostOnly: true`, and
+`unbundled: true`. The artifact is not an updater payload or public-distribution
+approval, and physical native/operator acceptance remains open. It must pass
+its dedicated checker immediately before use. If it changes, rebuild and rerun
+that dedicated proof; never fall back to an older DLL, the normal WASAPI
+artifact, another driver, or the signed updater.
 
 ## Windows candidate package-content boundary
 
