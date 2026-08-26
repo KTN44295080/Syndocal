@@ -15,6 +15,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+mod project_transaction_terminal_recovery_tests;
+
 use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
