@@ -1,7 +1,7 @@
 import { Index, onCleanup, onMount } from "solid-js";
 import type { Accessor } from "solid-js";
 
-export const TIMELINE_ITEM_CONTEXT_MENU_COLLAPSED_HEIGHT = 298;
+export const TIMELINE_ITEM_CONTEXT_MENU_COLLAPSED_HEIGHT = 154;
 
 export interface TimelineItemContextMenuAction {
   id: string;
@@ -32,7 +32,6 @@ export function TimelineItemContextMenu(props: TimelineItemContextMenuProps) {
 
   onMount(() => {
     const closeFromOutside = (event: PointerEvent) => {
-      if (event.defaultPrevented) return;
       const target = event.target;
       if (target instanceof Node && menuElement?.contains(target)) return;
       props.onDismiss(false);
@@ -66,29 +65,34 @@ export function TimelineItemContextMenu(props: TimelineItemContextMenuProps) {
       }}
       onContextMenu={(event) => event.preventDefault()}
     >
-      <Index each={props.groups()}>
-        {(group) => (
-          <details class="timelineItemContextMenuGroup" data-timeline-context-menu-group={group().id}>
-            <summary>{group().label}</summary>
-            <div class="timelineItemContextMenuGroupActions">
-              <Index each={group().actions}>
-                {(action) => (
-                  <button
-                    type="button"
-                    data-timeline-context-menu-action={action().id}
-                    data-timeline-split-action={action().id === "split-at-playhead" ? "" : undefined}
-                    class={action().danger ? "danger" : undefined}
-                    disabled={actionDisabled(action())}
-                    onClick={() => { void action().onSelect(); }}
-                  >
-                    {action().label}
-                  </button>
-                )}
-              </Index>
-            </div>
-          </details>
-        )}
-      </Index>
+      <details class="timelineItemContextMenuActions">
+        <summary>Actions</summary>
+        <div class="timelineItemContextMenuActionsGroups">
+          <Index each={props.groups()}>
+            {(group) => (
+              <details class="timelineItemContextMenuGroup" data-timeline-context-menu-group={group().id}>
+                <summary>{group().label}</summary>
+                <div class="timelineItemContextMenuGroupActions">
+                  <Index each={group().actions}>
+                    {(action) => (
+                      <button
+                        type="button"
+                        data-timeline-context-menu-action={action().id}
+                        data-timeline-split-action={action().id === "split-at-playhead" ? "" : undefined}
+                        class={action().danger ? "danger" : undefined}
+                        disabled={actionDisabled(action())}
+                        onClick={() => { void action().onSelect(); }}
+                      >
+                        {action().label}
+                      </button>
+                    )}
+                  </Index>
+                </div>
+              </details>
+            )}
+          </Index>
+        </div>
+      </details>
       <button
         type="button"
         data-timeline-context-menu-action={props.deleteAction.id}

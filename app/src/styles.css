@@ -30256,16 +30256,19 @@ h3 {
   text-align: left;
 }
 
-.timelineItemContextMenuGroup {
+.timelineItemContextMenuGroup,
+.timelineItemContextMenuActions {
   display: grid;
   gap: 0;
 }
 
-.timelineItemContextMenuGroup[open] {
+.timelineItemContextMenuGroup[open],
+.timelineItemContextMenuActions[open] {
   gap: 4px;
 }
 
-.timelineItemContextMenuGroup > summary {
+.timelineItemContextMenuGroup > summary,
+.timelineItemContextMenuActions > summary {
   display: list-item;
   height: 44px;
   min-height: 44px;
@@ -30277,12 +30280,14 @@ h3 {
   list-style-position: inside;
 }
 
-.timelineItemContextMenuGroup > summary:focus-visible {
+.timelineItemContextMenuGroup > summary:focus-visible,
+.timelineItemContextMenuActions > summary:focus-visible {
   outline: 2px solid #f3a43b;
   outline-offset: -2px;
 }
 
-.timelineItemContextMenuGroupActions {
+.timelineItemContextMenuGroupActions,
+.timelineItemContextMenuActionsGroups {
   display: grid;
   gap: 4px;
   padding-left: 8px;

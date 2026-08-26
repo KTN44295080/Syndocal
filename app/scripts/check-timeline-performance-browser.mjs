@@ -667,7 +667,12 @@ try {
     const menuStructure = await evaluate(client, `(() => {
       const menu = document.querySelector('.timelineItemContextMenu');
       if (!(menu instanceof HTMLElement)) return null;
-      const groups = [...menu.querySelectorAll(':scope > details')];
+      const actionsRoot = menu.querySelector(':scope > details.timelineItemContextMenuActions');
+      if (!(actionsRoot instanceof HTMLDetailsElement)) return null;
+      const rootSummary = actionsRoot.querySelector(':scope > summary');
+      const initiallyCollapsedRoot = !actionsRoot.open;
+      actionsRoot.open = true;
+      const groups = [...actionsRoot.querySelectorAll(':scope > .timelineItemContextMenuActionsGroups > details[data-timeline-context-menu-group]')];
       const collapsed = groups.every((group) => !group.open);
       const summaries = groups.map((group) => group.querySelector(':scope > summary')?.textContent?.trim() ?? '');
       const groupActionHeights = groups.map((group) => {
@@ -679,16 +684,21 @@ try {
         return heights;
       });
       const summaryHeights = groups.map((group) => group.querySelector(':scope > summary')?.getBoundingClientRect().height ?? 0);
+      const rootSummaryHeight = rootSummary instanceof HTMLElement ? rootSummary.getBoundingClientRect().height : 0;
+      actionsRoot.open = false;
       return {
         groupCount: groups.length,
         summaries,
         collapsed,
+        initiallyCollapsedRoot,
         groupActionCounts: groupActionHeights.map((heights) => heights.length),
         allGroupActions44: groupActionHeights.flat().every((height) => height >= 44),
         nativeDisclosureSemantics: menu.getAttribute('role') === 'group'
+          && !rootSummary?.hasAttribute('role')
           && groups.every((group) => group instanceof HTMLDetailsElement
             && !group.querySelector(':scope > summary')?.hasAttribute('role')),
         summaryHeights,
+        rootSummaryHeight,
         compactHeight: menu.getBoundingClientRect().height,
         width: menu.getBoundingClientRect().width,
       };
@@ -698,19 +708,53 @@ try {
         menuStructure?.groupCount,
         menuStructure?.summaries,
         menuStructure?.collapsed,
+        menuStructure?.initiallyCollapsedRoot,
         menuStructure?.groupActionCounts,
         menuStructure?.allGroupActions44,
         menuStructure?.nativeDisclosureSemantics,
         menuStructure?.summaryHeights,
       ],
-      [4, ["Selection", "Clipboard", "Timing", "Lane"], true, [2, 3, 8, 2], true, true, [44, 44, 44, 44]],
-      "Timeline item menu exposes four native disclosure groups and visible 44px actions in every expanded group",
+      [4, ["Selection", "Clipboard", "Timing", "Lane"], true, true, [2, 3, 8, 2], true, true, [44, 44, 44, 44]],
+      "Timeline item menu nests its four native disclosure groups inside one initially closed native Actions disclosure with visible 44px actions",
     );
     assert.ok(
-      menuStructure?.compactHeight >= 296 && menuStructure.compactHeight <= 300
+      menuStructure?.compactHeight >= 150 && menuStructure.compactHeight <= 158
+        && menuStructure.rootSummaryHeight >= 43.5 && menuStructure.rootSummaryHeight <= 44.5
         && menuStructure.width >= 208 && menuStructure.width <= 212,
-      `Timeline item menu keeps compact closed geometry at 210px width: ${JSON.stringify(menuStructure)}`,
+      `Timeline item menu keeps the shortened Actions-root closed geometry at 210px width: ${JSON.stringify(menuStructure)}`,
     );
+    const bottomEdgePlacement = await evaluate(client, `(() => {
+      const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
+      if (!(clip instanceof Element)) return null;
+      const viewportHeight = window.innerHeight;
+      clip.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 240,
+        clientY: viewportHeight - 1,
+      }));
+      const menu = document.querySelector('.timelineItemContextMenu');
+      if (!(menu instanceof HTMLElement)) return null;
+      return { top: menu.getBoundingClientRect().top, viewportHeight };
+    })()`);
+    assert.ok(
+      bottomEdgePlacement
+        && menuStructure?.compactHeight
+        && Math.abs(bottomEdgePlacement.top - (bottomEdgePlacement.viewportHeight - menuStructure.compactHeight)) <= 1,
+      `Timeline item menu bottom-edge placement uses its shortened closed height instead of the legacy 298px clamp: ${JSON.stringify({ bottomEdgePlacement, compactHeight: menuStructure?.compactHeight })}`,
+    );
+    await evaluate(client, `(() => {
+      const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
+      if (!(clip instanceof Element)) return false;
+      clip.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 240,
+        clientY: 180,
+      }));
+      return true;
+    })()`);
+    await sleep(30);
     const retainedInputSemantics = await evaluate(client, `(() => {
       const menu = document.querySelector('.timelineItemContextMenu');
       const summary = menu?.querySelector(':scope > details > summary');
@@ -770,6 +814,44 @@ try {
       { closed: true, outsideFocused: true },
       "outside primary pointer closes the Timeline item menu without stealing focus from the outside target",
     );
+    assert.equal(
+      await evaluate(client, "document.querySelector('.timelineItemContextMenu') === null"),
+      true,
+      "the Timeline item menu starts closed before the pre-prevented outside dismissal regression",
+    );
+    await evaluate(client, `(() => {
+      window.__syndocalTimelineMenuOutsidePrePrevented = false;
+      window.__syndocalTimelineMenuOutsidePrePreventer = (event) => {
+        if (event.button !== 0) return;
+        if (event.target instanceof Element && event.target.closest('.timelineItemContextMenu')) return;
+        event.preventDefault();
+        window.__syndocalTimelineMenuOutsidePrePrevented = true;
+      };
+      window.addEventListener('pointerdown', window.__syndocalTimelineMenuOutsidePrePreventer, { capture: true });
+    })()`);
+    assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu mounts under an already-installed upstream capture pre-preventer");
+    await sleep(30);
+    await evaluate(client, `(() => {
+      const outside = document.createElement('button');
+      outside.type = 'button';
+      document.body.append(outside);
+      outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+      outside.remove();
+    })()`);
+    await sleep(30);
+    assert.deepEqual(
+      [
+        await evaluate(client, "window.__syndocalTimelineMenuOutsidePrePrevented === true"),
+        await evaluate(client, "document.querySelector('.timelineItemContextMenu') === null"),
+      ],
+      [true, true],
+      "an upstream capture listener that pre-prevents the outside primary pointerdown no longer keeps the Timeline item menu open",
+    );
+    await evaluate(client, `(() => {
+      window.removeEventListener('pointerdown', window.__syndocalTimelineMenuOutsidePrePreventer, { capture: true });
+      delete window.__syndocalTimelineMenuOutsidePrePreventer;
+      delete window.__syndocalTimelineMenuOutsidePrePrevented;
+    })()`);
     const abortFocusProof = await evaluate(client, `(() => {
       const button = document.querySelector('[data-timeline-follow-operator-abort]');
       if (!(button instanceof HTMLButtonElement)) return null;
