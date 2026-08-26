@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 Updated: 2026-08-26
-Status: Required; strict DJ-Link v3 software integration is in the `1.2.0-alpha.14` / rb-output `1.1.5` checkpoint; immutable published v1.1.3 and retired v2 sources are not current show routes; hardware acceptance remains exactly 0/12
+Status: Required; strict DJ-Link v3 has a live authenticated initial-snapshot checkpoint on `1.2.0-alpha.15` / rb-output `1.1.5`; immutable published v1.1.3 and retired v2 sources are not current show routes; hardware acceptance remains exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current v3 authority — 2026-08-26
@@ -11,8 +11,8 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
 and adapter names are retired and rejected without a shim. HELLO advertises the
 complete nine-capability set, including `DJ_LOOP_FALLBACK`; current KDMX product
-metadata is `1.2.0-alpha.14` and the controlled rb-output source metadata is
-`1.1.5`. Any later text that calls v2 current is retained only as dated history
+metadata is `1.2.0-alpha.15` and the controlled rb-output source metadata is
+`1.1.5` at `c1a1470c89088117379fcee58fb7521bffadb4c3`. Any later text that calls v2 current is retained only as dated history
 and is superseded by this section and the v3 restatement near the end.
 
 Stage 1 keeps two independent truths. A physical F14 intent arms its bounded
@@ -475,6 +475,43 @@ the HW-4 matrix remains exactly **0/12 checked (0%)**.
 - This live observation is limited to the lifetime of PID `34792`. Listener and
   token restoration after stop/restart remain unproven, so HW-4.11 is still
   unchecked within the `0/12` matrix.
+
+### 2026-08-26 strict-v3 initial snapshot and Timeline mapping-selection checkpoint
+
+- The target DJ PC ran the clean upstream-equal `beta-v1.1.2` source checkout at
+  `c1a1470c89088117379fcee58fb7521bffadb4c3`. Its status reported
+  `Enabled=true`, `SyndocalState=connected`, `StateSync=sent`, no last error,
+  `TimelineState=idle`, `TimelineSnapshotReady=true`, and no Timeline warning.
+  The operator-supplied DJ-PC screenshot records `SYNDOCAL CONNECTED`,
+  `MIDI CONNECTED`, `PEDAL MODE DJ-CONTROL`, `TIMELINE STATE IDLE`,
+  `TIMELINE LOOP OFF`, and `Ready` in one frame. The preserved evidence is
+  `qa/artifacts/dj-pc-initial-timeline-snapshot-20260826.png`, 89,652 bytes,
+  SHA-256 `A5E610148CC4F16C1733DA41C9B9034DBB424C552D39F8DCD2C7CEE1F6F2EAEE`.
+- This proves a real authenticated v3 connection and authoritative initial
+  Timeline snapshot. It does not prove HW-4.1's session-replacement and old-close
+  requirements, so no HW-4 checkbox changes and the matrix remains exactly 0/12.
+- During mapping setup, the authored Timeline selection visibly returned to the
+  placeholder after a Setup snapshot poll. The old route mapped
+  `snapshot().timeline_bank` inline on every poll, recreating Solid `<For>` option
+  identities while leaving the draft signal potentially stale. The new route in
+  `7063db5` projects options through the extracted `djTimelineOptions.ts` helper
+  and retains the exact array and option identities while the authored IDs and
+  labels are unchanged. The reason is to keep the visible select and the mapping
+  draft aligned across equivalent snapshot replacement; invalid non-positive IDs
+  remain excluded and an actual authored option change remains visible.
+- `pnpm --dir app run check:dj-link`, localization 3553/3553, TypeScript/Vite
+  build, and `pnpm --dir app tauri build --no-bundle` passed. The native build
+  used the exact Community MSVC 14.44 linker pin with that linker first in
+  `where.exe link.exe`; first-party warning count was 0. Independent Ox-alpha
+  review returned APPROVE with no P0/P1 findings. The rebuilt exact-checkout
+  executable launched as one responsive `Syndocal` window, PID `46120`; after
+  selecting Timeline 1 and waiting through polling, the operator confirmed that
+  the selection remained.
+- The rebuild necessarily disconnected the pre-build WebSocket. Listener/token
+  re-arming, current-track capture, mapping persistence, Track Active, pedal,
+  Release, reconnect fencing, and shared-network acceptance remain open. Do not
+  operate the pedal until the new process is connected and the exact temporary
+  track mapping is visible.
 
 ## 9. Native and hardware acceptance
 
