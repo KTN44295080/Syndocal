@@ -96,8 +96,10 @@ adapter, hardware, and native evidence below is not promoted into that path.
   XRUN/no-callback recovery, or measured-latency gates. The complete warning
   matrix executed for checkpoint `ff61a6d` recorded zero first-party warnings;
   this warning result is not physical ASIO acceptance.
-- The Show-ASIO build for the 2026-08-30 performance is a separately
-  licensed, non-default, local-only `show-asio` feature/overlay. It is outside the normal MIT
+- The only built Show-ASIO artifact for the 2026-08-30 performance is the
+  historical alpha.12 artifact; no alpha.14 Show-ASIO build or acceptance is
+  implied. It is a separately licensed, non-default, local-only `show-asio`
+  feature/overlay and is outside the normal MIT
   installer and signed-updater route, which must never select, repair, replace,
   or attest it. Checkpoint `ff61a6d` built and manifest-verified
   `target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
