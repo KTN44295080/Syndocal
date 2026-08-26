@@ -1,6 +1,6 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.15 NATIVE ARTIFACT + DSF SOFTWARE CHECKPOINT; PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.16 DEVELOPMENT / ALPHA.15 NATIVE ARTIFACT + DSF SOFTWARE CHECKPOINT; PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
@@ -16,8 +16,11 @@ state, and the compatibility fallback is unchanged. The separately licensed alph
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
-The current synchronized development metadata is `1.2.0-alpha.15`; the current
-local native verification artifact is bound to pushed, upstream-equal source
+The current synchronized development metadata and any-deck source checkpoint
+are `1.2.0-alpha.16` at `ad3faa253c155cb1173b17fb81a711f60baea1f1`, with focused
+software gates, warning 0, and independent adversarial review passed. It has no
+native artifact; the latest local native verification artifact remains
+`1.2.0-alpha.15`, bound to pushed, upstream-equal source
 commit `c609b61`,
 while the separately licensed alpha.14 Show-ASIO artifact remains the only
 Show-ASIO artifact recorded here. Its runtime baseline includes the DVC
@@ -27,6 +30,18 @@ they do not promote physical hardware or output acceptance. This same-version
 rebuild is local validation evidence only; advance the prerelease ordinal before
 distributing another development artifact.
 
+Alpha.16 release-metadata evidence is split by filesystem boundary. The active
+OneDrive checkout correctly rejected direct `check:release` because
+`qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` has an external hard-link alias. A
+detached clean validation worktree overlaid with the exact alpha.16 source and
+pinned runtime bytes passed `check:release`, including the 169-assertion Windows
+packaging self-test and exact `1.2.0-alpha.16` metadata. Its Git worktree
+registration and `.git` directory were removed, but the generated unregistered
+directory `C:\TEMP\KDMX-alpha16-release-gate-01a03b78` remains because the
+recursive cleanup operation was policy-rejected. It contains no authoritative
+source or Git registration and remains an explicit cleanup item; do not weaken
+the hard-link checker or delete the external OneDrive alias to hide it.
+
 ## 1. Exact checkpoints
 
 The checkpoints are deliberately separate. Do not relabel a later QA/docs
@@ -34,12 +49,13 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
+| Current alpha.16 any-deck DJ-Link source + synchronized metadata | `ad3faa253c155cb1173b17fb81a711f60baea1f1`; no alpha.16 native artifact or physical acceptance yet |
 | Current local alpha.15 native verification runtime/source/artifact | Pushed, upstream-equal source commit `c609b61c77e44ee028ed7322c29a0cfd04b8182c` (`refactor(scene): extract bank scene creation controller`); local artifact identity is in section 3 and is not a new distributable artifact |
 | Prior alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); prior standard artifact identity is retained in section 3 |
 | Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
-| Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `e3d390d912a2c3a9be418ecbc31771d2bf515de7` |
+| Current rb-output v1.1.6 strict-v3 runtime / docs tip | `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572` / `789f7724a699324cd87171ef835b69486bcd4e70`; pushed, target DJ PC not yet updated |
 | Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
 | Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
@@ -408,8 +424,10 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 
 - Checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
-- Runtime source: `862cf8035dfb365a7d799f820936585882d0a1e7`
-- HEAD/upstream docs tip: `e3d390d912a2c3a9be418ecbc31771d2bf515de7`, clean at resumed audit
+- Current v1.1.6 runtime source: `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`
+- HEAD/upstream docs tip: `789f7724a699324cd87171ef835b69486bcd4e70`, clean after the 2026-08-27 push
+- Live target-DJ-PC evidence is still the historical v1.1.5 session; v1.1.6 has
+  not yet been deployed or physically accepted there.
 - FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
 - The controlled source path requires the external show JSON through
   `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
@@ -501,14 +519,23 @@ These are OPEN, not implicit completion claims:
 7. Decide and prove a hardlink-aware cleanup contract before deleting the
    current incremental cache; otherwise leave it untouched.
 
-## 9. Giant-file debt is not resolved
+## 9. Giant-file debt is partially reduced, not resolved
 
 Current exact metrics:
 
-- `app/src/App.tsx`: `28,719` lines, `1,199,118` bytes, SHA-256
-  `D4F603121EB49C65F4A1C1F4E0F67A31CAE8870EFFF8D21AF4789357EDDDB463`
-- `app/src-tauri/src/main.rs`: `129,413` lines, `4,965,088` bytes, SHA-256
-  `A337B15E66C69A56FEC12A9FFF2D3275829BA610B28F787BE58AB56CB803E5C2`
+- `app/src/App.tsx`: `28,722` lines, `1,199,135` bytes, SHA-256
+  `78DBC6EAA78ABF4CA890F595EDE74D4BE4B9D2E093A8BDAAB31F7E9958DEED48`
+- `app/src-tauri/src/main.rs`: `129,601` lines, `4,972,209` bytes, SHA-256
+  `82595C0042D411891836EA3ACC898DBF72E330EC83B7F2921799A7F01897B3EF`
+- Alpha.16 checkpoint `ad3faa253c155cb1173b17fb81a711f60baea1f1`
+  extracted the any-deck owner/loop runtime into
+  `app/src-tauri/src/dj_track_runtime.rs` (`412` lines, `17,228` bytes, SHA-256
+  `06F81C2AE850A240A9E1929CFE908F84F06C744FC1C46044CF4FD2E69BD895AB`)
+  and its two large regression tests into
+  `app/src-tauri/src/tests/dj_track_runtime_tests.rs` (`794` lines, `28,579`
+  bytes, SHA-256
+  `FEB1876ECEFF0D94C448CB84D80FAAB22A1BF3E72572A6A20E2E4676D0029EAF`).
+  `main.rs` remains oversized and requires further bounded extractions.
 - Source checkpoint `c609b61c77e44ee028ed7322c29a0cfd04b8182c`
   extracted Scene creation for a Bank from `App.tsx` into
   `app/src/sceneBankSceneCreationController.ts` (`128` lines, `5,254` bytes,
@@ -599,10 +626,12 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Current local alpha.15 source/artifact checkpoint `c609b61...`, prior standard
+- Current alpha.16 source checkpoint `ad3faa2...`, local alpha.15
+  source/artifact checkpoint `c609b61...`, prior standard
   alpha.15 source/artifact checkpoint `1d372e7...`, DVC controller
   checkpoint `652b197...`, alpha.14 artifact source checkpoint `92122f1b...`,
-  and rb-output docs tip `e3d390d...` were clean and upstream-equal when
+  and rb-output v1.1.6 docs tip `789f772...` are the current checkpoint chain.
+  The rb-output tip was clean and upstream-equal when
   recorded. The final documentation
   commit containing this handoff must again be pushed and rechecked clean.
 - The historical exact standard alpha.14 process and window identities are in

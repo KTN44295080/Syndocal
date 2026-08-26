@@ -346,7 +346,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.15`.
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.16`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -365,12 +365,12 @@ published tag or installer, and it does not close Show-ASIO or physical DJ
 acceptance. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from it.
 
-The current `1.2.0-alpha.15` advance is metadata-only and has no native
-artifact. Its runtime baseline includes the DVC controller checkpoint
-`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
-checkpoint is the commit containing these version surfaces and must be resolved
-after commit. The parent lane must run the required native gate before any
-alpha.15 artifact, warning, or acceptance claim.
+The current `1.2.0-alpha.16` any-deck DJ-Link/source and synchronized metadata
+checkpoint is `ad3faa253c155cb1173b17fb81a711f60baea1f1` and has no native
+artifact. Its focused software gates and independent adversarial review passed
+with first-party warnings 0. The parent lane must run the required native gate before any
+alpha.16 artifact, warning, or acceptance claim. The verified alpha.15 native
+artifact remains immutable historical evidence and is not relabelled.
 
 The synchronized product-version surfaces are:
 

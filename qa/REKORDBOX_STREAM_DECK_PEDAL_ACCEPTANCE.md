@@ -1,21 +1,28 @@
 # Syndocal × rekordbox-DJ-Link-ForPCDJ acceptance
 
 Date: 2026-08-21
-Updated: 2026-08-26
-Status: Required; strict DJ-Link v3 has a live authenticated initial-snapshot checkpoint on `1.2.0-alpha.15` / rb-output `1.1.5`; immutable published v1.1.3 and retired v2 sources are not current show routes; hardware acceptance remains exactly 0/12
+Updated: 2026-08-27
+Status: Required; strict DJ-Link v3 has a live authenticated initial-snapshot checkpoint on the deployed `1.2.0-alpha.15` / rb-output `1.1.5` pair; current development `1.2.0-alpha.16` / rb-output `1.1.6` is committed, pushed, software-gated, and independently reviewed, but remains unaccepted until the native rebuild, target-DJ-PC update, and physical matrix complete; immutable published v1.1.3 and retired v2 sources are not current show routes; hardware acceptance remains exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current v3 authority — 2026-08-26
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
-and adapter names are retired and rejected without a shim. HELLO advertises the
-complete nine-capability set, including `DJ_LOOP_FALLBACK`; current KDMX product
-metadata is `1.2.0-alpha.15` and the controlled rb-output source metadata is
-`1.1.5` at `c1a1470c89088117379fcee58fb7521bffadb4c3`. Any later text that calls v2 current is retained only as dated history
+and adapter names are retired and rejected without a shim. The new Agent HELLO
+advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
+`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`; current KDMX product
+metadata/source checkpoint is `1.2.0-alpha.16` at
+`ad3faa253c155cb1173b17fb81a711f60baea1f1`; the controlled rb-output v1.1.6
+runtime source is `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572` with clean
+upstream-equal docs tip `789f7724a699324cd87171ef835b69486bcd4e70`.
+Both source tranches passed their software gates and independent review, but
+neither has an accepted alpha.16/target-DJ-PC deployment. The live target-DJ-PC
+evidence remains on source version `1.1.5`. Any later text that calls v2 current is retained only as dated history
 and is superseded by this section and the v3 restatement near the end.
 
-Stage 1 keeps two independent truths. A physical F14 intent arms its bounded
+Stage 1 keeps two independent truths after a mapped `DJ_TRACK_ACTIVE` ACK admits
+one exact deck/deckId/playSessionId owner. A physical F14 intent arms its bounded
 Rekordbox-response window before attempting local MIDI. A fresh, valid,
 same-session Rekordbox measurement is authoritative and is routed as
 `DJ_LOOP_STATE` with measured truth nested under `payload.loop`; the retired
@@ -48,8 +55,8 @@ The performance is **2026-08-30**; development, acceptance, and show preparation
 must be complete by the separate **2026-08-29 completion deadline**. Current
 executable guidance does not wait for or use an installer: it uses only the controlled source checkout on the
 target DJ PC. Peer branch `beta-v1.1.2` is clean and upstream-equal at docs tip
-`e3d390d912a2c3a9be418ecbc31771d2bf515de7`; the exact runtime-source checkpoint
-is `862cf8035dfb365a7d799f820936585882d0a1e7`, and the source version is `1.1.5`.
+`789f7724a699324cd87171ef835b69486bcd4e70`; the exact runtime-source checkpoint
+is `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, and the source version is `1.1.6`.
 The branch name is not the product version, and the docs-only tip does not redefine
 the runtime identity.
 The checkout requires a show JSON outside the checkout through
@@ -114,8 +121,8 @@ string, ordinary status response, `.sdc`, template, backup, or Standby checkpoin
 The first Agent-to-Syndocal frame is `DJ_AGENT_HELLO`. Its exact payload contains
 `authToken`, `version:3`, and this complete, duplicate-free capability set:
 
-- `DJ_MASTER_TRACK_ACTIVE`
-- `DJ_MASTER_TRACK_SYNC`
+- `DJ_TRACK_ACTIVE`
+- `DJ_TRACK_SYNC`
 - `DJ_LOOP_STATE`
 - `DJ_LOOP_FALLBACK`
 - `DJ_RELEASE`
@@ -151,22 +158,37 @@ event identity, sequence, canonical v3 shape, and socket generation. Same event 
 plus the same canonical shape is idempotent; a changed shape, sequence rollback,
 unauthenticated traffic, stale session, or session impersonation fails closed. A new
 authenticated session replaces the older session by generation, and an old socket
-close cannot clear the replacement. `DJ_MASTER_TRACK_SYNC` is continuous non-ACK
+close cannot clear the replacement. `DJ_TRACK_SYNC` is continuous non-ACK
 telemetry; physical events remain ACKed and ACK success never claims an external
 physical action occurred. Heartbeat is five seconds and disconnect/timeout never
 implies Release.
 
-`DJ_MASTER_TRACK_ACTIVE` and `DJ_MASTER_TRACK_SYNC` carry the strict track payload:
-`deck`, `deckId`, `masterDeckRevision`, exactly one identity form (`contentId` or
-both `title` and `artist`), optional `trackBpm`, `positionAtSendSec`,
-`effectiveBpm`, `positionRevision`, `sampleAgeMs`, `isPlaying:true`, `master:true`,
-`startedAt`, `playSessionId`, and an optional measured loop object. The measured loop
+`DJ_TRACK_ACTIVE` and `DJ_TRACK_SYNC` carry the strict any-deck payload: `deck`,
+`deckId`, exactly one identity form (`contentId` alone or both `title` and `artist`
+without `contentId`), optional `trackBpm`, `positionAtSendSec`, `effectiveBpm`,
+`positionRevision`, `sampleAgeMs`, `isPlaying:true`, `startedAt`, `playSessionId`,
+and an optional measured loop object. They carry neither `master` nor
+`masterDeckRevision`; Master state is not trigger authority. The measured loop
 object used by track and `DJ_LOOP_STATE` frames contains `active`, optional
 `startBeat`/`endBeat`/`lengthBeats`, `revision`, `sampleAgeMs`, and the exact source
 `rekordbox-hook-measured`; it is not a root-level division counter.
+Optional `trackBpm` and track-level `loop` values may be omitted or JSON `null`;
+no other substitute shape is accepted.
 
-`DJ_STATE_SYNC.payload` contains `released`, optional `masterDeck`, and optional
-`activePlaySessionId`. `DJ_TIMELINE_STATE_REQUEST` has `{}` as its payload.
+For the new Agent, the nine capabilities above are the only advertised and emitted
+show contract. Syndocal temporarily accepts the former complete nine-capability
+Master-only set and its `DJ_MASTER_TRACK_ACTIVE` / `DJ_MASTER_TRACK_SYNC` events as
+one bounded migration path for the already-deployed pre-change Agent. Mixed sets,
+an eleven-capability union, and a new Agent emitting an unadvertised legacy event
+fail closed. Remove this migration after the target DJ PC has restarted on the
+generic contract and the restart/next-show row has passed.
+
+For the new generic capability set, `DJ_STATE_SYNC.payload` contains `released`
+and optional correlated `ownerDeck`, `ownerDeckId`, and `activePlaySessionId`.
+The three owner fields are all present together or all omitted; partial and
+explicit-null owner triples fail closed. It must not relabel that owner as
+`masterDeck`. The old migration session alone may retain its legacy optional
+`masterDeck` field. `DJ_TIMELINE_STATE_REQUEST` has `{}` as its payload.
 `DJ_TIMELINE_BEAT_JUMP` carries `{ bars: -4|4, timelineId }`, and
 `DJ_TIMELINE_LOOP_SET` carries `{ active: boolean, timelineId }`; both are
 Agent-to-Syndocal and ACKed.
@@ -181,7 +203,7 @@ neither the local LoopHalf action nor an ACK alone changes authority.
 
 ## 3. DJ-Link peer behavior
 
-The peer reuses the existing hook, Hook UDP, master-change event, playback state,
+The peer reuses the existing hook, Hook UDP, per-deck playback state,
 Socket.IO/Web UI, packaging, and installer. Its new show-control client sends explicit
 semantic events rather than the existing large browser `state` snapshot.
 The peer repository is implemented and reviewed in its own Codex flow. The immutable
@@ -196,10 +218,13 @@ The Pedal defaults may use F13/F14/F15, but remain configurable and are acquired
 native Windows global hotkeys on the DJ PC, not through browser `keydown` and not by
 Syndocal.
 
-In Stage 1, F13 runs the configured local release macro: Filter HP and the master
-deck's `ChannelFader` fade, Cue/Stop, optional local reset steps, and then one
+In Stage 1, F13 runs the configured local release macro against the admitted owner
+deck: Filter HP and that deck's `ChannelFader` fade, Cue/Stop, optional local reset
+steps, and then one
 idempotent `DJ_RELEASE`. F14 keeps the local MIDI LoopHalf action and
-sends `DJ_LOOP_STATE` with the absolute measured-loop object. F15 is deliberately inactive in
+sends `DJ_LOOP_STATE` with the owner deck/deckId/playSessionId and absolute
+measured-loop object. No Track Active ACK other than `accepted` or `duplicate` may
+establish that owner, and an unrecognized concurrent deck cannot steal it. F15 is deliberately inactive in
 Stage 1 and sends neither MIDI nor a Syndocal show event. F13 macro ordering is
 configuration-dependent: the documented default is `sequence:"parallel"`, while
 `filter-then-fade` waits for Filter completion before starting the fade. Ramp
@@ -221,8 +246,12 @@ During initial connection, authoritative-snapshot wait, disconnect, and immediat
 after reconnect, Stage 1 F13/F14 local Rekordbox operation continues. The peer marks
 only the network-side effect pending or failed and does not replay old relative
 actions after reconnect; after a valid State Sync snapshot it sends `DJ_STATE_SYNC`
-with current state and requests a fresh authoritative timeline state. If the State
-Sync provider is invalid, neither frame is sent. If a Stage 1 `DJ_RELEASE` is pending
+with current state and requests a fresh authoritative timeline state. After that
+fresh snapshot, it re-announces every still-fresh actually-playing exact candidate
+once for the new connection generation. A surviving receiver dedupes the same
+deck/session without restarting; a restarted receiver can re-admit it from the
+persisted mapping. It never re-announces stale, non-playing, ambiguous, or released
+sessions. If the State Sync provider is invalid, neither frame is sent. If a Stage 1 `DJ_RELEASE` is pending
 when the socket closes, the peer finalizes that delivery as `send-failed` for the
 connection failure; the router exits `handoff-pending` to `dj-control`, reports a
 failed/retryable local operation, and a later reconnect does not resend that old
@@ -240,20 +269,19 @@ After reconnect, a valid `DJ_TIMELINE_STATE(state:"running")` keeps Stage 2 acti
 a valid `idle`, `stopped`, `ended`, or `reset` state exits Stage 2 to `dj-control`,
 resets the peer's local loop division to zero, and restores Stage 1 (F15 inactive).
 
-## 4. Master Track Active event
+## 4. Any-Deck Track Active event
 
-Track Loaded, Track Playing, and Master Track Active are distinct. Automatic show
-mapping uses only `DJ_MASTER_TRACK_ACTIVE`, generated when the deck is current Master,
-is actually playing, has a known identity, and differs from the prior active play
-session. It is also generated when an already-playing deck becomes Master.
+Track Loaded, Track Playing, and Track Active are distinct. Automatic show mapping
+uses only `DJ_TRACK_ACTIVE`, generated once for each fresh deck/play session when the
+deck is actually playing and has one exact known identity. Current Rekordbox Master,
+Master transfer, preview, load, and Cue preparation do not gate or synthesize it.
 
-The payload uses the strict v3 fields `deck`, `deckId`, `masterDeckRevision`, exact
-track identity, `trackBpm` when available, `positionAtSendSec`, `effectiveBpm`,
-`positionRevision`, `sampleAgeMs`, `isPlaying:true`, `master:true`, `startedAt`,
-`playSessionId`, and the optional measured loop. An explicit hook master-change wins
-over explicit master state, which wins over the existing playback heuristic; the
-retired `DJ_MASTER_CHANGED` name is not an accepted event in the intended corrected
-v1.1.5 production v3 contract.
+The payload uses the strict v3 any-deck fields described above. A playing deck that
+has only title, has ambiguous identity, carries contentId together with title/artist,
+or lacks a fresh position sample fails closed. `DJ_TRACK_SYNC` then advances only
+the exact admitted deck/deckId/playSessionId with a monotonic position revision.
+The retired `DJ_MASTER_CHANGED` name is not accepted in the corrected production v3
+contract.
 
 ## 5. Project Track-to-Timeline mapping
 
@@ -262,7 +290,7 @@ data. The DJ-Link peer does not store it. A mapping contains:
 
 - stable mapping ID;
 - selector: exact opaque `contentId`, or exact normalized `title` plus `artist`;
-- event: `DJ_MASTER_TRACK_ACTIVE`;
+- event: `DJ_TRACK_ACTIVE`;
 - action: `StartTimeline` with an existing Timeline ID;
 - retrigger policy: initially `OncePerPlaySession`.
 
@@ -284,13 +312,18 @@ strict-v3 contract; it is not an advertised capability or accepted ingress event
 immutable published v1.1.3 package is blocked because its internal encoder/router
 still fails that negative proof. The corrected source lane must prove the path is
 unreachable before any v1.1.5 artifact or acceptance evidence is used.
-Load, preview, Cue preparation, a non-Master deck, and `DJ_STATE_SYNC` cannot start a
-Timeline.
+Load, preview, Cue preparation, a non-playing deck, and `DJ_STATE_SYNC` cannot start
+a Timeline. A non-Master deck is deliberately eligible when it is actually playing
+an exact mapped track.
 
-`DJ_MASTER_TRACK_ACTIVE` validates current Master/playing/identity, resolves at most
-one mapping, and invokes the existing canonical runtime Timeline start path. The
-dedupe key includes project epoch, mapping ID, and `playSessionId`; mapping CAS or
-project replacement invalidates the prior generation.
+`DJ_TRACK_ACTIVE` validates playing/identity/freshness, resolves at most one mapping,
+and invokes the existing canonical runtime Timeline start path. The dedupe key
+includes project epoch, mapping ID, deck/deckId, and `playSessionId`; mapping CAS or
+project replacement invalidates the prior generation. A mapping ACK of `accepted`
+or `duplicate` admits that exact deck/session as pedal and synchronization owner.
+`no_mapping`, `rejected`, `busy`, timeout, and send failure do not establish or
+replace ownership. Until Release or an authoritative terminal lifecycle clears the
+owner, another concurrent candidate cannot steal it.
 
 `DJ_LOOP_STATE` is an absolute measured-loop report. Its `active`, optional
 `startBeat`/`endBeat`/`lengthBeats`, `revision`, `sampleAgeMs`, and exact
@@ -300,7 +333,7 @@ closed; an already-converged report is a no-op. It must never implement absolute
 synchronization by repeatedly applying relative Loop Half.
 
 `DJ_LOOP_FALLBACK` is a separately typed, absolute prediction, never a measured
-loop. It is accepted only for the exact current deck/master revision/play session,
+loop. It is accepted only for the exact admitted deck/deckId/play session,
 the source `pedal-no-response-predicted`, a response window from 50 through 1500 ms,
 one monotonic `pedalIntentId`, the exact `baseMeasuredLoopRevision` and
 `baseLoopDivision`, and one exact next value in the full `8` through `1/64`
@@ -310,14 +343,17 @@ advance measured-loop revision authority; a later fresh `DJ_LOOP_STATE` override
 it. It is rejected after Release and cannot be synthesized from invalid, stale, or
 contradictory measurements.
 
-`DJ_RELEASE` disables the current DJ loop and resumes the Timeline through the
+`DJ_RELEASE` disables the admitted owner's current DJ loop and resumes the Timeline through the
 canonical transport lane. Exact replay and repeated Release are idempotent and do not
 double-advance, double-cue, or seek.
 
-`DJ_STATE_SYNC` restores diagnostics and may converge the current measured loop only
-when the synchronized state is not released. A snapshot with `released: true` cannot
-re-enable or resume the loop. State Sync never replays Track
-Active mappings and never executes Release transport semantics from a snapshot.
+`DJ_STATE_SYNC` restores diagnostics only. A snapshot with `released: true` cannot
+re-enable or resume the loop. State Sync never replays Track Active mappings,
+converges measured-loop authority, or executes Release transport semantics.
+An empty restarted receiver accepts a structurally valid generic owner triple as
+diagnostic evidence without manufacturing ownership; a receiver that already has an
+owner requires an exact triple match. Only the later re-announced `DJ_TRACK_ACTIVE`
+may run mapping admission on the restarted receiver.
 
 `DJ_TIMELINE_BEAT_JUMP` is accepted only for `bars:-4` or `bars:4` and the current
 authoritative `timelineId`; it is available only in Stage 2. `DJ_TIMELINE_LOOP_SET`
@@ -334,7 +370,7 @@ The existing Web Remote/Setup I/O surface contains a `DJ Link agent` disclosure 
 
 - configured Show-LAN bind address and endpoint state;
 - Connected/Disconnected, peer address, heartbeat age, and session generation;
-- Master deck, playing state, current title/artist/content ID, measured Loop state;
+- admitted owner deck/session, playing state, current exact identity, measured Loop state;
 - last event, last event age, and last terminal outcome;
 - explicit token rotation/show-once workflow;
 - Track mapping add/edit/remove and `Use Current Track`.
@@ -352,8 +388,9 @@ Syndocal proof must cover:
    authenticated session replacement, and old-close ABA protection;
 3. same-ID replay, same-ID/different-shape rejection, sequence rollback, and truthful
    terminal ACKs;
-4. content-ID priority, exact title+artist fallback, title-only/non-Master/no-mapping
-   rejection, and Once-per-play-session dedupe;
+4. content-ID priority, exact title+artist fallback, title-only/non-playing/no-mapping
+   rejection, non-Master actual-play acceptance, concurrent-owner protection, and
+   Once-per-deck/play-session dedupe;
 5. Track Load and State Sync never triggering a Timeline;
 6. measured-loop revision/source freshness, non-accumulation, no-op convergence,
    exact nested active/inactive shape, retired-flat rejection, invalid
@@ -381,19 +418,22 @@ the immutable product release is v1.1.3, but it is historical and blocked by the
 This is static/software evidence only, not a
 hardware execution claim:
 
-- Current rb-output runtime source `862cf8035dfb365a7d799f820936585882d0a1e7`
-  passed full `npm test`: 389 total / 387 pass / 0 fail / 2 intentional package
-  skips. Stage 1 plus strict-v3 focused tests passed 33/33, and the first-party
-  warning count was 0. Independent Terra xHigh adversarial reviews caught the
-  rapid-F14/inactive-loop races, late-fallback causality gap, and measured-loop
-  wire-shape mismatch; the final review found P0/P1/P2 none.
+- Current rb-output v1.1.6 runtime source
+  `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572` passed full `npm test`: 406
+  tests / 404 pass / 0 fail / 2 intentional real-packaging-only skips. Focused
+  envelope, Stage 1, smoke, config/setup, and CSV gates also passed, and the
+  first-party warning count was 0. Independent Terra xHigh adversarial review
+  found P0/P1/P2 none after the any-deck owner, frozen identity, reconnect
+  reannounce, measured-loop, and admitted-owner UI corrections.
   Ox-alpha was unavailable in this session; this narrow review exception is recorded
   explicitly and does not alter the hardware boundary.
 
-- With the exact MSVC 14.44 linker pinned and first in `where.exe link.exe`, KDMX
-  passed protocol DJ-Link 12/12, the dedicated rb-output sender-contract 2/2,
-  I/O `remote_ws` 57/57, Syndocal DJ-Link dispatch 10/10, and extracted full-range
-  mapping 3/3. All were rerun serially after the final peer wire correction; the
+- With the exact MSVC 14.44 linker pinned and first in `where.exe link.exe`, the
+  final alpha.16 tranche passed sender-contract 6/6, the capability-family I/O
+  focus, both extracted Syndocal any-deck runtime tests, and `cargo check` with
+  first-party warnings 0. `check:dj-link`, localization 3555/3555, the
+  three-display alpha.16 harness 80/80, frontend build, release metadata in a
+  clean detached worktree, fmt, and diff checks passed. The
   first-party warning count was 0.
 
 - `tests/smoke.test.js`:
@@ -518,8 +558,9 @@ the HW-4 matrix remains exactly **0/12 checked (0%)**.
 End-to-end acceptance records both repository commits/artifacts, Windows and app
 versions, DJ/FOH NICs and switch path, rekordbox and Stream Deck versions, Pedal model
 and firmware, virtual MIDI device/mapping, operator/date, packet/log timestamps, and
-video evidence. It demonstrates Track pre-load without trigger, actual Master playback
-trigger, Master switch, repeated absolute measured-loop reports, filter isolation, Release,
+video evidence. It demonstrates Track pre-load without trigger, exact mapped playback
+on a non-Master or Master deck, concurrent-deck ownership fencing, repeated absolute
+measured-loop reports, filter isolation, Release,
 disconnect/local operation/reconnect sync, same-session dedupe, app restart, and next
 show reuse while Art-Net/sACN traffic shares the wired network.
 
@@ -533,9 +574,9 @@ denominator, which remains **19/71 (26.8%)**.
 | Check | Required demonstration | Status |
 | --- | --- | --- |
 | [ ] HW-4.1 | Wired `/dj-link` HELLO/authentication, session replacement, and old-close protection | Required / Peer and hardware pending |
-| [ ] HW-4.2 | Track pre-load without trigger and non-Master rejection | Required / Peer and hardware pending |
-| [ ] HW-4.3 | Actual Master playback emits one mapped Track Active event | Required / Peer and hardware pending |
-| [ ] HW-4.4 | Master switch while already playing | Required / Peer and hardware pending |
+| [ ] HW-4.2 | Track pre-load, preview, Cue, non-playing, nonmatching, and ambiguous identity do not trigger | Required / Peer and hardware pending |
+| [ ] HW-4.3 | Actual exact mapped playback on any deck emits one `DJ_TRACK_ACTIVE` and starts one mapped Timeline | Required / Peer and hardware pending |
+| [ ] HW-4.4 | Concurrent playing decks cannot steal an admitted owner; terminal release permits a later mapped deck/session | Required / Peer and hardware pending |
 | [ ] HW-4.5 | Stage 1 F14 local LoopHalf plus repeated absolute measured-loop `DJ_LOOP_STATE` reports | Required / Peer and hardware pending |
 | [ ] HW-4.6 | Stage 1 F13 Filter isolation and configured local release-macro behavior | Required / Peer and hardware pending |
 | [ ] HW-4.7 | Stage 1 F13 Release, ACK/rejection/timeout, and retry disposition | Required / Peer and hardware pending |
@@ -547,9 +588,9 @@ denominator, which remains **19/71 (26.8%)**.
 
 The separately developed DJ-Link peer has no current-final accepted release. The
 immutable v1.1.3 package is blocked by its `DJ_MASTER_CHANGED` mismatch. Source
-version 1.1.5 is pushed on branch `beta-v1.1.2`; the controlled runtime-source
-checkpoint is `862cf8035dfb365a7d799f820936585882d0a1e7`, while the clean upstream-equal
-docs tip is `e3d390d912a2c3a9be418ecbc31771d2bf515de7`. For the 2026-08-30 performance, with preparation
+version 1.1.6 is pushed on branch `beta-v1.1.2`; the controlled runtime-source
+checkpoint is `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, while the clean upstream-equal
+docs tip is `789f7724a699324cd87171ef835b69486bcd4e70`. For the 2026-08-30 performance, with preparation
 complete by 2026-08-29, the only permitted path is that
 target-DJ-PC source checkout with the checkout-external configuration and real
 current token described above, not an installer. Until identity binding and the
@@ -591,7 +632,7 @@ unaccepted alpha.9 work at that checkpoint.
 
 Therefore the authoritative status remains `Required / Peer and hardware
 pending`. Still-open evidence includes wired-LAN HELLO/auth/session replacement,
-real Master playback and switch, absolute Loop divisions, Release, disconnect
+exact mapped any-deck playback and owner fencing, absolute Loop divisions, Release, disconnect
 and reconnect State Sync, Pedal/global-hotkey input, app restart/next-show reuse,
 and concurrent Art-Net/sACN traffic. No DJ/Pedal completion claim is made and the
 KDMX accepted denominator remains 19/71 (26.8%).
@@ -738,18 +779,23 @@ session becomes ready only after `DJ_AGENT_HELLO`, an authoritative
 timeline-state response. Missing, unknown, stale, reordered, or legacy-shaped
 frames fail closed without fallback or implicit conversion.
 
+The new show peer advertises exactly the generic any-deck nine-capability set
+defined in section 2. It never uses Master state as trigger authority. The former
+complete Master-only nine-capability set remains a bounded Syndocal ingress
+migration only; mixed capability sets and the eleven-capability union are invalid.
+
 This restatement moves the same authority out of the historical 2026-08-25
 correction record below, which stays under its SUPERSEDED label as history
 only. No HW-4 row is changed by this restatement: the matrix remains **0/12
 checked (0%)**, every row remains `Required / Peer and hardware pending`, and
 the whole-product accepted denominator remains **19/71 (26.8%)**.
 
-## Current v1.1.5 controlled-source strict-v3 hardware acceptance preflight
+## Current v1.1.6 controlled-source strict-v3 hardware acceptance preflight
 
 The next acceptance action uses only the clean, upstream-equal target-DJ-PC source
 checkout on `beta-v1.1.2` at docs tip
-`e3d390d912a2c3a9be418ecbc31771d2bf515de7`; its exact strict-v3 runtime source
-is `862cf8035dfb365a7d799f820936585882d0a1e7`, source version `1.1.5`. Do not install the blocked
+`789f7724a699324cd87171ef835b69486bcd4e70`; its exact strict-v3 runtime source
+is `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, source version `1.1.6`. Do not install the blocked
 immutable v1.1.3 package and do not substitute a shortcut or installer. In the
 same PowerShell, set `DJ_AGENT_CONFIG_PATH` to the checkout-external show JSON.
 Use exact no-argument `start-all.bat` for the real controlled launch; exact

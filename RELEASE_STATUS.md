@@ -1,7 +1,7 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-26
-Branch: `codex/syndocal-v1.2`; current development metadata is `1.2.0-alpha.15` and has no built runtime/native artifact. Its runtime baseline includes the pushed DVC controller checkpoint `652b197d3cce9cfc119a790baffefbd47f08cc8c`; resolve the synchronized metadata checkpoint after commit with `git log -1 --format=%H -- Cargo.toml`. The metadata-only advance remains pending the parent native gate. The historical alpha.14 runtime/native source checkpoint `92122f1b148d40845b2cfe3e4618a57ce132b3df` is pushed and upstream-equal. The historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` and historical `1.2.0-alpha.12` runtime/artifact source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` remain immutable evidence. Later cleanup or documentation commits do not redefine an already-built binary's source identity.
+Updated: 2026-08-27
+Branch: `codex/syndocal-v1.2`; current development metadata and any-deck DJ-Link source checkpoint are `1.2.0-alpha.16` at `ad3faa253c155cb1173b17fb81a711f60baea1f1`. The source tranche passed its focused Rust/TypeScript gates, warning count 0, frontend build, release-metadata validation in a clean detached worktree, and independent adversarial review with no P0/P1/P2 finding. It has no built runtime/native artifact and remains pending the parent native gate and physical HW-4 acceptance. The current rb-output v1.1.6 peer implementation is `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, with docs tip `789f7724a699324cd87171ef835b69486bcd4e70`; it is pushed but not yet deployed to the target DJ PC. The latest verified standard native artifact remains the historical `1.2.0-alpha.15` artifact recorded in the near-show and pause-handoff authorities. The historical alpha.14 runtime/native source checkpoint `92122f1b148d40845b2cfe3e4618a57ce132b3df` is pushed and upstream-equal. The historical prior alpha.12 cleanup-safety HEAD `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` and historical `1.2.0-alpha.12` runtime/artifact source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` remain immutable evidence. Later cleanup or documentation commits do not redefine an already-built binary's source identity.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)
@@ -22,18 +22,17 @@ Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/
 > to AI4, or close the current Windows product release until the flow's indexed
 > unchecked gates are closed.
 
-## 2026-08-26 current development metadata alpha.15 advance
+## 2026-08-26 current development metadata alpha.16 advance
 
-Synchronized product metadata advances from `1.2.0-alpha.14` to
-`1.2.0-alpha.15` across the root workspace, first-party lock entries, app and
+Synchronized product metadata advances from `1.2.0-alpha.15` to
+`1.2.0-alpha.16` across the root workspace, first-party lock entries, app and
 Tauri metadata, release checks, next artifact names, required three-display
 harness version, and current product documentation. This is a metadata-only
-advance: no alpha.15 standard or Show-ASIO native artifact has been built.
-The alpha.15 runtime baseline includes DVC controller checkpoint
-`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
-checkpoint is the commit containing these version surfaces and must be resolved
-after commit. The parent lane must run the required native gate before any
-alpha.15 artifact or acceptance claim.
+advance: no alpha.16 standard or Show-ASIO native artifact has been built.
+The alpha.16 any-deck/source and synchronized metadata checkpoint is
+`ad3faa253c155cb1173b17fb81a711f60baea1f1`. The parent lane must run the required native gate before any
+alpha.16 artifact or acceptance claim. The verified alpha.15 native artifacts
+retain their exact historical source and hashes and are not relabelled.
 
 The following alpha.14 section remains historical and retains its exact
 runtime source, artifact path, hash, warning, and window evidence.
@@ -93,9 +92,9 @@ work is bounded to the controlled near-show path and its explicit blockers; hist
 adapter, hardware, and native evidence below is not promoted into that path.
 
 - The DJ peer authority is the clean/upstream-equal strict-v3 checkpoint on
-  branch `beta-v1.1.2`, source product version `1.1.5`: exact runtime source
-  `862cf8035dfb365a7d799f820936585882d0a1e7`, docs tip
-  `71738778c8b7637c14768e02fecbc2ef14ece7f3`. The docs-only tip does not
+  branch `beta-v1.1.2`, source product version `1.1.6`: exact runtime source
+  `ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, docs tip
+  `789f7724a699324cd87171ef835b69486bcd4e70`. The docs-only tip does not
   redefine the runtime identity. The sole current show
   route is the controlled source checkout on the target DJ PC, not an installer,
   shortcut, or published v1.1.3 artifact. It requires a checkout-external show
@@ -114,7 +113,7 @@ adapter, hardware, and native evidence below is not promoted into that path.
   this warning result is not physical ASIO acceptance.
 - The built Show-ASIO evidence for the 2026-08-30 performance consists of the
   historical alpha.12 artifact and the separate alpha.14 local-only artifact
-  from `6b4cd1a`. The current alpha.15 metadata has no Show-ASIO artifact;
+  from `6b4cd1a`. The current alpha.16 metadata has no Show-ASIO artifact;
   neither historical artifact is promoted. Show-ASIO is a separately licensed,
   non-default, local-only `show-asio`
   feature/overlay and is outside the normal MIT
