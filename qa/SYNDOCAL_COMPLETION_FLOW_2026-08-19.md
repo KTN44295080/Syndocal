@@ -346,16 +346,19 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the last synchronized committed ordinal is `1.2.0-alpha.11`.
-The in-progress alpha.12 tranche originally began from pushed source checkpoint
-`763670c`. Current pushed HEAD `07a9b75` still has committed
-`1.2.0-alpha.11` metadata; subsequent documentation, native-acceptance-harness,
-and cleanup-harness checkpoints `0df10d2`, `a0c76c5`, `7ee3b8f`, and `07a9b75`
-intentionally did not advance product metadata. The still-dirty implementation worktree synchronizes
-in-progress metadata to `1.2.0-alpha.12`. Until that advance is committed with
-tracked sources only and natively verified, `check:release` passes only with
-untracked supporting sources present, and alpha.12 must not be described as a
-reproducible checkpoint, tag, installer, or artifact. The branch name may remain
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.13`.
+`1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
+MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
+hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
+later display-stable-identity-QA, Show-ASIO hardlink-fix, cleanup
+inaccessible-process-fix, and cleanup exact-gate checkpoints (`b543067`,
+`fb25ab1`, `ef7b647`, and `c40cfd8`) intentionally did not advance product
+metadata; and those alpha.12 artifacts are never rebuilt or replaced under their
+version. This alpha.13 advance synchronizes the live metadata surfaces for the
+upcoming UI tranche and fixes the required version of the next native acceptance
+target; until alpha.13 has its own committed source checkpoint and native
+verification, it must not be described as a reproducible tag, installer, or
+published artifact. The branch name may remain
 historical; artifact metadata and tags must not derive a false version from it.
 
 The synchronized product-version surfaces are:
@@ -421,10 +424,13 @@ alpha.11 checkpoints (section 37 at D4-checkpoint HEAD
 `63cf795d17846602419d63a007db9f3a95cfce7b` and section 39 at merged HEAD
 `b4a5b62ad48c7e3e58f78c66cf2914e0f53a46f5`) and in individual focused gates at
 their own recorded commits, each valid only for that frozen configuration and
-tree. The current dirty `1.2.0-alpha.12` worktree is unmeasured for the full
-integrated checkpoint; its most recent full dependency clippy run exposed 12
-open first-party large-error lints (near-show finding FC-28), which remain
-open until a fresh full-gate rerun measures this tree again. W0 must still
+tree. The committed `1.2.0-alpha.12` checkpoint was measured at source
+checkpoint `ff61a6d` with zero first-party warnings across its recorded Windows
+configurations (2026-08-26 pause handoff), superseding that tree's earlier
+12 open first-party large-error lints (near-show finding FC-28). The in-progress
+`1.2.0-alpha.13` worktree is unmeasured for the full
+integrated checkpoint and remains unmeasured until a fresh full-gate rerun
+measures this tree again. W0 must still
 recount every supported feature and platform configuration — including the two
 pending macOS rows — and classify every first-party diagnostic.
 

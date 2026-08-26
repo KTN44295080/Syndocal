@@ -94,6 +94,26 @@ const click = (client, selector) => evaluate(client, `(() => {
   element.click();
   return true;
 })()`);
+const openTimelineContextMenuGroup = (client, groupId) => evaluate(client, `(() => {
+  const group = document.querySelector('.timelineItemContextMenu details[data-timeline-context-menu-group="${groupId}"]');
+  if (!(group instanceof HTMLDetailsElement)) return false;
+  const summary = group.querySelector(':scope > summary');
+  if (!(summary instanceof HTMLElement)) return false;
+  if (!group.open) summary.click();
+  return group.open;
+})()`);
+const openTimelineVideoContextMenu = (client) => evaluate(client, `(() => {
+  const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
+  if (!(clip instanceof Element)) return false;
+  if ('focus' in clip && typeof clip.focus === 'function') clip.focus();
+  clip.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 240,
+    clientY: 180,
+  }));
+  return document.querySelector('.timelineItemContextMenu') !== null;
+})()`);
 const dragTimelineResize = async (client, selector, handleSelector, edge, isolate = false) => {
   assert.equal(await evaluate(client, `(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
@@ -609,6 +629,7 @@ try {
       clip?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 240, clientY: 180 }));
     })()`);
     await sleep(50);
+    assert.equal(await openTimelineContextMenuGroup(client, "timing"), true, "Timeline Timing disclosure opens for Split actions");
     assert.equal(await evaluate(client, `(() => {
       const button = document.querySelector('[data-timeline-split-action]');
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
@@ -643,6 +664,80 @@ try {
     })()`);
     assert.equal(videoSelected, true);
     await sleep(80);
+    const menuStructure = await evaluate(client, `(() => {
+      const menu = document.querySelector('.timelineItemContextMenu');
+      if (!(menu instanceof HTMLElement)) return null;
+      const groups = [...menu.querySelectorAll(':scope > details')];
+      const collapsed = groups.every((group) => !group.open);
+      const summaries = groups.map((group) => group.querySelector(':scope > summary')?.textContent?.trim() ?? '');
+      const groupActionHeights = groups.map((group) => {
+        const summary = group.querySelector(':scope > summary');
+        if (!(summary instanceof HTMLElement)) return [];
+        summary.click();
+        const heights = [...group.querySelectorAll('button')].map((button) => button.getBoundingClientRect().height);
+        summary.click();
+        return heights;
+      });
+      const summaryHeights = groups.map((group) => group.querySelector(':scope > summary')?.getBoundingClientRect().height ?? 0);
+      return {
+        groupCount: groups.length,
+        summaries,
+        collapsed,
+        groupActionCounts: groupActionHeights.map((heights) => heights.length),
+        allGroupActions44: groupActionHeights.flat().every((height) => height >= 44),
+        nativeDisclosureSemantics: menu.getAttribute('role') === 'group'
+          && groups.every((group) => group instanceof HTMLDetailsElement
+            && !group.querySelector(':scope > summary')?.hasAttribute('role')),
+        summaryHeights,
+        compactHeight: menu.getBoundingClientRect().height,
+        width: menu.getBoundingClientRect().width,
+      };
+    })()`);
+    assert.deepEqual(
+      [
+        menuStructure?.groupCount,
+        menuStructure?.summaries,
+        menuStructure?.collapsed,
+        menuStructure?.groupActionCounts,
+        menuStructure?.allGroupActions44,
+        menuStructure?.nativeDisclosureSemantics,
+        menuStructure?.summaryHeights,
+      ],
+      [4, ["Selection", "Clipboard", "Timing", "Lane"], true, [2, 3, 8, 2], true, true, [44, 44, 44, 44]],
+      "Timeline item menu exposes four native disclosure groups and visible 44px actions in every expanded group",
+    );
+    assert.ok(
+      menuStructure?.compactHeight >= 296 && menuStructure.compactHeight <= 300
+        && menuStructure.width >= 208 && menuStructure.width <= 212,
+      `Timeline item menu keeps compact closed geometry at 210px width: ${JSON.stringify(menuStructure)}`,
+    );
+    const retainedInputSemantics = await evaluate(client, `(() => {
+      const menu = document.querySelector('.timelineItemContextMenu');
+      const summary = menu?.querySelector(':scope > details > summary');
+      const overview = document.querySelector('.timelineOverview');
+      if (!(menu instanceof HTMLElement) || !(summary instanceof HTMLElement) || !(overview instanceof Element)) return null;
+      summary.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+      const insidePointerRetained = document.querySelector('.timelineItemContextMenu') === menu;
+      const preventedEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      preventedEscape.preventDefault();
+      window.dispatchEvent(preventedEscape);
+      const preventedEscapeRetained = document.querySelector('.timelineItemContextMenu') === menu;
+      const priorGesture = overview.getAttribute('data-timeline-gesture-active');
+      overview.setAttribute('data-timeline-gesture-active', 'true');
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      if (priorGesture === null) overview.removeAttribute('data-timeline-gesture-active');
+      else overview.setAttribute('data-timeline-gesture-active', priorGesture);
+      return {
+        insidePointerRetained,
+        preventedEscapeRetained,
+        gestureEscapeRetained: document.querySelector('.timelineItemContextMenu') === menu,
+      };
+    })()`);
+    assert.deepEqual(
+      retainedInputSemantics,
+      { insidePointerRetained: true, preventedEscapeRetained: true, gestureEscapeRetained: true },
+      "inside pointer input and reserved Escape states retain the Timeline item menu",
+    );
     const state = await measure(client);
     assert.ok(state.rect[0] > 0 && state.rect[1] > 0, "Timeline surface has visible nonzero geometry");
     assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
@@ -652,20 +747,82 @@ try {
       [1, true, "Follow: transitioning 50%", 1, true, 0],
       "Visible Operator and Performance Timeline surfaces expose runtime Follow truth with 44px abort targets",
     );
-    const abortFocusRetained = await evaluate(client, `(() => {
-      const button = document.querySelector('.timelinePerformanceEditor [data-timeline-follow-abort]');
-      if (!(button instanceof HTMLButtonElement)) return false;
-      button.focus();
-      button.click();
+    assert.equal(await evaluate(client, `(() => {
+      const outside = document.createElement('button');
+      outside.type = 'button';
+      outside.id = 'timeline-menu-outside-focus-target';
+      outside.addEventListener('pointerdown', () => outside.focus(), { once: true });
+      document.body.append(outside);
+      outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
       return true;
+    })()`), true);
+    await sleep(30);
+    assert.deepEqual(
+      await evaluate(client, `(() => {
+        const outside = document.getElementById('timeline-menu-outside-focus-target');
+        const result = {
+          closed: document.querySelector('.timelineItemContextMenu') === null,
+          outsideFocused: document.activeElement === outside,
+        };
+        outside?.remove();
+        return result;
+      })()`),
+      { closed: true, outsideFocused: true },
+      "outside primary pointer closes the Timeline item menu without stealing focus from the outside target",
+    );
+    const abortFocusProof = await evaluate(client, `(() => {
+      const button = document.querySelector('[data-timeline-follow-operator-abort]');
+      if (!(button instanceof HTMLButtonElement)) return null;
+      button.focus();
+      const rect = button.getBoundingClientRect();
+      const proof = {
+        enabled: !button.disabled,
+        connected: button.isConnected,
+        visible: rect.width > 0 && rect.height > 0,
+        target44: rect.width >= 44 && rect.height >= 44,
+      };
+      button.click();
+      return proof;
     })()`);
-    assert.equal(abortFocusRetained, true, "Timeline Follow abort control is keyboard-focusable");
+    assert.deepEqual(
+      [abortFocusProof?.enabled, abortFocusProof?.connected, abortFocusProof?.visible, abortFocusProof?.target44],
+      [true, true, true, true],
+      `Timeline Follow abort control is enabled and mounted before activation: ${JSON.stringify(abortFocusProof)}`,
+    );
     await sleep(50);
     assert.equal(
-      await evaluate(client, "document.activeElement?.matches?.('[data-timeline-follow-abort]') === true"),
+      await evaluate(client, "document.activeElement?.matches?.('[data-timeline-follow-operator-abort]') === true"),
       true,
-      "Timeline Follow abort retains focus after its bounded runtime-only result",
+      "visible Operator Timeline Follow abort retains focus after its bounded runtime-only result",
     );
+    assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens after outside dismissal");
+    await sleep(30);
+    await evaluate(client, "document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 2 }))");
+    await sleep(30);
+    assert.equal(
+      await evaluate(client, "document.querySelector('.timelineItemContextMenu') === null"),
+      true,
+      "outside secondary pointer dismisses the stale Timeline item menu",
+    );
+    assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens for Escape dismissal");
+    await sleep(30);
+    const escapeDismissed = await evaluate(client, `(() => {
+      const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    })()`);
+    await sleep(30);
+    assert.deepEqual(
+      [
+        escapeDismissed,
+        await evaluate(client, "document.querySelector('.timelineItemContextMenu') === null"),
+        await evaluate(client, "document.activeElement?.getAttribute('data-timeline-video-clip-id') ?? ''"),
+      ],
+      [true, true, "800"],
+      "Escape dismisses the Timeline item menu and restores focus to its invoker",
+    );
+    assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens for action execution");
+    await sleep(30);
     assert.equal(state.phaseEditorOpen, true);
     assert.deepEqual([state.cueAudioOpen, state.cueAudioControls, state.cueAudioState, state.cueAudioCheckboxes], [true, 4, 'Loading settings', 0]);
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
@@ -701,6 +858,7 @@ try {
         };
       };
     })()`);
+    assert.equal(await openTimelineContextMenuGroup(client, "timing"), true, "Timeline Timing disclosure opens for linked Split dispatch");
     assert.equal(await evaluate(client, `(() => {
       const button = document.querySelector('[data-timeline-split-action]');
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
@@ -766,6 +924,7 @@ try {
       })()`);
       assert.ok(opened, `${splitCase.kind} opens the production Timeline item menu`);
       await sleep(40);
+      assert.equal(await openTimelineContextMenuGroup(client, "timing"), true, `${splitCase.kind} opens the Timing disclosure for Split`);
       assert.equal(await evaluate(client, `(() => {
         const button = document.querySelector('[data-timeline-split-action]');
         if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
@@ -793,6 +952,7 @@ try {
       return true;
     })()`), true);
     await sleep(50);
+    assert.equal(await openTimelineContextMenuGroup(client, "clipboard"), true, "Timeline Clipboard disclosure opens for Copy");
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
         .find((candidate) => candidate.textContent?.trim() === 'Copy selected');
@@ -1080,6 +1240,7 @@ try {
         return true;
       })()`), true);
       await sleep(50);
+      assert.equal(await openTimelineContextMenuGroup(client, "lane"), true, "Timeline Lane disclosure opens for lane actions");
       assert.equal(await evaluate(client, `(() => {
         const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
           .find((candidate) => candidate.textContent?.trim() === 'Move lane up');

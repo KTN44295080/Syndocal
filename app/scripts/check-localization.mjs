@@ -18,6 +18,10 @@ const timelineOverviewSource = await readFile(
   new URL("../src/components/TimelineOverview.tsx", import.meta.url),
   "utf8",
 );
+const timelineCueEventsPanelSource = await readFile(
+  new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url),
+  "utf8",
+);
 const valueEffectEditorSource = await readFile(
   new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url),
   "utf8",
@@ -677,6 +681,16 @@ assert.doesNotMatch(
   timelineOverviewSource,
   /aria-label=\{`Block #\$\{event\.id\}/,
   "the old generic Block label must not bypass point/Scene Block semantics",
+);
+assert.match(
+  timelineOverviewSource,
+  /<text\s+class="timelineSceneBlockLabel"\s+data-no-localize[\s\S]*?\{sceneBlockName\(event\)\}[\s\S]*?<\/text>/,
+  "Timeline Scene Block display names must remain authored user data when a label matches UI copy such as New Scene",
+);
+assert.match(
+  timelineCueEventsPanelSource,
+  /Armed:\s*<span data-no-localize>\{cue\(\)\.label\}<\/span>/,
+  "armed Timeline cue names must remain authored user data when a label matches UI copy such as New Scene",
 );
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 assert.match(

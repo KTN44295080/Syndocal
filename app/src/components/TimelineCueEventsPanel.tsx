@@ -54,6 +54,11 @@ import {
 import {
   type TimelineStretchMode,
 } from "../timelineBlockGestures";
+import {
+  TimelineItemContextMenu,
+  TIMELINE_ITEM_CONTEXT_MENU_COLLAPSED_HEIGHT,
+  type TimelineItemContextMenuGroup,
+} from "./TimelineItemContextMenu";
 
 export type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 
@@ -556,15 +561,20 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     );
   };
   const openItemContextMenu = (point: { x: number; y: number }, anchor: TimelineItemRef) => {
+    if (layerMenu()) closeLayerMenu(false);
     const active = document.activeElement;
     itemMenuReturnFocus = active && "focus" in active
       ? active as Element & { focus: () => void }
       : null;
     setItemContextMenu({
       x: Math.max(8, Math.min(point.x, window.innerWidth - 226)),
-      y: Math.max(8, Math.min(point.y, window.innerHeight - 552)),
+      y: Math.max(8, Math.min(point.y, window.innerHeight - TIMELINE_ITEM_CONTEXT_MENU_COLLAPSED_HEIGHT)),
       anchor,
     });
+  };
+  const closeItemContextMenu = (restoreFocus = true) => {
+    if (!restoreFocus) itemMenuReturnFocus = null;
+    setItemContextMenu(null);
   };
   const pendingRemoveAudioClip = () =>
     props.audioClips.find((clip) => clip.id === pendingRemoveAudioClipId()) ?? null;
@@ -733,6 +743,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     return !hasContents || reassignCandidates().some((candidate) => candidate.id === reassignTargetLayerId());
   };
   const openLayerMenu = (layer: TimelineLayerSummary, point: { x: number; y: number }) => {
+    if (itemContextMenu()) closeItemContextMenu(false);
     const activeElement = document.activeElement;
     const fallbackTrigger = document.querySelector<HTMLElement>(
       `[data-timeline-layer-gutter][data-timeline-layer-id="${layer.id}"] [data-timeline-layer-menu-trigger]`,
@@ -1240,7 +1251,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
         </button>
         <Show when={armedCue()}>
-          {(cue) => <output class="timelineArmedCue" data-timeline-armed-cue={cue().id}>Armed: {cue().label}</output>}
+          {(cue) => (
+            <output class="timelineArmedCue" data-timeline-armed-cue={cue().id}>
+              Armed: <span data-no-localize>{cue().label}</span>
+            </output>
+          )}
         </Show>
       </div>
       </div>
@@ -1423,266 +1438,221 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       />
       <Show when={itemContextMenu()}>
         {(menu) => (
-          <div
-            class="timelineItemContextMenu"
-            role="menu"
-            aria-label="Timeline item group actions"
-            style={{
-              left: `${menu().x}px`,
-              top: `${menu().y}px`,
-              "max-height": `calc(100vh - ${menu().y + 8}px)`,
+          <TimelineItemContextMenu
+            x={menu().x}
+            y={menu().y}
+            groups={() => {
+              const primary = menu().anchor;
+              const isolate = singleMemberEditKey() === timelineItemKey(primary);
+              const selection: TimelineItemContextMenuGroup = {
+                id: "selection",
+                label: "Selection",
+                actions: [
+                  {
+                    id: "group-selected",
+                    label: "Group selected",
+                    disabled: () => selectedTimelineItemRefs().length < 2 || itemGroupForSelection() !== null,
+                    onSelect: () => {
+                      void props.onGroupItems(selectedTimelineItemRefs());
+                      closeItemContextMenu();
+                    },
+                  },
+                  {
+                    id: "ungroup",
+                    label: "Ungroup",
+                    disabled: () => itemGroupForSelection() === null,
+                    onSelect: () => {
+                      const item = selectedTimelineItemRefs()[0];
+                      if (item) void props.onUngroupItem(item);
+                      closeItemContextMenu();
+                    },
+                  },
+                ],
+              };
+              const clipboard: TimelineItemContextMenuGroup = {
+                id: "clipboard",
+                label: "Clipboard",
+                actions: [
+                  {
+                    id: "copy-selected",
+                    label: "Copy selected",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: () => {
+                      setCopiedTimelineItems([...selectedTimelineItemRefs()]);
+                      props.onTimelineStatus("Timeline selection copied.");
+                      closeItemContextMenu();
+                    },
+                  },
+                  {
+                    id: "paste-at-playhead",
+                    label: "Paste at playhead",
+                    disabled: () => copiedTimelineItems().length === 0,
+                    onSelect: async () => {
+                      const items = [...copiedTimelineItems()];
+                      const rawTargetMs = props.snapMode === "Off"
+                        ? props.positionMs
+                        : props.snapTimeMs(props.positionMs);
+                      const targetMs = Math.max(0, Math.round(rawTargetMs));
+                      closeItemContextMenu();
+                      const selected = await props.onPasteItems(items, targetMs);
+                      if (selected.length > 0) selectReturnedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "duplicate-selected",
+                    label: "Duplicate selected",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const duplicates = await props.onDuplicateItems(items, Math.max(1, props.gridMs));
+                      if (duplicates.length > 0) selectReturnedTimelineItems(duplicates);
+                    },
+                  },
+                ],
+              };
+              const timing: TimelineItemContextMenuGroup = {
+                id: "timing",
+                label: "Timing",
+                actions: [
+                  {
+                    id: "split-at-playhead",
+                    label: "Split at playhead",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                      closeItemContextMenu();
+                      await applyTimelineSplitAtPlayhead(
+                        props.onSplitItems,
+                        selectReturnedTimelineItems,
+                        focusReturnedTimelineItem,
+                        { items, primary, boundary_ms: props.positionMs, isolate },
+                      );
+                    },
+                  },
+                  {
+                    id: "nudge-earlier",
+                    label: "Nudge earlier",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const selected = await props.onNudgeItems(items, -Math.max(1, props.gridMs));
+                      if (selected.length > 0) setSelectedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "nudge-later",
+                    label: "Nudge later",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const selected = await props.onNudgeItems(items, Math.max(1, props.gridMs));
+                      if (selected.length > 0) setSelectedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "ripple-earlier",
+                    label: "Ripple earlier",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const selected = await props.onRippleItems(items, -Math.max(1, props.gridMs));
+                      if (selected.length > 0) selectReturnedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "ripple-later",
+                    label: "Ripple later",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const selected = await props.onRippleItems(items, Math.max(1, props.gridMs));
+                      if (selected.length > 0) selectReturnedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "quantize-to-grid",
+                    label: "Quantize to grid",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      closeItemContextMenu();
+                      const selected = await props.onQuantizeItems(items, Math.max(1, props.gridMs));
+                      if (selected.length > 0) setSelectedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "trim-start-to-playhead",
+                    label: "Trim start to playhead",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                      closeItemContextMenu();
+                      const selected = await props.onTrimItems(items, primary, "start", props.positionMs, isolate);
+                      if (selected.length > 0) selectReturnedTimelineItems(selected);
+                    },
+                  },
+                  {
+                    id: "trim-end-to-playhead",
+                    label: "Trim end to playhead",
+                    disabled: () => selectedTimelineItemRefs().length === 0,
+                    onSelect: async () => {
+                      const items = [...selectedTimelineItemRefs()];
+                      if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
+                      closeItemContextMenu();
+                      const selected = await props.onTrimItems(items, primary, "end", props.positionMs, isolate);
+                      if (selected.length > 0) selectReturnedTimelineItems(selected);
+                    },
+                  },
+                ],
+              };
+              const lane: TimelineItemContextMenuGroup = {
+                id: "lane",
+                label: "Lane",
+                actions: [
+                  {
+                    id: "move-lane-up",
+                    label: "Move lane up",
+                    disabled: () => !canMoveTimelineItemLane(primary, -1, isolate),
+                    onSelect: () => {
+                      const target = adjacentTimelineLaneTarget(primary, -1);
+                      closeItemContextMenu();
+                      if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
+                    },
+                  },
+                  {
+                    id: "move-lane-down",
+                    label: "Move lane down",
+                    disabled: () => !canMoveTimelineItemLane(primary, 1, isolate),
+                    onSelect: () => {
+                      const target = adjacentTimelineLaneTarget(primary, 1);
+                      closeItemContextMenu();
+                      if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
+                    },
+                  },
+                ],
+              };
+              return [selection, clipboard, timing, lane];
             }}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length < 2 || itemGroupForSelection() !== null}
-              onClick={() => {
-                void props.onGroupItems(selectedTimelineItemRefs());
-                setItemContextMenu(null);
-              }}
-            >
-              Group selected
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={itemGroupForSelection() === null}
-              onClick={() => {
-                const item = selectedTimelineItemRefs()[0];
-                if (item) void props.onUngroupItem(item);
-                setItemContextMenu(null);
-              }}
-            >
-              Ungroup
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={() => {
-                setCopiedTimelineItems([...selectedTimelineItemRefs()]);
-                props.onTimelineStatus("Timeline selection copied.");
-                setItemContextMenu(null);
-              }}
-            >
-              Copy selected
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={copiedTimelineItems().length === 0}
-              onClick={async () => {
-                const items = [...copiedTimelineItems()];
-                const rawTargetMs = props.snapMode === "Off"
-                  ? props.positionMs
-                  : props.snapTimeMs(props.positionMs);
-                const targetMs = Math.max(0, Math.round(rawTargetMs));
-                setItemContextMenu(null);
-                const selected = await props.onPasteItems(items, targetMs);
-                if (selected.length > 0) selectReturnedTimelineItems(selected);
-              }}
-            >
-              Paste at playhead
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              data-timeline-split-action
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                const primary = menu().anchor;
-                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
-                const isolate = singleMemberEditKey() === timelineItemKey(primary);
-                setItemContextMenu(null);
-                await applyTimelineSplitAtPlayhead(
-                  props.onSplitItems,
-                  selectReturnedTimelineItems,
-                  focusReturnedTimelineItem,
-                  { items, primary, boundary_ms: props.positionMs, isolate },
-                );
-              }}
-            >
-              Split at playhead
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const duplicates = await props.onDuplicateItems(
-                  items,
-                  Math.max(1, props.gridMs),
-                );
-                if (duplicates.length > 0) selectReturnedTimelineItems(duplicates);
-              }}
-            >
-              Duplicate selected
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const selected = await props.onNudgeItems(items, -Math.max(1, props.gridMs));
-                if (selected.length > 0) setSelectedTimelineItems(selected);
-              }}
-            >
-              Nudge earlier
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const selected = await props.onNudgeItems(items, Math.max(1, props.gridMs));
-                if (selected.length > 0) setSelectedTimelineItems(selected);
-              }}
-            >
-              Nudge later
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const selected = await props.onRippleItems(items, -Math.max(1, props.gridMs));
-                if (selected.length > 0) selectReturnedTimelineItems(selected);
-              }}
-            >
-              Ripple earlier
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const selected = await props.onRippleItems(items, Math.max(1, props.gridMs));
-                if (selected.length > 0) selectReturnedTimelineItems(selected);
-              }}
-            >
-              Ripple later
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                setItemContextMenu(null);
-                const selected = await props.onQuantizeItems(items, Math.max(1, props.gridMs));
-                if (selected.length > 0) setSelectedTimelineItems(selected);
-              }}
-            >
-              Quantize to grid
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={!canMoveTimelineItemLane(
-                menu().anchor,
-                -1,
-                singleMemberEditKey() === timelineItemKey(menu().anchor),
-              )}
-              onClick={() => {
-                const primary = menu().anchor;
-                const target = adjacentTimelineLaneTarget(primary, -1);
-                const isolate = singleMemberEditKey() === timelineItemKey(primary);
-                setItemContextMenu(null);
-                if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
-              }}
-            >
-              Move lane up
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={!canMoveTimelineItemLane(
-                menu().anchor,
-                1,
-                singleMemberEditKey() === timelineItemKey(menu().anchor),
-              )}
-              onClick={() => {
-                const primary = menu().anchor;
-                const target = adjacentTimelineLaneTarget(primary, 1);
-                const isolate = singleMemberEditKey() === timelineItemKey(primary);
-                setItemContextMenu(null);
-                if (target) void applyTimelineLaneMove(primary, target.id, 0, isolate);
-              }}
-            >
-              Move lane down
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                const primary = menu().anchor;
-                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
-                const isolate = singleMemberEditKey() === timelineItemKey(primary);
-                setItemContextMenu(null);
-                const selected = await props.onTrimItems(
-                  items,
-                  primary,
-                  "start",
-                  props.positionMs,
-                  isolate,
-                );
-                if (selected.length > 0) selectReturnedTimelineItems(selected);
-              }}
-            >
-              Trim start to playhead
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={async () => {
-                const items = [...selectedTimelineItemRefs()];
-                const primary = menu().anchor;
-                if (!items.some((item) => timelineItemKey(item) === timelineItemKey(primary))) return;
-                const isolate = singleMemberEditKey() === timelineItemKey(primary);
-                setItemContextMenu(null);
-                const selected = await props.onTrimItems(
-                  items,
-                  primary,
-                  "end",
-                  props.positionMs,
-                  isolate,
-                );
-                if (selected.length > 0) selectReturnedTimelineItems(selected);
-              }}
-            >
-              Trim end to playhead
-            </button>
-            <button
-              type="button"
-              class="danger"
-              role="menuitem"
-              disabled={selectedTimelineItemRefs().length === 0}
-              onClick={() => {
+            deleteAction={{
+              id: "delete-selected",
+              label: "Delete selected",
+              danger: true,
+              disabled: () => selectedTimelineItemRefs().length === 0,
+              onSelect: () => {
                 setPendingRemoveTimelineItems([...selectedTimelineItemRefs()]);
-                setItemContextMenu(null);
+                closeItemContextMenu();
                 if (!itemRemoveDialog?.open) itemRemoveDialog?.showModal();
-              }}
-            >
-              Delete selected
-            </button>
-            <button type="button" role="menuitem" onClick={() => setItemContextMenu(null)}>Close</button>
-          </div>
+              },
+            }}
+            onDismiss={closeItemContextMenu}
+          />
         )}
       </Show>
       <Show when={menuLayer()}>

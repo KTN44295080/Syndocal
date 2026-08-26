@@ -30256,6 +30256,38 @@ h3 {
   text-align: left;
 }
 
+.timelineItemContextMenuGroup {
+  display: grid;
+  gap: 0;
+}
+
+.timelineItemContextMenuGroup[open] {
+  gap: 4px;
+}
+
+.timelineItemContextMenuGroup > summary {
+  display: list-item;
+  height: 44px;
+  min-height: 44px;
+  line-height: 44px;
+  cursor: pointer;
+  padding: 0 8px;
+  color: #f1eadf;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.timelineItemContextMenuGroup > summary:focus-visible {
+  outline: 2px solid #f3a43b;
+  outline-offset: -2px;
+}
+
+.timelineItemContextMenuGroupActions {
+  display: grid;
+  gap: 4px;
+  padding-left: 8px;
+}
+
 .timelineAudioClipResizeHandle,
 .timelineVideoClipResizeHandle,
 .timelineAudioClipFadeHandle {

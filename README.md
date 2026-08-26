@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.12**
+- 製品名: **Syndocal 1.2.0-alpha.13**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -52,7 +52,7 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.12_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.12_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.13_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.13_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
@@ -130,7 +130,7 @@ pnpm --dir app tauri build --ci --bundles nsis,msi
 
 Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがstageされ、MSI/NSISへ同梱されます。NDIは開発時の明示featureとしてのみ扱い、通常packageでは独立したライセンス済みruntime overlayのartifact proofが存在するまでfail-closedである。
 
-ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。ABI v1時代のbridge/build、短時間smoke、100-cycle、native UIと第二vendor（HOTONE）の明示stream／100-cycleは歴史的証跡であり、現在のABI/schema v2 bridgeには読み替えません。現在のapp loader sourceはcanonical `syndocal_asio_bridge.dll`のABI/schema v2だけを読み、旧名・旧ABI・欠落・load/symbol/ABI faultを明示分類してfail-closeします。deterministic app-side bridge-v2 35/35とAmpero Miniの直接100-cycleは通過していますが、fresh alpha.12 app buildでのnative UI、選択永続化／stale再検証、hot-plug／fault recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyは未受入です。残る配布ライセンスとadvertised rate／buffer／channel matrixを含む全ゲートが終わるまで完了扱いにしません。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。`distribution_approved: false` の間、通常installer/updaterは canonical `syndocal_asio_bridge.dll`、旧 `syndocal-asio-bridge.dll`、その他のASIO DLL、DLL globをすべて拒否し、libavは検証済み7 DLLだけを明示同梱します。GPLv3版として分離するかSteinberg proprietary agreementを締結し、独立したartifact/notice/release workflowを承認するまで、通常のpackage flowはASIO配布artifactを生成・stage・publishしません。
+ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。ABI v1時代のbridge/build、短時間smoke、100-cycle、native UIと第二vendor（HOTONE）の明示stream／100-cycleは歴史的証跡であり、現在のABI/schema v2 bridgeには読み替えません。現在のapp loader sourceはcanonical `syndocal_asio_bridge.dll`のABI/schema v2だけを読み、旧名・旧ABI・欠落・load/symbol/ABI faultを明示分類してfail-closeします。deterministic app-side bridge-v2 35/35とAmpero Miniの直接100-cycleは通過していますが、fresh alpha.13 app buildでのnative UI、選択永続化／stale再検証、hot-plug／fault recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyは未受入です。残る配布ライセンスとadvertised rate／buffer／channel matrixを含む全ゲートが終わるまで完了扱いにしません。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。`distribution_approved: false` の間、通常installer/updaterは canonical `syndocal_asio_bridge.dll`、旧 `syndocal-asio-bridge.dll`、その他のASIO DLL、DLL globをすべて拒否し、libavは検証済み7 DLLだけを明示同梱します。GPLv3版として分離するかSteinberg proprietary agreementを締結し、独立したartifact/notice/release workflowを承認するまで、通常のpackage flowはASIO配布artifactを生成・stage・publishしません。
 
 ```powershell
 & .\qa\harnesses\check-asio-build.ps1

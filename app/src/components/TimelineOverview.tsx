@@ -3352,6 +3352,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 </Show>
                 <text
                   class="timelineSceneBlockLabel"
+                  data-no-localize
                   x={nameInsetPx}
                   y={-blockHeightPx() / 2 + blockUpperBandHeightPx() / 2}
                   dominant-baseline="central"
