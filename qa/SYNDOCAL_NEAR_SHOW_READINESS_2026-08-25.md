@@ -24,17 +24,28 @@ The performance is **2026-08-30**. Development, acceptance, and show
 preparation must be complete by the separate **2026-08-29 completion
 deadline**. Neither date waives any named fail-closed hardware or native gate.
 
-Current synchronized development metadata is `1.2.0-alpha.15`; it has no
-native artifact. Its runtime baseline includes the DVC controller checkpoint
-`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
-checkpoint is the commit containing these version surfaces and must be resolved
-after commit. The parent lane must complete the required native gate before
-alpha.15 can have an artifact or acceptance claim.
+Current synchronized development metadata is `1.2.0-alpha.15`; its exact
+standard native artifact is bound to pushed, upstream-equal source commit
+`1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline
+authority continuation`). The artifact is
+`target/release/syndocal.exe`, `58,523,648` bytes, Product/FileVersion
+`1.2.0-alpha.15`, SHA-256
+`A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`; its
+`windows-native-release` warning ratchet is baseline/current
+`0 total / 0 first-party / 0 third-party`, with exact process counts `0` before
+build, exactly one responsive maximized QA window, and `0` after. The DVC
+controller baseline remains `652b197d3cce9cfc119a790baffefbd47f08cc8c`.
+The old unconditional async authority fallback could let an event or poll
+hydrate state while the DVC report/navigation continuation went stale; the
+inline paired-authority branch now fails closed for mismatched or later-C state,
+with the compatibility fallback unchanged.
+This artifact and warning result do not close physical output or hardware
+acceptance.
 
 Version-state distinction (2026-08-26): the historical exact committed and pushed
 `1.2.0-alpha.14` runtime/standard-artifact source checkpoint is
-`92122f1b148d40845b2cfe3e4618a57ce132b3df`. Its
-`target/release/syndocal.exe` is `58,523,648` bytes,
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`. At that checkpoint,
+`target/release/syndocal.exe` was `58,523,648` bytes,
 ProductVersion/FileVersion `1.2.0-alpha.14`, SHA-256
 `B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`;
 the native warning gate recorded zero baseline/current warnings and exactly one
@@ -55,14 +66,15 @@ Its manifest records `distributionApproved: false`, `sameHostOnly: true`, and
 `unbundled: true`. The complete warning matrix executed for `ff61a6d` recorded
 zero first-party warnings. These artifact and warning results do not close the
 physical DJ (0/12), native ASIO/operator, three-display Apply/output, or DSF
-show-project acceptance gates.
+physical show-project acceptance gates; the alpha.15 software import/report/
+Save As/restart/reload slice is recorded in the blocker ledger below.
 
 DJ-Link update (2026-08-26): `1.2.0-alpha.13` is the committed/pushed Timeline
 UI checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`. The current product
 metadata is `1.2.0-alpha.15`; the historical alpha.14 strict-v3 software
 surface remains paired with rb-output `1.1.5`, runtime
 `862cf8035dfb365a7d799f820936585882d0a1e7`, clean docs tip
-`71738778c8b7637c14768e02fecbc2ef14ece7f3`. Focused
+`e3d390d912a2c3a9be418ecbc31771d2bf515de7`. Focused
 software gates cover exact v3 clean break, fresh measured-loop authority,
 bounded no-response prediction, late-measurement rebase, independent Release,
 and the full `8 → 4 → 2 → 1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/64`
@@ -214,12 +226,38 @@ The objective is not complete if any of the following remains true:
 | SHOW-P0-1 | Bank/Scene authoring never leaves project mutation authority stuck | Native alpha.11 Bank Save remained pending while recovery checkpoint reported busy. Static review found a possible permanent transaction-lane residue: a failed Commit followed by one swallowed failed Cancel can leave `closing`/active state without automatic finalization. | Deterministic contention tests prove exact-identity Commit/Cancel cleanup reaches a terminal state without permanent active/pending/closing residue; native create, rename, reorder, delete, Undo, save, restart, and reload all complete. | BLOCKED BY IMPLEMENTATION |
 | SHOW-P0-2 | Timeline lower-right uses the same authoritative Bank/Scene representation as Lighting, with placement-only behavior | The compact representation and required `cueLists={snapshot().cue_lists}` connection exist in the dirty tree. The shared fail-closed authority now covers Control/Edit Cue Pads, editable Touch, outer and inner Timeline placement, delayed callbacks, and orphan events without fabricated Cue/Bank IDs. The hardened Scene Matrix gate drives the production-shaped owner registration, exact three-field Program Audio state, Begin/Batch/Commit, exact operation ACK, a complete terminal `R+1` authority result, Undo, and an expected dirty-project `beforeunload`; it passes 5/5 viewport sizes. Dedicated source-shelf and external-DnD contracts also pass. Independent Ox review returned PASS with no Blocker/High/Medium; its two actionable Low findings were repaired by safety-lowering flash release across a later authority fault and visible discard messages for stale delayed look writes. The stopped Ox backend tranche now passes exact-linker engine Bank tests 16/16 and Tauri `--no-default-features` Bank tests 9/9, but remains uncommitted under independent review. The warning ratchet also found the new eight-argument `rename_cue_list` command; it must be converted to a typed request shape rather than suppressed. Fresh native proof remains open. | Same snapshot produces identical Bank ID/order/name/color and Scene ID/order/number/name/type in Lighting and Timeline; empty Banks remain; Timeline exposes no CRUD/play path; click and drag place the same Scene Block. | FOCUSED FRONTEND + OX REVIEW PASS / BACKEND TESTS PASS / REVIEW, WARNING FIX, AND NATIVE PROOF OPEN |
 | SHOW-P0-3 | Detached Stage/Timeline panes never dual-render, disappear, or leave unused main-window space | The previous startup recovery could treat failed placement capture as child absence. A fail-closed exact-label child census is being implemented. | Browser state-machine proof plus a fresh exact-checkout native run covers both detachment orders, restart with detached records, child present/absent/unknown outcomes, Stage integrated rendering, Timeline source/timeline separation, no duplicate pane, and no unusable main-window void. | BLOCKED BY INTEGRATION |
-| SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | The pinned 67,873-byte file has SHA-256 `22D86D7C0F0C56543B440356F76C467F86C37B0E9D06D76EA8F56B2952D0F841`. Static exact derivation reports 46 fixtures, 12 profiles, 15 fixture groups, 2 Banks, 2 Scenes, 84/84 accepted value payloads, 234 beam records, and zero unknown fixture types. The exact-linker Rust importer gate now passes on that file with `fixtures=46`, `cues=2`, `effects=0/0`, `midi=2`, `approximate=4`, `skipped=0`, `unsupported=1`, and `warnings=0`; the Approximate details are MIDI input/feedback device affinity, and the Unsupported detail is Daslight-specific hardware binding. Commit `652b197` extracts the DVC import orchestration from `App.tsx`; its focused controller proof passes 7/7, MIDI/DMX shortcut contracts pass 39/39 and 35/35, frontend invoke inventory passes 419, and the frontend warning ratchet remains 0. Native UI import/report, Save As/restart/reload, and the physical output flow remain unexecuted. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh native three-display output complete, save, restart, and reload without substitution. | STATIC + RUST IMPORT PASS / NATIVE UI AND PHYSICAL EXECUTION OPEN |
+| SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | The pinned 67,873-byte file and exact Rust importer evidence remain as recorded. The alpha.15 native UI now navigated `Setup > Patch` and displayed the exact report plus Save As/close/restart/reopen evidence recorded in the dated alpha.15 software checkpoint below. This closes only the software import/report/save/reload slice; physical output and representative-scene real-output acceptance remain open. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh native three-display output complete, save, restart, and reload without substitution. | ALPHA.15 SOFTWARE IMPORT/REPORT/SAVE/RELOAD PASS / PHYSICAL OUTPUT AND SHOW FLOW OPEN |
 | SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | Published v1.1.3 remains immutable but blocked by its `DJ_MASTER_CHANGED` mismatch. The sole current show route is the controlled target-DJ-PC source on branch `beta-v1.1.2`, source version `1.1.5`, using only strict `syndocal-envelope-v3`; flat/v1/v2 routes are retired. The source requires a checkout-external show JSON through `DJ_AGENT_CONFIG_PATH`; no-argument `start-all.bat` is the real launch and exact lowercase `--preflight-only` is the only alternate. Passing preflight is software-only and starts no show-side process. The real launch still requires the current real Syndocal token. Current topology is FOH `192.168.50.1` / DJ PC `192.168.50.2`. No installer or preflight result is promoted to hardware acceptance. | Both PCs run the pinned controlled source/native artifact with the real token, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, measured loop, no-response fallback, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | STRICT V3 SOFTWARE PATH / REAL TOKEN + HARDWARE 0/12 OPEN |
-| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | The exact committed/pushed alpha.14 standard runtime/artifact source checkpoint remains `92122f1b148d40845b2cfe3e4618a57ce132b3df`. Its `target/release/syndocal.exe` is 58,523,648 bytes, ProductVersion/FileVersion `1.2.0-alpha.14`, SHA-256 `B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`; exactly one responsive maximized exact-path Syndocal window was recorded at the artifact checkpoint. A separate alpha.14 local-only Show-ASIO artifact was built from `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb`: application SHA-256 `CC2D1E28B9063250E86106F04DD082A5C860A840EB721C8208EEFEE009BD0599`, ABI-v2 bridge SHA-256 `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`, manifest SHA-256 `BBEA830122B999A7F985A8F0E88330361E74D3EEE9C5DF2E982EB932A4B687DD`, `files=14`, and `distributionApproved:false`. Later code/docs commits are not relabeled as either artifact source. | Preserve the standard `92122f1b` and local-only Show-ASIO `6b4cd1a` identities separately; complete the remaining physical DJ, ASIO, display, and DSF acceptance without substituting later commits as runtime provenance. | ALPHA.14 STANDARD + LOCAL-ONLY SHOW-ASIO ARTIFACTS BUILT / PHYSICAL ACCEPTANCE OPEN |
+| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | The alpha.15 standard artifact is bound to pushed, upstream-equal source `1d372e795870c1a6e5687d1116161042ddac627e`: `target/release/syndocal.exe`, 58,523,648 bytes, Product/FileVersion `1.2.0-alpha.15`, SHA-256 `A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`, `windows-native-release` baseline/current `0 total / 0 first-party / 0 third-party`, and exact process gate `0` before, one responsive maximized QA window, `0` after. Historical alpha.14 standard and local-only Show-ASIO identities remain preserved separately below. | Preserve the alpha.15 standard identity and historical alpha.14/local-only identities separately; complete the remaining physical DJ, ASIO, display, and DSF show acceptance without substituting later commits as runtime provenance. | ALPHA.15 STANDARD ARTIFACT + WARNING RATCHET PASS / PHYSICAL ACCEPTANCE OPEN |
 | SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | The isolated bridge and application loader source have clean-broken to ABI/schema v2 and one canonical `syndocal_asio_bridge.dll`; the old claim that the app loader remains ABI v1 is retired. The complete historical matrix and the alpha.14 Show-ASIO build recorded zero first-party warnings. The exact 44.1 kHz / 2-channel i32 / 128-frame HOTONE Ampero bridge-only run completed for `3,600,031 ms`. The alpha.14 local-only native app then completed a bounded Start/5-second/Stop/Close and restart/revalidation run against the same Ampero configuration: callback `128/128/128`, `OVR 0/0f`, `XRUN 0`, capture-to-worker `4.4/4.5 ms` then `4.4/4.7 ms`, and app/bridge process counts 0 after each Close. This is short native/operator evidence only. Occupied/reset/unplug/XRUN/no-callback recovery, TOPPING, long-duration, full matrix, formal matched 48 kHz ASIO/WASAPI, and measured latency acceptance remain open. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Close, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, formal matched 48 kHz soak, and measured latency pass without WASAPI or another-driver substitution; the local-only artifact passes its dedicated checker immediately before use. | ALPHA.14 BOUNDED AMPERO NATIVE PASS / RECOVERY, LONG-RUN, MATRIX, LATENCY, AND PHYSICAL ACCEPTANCE OPEN |
 | SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Strict wire v3 now requires fresh position/effective BPM/session/deck identity, continuous revisioned Sync, exact measured loop state, atomic engine start/sync/release ownership, and late-event fencing. F14 arms a bounded response window before local MIDI; fresh Rekordbox measurement remains primary, only true no-response emits a distinct predicted fallback, invalid/stale/contradictory response suppresses prediction, and a later fresh measurement rebases it. F13 routes Release independently of Rekordbox Stop MIDI success. Focused software proof passes, but the real-token run and exact authored Timelines/full physical sequence remain unexecuted. | Wired authenticated Master-track trigger, position follow, measured absolute loop updates and no-response fallback across `8 → 4 → 2 → 1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/64`, independent pedal Release/stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | STRICT V3 SOFTWARE CONTRACT / NATIVE, REAL RUN, AUTHORING, AND HARDWARE OPEN |
 | SHOW-P0-9 | Scene Settings remains usable at show-editor size and an authored Scene may intentionally contain zero owned FX | The focused browser gate now passes at 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720 with an 8-FX fixture: 4x2 family layout at 1920, no chooser descriptions, local 32px owned-FX toolbar controls, contained focusable scrollport, real wheel/PageDown/End reaching a bottom sentinel, and zero document/app scroll. Browser removal reaches 0, but native Tauri/engine guards still reject the final removal. | Exact-checkout native UI reproduces the internal scroll and zero-FX operation; acknowledged engine state, active runtime release, save/reload persistence, and publication-failure rollback all pass without browser-local authority. | FOCUSED LAYOUT PROOF PASS / NATIVE MUTATION BLOCKED |
+
+## 2026-08-26 alpha.15 native software checkpoint
+
+- Source/artifact checkpoint: pushed, upstream-equal `1d372e795870c1a6e5687d1116161042ddac627e`;
+  the standard artifact and warning ratchet are recorded in `SHOW-P0-6`.
+- The exact `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc` input is
+  `67,873` bytes with SHA-256
+  `22D86D7C0F0C56543B440356F76C467F86C37B0E9D06D76EA8F56B2952D0F841`.
+  Native UI navigation reached `Setup > Patch` and displayed: `fixtures=46`,
+  `profiles=12`, `fixture groups=15`, `scene banks=2`, `cues=2`,
+  `values converted=2`, `skipped=0`, `beam records=234`, `mismatches=0`,
+  `audio=0`, `scene blocks=0`, `effects=0/0`, `unknown=0`, `missing=0`;
+  summary `Converted=84`, `Approximate=4`, `Skipped=0`, `Unsupported=1`.
+  Approximate details are MIDI input device affinity and MIDI feedback output
+  affinity. The Unsupported detail is the Daslight hardware device; imported
+  DMX routes are disabled.
+- Save As produced `target/qa/dsf2026-native-alpha15/DSF2026-imported-alpha15.sdc`,
+  `1,035,667` bytes, SHA-256
+  `CDECBC4D3D3D947C0DA4915009D3480A605E4B4B363C25622907E1D78A6FA6FB`.
+  Clean close, restart, and reopen verified `46` fixtures, `12` embedded
+  profiles, `2 MIDI / 0 OSC / 0 DMX / 0 DJ Link` mappings, and two scene banks
+  with color/dimmer cues `all_white` and `all_max`.
+- This closes only the software import/report/Save As/save/reload slice. It does
+  not close physical three-output Apply/content/save/restart, representative
+  scene real-output acceptance, DJ physical `0/12`, or ASIO unplug/XRUN/fault,
+  long-duration, TOPPING, or matrix gates.
 
 ## Discovered fail-closed and clean-break repair ledger
 
@@ -553,10 +591,13 @@ five-display topology. On 2026-08-26 both Windows PowerShell 5.1 and PowerShell
 no remaining P0/P1 in the runner or companion self-test. `git diff --check` was
 clean apart from Git's informational LF-to-CRLF notices.
 
-The current alpha.15 metadata has no native artifact. The exact clean historical
-alpha.14 standard artifact exists at checkpoint `92122f1b`,
-and the separate alpha.14 local-only Show-ASIO artifact exists at checkpoint
-`6b4cd1a`; configured physical acceptance remains open.
+The current alpha.15 standard artifact exists at source checkpoint `1d372e7`:
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.15`,
+58,523,648 bytes, SHA-256
+`A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`.
+The exact clean historical alpha.14 standard artifact remains at checkpoint
+`92122f1b`, and the separate alpha.14 local-only Show-ASIO artifact remains at
+checkpoint `6b4cd1a`; configured physical acceptance remains open.
 The runner still requires the
 real Apply/output/content sequence for Editor 1920x1080, LED 1920x1080, and
 Projector 3840x2160, plus the exact artifact hash/version/HEAD, raw

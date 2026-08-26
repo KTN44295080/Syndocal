@@ -1,25 +1,28 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.15 METADATA ADVANCED; ALPHA.14 NATIVE/DVC CHECKPOINT PRESERVED**
+Status: **ALPHA.15 NATIVE ARTIFACT + DSF SOFTWARE CHECKPOINT; PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
-not accepted as fully show-ready: the alpha.14 strict-v3 software and standard
-native artifact gates are complete, while the physical DJ, three-output, and
-DSF native show-program gates below remain open. The exact DSF2026 Rust importer
-gate and DVC frontend-controller extraction are complete, but the native UI
-import/report, Save As, restart/reload, and physical route remain open. The
-separately licensed alpha.14
+not accepted as fully show-ready: the alpha.15 standard native artifact and the
+DSF native import/report/Save As/restart/reload software slice are complete,
+while physical DJ, three-output Apply/content/save/restart, representative-scene
+real output, and the remaining DSF show-program gates remain open. The DVC
+authority race is fixed in pushed commit `1d372e795870c1a6e5687d1116161042ddac627e`:
+the old unconditional async authority fallback let an event or poll hydrate
+state while the DVC-specific report/navigation continuation went stale. The new
+inline paired-authority branch remains fail-closed for mismatched or later-C
+state, and the compatibility fallback is unchanged. The separately licensed alpha.14
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
-The current synchronized development metadata is `1.2.0-alpha.15`; this is a
-metadata-only advance and no alpha.15 native or Show-ASIO artifact has been
-built. Its runtime baseline includes the DVC controller checkpoint
-`652b197d3cce9cfc119a790baffefbd47f08cc8c`; the synchronized metadata
-checkpoint is the commit containing these version surfaces and must be resolved
-after commit. The parent lane must run the required native gate before any
-alpha.15 artifact or acceptance claim.
+The current synchronized development metadata is `1.2.0-alpha.15`; the standard
+native artifact is bound to pushed, upstream-equal source commit `1d372e7`,
+while the separately licensed alpha.14 Show-ASIO artifact remains the only
+Show-ASIO artifact recorded here. Its runtime baseline includes the DVC
+controller checkpoint `652b197d3cce9cfc119a790baffefbd47f08cc8c`. The alpha.15
+artifact identity, warning ratchet, and native process gate are recorded below;
+they do not promote physical hardware or output acceptance.
 
 ## 1. Exact checkpoints
 
@@ -28,7 +31,7 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.15 development metadata/source baseline; no artifact built | DVC controller `652b197d3cce9cfc119a790baffefbd47f08cc8c`; resolve the synchronized metadata commit with `git log -1 --format=%H -- Cargo.toml` after commit |
+| Current alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); standard artifact identity is in section 3 |
 | Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
@@ -41,11 +44,14 @@ commit as the source identity of an already-built binary.
 | Cleanup exact Codex-control-plane gate | `c40cfd89ccb2203b92e76d3a8d72f00980aa1a30` |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The alpha.15 metadata has no native artifact;
-the historical alpha.14 runtime source and native artifact are bound to pushed,
-upstream-equal commit
-`92122f1b148d40845b2cfe3e4618a57ce132b3df`. A later commit containing only
-checkpoint documentation must not redefine that binary source identity.
+Branch: `codex/syndocal-v1.2`. The alpha.15 standard runtime/source/artifact is
+bound to pushed commit
+`1d372e795870c1a6e5687d1116161042ddac627e`. The historical alpha.14 runtime
+source and native artifact remain bound to
+`92122f1b148d40845b2cfe3e4618a57ce132b3df`; a later commit containing only
+checkpoint documentation must not redefine either binary's source identity.
+Resolve the current branch/docs tip after publishing this handoff; do not report
+the artifact source checkpoint as the later documentation HEAD.
 
 ## 2. Mandatory operating rules
 
@@ -79,12 +85,29 @@ checkpoint documentation must not redefine that binary source identity.
   `app/src-tauri/src/main.rs`. Extract the owning domain first and preserve the
   contract with focused tests.
 
-## 3. Historical alpha.14 standard and local-only Show-ASIO artifacts
+## 3. Alpha.15 standard artifact; historical alpha.14 and local-only Show-ASIO artifacts
 
-### Standard MIT/WASAPI artifact
+### Current alpha.15 standard MIT/WASAPI artifact (2026-08-26)
+
+- Source checkpoint: `1d372e795870c1a6e5687d1116161042ddac627e`
+- Path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- Product/File version: `1.2.0-alpha.15`
+- Size: `58,523,648` bytes
+- SHA-256: `A22BE8BD7CFB9C95D551E24DE51862C352D7B02C2FA22D4E469C2E085CEBC23E`
+- Native warning ratchet (`windows-native-release`): baseline/current
+  `0 total / 0 first-party / 0 third-party`.
+- Exact process gate: process count was `0` before build, exactly one
+  responsive maximized `Syndocal` window was available for QA, and the exact
+  process count was `0` after QA.
+- This proves the alpha.15 standard software/native artifact checkpoint only;
+  physical output, DJ, representative-scene real-output, and full ASIO gates
+  remain open.
+
+### Historical alpha.14 standard MIT/WASAPI artifact
 
 - Source checkpoint: `92122f1b148d40845b2cfe3e4618a57ce132b3df`
-- Path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- Recorded build path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+  (the current file at this path has since been replaced by the alpha.15 artifact above)
 - Product/File version: `1.2.0-alpha.14`
 - Size: `58,523,648` bytes
 - SHA-256: `B140E9DA515741C8A6A318963C6BAB576CED62ECABEDEA50BA8DE15593AE325C`
@@ -95,7 +118,7 @@ checkpoint documentation must not redefine that binary source identity.
   project changes used below were explicitly discarded rather than saved;
   after Close, the exact-path process count was `0`.
 
-### Current local-only Show-ASIO artifact: bounded Ampero physical proof
+### Historical alpha.14 local-only Show-ASIO artifact: bounded Ampero physical proof
 
 - Source checkpoint: `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb`
 - Directory:
@@ -125,6 +148,33 @@ checkpoint documentation must not redefine that binary source identity.
   clean checkout detached at `6b4cd1a` or a rebuild from the new HEAD.
 
 ## 4. Completed software evidence
+
+### Alpha.15 native/software checkpoint (2026-08-26)
+
+- Source/artifact checkpoint: pushed, upstream-equal `1d372e795870c1a6e5687d1116161042ddac627e`;
+  standard artifact identity and the `windows-native-release` warning ratchet
+  are recorded in section 3.
+- The exact `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc` input is
+  `67,873` bytes with SHA-256
+  `22D86D7C0F0C56543B440356F76C467F86C37B0E9D06D76EA8F56B2952D0F841`.
+  Native UI navigation reached `Setup > Patch` and displayed the import report:
+  `fixtures=46`, `profiles=12`, `fixture_groups=15`, `scene_banks=2`,
+  `cues=2`, `values converted=2`, `skipped=0`, `beam records=234`,
+  `mismatches=0`, `audio=0`, `scene blocks=0`, `effects=0/0`, `unknown=0`,
+  `missing=0`; summary `Converted=84`, `Approximate=4`, `Skipped=0`,
+  `Unsupported=1`. Approximate details are MIDI input device affinity and MIDI
+  feedback output affinity. The Unsupported detail is the Daslight hardware
+  device; imported DMX routes are disabled.
+- Save As produced `target/qa/dsf2026-native-alpha15/DSF2026-imported-alpha15.sdc`,
+  `1,035,667` bytes, SHA-256
+  `CDECBC4D3D3D947C0DA4915009D3480A605E4B4B363C25622907E1D78A6FA6FB`.
+  Clean close, restart, and reopen verified `46` fixtures, `12` embedded
+  profiles, `2 MIDI / 0 OSC / 0 DMX / 0 DJ Link` mappings, and two scene banks
+  with color/dimmer cues `all_white` and `all_max`.
+- This closes only the software import/report/Save As/save/reload slice. It does
+  not close physical three-output Apply/content/save/restart, representative
+  scene real-output acceptance, DJ physical `0/12`, or ASIO unplug/XRUN/fault,
+  long-duration, TOPPING, or matrix gates.
 
 Historical alpha.14 evidence:
 
@@ -327,10 +377,9 @@ These are OPEN, not implicit completion claims:
    ASIO/WASAPI and the remaining recovery matrix remain open.
 4. Configure and Apply the stable three-output roles, verify exact placement and
    visible content on all three physical displays, then save/restart and repeat.
-5. Repeat the now-passing exact
-   `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc` import through the native UI;
-   retain the visible import report and exact skipped/fail-closed mappings.
-   Create representative Lighting scenes,
+5. The alpha.15 native `DSF2026.dvc` import/report/Save As/close/restart/reopen
+   software slice is complete; retain its visible report and exact
+   skipped/fail-closed mappings. Create representative Lighting scenes,
    LED/projector substitute media, the two required timelines, DJ trigger and
    measured/no-response loop behavior through `1/64`, release/transition
    behavior, then save/restart and run the full show
@@ -390,9 +439,10 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Main internal DVC checkpoint `652b197...`, alpha.14 artifact source checkpoint
-  `92122f1b...`, and rb-output docs tip `e3d390d...` were clean and
-  upstream-equal when recorded. The final documentation
+- Main alpha.15 source/artifact checkpoint `1d372e7...`, DVC controller
+  checkpoint `652b197...`, alpha.14 artifact source checkpoint `92122f1b...`,
+  and rb-output docs tip `e3d390d...` were clean and upstream-equal when
+  recorded. The final documentation
   commit containing this handoff must again be pushed and rechecked clean.
 - The historical exact standard alpha.14 process and window identities are in
   section 3. Re-resolve them on resume; do not assume PID/HWND stability.
@@ -409,6 +459,6 @@ Resume in this order:
    commit, and push.
 
 This checkpoint does not claim public-release readiness or completed performance
-acceptance. It preserves a verified alpha.14 strict-v3 standard-native
-checkpoint, the bounded alpha.14 local Show-ASIO Ampero proof, and the shortest
-exact route to the remaining physical show proof.
+acceptance. It preserves the verified alpha.15 standard-native artifact and DSF
+software import/report/save/reload slice, the bounded alpha.14 local Show-ASIO
+Ampero proof, and the shortest exact route to the remaining physical show proof.
