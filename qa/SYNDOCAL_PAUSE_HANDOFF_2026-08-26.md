@@ -678,3 +678,62 @@ Ampero proof, and the shortest exact route to the remaining physical show proof.
   Syndocal and regenerating its process-local DJ token, breaking the operator's
   live Rekordbox/DJ-Link session. This checkpoint therefore proves the focused
   frontend contract only and must not be promoted to native acceptance.
+
+## 12. 2026-08-27 HW-4.11 source checkpoint and exact resume state
+
+The current branch is `codex/syndocal-v1.2`; implementation commit
+`dcf6e524eddfaf79a54856af458efef202c079e1` is pushed and equals
+`origin/codex/syndocal-v1.2`. This checkpoint replaces the prior source-level
+restart/NIC gap with a V2 machine-local authority, separate Windows Credential
+Manager primary/rollback secrets, generation high-water, crash-compensated
+journal, durable disarm cleanup retry, exact NLM network/adapter/IPv4 trust, and
+DJ-only auto-start through the one shared Remote listener. Invalid/future/V1,
+ambiguous, stale, partially committed, or unsupported state fails closed.
+
+The same tranche also closes the remaining authored-label localization leak for
+`New Scene` in both Cue Pads, the Timeline Armed display, and the Phase-1 report;
+only persisted labels are marked `data-no-localize`, while `Empty`, `Armed`, and
+the New Scene operation remain localizable UI copy. The previously committed
+Timeline context menu still dismisses on outside left pointer/Escape and uses a
+compact hierarchical menu. The Remote pane retains original control sizes and
+uses its disclosure stack as the internal scroll owner.
+
+Supervisor and independent Terra evidence on the fixed source:
+
+- exact Community MSVC `14.44.35207` linker was pinned and first in
+  `where.exe link.exe` before every Cargo gate;
+- `cargo check -p syndocal --no-default-features --locked` passed;
+- focused Rust tests passed: Syndocal `119/119`, I/O `38/38`, protocol `13/13`,
+  and control-plane freeze `1/1` with exactly `482` routes;
+- first-party warning count was `0` for every executed configuration;
+- `pnpm --dir app build`, DJ Link/output-control/invoke/routing/localization,
+  five-size disclosure scroll, and Timeline performance/context-menu checks all
+  passed. Localization is `3560/3560`; frontend invokes are exactly `422`;
+- independent Terra xHigh adversarial review found no blocking P0/P1/P2 issue.
+
+During test diagnosis, only verified debug workers were terminated: PIDs
+`59872`, `61748`, `59696`, and `26320`, all exact
+`target\debug\deps\io-...exe` processes. The current release process was never
+terminated or restarted. Current live evidence is PID `46120`, exact
+`target\release\syndocal.exe`, responsive `1.2.0-alpha.15`, size `58,523,648`,
+SHA-256
+`42D7B5AEECD520855D4645DF6178E2DE617EC1B7D794A3010750DE94912BE33E`,
+LISTEN `192.168.50.1:9100`, ESTABLISHED peer `192.168.50.2:58211`. Do not relabel
+this artifact as alpha.16.
+
+Cleanup inventory was read-only. No Apply ran, no path was deleted, and
+reclaimed bytes are exactly `0`. `target` is `225,690,640,640` logical bytes;
+the reviewed `target\debug\incremental` candidate is `85,807,780,400` logical
+bytes. Cleanup remains blocked by the dirty-worktree phase of this checkpoint
+and `HardlinkDetected`: the cited `metadata.rmeta` now has four names, including
+two under external `C:\Users\kouty\Documents\.tmp.driveupload`. Preserve QA,
+evidence, and `C:\TEMP\KDMX-alpha16-release-gate-01a03b78`.
+
+Do not run a native release build while the operator intends to retain the live
+session. On operator return, first re-resolve PID/path/hash/socket and repository
+equality. Then, with explicit acceptance of stopping only that exact checkout
+process, run the mandatory alpha.16 `tauri build --no-bundle`, launch/maximize
+exactly one responsive Syndocal window, deploy rb-output `1.1.6` to the DJ PC,
+and execute HW-4.1 through HW-4.12. Native alpha.16, real Credential Manager/NLM
+restart, DJ-PC token reuse, hardware pedal/MIDI, ASIO, three displays, DSF
+output, and full rehearsal remain unverified; the DJ matrix remains **0/12**.

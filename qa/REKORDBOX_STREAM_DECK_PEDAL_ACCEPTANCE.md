@@ -837,3 +837,59 @@ for acceptance. This correction checks no HW-4 row: the DJ/Pedal matrix remains
 exactly **0/12 checked (0%)**, all rows remain `Required / Peer and hardware
 pending`, and no wired-LAN, MIDI, pedal, Rekordbox, or Syndocal ACK acceptance is
 claimed.
+
+## Current HW-4.11 machine-authority source checkpoint — 2026-08-27
+
+This append-only section supersedes the two implementation gaps described in
+`Current KDMX runtime/operator preflight gaps` for current source only. It does
+not rewrite the dated hardware observations above and it checks no HW-4 row.
+
+- **Old path:** listener enable/bind/start state and the process-local token did
+  not survive a Syndocal restart; discovery exposed address-only candidates and
+  could not prove the selected physical Show-LAN adapter. The retired
+  `list_show_lan_interfaces` route is removed.
+- **New path:** commit `dcf6e524eddfaf79a54856af458efef202c079e1`
+  persists only V2 non-secret machine authority in
+  `dj-link-machine-settings.json`. The 32-byte secret is stored separately in
+  Windows Credential Manager targets
+  `jp.seraf.ktn.syndocal/dj-link/v1` and the transaction-only
+  `jp.seraf.ktn.syndocal/dj-link/v1/rollback`. Startup restores an explicitly
+  armed authority only after a stable two-pass NLM observation and a fresh exact
+  `(network GUID, adapter GUID, IPv4)` revalidation. The same sole
+  `RemoteWsServer` is then started in DJ-only mode; Web Remote is not silently
+  enabled and a generic Web-only Start cannot replace an armed DJ authority.
+- **Crash and clean-break behavior:** a monotonic credential-generation high
+  water mark prevents generation reuse. Prepare/commit/final-write failures
+  restore only a separately verified prior credential and non-secret preimage;
+  invalid, corrupt, future, V1, stale, ambiguous, incomplete, or unsupported
+  state remains visibly fail-closed. Disarm writes an unarmed durable cleanup
+  marker before revoking both credential slots and retries unfinished cleanup
+  at restart. No compatibility fallback or hidden second listener exists.
+- **Secret boundary:** ordinary status, persisted JSON, URLs, logs, renderer
+  storage, and `Debug` omit or redact the token. After HELLO authentication the
+  parsed bearer and JSON value are zeroized and replaced by a fixed valid
+  non-secret sentinel before canonical/session retention. Arm/rotate exposes a
+  token only in the operator-requested show-once renderer field for at most 30
+  seconds; copy and unmount clear it. Clipboard history and operator-managed
+  external configuration remain outside the application boundary.
+- **Source proof:** exact MSVC 14.44 linker preflight was printed and verified
+  before each Rust gate. `cargo check -p syndocal --no-default-features
+  --locked` passed; focused tests passed Syndocal `119/119`, I/O `38/38`,
+  protocol `13/13`, and control-plane freeze `1/1` over exactly `482` routes.
+  First-party warnings were `0`. Frontend build passed; DJ Link, output-control,
+  invoke `422`, routing `130/31/30/411`, localization `3560/3560`, five-size
+  Remote disclosure scroll, and Timeline context-menu/performance checks passed.
+  Independent Terra xHigh review approved with no blocking P0/P1/P2 finding.
+- **Current live-artifact boundary (2026-08-27):** the operator's untouched
+  process is PID `46120`, exact path
+  `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, version
+  `1.2.0-alpha.15`, size `58,523,648`, SHA-256
+  `42D7B5AEECD520855D4645DF6178E2DE617EC1B7D794A3010750DE94912BE33E`.
+  It remains responsive with `192.168.50.1:9100` LISTEN and the DJ-PC peer
+  `192.168.50.2:58211` ESTABLISHED. It is historical alpha.15 runtime evidence,
+  not an alpha.16 native acceptance artifact. No native build, restart, window
+  QA, real CredMan/NLM restart, or target-DJ-PC deployment was performed.
+- The DJ PC therefore remains deployed on rb-output `1.1.5`; source `1.1.6` is
+  pushed but not deployed. Real restart/token reuse/reconnect/next-show proof is
+  still pending. HW-4.1 through HW-4.12 remain exactly **0/12 checked (0%)** and
+  `Required / Peer and hardware pending`.

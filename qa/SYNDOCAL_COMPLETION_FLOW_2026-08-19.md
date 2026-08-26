@@ -1941,3 +1941,34 @@ No browser, loopback, short device smoke, partial Timeline, or generic native
 launch may promote this objective. The final artistic Lighting design and final
 video assets remain user-authored after the complete product path is proven with
 representative scenes and deterministic temporary media.
+
+## 42. 2026-08-27 show-critical DJ machine authority checkpoint
+
+Commit `dcf6e524eddfaf79a54856af458efef202c079e1` is the pushed source checkpoint
+for HW-4.11. The old process-local-token/address-only/listener-manual-repair path
+is replaced by V2 non-secret machine settings, separate Credential Manager
+primary/rollback records, monotonic generation high-water, a crash-compensated
+journal, durable disarm cleanup, exact NLM `(network GUID, adapter GUID, IPv4)`
+trust, and armed DJ-only startup through the single shared Remote listener.
+Retired, malformed, future, stale, ambiguous, missing, or partially committed
+authority fails closed. Authenticated HELLO bearer bytes are zeroized before
+retained session/canonical state, and status/Debug/persisted JSON do not expose
+the token.
+
+The fixed-source gates passed with exact MSVC 14.44 and zero first-party
+warnings: Syndocal `119/119`, I/O `38/38`, protocol `13/13`, control-plane
+`1/1` over `482` routes, frontend build, invoke `422`, command routing
+`130/31/30/411`, localization `3560/3560`, five-size Remote scroll, and Timeline
+context-menu/performance proof. Independent Terra xHigh review approved without
+a blocking P0/P1/P2 finding. The authored `New Scene` label is now protected in
+all discovered Cue Pad/Armed/report views while operation text remains
+localizable.
+
+This is source completion, not show acceptance. The running untouched artifact
+is still alpha.15 PID `46120` with an established DJ-PC socket; alpha.16 native
+build/launch, real Windows credential/NLM restart, rb-output `1.1.6` deployment,
+and HW-4.1 through HW-4.12 are pending. The DJ matrix remains **0/12**. Cleanup
+was inventory-only and reclaimed `0` bytes because the reviewed incremental
+tree remains hardlinked to external `.tmp.driveupload` paths. The next safe
+show-critical action is the exact alpha.16 native build and full hardware matrix
+after the operator authorizes replacement of the live alpha.15 process.
