@@ -1972,3 +1972,16 @@ was inventory-only and reclaimed `0` bytes because the reviewed incremental
 tree remains hardlinked to external `.tmp.driveupload` paths. The next safe
 show-critical action is the exact alpha.16 native build and full hardware matrix
 after the operator authorizes replacement of the live alpha.15 process.
+
+## 43. 2026-08-27 bounded DJ machine test extraction
+
+Pushed commit `684ecc01ceba141047f49cc595337f138719b749` reduces the
+show-critical `dj_link_machine.rs` compilation unit from `2,644` to `1,491`
+lines by moving its unchanged private child test module to
+`src/tests/dj_link_machine_tests.rs`. All `38` tests and `125` assertion-macro
+occurrences remain; independent Terra review found no semantic or visibility
+change. Exact MSVC 14.44 Windows proof passed `37/37`, with the one remaining
+test unchanged behind its non-Windows cfg, and first-party warnings remained
+zero. This is a refactor-only checkpoint: the live alpha.15 process, cleanup
+state, HW-4 **0/12** matrix, and all alpha.16 native/hardware boundaries in
+section 42 are unchanged.

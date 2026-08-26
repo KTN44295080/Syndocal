@@ -737,3 +737,22 @@ exactly one responsive Syndocal window, deploy rb-output `1.1.6` to the DJ PC,
 and execute HW-4.1 through HW-4.12. Native alpha.16, real Credential Manager/NLM
 restart, DJ-PC token reuse, hardware pedal/MIDI, ASIO, three displays, DSF
 output, and full rehearsal remain unverified; the DJ matrix remains **0/12**.
+
+## 13. 2026-08-27 bounded DJ machine test-module extraction
+
+Commit `684ecc01ceba141047f49cc595337f138719b749` is pushed and equal to
+`origin/codex/syndocal-v1.2`. It is a pure post-HW-4.11 maintainability
+checkpoint: the inline `dj_link_machine.rs` test module moved to
+`app/src-tauri/src/tests/dj_link_machine_tests.rs` while remaining the same
+private child module through `#[path = "tests/dj_link_machine_tests.rs"]`.
+Production visibility, entrypoints, persistence behavior, and acceptance state
+did not change. The production file shrank from `2,644` to `1,491` lines; all
+`38` test names, order, `125` assertion-macro invocations, and comments were
+retained.
+Independent Terra comparison found only two rustfmt line-wrap differences and
+no P0/P1/P2 issue. Exact MSVC 14.44 focused proof passed `37/37` on Windows;
+the remaining unchanged test is `cfg(not(target_os = "windows"))`. `cargo fmt
+--all -- --check`, `git diff --check`, and the warning ratchet passed with zero
+first-party warnings. No native build, process restart, cleanup Apply, or file
+deletion occurred; reclaimed bytes remain `0`. PID `46120` remains responsive
+with the same LISTEN and ESTABLISHED DJ-PC socket. HW-4 remains **0/12**.
