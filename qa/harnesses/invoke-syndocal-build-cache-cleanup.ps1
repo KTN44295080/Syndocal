@@ -581,6 +581,82 @@ function Test-SyndocalCleanupOwnershipAnchor {
     return $false
 }
 
+function Test-SyndocalCleanupCodexControlPlane {
+    param(
+        [Parameter(Mandatory)]
+        $Process,
+        [Parameter(Mandatory)]
+        [object[]]$Processes,
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot
+    )
+
+    # Narrow control-plane exception for this cleanup ceremony only.
+    # Owner: KDMX QA. Expiry: 2026-09-15 or immediately when the Codex runtime
+    # ancestry/command shape changes. Spawned cargo/node/pwsh children are not
+    # exempt and remain ordinary writer candidates.
+    if ((Get-Date).Date -gt [datetime]"2026-09-15") {
+        return $false
+    }
+
+    $nameProperty = $Process.PSObject.Properties["Name"]
+    $executableProperty = $Process.PSObject.Properties["ExecutablePath"]
+    $commandProperty = $Process.PSObject.Properties["CommandLine"]
+    if ($null -eq $nameProperty -or $null -eq $executableProperty -or $null -eq $commandProperty) {
+        return $false
+    }
+    $name = [string]$nameProperty.Value
+    $executablePath = [string]$executableProperty.Value
+    $commandLine = [string]$commandProperty.Value
+    if ($name -ine "node.exe" -or
+        [string]::IsNullOrWhiteSpace($executablePath) -or
+        [string]::IsNullOrWhiteSpace($commandLine) -or
+        $executablePath -notmatch '(?i)^[a-z]:\\Users\\[^\\]+\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\[^\\]+\\bin\\node\.exe$') {
+        return $false
+    }
+
+    $repoPattern = [regex]::Escape($RepositoryRoot)
+    $trustedWorker = $commandLine -match ('(?i)\\trusted-worker\.js(?:"|\s)+"?' + $repoPattern + '"?\s*$')
+    $kernel = $commandLine -match ('(?i)\\kernel\.js\b.*\s--working-dir\s+"?' + $repoPattern + '"?\s*$')
+    if (-not $trustedWorker -and -not $kernel) {
+        return $false
+    }
+
+    $parentMatches = @($Processes | Where-Object {
+        $null -ne $_.PSObject.Properties["ProcessId"] -and
+        [int]$_.ProcessId -eq [int]$Process.ParentProcessId
+    })
+    if ($parentMatches.Count -ne 1) {
+        return $false
+    }
+    $parent = $parentMatches[0]
+    $parentNameProperty = $parent.PSObject.Properties["Name"]
+    $parentExecutableProperty = $parent.PSObject.Properties["ExecutablePath"]
+    if ($null -eq $parentNameProperty -or $null -eq $parentExecutableProperty -or
+        [string]$parentNameProperty.Value -ine "node_repl.exe" -or
+        [string]$parentExecutableProperty.Value -notmatch '(?i)^[a-z]:\\Users\\[^\\]+\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\[^\\]+\\bin\\node_repl\.exe$') {
+        return $false
+    }
+
+    $grandparentMatches = @($Processes | Where-Object {
+        $null -ne $_.PSObject.Properties["ProcessId"] -and
+        [int]$_.ProcessId -eq [int]$parent.ParentProcessId
+    })
+    if ($grandparentMatches.Count -ne 1) {
+        return $false
+    }
+    $grandparent = $grandparentMatches[0]
+    $grandparentNameProperty = $grandparent.PSObject.Properties["Name"]
+    $grandparentExecutableProperty = $grandparent.PSObject.Properties["ExecutablePath"]
+    if ($null -eq $grandparentNameProperty -or $null -eq $grandparentExecutableProperty) {
+        return $false
+    }
+    return (
+        [string]$grandparentNameProperty.Value -ieq "codex.exe" -and
+        [string]$grandparentExecutableProperty.Value -match '(?i)^[a-z]:\\Program Files\\WindowsApps\\OpenAI\.Codex_[^\\]+\\app\\resources\\codex\.exe$'
+    )
+}
+
 function Assert-SyndocalCleanupNoOwnedWriters {
     param(
         [Parameter(Mandatory)]
@@ -627,13 +703,16 @@ function Assert-SyndocalCleanupNoOwnedWriters {
             Throw-SyndocalCleanupGate -Code "WriterOwnershipUnverifiable" -Message "Writer ownership metadata is unavailable for PID $processId ($name)."
         }
 
+        $isWriter = Test-SyndocalCleanupWriterName -Name $name
+        $isCodexControlPlane = $isWriter -and (Test-SyndocalCleanupCodexControlPlane -Process $process -Processes $processes -RepositoryRoot $RepositoryRoot)
         $records[$processId] = [pscustomobject]@{
             ProcessId = $processId
             ParentProcessId = [int]$parentProperty.Value
             Name = $name
             ExecutablePath = $executablePath
             CommandLine = $commandLine
-            IsWriter = Test-SyndocalCleanupWriterName -Name $name
+            IsWriter = $isWriter -and -not $isCodexControlPlane
+            IsCodexControlPlane = $isCodexControlPlane
             IsAnchor = Test-SyndocalCleanupOwnershipAnchor -ExecutablePath $executablePath -CommandLine $commandLine -RepositoryRoot $RepositoryRoot -TargetRoot $TargetRoot
         }
     }

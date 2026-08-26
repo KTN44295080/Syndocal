@@ -335,6 +335,81 @@ try {
     Assert-Equal -Expected "CimRecordIncomplete" -Actual $nullNameReport.Blocker.Code -Message "null process identity has a typed blocker"
     Assert-True -Condition (Test-Path -LiteralPath $nullNameFixture.Candidate) -Message "null process identity cannot delete"
 
+    $codexControlPlaneFixture = New-CleanupTestFixture
+    $codexControlPlaneRoot = $codexControlPlaneFixture.RepositoryRoot
+    $codexRuntime = "C:\Users\test\AppData\Local\OpenAI\Codex\runtimes\cua_node\exact-runtime\bin"
+    $codexControlPlaneReport = Invoke-FixtureCleanup -Fixture $codexControlPlaneFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "codex.exe"; ProcessId = 910001; ParentProcessId = 0; ExecutablePath = "C:\Program Files\WindowsApps\OpenAI.Codex_26.818.5229.0_x64__test\app\resources\codex.exe"; CommandLine = "codex.exe app-server" }
+                [pscustomobject]@{ Name = "node_repl.exe"; ProcessId = 910002; ParentProcessId = 910001; ExecutablePath = "$codexRuntime\node_repl.exe"; CommandLine = "node_repl.exe" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 910003; ParentProcessId = 910002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\trusted-worker.js `"$codexControlPlaneRoot`"" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 910004; ParentProcessId = 910002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\kernel.js --session-id exact --working-dir `"$codexControlPlaneRoot`"" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Applied" -Actual $codexControlPlaneReport.Outcome -Message "exact Codex control-plane ancestry does not masquerade as an active build writer"
+    Assert-True -Condition (-not (Test-Path -LiteralPath $codexControlPlaneFixture.Candidate)) -Message "exact Codex control plane permits the reviewed deletion"
+
+    $codexNearMissFixture = New-CleanupTestFixture
+    $codexNearMissRoot = $codexNearMissFixture.RepositoryRoot
+    $codexNearMissReport = Invoke-FixtureCleanup -Fixture $codexNearMissFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "pwsh.exe"; ProcessId = 920002; ParentProcessId = 0; ExecutablePath = "C:\Program Files\PowerShell\7\pwsh.exe"; CommandLine = "pwsh.exe unrelated" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 920003; ParentProcessId = 920002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\kernel.js --working-dir `"$codexNearMissRoot`"" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "Blocked" -Actual $codexNearMissReport.Outcome -Message "Codex-shaped node without exact parent chain remains a writer"
+    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $codexNearMissReport.Blocker.Code -Message "Codex control-plane near miss has a typed writer blocker"
+    Assert-True -Condition (Test-Path -LiteralPath $codexNearMissFixture.Candidate) -Message "Codex control-plane near miss cannot delete"
+
+    $codexWrongGrandparentFixture = New-CleanupTestFixture
+    $codexWrongGrandparentRoot = $codexWrongGrandparentFixture.RepositoryRoot
+    $codexWrongGrandparentReport = Invoke-FixtureCleanup -Fixture $codexWrongGrandparentFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "codex.exe"; ProcessId = 930001; ParentProcessId = 0; ExecutablePath = "C:\Temp\OpenAI.Codex_test\app\resources\codex.exe"; CommandLine = "codex.exe app-server" }
+                [pscustomobject]@{ Name = "node_repl.exe"; ProcessId = 930002; ParentProcessId = 930001; ExecutablePath = "$codexRuntime\node_repl.exe"; CommandLine = "node_repl.exe" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 930003; ParentProcessId = 930002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\kernel.js --working-dir `"$codexWrongGrandparentRoot`"" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $codexWrongGrandparentReport.Blocker.Code -Message "Codex-shaped chain outside WindowsApps remains a writer"
+
+    $codexDuplicateParentFixture = New-CleanupTestFixture
+    $codexDuplicateParentRoot = $codexDuplicateParentFixture.RepositoryRoot
+    $codexDuplicateParentReport = Invoke-FixtureCleanup -Fixture $codexDuplicateParentFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "codex.exe"; ProcessId = 940001; ParentProcessId = 0; ExecutablePath = "C:\Program Files\WindowsApps\OpenAI.Codex_test\app\resources\codex.exe"; CommandLine = "codex.exe app-server" }
+                [pscustomobject]@{ Name = "node_repl.exe"; ProcessId = 940002; ParentProcessId = 940001; ExecutablePath = "$codexRuntime\node_repl.exe"; CommandLine = "node_repl.exe" }
+                [pscustomobject]@{ Name = "node_repl.exe"; ProcessId = 940002; ParentProcessId = 940001; ExecutablePath = "$codexRuntime\node_repl.exe"; CommandLine = "node_repl.exe" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 940003; ParentProcessId = 940002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\kernel.js --working-dir `"$codexDuplicateParentRoot`"" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $codexDuplicateParentReport.Blocker.Code -Message "ambiguous Codex parent identity remains a writer"
+
+    $codexSiblingRootFixture = New-CleanupTestFixture
+    $codexSiblingRoot = $codexSiblingRootFixture.RepositoryRoot
+    $codexSiblingReport = Invoke-FixtureCleanup -Fixture $codexSiblingRootFixture -Apply -Hooks @{
+        CimProvider = {
+            @(
+                [pscustomobject]@{ Name = "codex.exe"; ProcessId = 950001; ParentProcessId = 0; ExecutablePath = "C:\Program Files\WindowsApps\OpenAI.Codex_test\app\resources\codex.exe"; CommandLine = "codex.exe app-server" }
+                [pscustomobject]@{ Name = "node_repl.exe"; ProcessId = 950002; ParentProcessId = 950001; ExecutablePath = "$codexRuntime\node_repl.exe"; CommandLine = "node_repl.exe" }
+                [pscustomobject]@{ Name = "node.exe"; ProcessId = 950003; ParentProcessId = 950002; ExecutablePath = "$codexRuntime\node.exe"; CommandLine = "node.exe C:\Temp\kernel.js --working-dir `"$($codexSiblingRoot)2`"" }
+            )
+        }
+        StabilityDelayMilliseconds = 0
+    }
+    Assert-Equal -Expected "ActiveOwnedWriter" -Actual $codexSiblingReport.Blocker.Code -Message "sibling repository suffix remains a writer"
+
     $missingMetadataFixture = New-CleanupTestFixture
     $missingMetadataReport = Invoke-FixtureCleanup -Fixture $missingMetadataFixture -Apply -Hooks @{
         CimProvider = {
