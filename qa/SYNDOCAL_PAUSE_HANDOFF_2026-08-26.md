@@ -1,12 +1,15 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **RESUMED THROUGH THE ALPHA.14 SHOW-ASIO AND TIMELINE-NATIVE CHECKPOINT**
+Status: **RESUMED THROUGH THE ALPHA.14 SHOW-ASIO, TIMELINE-NATIVE, AND DVC SOFTWARE CHECKPOINT**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
 not accepted as fully show-ready: the alpha.14 strict-v3 software and standard
 native artifact gates are complete, while the physical DJ, three-output, and
-DSF show-program gates below remain open. The separately licensed alpha.14
+DSF native show-program gates below remain open. The exact DSF2026 Rust importer
+gate and DVC frontend-controller extraction are complete, but the native UI
+import/report, Save As, restart/reload, and physical route remain open. The
+separately licensed alpha.14
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
@@ -19,6 +22,7 @@ commit as the source identity of an already-built binary.
 | --- | --- |
 | Current alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
+| DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
 | Current rb-output strict-v3 runtime / docs tip | `862cf8035dfb365a7d799f820936585882d0a1e7` / `e3d390d912a2c3a9be418ecbc31771d2bf515de7` |
 | Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
 | Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
@@ -144,6 +148,24 @@ Current alpha.14 evidence:
   user/project title literally named `New Scene` remained literal project data
   and was not translated behind the operator's back; it was discarded without
   saving.
+- The exact `DSF2026.dvc` input is `67,873` bytes with SHA-256
+  `22D86D7C0F0C56543B440356F76C467F86C37B0E9D06D76EA8F56B2952D0F841`.
+  Under the exact Community VS 14.44 linker, pinned first ahead of Git's
+  linker, the focused Rust importer test passed with `fixtures=46`, `cues=2`,
+  `effects=0/0`, `midi=2`, `approximate=4`, `skipped=0`, `unsupported=1`, and
+  `warnings=0`. Approximate details are the MIDI input/feedback device-affinity
+  boundary; the Unsupported detail is the device-specific Daslight hardware
+  binding. This is backend import evidence, not native UI/save/reload proof.
+- Commit `652b197d3cce9cfc119a790baffefbd47f08cc8c` extracts the 42-line DVC
+  import orchestration and paired result type from `App.tsx` into
+  `app/src/dvcImportController.ts`. Focused controller proof passed `7/7`; DVC
+  MIDI/DMX shortcut contracts passed `39/39` and `35/35`; frontend invoke
+  inventory remained exact at `419`; project transaction/authority gates
+  passed; `pnpm --dir app run build` passed; the frontend warning ratchet
+  stayed at baseline/current `0/0` with no first-party warning. Independent
+  Terra xHigh review found no P0/P1/P2; Ox-alpha remained unavailable under the
+  recorded narrow exception. Native build and UI proof for this later internal
+  commit remain open.
 - Final independent Terra xHigh adversarial review found P0/P1/P2 none after
   fixing rapid-F14/inactive-loop races, late-fallback causality, and the
   measured-loop sender/receiver wire mismatch. Ox-alpha was not callable in
@@ -295,8 +317,10 @@ These are OPEN, not implicit completion claims:
    ASIO/WASAPI and the remaining recovery matrix remain open.
 4. Configure and Apply the stable three-output roles, verify exact placement and
    visible content on all three physical displays, then save/restart and repeat.
-5. Import `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`; retain the import report and
-   exact skipped/fail-closed mappings. Create representative Lighting scenes,
+5. Repeat the now-passing exact
+   `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc` import through the native UI;
+   retain the visible import report and exact skipped/fail-closed mappings.
+   Create representative Lighting scenes,
    LED/projector substitute media, the two required timelines, DJ trigger and
    measured/no-response loop behavior through `1/64`, release/transition
    behavior, then save/restart and run the full show
@@ -314,8 +338,8 @@ These are OPEN, not implicit completion claims:
 
 Current exact metrics:
 
-- `app/src/App.tsx`: `28,810` lines, `1,202,918` bytes, SHA-256
-  `4BC665227797FA2F138A802DC9979B93D44881A1E2182C921B1B5BD67E5DACB2`
+- `app/src/App.tsx`: `28,778` lines, `1,201,419` bytes, SHA-256
+  `FB4295521386B246629EC1B6BC5DFBD229D1E53DB2E4AB058DCD41B46495AF9E`
 - `app/src-tauri/src/main.rs`: `129,413` lines, `4,965,088` bytes, SHA-256
   `A337B15E66C69A56FEC12A9FFF2D3275829BA610B28F787BE58AB56CB803E5C2`
 - This tranche extracted the exact loop-profile mapping and its tests into
@@ -324,6 +348,13 @@ Current exact metrics:
   and added the cross-repository wire proof as the separate
   `crates/protocol/tests/dj_link_v3_sender_contract.rs` (`67` lines, `2,158`
   bytes). It did not attempt a risky whole-file rewrite before the show.
+- The resumed DVC tranche extracted the import coordinator into
+  `app/src/dvcImportController.ts` (`77` lines, `3,379` bytes, SHA-256
+  `1F78CC6963596902114A88ECCBF50116DC9F4806D4265E3BFBDC75CDF40941B0`)
+  with its deterministic `185`-line focused checker. The old orchestration was
+  removed from `App.tsx`; the MIDI/DMX contract checkers now inspect the new
+  production module rather than retaining source-string comments in the giant
+  file.
 
 This remains an architectural risk: frontend, Tauri, engine, and recovery paths
 still touch shared state through oversized compilation units. Do not attempt a
@@ -349,8 +380,9 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Main runtime source checkpoint `92122f1b...` and rb-output docs tip
-  `e3d390d...` were both clean and upstream-equal. The final documentation
+- Main internal DVC checkpoint `652b197...`, alpha.14 artifact source checkpoint
+  `92122f1b...`, and rb-output docs tip `e3d390d...` were clean and
+  upstream-equal when recorded. The final documentation
   commit containing this handoff must again be pushed and rechecked clean.
 - The current exact standard alpha.14 process and window identities are in
   section 3. Re-resolve them on resume; do not assume PID/HWND stability.
