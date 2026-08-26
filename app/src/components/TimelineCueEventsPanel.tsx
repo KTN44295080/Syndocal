@@ -844,11 +844,19 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       event.stopImmediatePropagation();
       closeLayerMenu();
     };
+    const closeFromAncestorScroll = (event: Event) => {
+      if (!layerMenu()) return;
+      const target = event.target;
+      if (target instanceof Node && layerMenuElement?.contains(target)) return;
+      closeLayerMenu(false);
+    };
     window.addEventListener("pointerdown", closeFromPointer, true);
     window.addEventListener("keydown", closeFromEscape, { capture: true });
+    window.addEventListener("scroll", closeFromAncestorScroll, { capture: true, passive: true });
     onCleanup(() => {
       window.removeEventListener("pointerdown", closeFromPointer, true);
       window.removeEventListener("keydown", closeFromEscape, { capture: true });
+      window.removeEventListener("scroll", closeFromAncestorScroll, { capture: true });
     });
   });
   const timelineAuthorityAvailable = () => props.bankAuthority.issue === null;

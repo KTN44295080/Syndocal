@@ -102,7 +102,7 @@ const openTimelineContextMenuGroup = (client, groupId) => evaluate(client, `(() 
   if (!group.open) summary.click();
   return group.open;
 })()`);
-const openTimelineVideoContextMenu = (client) => evaluate(client, `(() => {
+const openTimelineVideoContextMenu = (client, clientY = 180) => evaluate(client, `(() => {
   const clip = document.querySelector('[data-timeline-video-clip-id="800"]');
   if (!(clip instanceof Element)) return false;
   if ('focus' in clip && typeof clip.focus === 'function') clip.focus();
@@ -110,9 +110,93 @@ const openTimelineVideoContextMenu = (client) => evaluate(client, `(() => {
     bubbles: true,
     cancelable: true,
     clientX: 240,
-    clientY: 180,
+    clientY: ${JSON.stringify(clientY)},
   }));
   return document.querySelector('.timelineItemContextMenu') !== null;
+})()`);
+const openTimelineContextMenuActions = (client) => evaluate(client, `(() => {
+  const actions = document.querySelector('.timelineItemContextMenu > details.timelineItemContextMenuActions');
+  const summary = actions?.querySelector(':scope > summary');
+  if (!(actions instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement)) return false;
+  if (!actions.open) summary.click();
+  return actions.open;
+})()`);
+const openTimelineLayerContextMenu = (client) => evaluate(client, `(() => {
+  const trigger = document.querySelector('[data-timeline-layer-menu-trigger]');
+  if (!(trigger instanceof HTMLElement)) return false;
+  trigger.click();
+  return document.querySelector('.timelineLayerContextMenu') !== null;
+})()`);
+const openSceneMatrixContextMenu = (client, triggerSelector, menuSelector) => evaluate(client, `(() => {
+  const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+  if (!(trigger instanceof HTMLElement)) return false;
+  const rect = trigger.getBoundingClientRect();
+  trigger.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: rect.left + Math.max(2, rect.width / 2),
+    clientY: rect.top + Math.max(2, rect.height / 2),
+  }));
+  return document.querySelector(${JSON.stringify(menuSelector)}) !== null;
+})()`);
+const observeNativeScroll = (client, { scrollportSelector, axis, menuSelector }) => evaluate(client, `(async () => {
+  const scrollport = document.querySelector(${JSON.stringify(scrollportSelector)});
+  if (!(scrollport instanceof HTMLElement)) return null;
+  const scrollProperty = ${JSON.stringify(axis)} === 'top' ? 'scrollTop' : 'scrollLeft';
+  const dimension = ${JSON.stringify(axis)} === 'top' ? 'Height' : 'Width';
+  const range = scrollport['scroll' + dimension] - scrollport['client' + dimension];
+  const before = scrollport[scrollProperty];
+  const delta = Math.max(1, Math.floor(range / 2));
+  const target = before < range ? Math.min(range, before + delta) : Math.max(0, before - delta);
+  if (!(range > 0) || target === before) {
+    return { range, before, target, after: before, nativeScrollObserved: false, menuPresent: document.querySelector(${JSON.stringify(menuSelector)}) !== null };
+  }
+  const nativeScrollObserved = await new Promise((resolve) => {
+    let settled = false;
+    const onScroll = () => settle(true);
+    const timeout = window.setTimeout(() => settle(false), 500);
+    const settle = (observed) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      scrollport.removeEventListener('scroll', onScroll);
+      window.setTimeout(() => resolve(observed), 0);
+    };
+    scrollport.addEventListener('scroll', onScroll, { once: true });
+    scrollport[scrollProperty] = target;
+  });
+  return {
+    range,
+    before,
+    target,
+    after: scrollport[scrollProperty],
+    nativeScrollObserved,
+    menuPresent: document.querySelector(${JSON.stringify(menuSelector)}) !== null,
+  };
+})()`);
+const createDeterministicScrollRange = (client, { scrollportSelector, contentSelector, axis }) => evaluate(client, `(async () => {
+  const scrollport = document.querySelector(${JSON.stringify(scrollportSelector)});
+  const content = document.querySelector(${JSON.stringify(contentSelector)});
+  if (!(scrollport instanceof HTMLElement) || !(content instanceof HTMLElement)) return null;
+  const property = ${JSON.stringify(axis)} === 'top' ? 'height' : 'width';
+  const dimension = ${JSON.stringify(axis)} === 'top' ? 'Height' : 'Width';
+  const previousInlineSize = content.style[property];
+  const initialRange = scrollport['scroll' + dimension] - scrollport['client' + dimension];
+  if (!(initialRange > 0)) {
+    content.style[property] = String(scrollport['client' + dimension] + 64) + 'px';
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  return {
+    initialRange,
+    range: scrollport['scroll' + dimension] - scrollport['client' + dimension],
+    previousInlineSize,
+  };
+})()`);
+const restoreDeterministicScrollRange = (client, { contentSelector, axis, previousInlineSize }) => evaluate(client, `(() => {
+  const content = document.querySelector(${JSON.stringify(contentSelector)});
+  if (!(content instanceof HTMLElement)) return false;
+  content.style[${JSON.stringify(axis)} === 'top' ? 'height' : 'width'] = ${JSON.stringify(previousInlineSize)};
+  return true;
 })()`);
 const dragTimelineResize = async (client, selector, handleSelector, edge, isolate = false) => {
   assert.equal(await evaluate(client, `(() => {
@@ -560,6 +644,78 @@ try {
     await waitFor(() => evaluate(client, "document.querySelector('.editDomainUpperPanel > .sceneMatrixPanel')?.getBoundingClientRect().height > 120"), "Lighting Banks and Scenes surface");
     const lightingGeometry = await measureControlDomainGeometry(client, 'edit');
     assertControlDomainGeometry(lightingGeometry, viewport, 'edit');
+    // This fixture renders two Banks, so create a scoped 64px content overflow
+    // at its constrained viewport. The listener still receives only the
+    // browser-native scroll event from the production scroll host.
+    if (viewport.width === 860) {
+      const sceneMatrixScrollRange = await createDeterministicScrollRange(client, {
+        scrollportSelector: '.sceneMatrixScroller',
+        contentSelector: '.sceneMatrixColumns',
+        axis: 'left',
+      });
+      assert.ok(
+        (sceneMatrixScrollRange?.range ?? 0) > 0,
+        `Scene Matrix scroll host has a deterministic horizontal range: ${JSON.stringify(sceneMatrixScrollRange)}`,
+      );
+      assert.equal(
+        await openSceneMatrixContextMenu(client, '[data-scene-matrix-cue-id]', '.sceneMatrixSceneContextMenu'),
+        true,
+        "Scene Matrix Scene context menu opens for an external-scroll dismissal",
+      );
+      await sleep(30);
+      const sceneContextScrollDismissal = await observeNativeScroll(client, {
+        scrollportSelector: '.sceneMatrixScroller',
+        axis: 'left',
+        menuSelector: '.sceneMatrixSceneContextMenu',
+      });
+      assert.deepEqual(
+        [
+          (sceneContextScrollDismissal?.range ?? 0) > 0,
+          sceneContextScrollDismissal?.after !== sceneContextScrollDismissal?.before,
+          sceneContextScrollDismissal?.nativeScrollObserved,
+          sceneContextScrollDismissal?.menuPresent,
+        ],
+        [true, true, true, false],
+        `Scene Matrix Scene context menu closes after a browser-native horizontal ancestor scroll: ${JSON.stringify(sceneContextScrollDismissal)}`,
+      );
+      await evaluate(client, `(() => {
+        const scrollport = document.querySelector('.sceneMatrixScroller');
+        if (!(scrollport instanceof HTMLElement)) return false;
+        scrollport.scrollLeft = 0;
+        return true;
+      })()`);
+      await sleep(30);
+      assert.equal(
+        await openSceneMatrixContextMenu(client, '[data-scene-matrix-column-header]', '.sceneMatrixBankContextMenu:not(.sceneMatrixSceneContextMenu)'),
+        true,
+        "Scene Matrix Bank context menu opens for an external-scroll dismissal",
+      );
+      await sleep(30);
+      const bankContextScrollDismissal = await observeNativeScroll(client, {
+        scrollportSelector: '.sceneMatrixScroller',
+        axis: 'left',
+        menuSelector: '.sceneMatrixBankContextMenu:not(.sceneMatrixSceneContextMenu)',
+      });
+      assert.deepEqual(
+        [
+          (bankContextScrollDismissal?.range ?? 0) > 0,
+          bankContextScrollDismissal?.after !== bankContextScrollDismissal?.before,
+          bankContextScrollDismissal?.nativeScrollObserved,
+          bankContextScrollDismissal?.menuPresent,
+        ],
+        [true, true, true, false],
+        `Scene Matrix Bank context menu closes after a browser-native horizontal ancestor scroll: ${JSON.stringify(bankContextScrollDismissal)}`,
+      );
+      assert.equal(
+        await restoreDeterministicScrollRange(client, {
+          contentSelector: '.sceneMatrixColumns',
+          axis: 'left',
+          previousInlineSize: sceneMatrixScrollRange.previousInlineSize,
+        }),
+        true,
+        "Scene Matrix deterministic scroll range restores its original inline width",
+      );
+    }
     await saveScreenshot(client, `control-lighting-${viewport.width}x${viewport.height}.png`);
 
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="mixer"]'), true);
@@ -782,6 +938,70 @@ try {
       { insidePointerRetained: true, preventedEscapeRetained: true, gestureEscapeRetained: true },
       "inside pointer input and reserved Escape states retain the Timeline item menu",
     );
+    assert.equal(
+      await openTimelineVideoContextMenu(client, viewport.height - 1),
+      true,
+      "Timeline item menu opens near the lower edge for internal-scroll retention",
+    );
+    await sleep(30);
+    assert.equal(await openTimelineContextMenuActions(client), true, "Timeline item Actions disclosure opens for internal scroll proof");
+    assert.equal(await openTimelineContextMenuGroup(client, "timing"), true, "Timeline item Timing actions open for internal scroll proof");
+    await sleep(30);
+    const itemMenuInternalScroll = await observeNativeScroll(client, {
+      scrollportSelector: '.timelineItemContextMenu',
+      axis: 'top',
+      menuSelector: '.timelineItemContextMenu',
+    });
+    assert.deepEqual(
+      [
+        (itemMenuInternalScroll?.range ?? 0) > 0,
+        itemMenuInternalScroll?.after !== itemMenuInternalScroll?.before,
+        itemMenuInternalScroll?.nativeScrollObserved,
+        itemMenuInternalScroll?.menuPresent,
+      ],
+      [true, true, true, true],
+      `Timeline item menu retains its internally scrolled expanded actions after a browser-native scroll: ${JSON.stringify(itemMenuInternalScroll)}`,
+    );
+    // Keep this test-only overflow local to the real Timeline scroll host; it
+    // lets the browser dispatch the same event produced by all user scroll
+    // inputs without altering production layout.
+    if (viewport.width === 860) {
+      const timelineLayerScrollRange = await createDeterministicScrollRange(client, {
+        scrollportSelector: '.timelineLayerScrollport',
+        contentSelector: '.timelineLayerScrollContent',
+        axis: 'top',
+      });
+      assert.ok(
+        (timelineLayerScrollRange?.range ?? 0) > 0,
+        `Timeline layer scroll host has a deterministic vertical range: ${JSON.stringify(timelineLayerScrollRange)}`,
+      );
+      const itemMenuExternalScrollDismissal = await observeNativeScroll(client, {
+        scrollportSelector: '.timelineLayerScrollport',
+        axis: 'top',
+        menuSelector: '.timelineItemContextMenu',
+      });
+      assert.deepEqual(
+        [
+          (itemMenuExternalScrollDismissal?.range ?? 0) > 0,
+          itemMenuExternalScrollDismissal?.after !== itemMenuExternalScrollDismissal?.before,
+          itemMenuExternalScrollDismissal?.nativeScrollObserved,
+          itemMenuExternalScrollDismissal?.menuPresent,
+        ],
+        [true, true, true, false],
+        `Timeline item menu closes after a browser-native vertical ancestor scroll: ${JSON.stringify(itemMenuExternalScrollDismissal)}`,
+      );
+      assert.equal(
+        await restoreDeterministicScrollRange(client, {
+          contentSelector: '.timelineLayerScrollContent',
+          axis: 'top',
+          previousInlineSize: timelineLayerScrollRange.previousInlineSize,
+        }),
+        true,
+        "Timeline deterministic scroll range restores its original inline height",
+      );
+      assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens after ancestor-scroll dismissal");
+      await sleep(30);
+    }
     const state = await measure(client);
     assert.ok(state.rect[0] > 0 && state.rect[1] > 0, "Timeline surface has visible nonzero geometry");
     assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
@@ -903,6 +1123,43 @@ try {
       [true, true, "800"],
       "Escape dismisses the Timeline item menu and restores focus to its invoker",
     );
+    if (viewport.width === 860) {
+      assert.equal(await openTimelineLayerContextMenu(client), true, "Timeline layer menu opens for ancestor-scroll dismissal");
+      await sleep(30);
+      const timelineLayerMenuScrollRange = await createDeterministicScrollRange(client, {
+        scrollportSelector: '.timelineLayerScrollport',
+        contentSelector: '.timelineLayerScrollContent',
+        axis: 'top',
+      });
+      assert.ok(
+        (timelineLayerMenuScrollRange?.range ?? 0) > 0,
+        `Timeline layer menu host has a deterministic vertical range: ${JSON.stringify(timelineLayerMenuScrollRange)}`,
+      );
+      const layerMenuScrollDismissal = await observeNativeScroll(client, {
+        scrollportSelector: '.timelineLayerScrollport',
+        axis: 'top',
+        menuSelector: '.timelineLayerContextMenu',
+      });
+      assert.deepEqual(
+        [
+          (layerMenuScrollDismissal?.range ?? 0) > 0,
+          layerMenuScrollDismissal?.after !== layerMenuScrollDismissal?.before,
+          layerMenuScrollDismissal?.nativeScrollObserved,
+          layerMenuScrollDismissal?.menuPresent,
+        ],
+        [true, true, true, false],
+        `Timeline layer menu closes after a browser-native vertical ancestor scroll: ${JSON.stringify(layerMenuScrollDismissal)}`,
+      );
+      assert.equal(
+        await restoreDeterministicScrollRange(client, {
+          contentSelector: '.timelineLayerScrollContent',
+          axis: 'top',
+          previousInlineSize: timelineLayerMenuScrollRange.previousInlineSize,
+        }),
+        true,
+        "Timeline layer menu deterministic scroll range restores its original inline height",
+      );
+    }
     assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens for action execution");
     await sleep(30);
     assert.equal(state.phaseEditorOpen, true);

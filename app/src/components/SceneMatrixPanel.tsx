@@ -602,10 +602,23 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
         closeSceneContextMenu(!focusableOutside);
       }
     };
+    const closeMenuOnAncestorScroll = (event: Event) => {
+      const target = event.target;
+      // Context menus are fixed to their opening point. Their own content is
+      // not a scrollport, but keep the exclusion symmetrical with Timeline so
+      // a future bounded menu body cannot be mistaken for an outside scroll.
+      if (target instanceof Node && (bankContextMenuElement?.contains(target) || sceneContextMenuElement?.contains(target))) {
+        return;
+      }
+      if (bankContextMenu()) closeContextMenu(false);
+      if (sceneContextMenu()) closeSceneContextMenu(false);
+    };
     document.addEventListener("pointerdown", closeMenuOnOutsidePointer);
+    window.addEventListener("scroll", closeMenuOnAncestorScroll, { capture: true, passive: true });
     onCleanup(() => {
       resizeObserver.disconnect();
       document.removeEventListener("pointerdown", closeMenuOnOutsidePointer);
+      window.removeEventListener("scroll", closeMenuOnAncestorScroll, { capture: true });
     });
   });
 

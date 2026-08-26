@@ -31,6 +31,7 @@ export function TimelineItemContextMenu(props: TimelineItemContextMenuProps) {
   let menuElement: HTMLDivElement | undefined;
 
   onMount(() => {
+    const mountedAt = performance.now();
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && menuElement?.contains(target)) return;
@@ -43,12 +44,25 @@ export function TimelineItemContextMenu(props: TimelineItemContextMenuProps) {
       event.stopImmediatePropagation();
       props.onDismiss(true);
     };
+    const closeFromAncestorScroll = (event: Event) => {
+      // A focus/layout scroll that started before this menu mounted can be
+      // delivered afterward. It cannot have moved this menu's pointer anchor.
+      if (event.timeStamp < mountedAt) return;
+      const target = event.target;
+      // The menu itself is intentionally a bounded scrollport for expanded
+      // action groups. Scrolling it must keep the selected action reachable;
+      // any ancestor/document scroll invalidates the fixed pointer anchor.
+      if (target instanceof Node && menuElement?.contains(target)) return;
+      props.onDismiss(false);
+    };
 
     window.addEventListener("pointerdown", closeFromOutside, { capture: true });
     window.addEventListener("keydown", closeFromEscape, { capture: true });
+    window.addEventListener("scroll", closeFromAncestorScroll, { capture: true, passive: true });
     onCleanup(() => {
       window.removeEventListener("pointerdown", closeFromOutside, { capture: true });
       window.removeEventListener("keydown", closeFromEscape, { capture: true });
+      window.removeEventListener("scroll", closeFromAncestorScroll, { capture: true });
     });
   });
 
