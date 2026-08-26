@@ -396,15 +396,33 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
   `34792`, and its only `Syndocal` window was responsive and maximized for Setup
   I/O inspection.
 - The FOH machine had neither `C:\SyndocalShow\dj-agent-v1.1.5.json` nor a
-  `DJ_AGENT_CONFIG_PATH` value. The real process-local token was not exposed,
-  copied, logged, or rotated. `pnpm --dir app run check:dj-link` passed with no
-  first-party warning. The next live action is explicit operator approval of
-  token rotation, followed by `Enable DJ Link` -> refresh/select
-  `192.168.50.1` -> copy the show-once token only into the checkout-external
-  JSON on the real `.50.2` DJ PC -> start the shared Web Remote/DJ listener.
+  `DJ_AGENT_CONFIG_PATH` value. After explicit operator approval, the
+  process-local token was rotated, but its show-once value was not successfully
+  copied into the external configuration and was not recorded in logs, QA, or
+  Git. `pnpm --dir app run check:dj-link` passed with no first-party warning.
+  The next real peer action is to have the `.50.2` DJ PC ready, rotate once more,
+  copy the new show-once token only into its checkout-external JSON, launch the
+  real `rb-output` session, and verify HELLO/ACK.
 - Physical acceptance remains `0/12`: real token, HELLO/ACK, Rekordbox track
   detection, MIDI output, pedal, the full measured/no-response loop profile,
   release, reconnect, and restart are not recorded as accepted.
+
+### 2026-08-26 alpha.15 live listener activation
+
+- After the preflight above, the operator-approved live start was verified in
+  the exact alpha.15 Syndocal process: PID `34792` owns the TCP listener bound to
+  `192.168.50.1:9100`.
+- The maximized Setup I/O surface now shows `Remote Stop` and `DJ Link Available`.
+  No PIN or token value is recorded in this handoff.
+- The approved token rotation completed, but copying the show-once value was not
+  verified. The currently running listener is therefore not evidence of a
+  usable `.50.2` credential; rotate again only when the real DJ PC is ready.
+- This is FOH-side listener evidence only. Physical DJ acceptance remains
+  `0/12`; the `.50.2` peer and the real `rb-output` connection are still
+  unverified.
+- This live observation is limited to the lifetime of PID `34792`. Listener and
+  token restoration after stop/restart remain unproven, so HW-4.11 is still
+  unchecked within the `0/12` matrix.
 
 ## 8. Explicit remaining show gates
 

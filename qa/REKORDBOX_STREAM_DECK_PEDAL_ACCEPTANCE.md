@@ -459,6 +459,23 @@ the HW-4 matrix remains exactly **0/12 checked (0%)**.
   still require the controller/pedal and configured `CustomMIDI1` route; all
   twelve rows remain unchecked.
 
+### 2026-08-26 alpha.15 live listener activation
+
+- After the transport preflight above, the operator-approved live start was
+  verified in the exact alpha.15 Syndocal process from this checkout: PID `34792`
+  owns the TCP listener bound to `192.168.50.1:9100`.
+- The maximized Setup I/O surface now shows `Remote Stop` and `DJ Link Available`.
+  No PIN or token value is recorded here.
+- The operator-approved token rotation completed, but copying the show-once
+  value was not verified. A fresh rotation and direct copy into the real
+  `.50.2` checkout-external configuration are still required before HELLO/ACK.
+- This proves only the FOH-side listener start. Physical DJ acceptance remains
+  exactly **0/12**; the `.50.2` peer and the real `rb-output` connection remain
+  unverified.
+- This live observation is limited to the lifetime of PID `34792`. Listener and
+  token restoration after stop/restart remain unproven, so HW-4.11 is still
+  unchecked within the `0/12` matrix.
+
 ## 9. Native and hardware acceptance
 
 End-to-end acceptance records both repository commits/artifacts, Windows and app
