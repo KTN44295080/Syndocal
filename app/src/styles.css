@@ -36324,6 +36324,20 @@ a[href]:focus-visible,
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Web Remote connection controls remain reachable while its disclosures use
+   the zone's remaining height.  The disclosure stack, not the whole Remote
+   zone, owns the vertical scrollport. */
+.layoutSetup.setupMode-io .remoteControl {
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-io .remoteControl > .ioDisclosureStack {
+  min-height: 0;
+  overflow: hidden auto;
+  padding-right: 2px;
+}
+
 /* Timeline disclosures stay horizontally inside the context pane. Secondary
    controls may wrap, but their hit targets and slider sizes remain unchanged. */
 .timelineToolsDisclosurePanel,

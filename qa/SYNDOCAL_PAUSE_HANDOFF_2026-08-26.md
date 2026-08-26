@@ -623,3 +623,29 @@ This checkpoint does not claim public-release readiness or completed performance
 acceptance. It preserves the verified alpha.15 standard-native artifact and DSF
 software import/report/save/reload slice, the bounded alpha.14 local Show-ASIO
 Ampero proof, and the shortest exact route to the remaining physical show proof.
+
+## 11. 2026-08-26 Web Remote disclosure-scroll checkpoint
+
+- The prior Setup I/O route let expanded DJ Link / Remote disclosures grow the
+  Web Remote zone without an owned scrollport. In a maximized window, the fixed
+  desk then clipped controls above the visible area and the operator could not
+  scroll back to the Web Remote header/actions.
+- The corrected route keeps `.remoteControl` inside its assigned desk row and
+  gives only its `.ioDisclosureStack` the remaining-height vertical scrollport.
+  Typography, control geometry, and hit targets are unchanged. The focused
+  contract lives in the extracted
+  `app/scripts/remote-disclosure-scroll-contract.mjs` module rather than adding
+  more inline logic to the already oversized viewport runner.
+- Focused CDP proof passed at `1920x1032` and `1280x802`: document/app scroll
+  stayed zero, the Remote disclosure stack scrolled, the Web Remote header and
+  action remained reachable, and the action hit-test stayed centered. The
+  localization inventory remained `3553/3553`; the
+  `frontend-typescript-vite-windows` warning ratchet remained `0 -> 0`.
+  `node --check` for both runner and extracted module plus `git diff --check`
+  passed. Independent Terra xHigh adversarial review reported no P0/P1 finding;
+  its P2 suggestions are future strengthening only.
+- Native build and maximized native QA are deliberately still open. Performing
+  the mandatory native build now would require stopping this checkout's running
+  Syndocal and regenerating its process-local DJ token, breaking the operator's
+  live Rekordbox/DJ-Link session. This checkpoint therefore proves the focused
+  frontend contract only and must not be promoted to native acceptance.

@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import ts from "typescript";
+import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
@@ -34,6 +35,7 @@ const sceneFxBlockOnlyMode = process.argv.includes("--scene-fx-block-only");
 const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const setupIoOnlyMode = process.argv.includes("--setup-io-only");
+const setupIoRemoteScrollOnlyMode = process.argv.includes("--setup-io-remote-scroll-only");
 const setupVideoOnlyMode = process.argv.includes("--setup-video-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const timelineSourcePlacementOnlyMode = process.argv.includes("--timeline-source-placement-only");
@@ -81,7 +83,7 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : setupDmxOnlyMode || setupIoOnlyMode
+    : setupDmxOnlyMode || setupIoOnlyMode || setupIoRemoteScrollOnlyMode
       ? "setup-io"
     : setupVideoOnlyMode
       ? "timeline"
@@ -4696,6 +4698,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   const measurements = {};
   const disclosures = {};
   const flows = {};
+  let remoteDisclosureScroll = { passed: dmxOnly };
 
   await sleep(100);
   measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
@@ -4803,6 +4806,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-enabled"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
+    remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);
     await clickVisibleSelector(client, '[data-io-control="remote-start"]');
     await sleep(180);
     const remoteEndpoints = await exerciseSetupIoDisclosure(client, 'remote-endpoints', '[data-io-control="remote-copy-url"]');
@@ -4844,6 +4848,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
     remoteStartFlow: dmxOnly || Object.values(flows.remote).every(Boolean),
+    remoteDisclosureScrollReachability: dmxOnly || remoteDisclosureScroll.passed,
     legacyStoredIoTabsNormalize: legacyStoredTabs.passed,
     fixedFrameContained: isContained(measurements.io),
   };
@@ -4856,8 +4861,41 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     measurements,
     disclosures,
     flows,
+    remoteDisclosureScroll,
     routePagination,
     legacyStoredTabs,
+  };
+}
+
+async function runSetupIoRemoteScrollViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "setup");
+  await installSetupIoInvokeMock(client);
+  await clickByText(client, "I/O");
+  await sleep(100);
+
+  const measurements = await measure(client, `setup-io-remote-scroll-${viewport.width}x${viewport.height}`);
+  const remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);
+  const checks = {
+    documentAndAppScrollZero: measurements.ioDocumentAndAppScrollZero,
+    fixedFrameContained: isContained(measurements),
+    remoteDisclosureScrollReachability: remoteDisclosureScroll.passed,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `setup-io-remote-scroll-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    measurements,
+    remoteDisclosureScroll,
   };
 }
 
@@ -36036,6 +36074,24 @@ async function main() {
       }
       return;
     }
+    if (setupIoRemoteScrollOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runSetupIoRemoteScrollViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `scroll=${Number(result.measurements.ioDocumentAndAppScrollZero)} ` +
+            `remoteScroll=${Number(result.remoteDisclosureScroll.passed)} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((entry) => !entry.passed);
+      if (failures.length > 0) {
+        throw new Error(`Setup I/O Remote scroll viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (setupDmxOnlyMode || setupIoOnlyMode) {
       const setupIoResults = [];
       for (const viewport of viewports) {
@@ -36059,6 +36115,7 @@ async function main() {
             `midi=${result.flows.midi ? `${Number(result.flows.midi.clockConnected)}/${Number(result.flows.midi.controlConnected)}` : "-"} ` +
             `osc=${result.flows.osc ? Number(result.flows.osc.listening) : "-"} ` +
             `remote=${result.flows.remote ? Number(result.flows.remote.started) : "-"} ` +
+            `remoteScroll=${result.remoteDisclosureScroll ? Number(result.remoteDisclosureScroll.passed) : "-"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
