@@ -555,6 +555,25 @@ Current exact metrics:
   removed from `App.tsx`; the MIDI/DMX contract checkers now inspect the new
   production module rather than retaining source-string comments in the giant
   file.
+- Resume checkpoint `dbbaffe677cb91211fc73b0b644f8ee34ef1a997`
+  extracted the inline `gpu_surface` test module without changing the runtime
+  GPU path. `crates/video/src/gpu_surface.rs` is now `1,120` lines / `43,552`
+  bytes (SHA-256
+  `1FDF9D2BB287156876B2748BD1EFFC45BD6B917062D8653C3D733BCBD537A3C8`),
+  and the six tests live in `crates/video/src/gpu_surface_tests.rs` (`387`
+  lines / `13,254` bytes, SHA-256
+  `19F530368D17875163A8F52D74345179E95AF6224D3A6D4284019621AAD5A171`).
+  Independent Terra review found no P0/P1 behavior or module-visibility issue.
+  `cargo fmt --all -- --check` and staged `git diff --cached --check` passed.
+  In a fresh `cmd.exe /d /v:on` session, `vcvars64.bat -vcvars_ver=14.44`
+  initialized the exact Community toolset, the explicitly pinned
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` was the required
+  `14.44.35207\bin\Hostx64\x64\link.exe`, and `where.exe link.exe`
+  returned it before Git's linker. `cargo test -p video --lib
+  gpu_surface::tests --locked -- --nocapture --test-threads=1` passed `6/6`
+  with no adapter/compositor skip message and zero first-party warnings. This
+  is a test-module extraction checkpoint, not native output presentation or
+  physical projector acceptance.
 
 This remains an architectural risk: frontend, Tauri, engine, and recovery paths
 still touch shared state through oversized compilation units. Do not attempt a
