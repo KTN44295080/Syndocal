@@ -50,9 +50,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 479;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 482;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "35cd157a0c764bf910f2f248c09ffd816fff52dd9f4669e88dcedc8ae78b184c";
+    "5630d765246dd7a84e36b08700e803384b4780b6df7024d24c0d44af2300a352";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -284,6 +284,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_video_output_window_statuses"
             | "get_video_preview_diagnostics"
             | "get_video_runtime_status"
+            | "get_dj_link_machine_status"
             | "get_visualizer_external_model_assets"
             | "get_visualizer_model_asset_cache_summary"
             | "get_visualizer_model_render_plans"
@@ -295,12 +296,12 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "inspect_reserved_media_asset_availability"
             | "list_audio_input_devices"
             | "list_audio_output_devices"
+            | "list_dj_link_wired_candidates"
             | "list_gdtf_fixture_cache"
             | "list_midi_inputs"
             | "list_midi_outputs"
             | "list_project_backups"
             | "list_serial_ports"
-            | "list_show_lan_interfaces"
             | "list_verified_fixture_profiles"
             | "list_video_display_monitors"
             | "live_audio_input_backends"
@@ -342,6 +343,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "add_still_image_layer"
             | "add_video_file_layer"
             | "analyze_timeline_audio_clip_path"
+            | "arm_dj_link_machine"
             | "arm_output_control_v2"
             | "begin_media_asset_preview"
             | "bootstrap_vj_show"
@@ -362,6 +364,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "disconnect_midi_control"
             | "disconnect_midi_feedback"
             | "disconnect_remote_client"
+            | "disarm_dj_link_machine"
             | "discover_art_rdm_devices"
             | "discover_usb_rdm_devices"
             | "enable_output_control_v2"
@@ -1882,6 +1885,22 @@ mod tests {
                 "cancel_pane_window_close",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
+            (
+                "get_dj_link_machine_status",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "list_dj_link_wired_candidates",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "arm_dj_link_machine",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "disarm_dj_link_machine",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
             // D3/P0: the authoritative Bank create/rename routes carry the
             // exact E/R/H/owner authority receipt args themselves, so they
             // must classify as backend-authoritative project mutations and
@@ -1915,7 +1934,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 479);
+        assert_eq!(names.len(), 482);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
             130
@@ -1924,10 +1943,10 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 88);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 89);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 143);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 145);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);

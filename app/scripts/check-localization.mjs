@@ -22,6 +22,14 @@ const timelineCueEventsPanelSource = await readFile(
   new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url),
   "utf8",
 );
+const timelineOperatorBarSource = await readFile(
+  new URL("../src/components/TimelineOperatorBar.tsx", import.meta.url),
+  "utf8",
+);
+const phase1SmokeReportPanelSource = await readFile(
+  new URL("../src/components/Phase1SmokeReportPanel.tsx", import.meta.url),
+  "utf8",
+);
 const valueEffectEditorSource = await readFile(
   new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url),
   "utf8",
@@ -697,6 +705,21 @@ assert.match(
   appSource,
   /overviewMarkerAriaLabel=\{\(event\) => timelineOverviewMarkerAriaLabel\(event, uiLocale\(\)\)\}/,
   "App must inject the tested uiLocalization formatter into TimelineOverview",
+);
+assert.equal(
+  [...appSource.matchAll(/<strong>\{pad\.cue \? <span data-no-localize>\{pad\.cue\.label\}<\/span> : "Empty"\}<\/strong>/g)].length,
+  2,
+  "Cue Pad labels must protect authored scene names while Empty remains localizable UI copy",
+);
+assert.match(
+  timelineOperatorBarSource,
+  /Armed:\s*<span data-no-localize>\{label\(\)\}<\/span>/,
+  "Timeline operator armed cue names must remain authored user data when a label matches UI copy such as New Scene",
+);
+assert.match(
+  phase1SmokeReportPanelSource,
+  /<strong data-no-localize>\{report\(\)\.cue_label\}<\/strong>/,
+  "Phase-1 smoke report cue names must remain authored user data when a label matches UI copy such as New Scene",
 );
 
 for (const operatorText of [

@@ -19,6 +19,10 @@ use std::{
 mod project_transaction_terminal_recovery_tests;
 
 use base64::Engine as _;
+use dj_link_persistence_runtime::{
+    discover_wired_candidates, DjLinkMachineArmRequest, DjLinkMachineAuthority,
+    DjLinkMachineStatus, DjLinkWiredCandidate,
+};
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
     validate_color_mapping_effect_request as validate_engine_color_mapping_effect_request,
@@ -126,6 +130,9 @@ mod capture_transport;
 mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
+mod dj_link_machine;
+mod dj_link_network;
+mod dj_link_persistence_runtime;
 mod dj_loop_range;
 mod dj_track_runtime;
 mod dvc_import;
@@ -432,7 +439,6 @@ const MAX_PROJECT_PUBLICATION_ORIGINS: usize = 32;
 const MAX_PROJECT_PUBLICATION_PENDING: usize = 16;
 const MAX_PROJECT_PUBLICATION_TERMINALS: usize = 64;
 const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
-const MAX_SHOW_LAN_INTERFACES: usize = 32;
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
 /// Correlation-safe pane window lifecycle terminal. The payload is always
 /// `{ pane, instance_id, request_id, terminal }` with `terminal` one of
@@ -1132,6 +1138,47 @@ fn dj_link_rejected(code: &str, state_generation: u64) -> DjLinkDispatchOutcome 
         code: code.to_string(),
         state_generation,
     }
+}
+
+/// A machine-level DJ listener may exist before any project is loaded, but it
+/// never receives an authored mapping authority until a project path is
+/// present. Authentication happens in the socket layer; this is the final
+/// cold-project injection gate shared by production and listener tests.
+fn dj_link_cold_project_rejection(
+    project_loaded: bool,
+    runtime: &Mutex<DjLinkRuntime>,
+) -> Option<DjLinkDispatchOutcome> {
+    (!project_loaded).then(|| {
+        dj_link_rejected(
+            "project_mapping_not_loaded",
+            dj_link_runtime_generation_if_available(runtime),
+        )
+    })
+}
+
+/// Dispatches an event that the socket transport has already authenticated.
+/// Keeping the cold-project check beside the canonical dispatcher makes it
+/// impossible for test listeners to bypass the production injection policy.
+fn dispatch_authenticated_dj_link_event_for_project(
+    project_loaded: bool,
+    envelope: protocol::DjLinkEnvelope,
+    engine: &EngineHandle,
+    project_coordinator: &Mutex<ProjectCoordinator>,
+    runtime: &Mutex<DjLinkRuntime>,
+    external_admission: &ProjectExternalCommandAdmission,
+    project_transaction_active: &AtomicBool,
+) -> DjLinkDispatchOutcome {
+    if let Some(rejection) = dj_link_cold_project_rejection(project_loaded, runtime) {
+        return rejection;
+    }
+    dispatch_dj_link_event(
+        envelope,
+        engine,
+        project_coordinator,
+        runtime,
+        external_admission,
+        project_transaction_active,
+    )
 }
 
 /// Best-effort diagnostic generation for a fail-fast Busy reply. A DJ socket
@@ -2231,9 +2278,9 @@ struct AppState {
     project_publication_reconcile_claim: Mutex<Option<ProjectPublicationReconcileClaimV1>>,
     output_lease_clock_origin: Instant,
     next_output_lease_request_id: AtomicU64,
-    /// Process-local DJ Link credential.  `None` is a deliberate fail-closed
-    /// state when the OS CSPRNG cannot initialize during startup.
-    dj_link_token: Mutex<Option<String>>,
+    /// The app-local DJ Link authority owns settings, Credential Manager
+    /// restoration and the process-only listener token injection value.
+    dj_link_machine: Mutex<DjLinkMachineAuthority>,
     /// The single background reaper for `media_asset_operations`, installed once
     /// during setup. Holding it here keeps the thread owned by `AppState` and
     /// joined on teardown instead of leaked.
@@ -2302,7 +2349,7 @@ struct AppState {
     dj_link_runtime: Arc<Mutex<DjLinkRuntime>>,
     dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
     pending_project_open_paths: Mutex<Vec<String>>,
-    current_project_path: Mutex<Option<PathBuf>>,
+    current_project_path: Arc<Mutex<Option<PathBuf>>>,
     operator_policy: Mutex<Option<OperatorPolicy>>,
     operator_selection: Arc<Mutex<OperatorSelectionContext>>,
     /// Serializes every project-identity operation with its authoritative
@@ -19443,6 +19490,10 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "relink_media_asset",
     "relinquish_output_lease_v2",
     "renew_output_lease_v2",
+    "arm_dj_link_machine",
+    "disarm_dj_link_machine",
+    "get_dj_link_machine_status",
+    "list_dj_link_wired_candidates",
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
     "send_art_rdm_request",
@@ -25774,75 +25825,76 @@ fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
     build_remote_access_urls(&config, discover_lan_ip())
 }
 
-/// Return only addresses that are explicitly reported by an adapter's
-/// IPv4/IPv6 address line.  Gateway, DNS, loopback, link-local, unspecified,
-/// and duplicate values are excluded before the renderer can select a bind
-/// target.  This is intentionally a read-only OS query; it never changes a
-/// listener or remote-control configuration.
-fn normalize_show_lan_interfaces(candidates: impl IntoIterator<Item = IpAddr>) -> Vec<String> {
-    let mut addresses = BTreeSet::new();
-    for address in candidates {
-        let eligible = !address.is_loopback()
-            && !address.is_unspecified()
-            && match address {
-                IpAddr::V4(ip) => !ip.is_link_local() && !ip.is_multicast(),
-                IpAddr::V6(ip) => !ip.is_unicast_link_local() && !ip.is_multicast(),
-            };
-        if eligible {
-            addresses.insert(address.to_string());
-        }
-    }
-    addresses
-        .into_iter()
-        .take(MAX_SHOW_LAN_INTERFACES)
-        .collect()
-}
-
-fn parse_show_lan_interface_addresses(output: &str) -> Vec<IpAddr> {
-    output
-        .lines()
-        .filter(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.contains("ipv4") || lower.contains("ipv6")
-        })
-        .flat_map(|line| {
-            line.split_whitespace().filter_map(|token| {
-                let token = token.trim_matches(|character: char| {
-                    matches!(character, '.' | ',' | ';' | '(' | ')' | '[' | ']')
-                });
-                let token = token.split('%').next().unwrap_or(token);
-                token.parse::<IpAddr>().ok()
-            })
-        })
-        .collect()
+#[tauri::command]
+async fn list_dj_link_wired_candidates() -> Result<Vec<DjLinkWiredCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(discover_wired_candidates)
+        .await
+        .map_err(|error| format!("DJ Link candidate worker failed: {error}"))?
 }
 
 #[tauri::command]
-async fn list_show_lan_interfaces() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let program = if cfg!(target_os = "windows") {
-            "ipconfig"
-        } else {
-            "ifconfig"
-        };
-        let output = Command::new(program)
-            .output()
-            .map_err(|error| format!("LAN interface enumeration failed: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "LAN interface enumeration exited with {}",
-                output.status
-            ));
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let addresses = normalize_show_lan_interfaces(parse_show_lan_interface_addresses(&text));
-        if addresses.is_empty() {
-            return Err("No eligible non-loopback LAN interface was discovered".to_string());
-        }
-        Ok(addresses)
-    })
-    .await
-    .map_err(|error| format!("LAN interface enumeration worker failed: {error}"))?
+fn get_dj_link_machine_status(state: State<'_, AppState>) -> Result<DjLinkMachineStatus, String> {
+    state
+        .dj_link_machine
+        .lock()
+        .map(|runtime| runtime.status())
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())
+}
+
+#[tauri::command]
+fn arm_dj_link_machine(
+    state: State<'_, AppState>,
+    request: DjLinkMachineArmRequest,
+) -> Result<String, String> {
+    let _lifecycle = state
+        .remote_control_lifecycle
+        .lock()
+        .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    if state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?
+        .is_some()
+    {
+        return Err(
+            "Stop the shared Remote listener before changing DJ Link machine authority".to_string(),
+        );
+    }
+    state
+        .dj_link_machine
+        .lock()
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?
+        .arm_or_rotate(Some(request))
+}
+
+#[tauri::command]
+fn disarm_dj_link_machine(state: State<'_, AppState>) -> Result<(), String> {
+    disarm_dj_link_machine_for_state_with(&state, DjLinkMachineAuthority::disarm)
+}
+
+/// Shared disarm transition: listener retirement and machine authority
+/// mutation are one lifecycle-serialized operation. Test fixtures may inject
+/// an in-memory authority operation, but use this exact production lock and
+/// listener-drop core rather than duplicating its ordering.
+fn disarm_dj_link_machine_for_state_with<T>(
+    state: &AppState,
+    operation: impl FnOnce(&mut DjLinkMachineAuthority) -> Result<T, String>,
+) -> Result<T, String> {
+    let _lifecycle = state
+        .remote_control_lifecycle
+        .lock()
+        .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    let previous_remote = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?
+        .take();
+    drop(previous_remote);
+    let mut machine = state
+        .dj_link_machine
+        .lock()
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?;
+    operation(&mut machine)
 }
 
 fn discover_lan_ip() -> Option<IpAddr> {
@@ -25888,16 +25940,6 @@ fn build_remote_access_urls(config: &RemoteControlConfig, lan_ip: Option<IpAddr>
         .collect()
 }
 
-/// Generate the process-local DJ Link credential.  It is deliberately kept
-/// out of every project/config/status serializer; callers receive it only
-/// through the explicit rotate command's show-once response.
-fn generate_dj_link_token() -> Result<String, String> {
-    let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|error| format!("DJ Link token generation failed: {error}"))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
-}
-
 fn format_url_host(ip: IpAddr) -> String {
     match ip {
         IpAddr::V4(ip) => ip.to_string(),
@@ -25929,6 +25971,53 @@ fn start_remote_control(
     start_remote_control_after_project_preflight(&state, config)
 }
 
+#[cfg(test)]
+type RemoteControlLifecycleTestHook = Arc<dyn Fn(&AppState) + Send + Sync>;
+
+/// A deterministic test seam placed after the production lifecycle lock is
+/// acquired. It never exists in product builds and lets the AppState proof
+/// demonstrate that start, disarm, and rotate cannot interleave authority and
+/// listener mutations around the one shared server.
+#[cfg(test)]
+static REMOTE_CONTROL_LIFECYCLE_TEST_HOOK: LazyLock<Mutex<Option<RemoteControlLifecycleTestHook>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+fn set_remote_control_lifecycle_test_hook(hook: Option<RemoteControlLifecycleTestHook>) {
+    if let Ok(mut current) = REMOTE_CONTROL_LIFECYCLE_TEST_HOOK.lock() {
+        *current = hook;
+    }
+}
+
+#[cfg(test)]
+struct RemoteControlLifecycleTestHookGuard;
+
+#[cfg(test)]
+impl Drop for RemoteControlLifecycleTestHookGuard {
+    fn drop(&mut self) {
+        set_remote_control_lifecycle_test_hook(None);
+    }
+}
+
+#[cfg(test)]
+fn install_remote_control_lifecycle_test_hook(
+    hook: RemoteControlLifecycleTestHook,
+) -> RemoteControlLifecycleTestHookGuard {
+    set_remote_control_lifecycle_test_hook(Some(hook));
+    RemoteControlLifecycleTestHookGuard
+}
+
+#[cfg(test)]
+fn run_remote_control_lifecycle_test_hook(state: &AppState) {
+    let hook = REMOTE_CONTROL_LIFECYCLE_TEST_HOOK
+        .lock()
+        .ok()
+        .and_then(|current| current.clone());
+    if let Some(hook) = hook {
+        hook(state);
+    }
+}
+
 /// Test adapter which repeats the production project preflight before entering
 /// the same listener, handler, process-fence, and serial replacement core.
 #[cfg(test)]
@@ -25951,26 +26040,44 @@ fn start_remote_control_after_project_preflight(
     state: &AppState,
     mut config: RemoteControlConfig,
 ) -> Result<(), String> {
-    // A repeated Start is the production listener-replacement route. It
-    // retires and joins the previous instance before binding the same port,
-    // so the new listener may share the process-lifetime DJ fence without
-    // creating parallel listener authorities. HELLO/session replacement is a
-    // separate generation-fenced protocol and is not a stop/join substitute.
+    // Every listener/authority transition serializes lifecycle first, then
+    // inspects machine state. Arm, rotate, disarm, stop, and startup use this
+    // same order; never take machine state before lifecycle or an ABBA wait can
+    // strand the sole shared listener.
     let _remote_lifecycle = state
         .remote_control_lifecycle
         .lock()
         .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
-    let previous_remote = state
-        .remote_control
+    #[cfg(test)]
+    run_remote_control_lifecycle_test_hook(state);
+    #[cfg(not(test))]
+    state
+        .dj_link_machine
         .lock()
-        .map_err(|_| "Remote control state lock was poisoned".to_string())?
-        .take();
-    drop(previous_remote);
-    config.dj_link_token = state
-        .dj_link_token
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?
+        .prepare_listener_config(&mut config)?;
+    #[cfg(test)]
+    state
+        .dj_link_machine
         .lock()
-        .map_err(|_| "DJ Link token state lock was poisoned".to_string())?
-        .clone();
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?
+        .prepare_listener_config_with_test_binding(&mut config)?;
+    // Replacement is deliberately absent: Start never tears down a live
+    // shared listener (including DJ-only auto-start) or invalidates an
+    // authenticated peer. The explicit Stop path joins it before another
+    // listener may bind.
+    {
+        let remote_control = state
+            .remote_control
+            .lock()
+            .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+        if remote_control.is_some() {
+            return Err(
+                "The shared Remote listener is already active; stop it before starting another transport mode"
+                .to_string(),
+            );
+        }
+    }
     let command_engine = state.engine.clone();
     let remote_project_transaction_active = Arc::clone(&state.project_transaction_active);
     let remote_project_external_command_admission =
@@ -25991,8 +26098,17 @@ fn start_remote_control_after_project_preflight(
     let dj_link_runtime = Arc::clone(&state.dj_link_runtime);
     let dj_link_external_admission = Arc::clone(&state.project_external_command_admission);
     let dj_link_transaction_active = Arc::clone(&state.project_transaction_active);
+    let dj_link_current_project_path = Arc::clone(&state.current_project_path);
     let dj_link_handler: DjLinkDispatchHandler = Arc::new(move |envelope| {
-        dispatch_dj_link_event(
+        // An armed machine may start its DJ-only listener before a project is
+        // selected.  A cold process has no authored mapping authority, so no
+        // inbound DJ event may create or alter the default Timeline.
+        let project_loaded = dj_link_current_project_path
+            .lock()
+            .map(|path| path.is_some())
+            .unwrap_or(false);
+        dispatch_authenticated_dj_link_event_for_project(
+            project_loaded,
             envelope,
             &dj_link_engine,
             dj_link_project_coordinator.as_ref(),
@@ -26435,29 +26551,32 @@ async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlSta
     .map_err(|error| format!("Remote control status query worker failed: {error}"))?
 }
 
-/// Rotate the machine-local DJ Link secret.  The current listener is stopped
-/// so the next explicit start injects the new secret; the returned value is
-/// show-once and is never persisted or included in status.
+/// Rotate only a previously armed, fully revalidated machine binding. The
+/// value is returned once to the operator and never appears in status or the
+/// settings file; the raw token is written solely to Credential Manager.
 #[tauri::command]
 fn rotate_dj_link_token(state: State<'_, AppState>) -> Result<String, String> {
-    let _remote_lifecycle = state
+    rotate_dj_link_token_for_state(&state)
+}
+
+fn rotate_dj_link_token_for_state(state: &AppState) -> Result<String, String> {
+    let _lifecycle = state
         .remote_control_lifecycle
         .lock()
         .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
-    let token = generate_dj_link_token()?;
-    let mut secret = state
-        .dj_link_token
-        .lock()
-        .map_err(|_| "DJ Link token state lock was poisoned".to_string())?;
-    *secret = Some(token.clone());
-    drop(secret);
-    let previous_remote = state
+    if state
         .remote_control
         .lock()
         .map_err(|_| "Remote control state lock was poisoned".to_string())?
-        .take();
-    drop(previous_remote);
-    Ok(token)
+        .is_some()
+    {
+        return Err("Stop the shared Remote listener before rotating DJ Link token".to_string());
+    }
+    state
+        .dj_link_machine
+        .lock()
+        .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?
+        .arm_or_rotate(None)
 }
 
 #[tauri::command]
@@ -76591,7 +76710,7 @@ pub(crate) mod tests {
                 project_publication_reconcile_claim: Mutex::new(None),
                 output_lease_clock_origin: Instant::now(),
                 next_output_lease_request_id: AtomicU64::new(1),
-                dj_link_token: Mutex::new(generate_dj_link_token().ok()),
+                dj_link_machine: Mutex::new(DjLinkMachineAuthority::default()),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
                 video_clip_slot_authoritative_publish_attempts: AtomicU64::new(0),
@@ -76643,7 +76762,7 @@ pub(crate) mod tests {
                 dj_link_process_fence: new_dj_link_process_fence(),
                 dmx_input: Mutex::new(None),
                 pending_project_open_paths: Mutex::new(Vec::new()),
-                current_project_path: Mutex::new(None),
+                current_project_path: Arc::new(Mutex::new(None)),
                 operator_policy: Mutex::new(None),
                 operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
                 dj_link_runtime,
@@ -79307,7 +79426,6 @@ pub(crate) mod tests {
             "standby_sync_status",
             "get_output_ownership_status",
             "get_engine_telemetry_report",
-            "list_show_lan_interfaces",
             "remote_control_status",
             "dmx_input_status",
             "get_snapshot_delta",
@@ -79366,12 +79484,7 @@ pub(crate) mod tests {
                             &config,
                             Some("192.0.2.42".parse().expect("test IPv4 address")),
                         );
-                        let interfaces = normalize_show_lan_interfaces([
-                            "192.0.2.42".parse().expect("test IPv4 address"),
-                            "127.0.0.1".parse().expect("test IPv4 address"),
-                        ]);
                         assert!(!urls.is_empty());
-                        assert_eq!(interfaces, ["192.0.2.42"]);
                     }
                 });
             }
@@ -99346,47 +99459,6 @@ f 1 2 3
     }
 
     #[test]
-    fn show_lan_interface_normalization_is_sorted_bounded_and_fail_closed() {
-        let addresses = normalize_show_lan_interfaces([
-            "192.168.1.40".parse::<IpAddr>().unwrap(),
-            "2001:db8::2".parse::<IpAddr>().unwrap(),
-            "192.168.1.40".parse::<IpAddr>().unwrap(),
-            "127.0.0.1".parse::<IpAddr>().unwrap(),
-            "169.254.10.3".parse::<IpAddr>().unwrap(),
-            "fe80::1".parse::<IpAddr>().unwrap(),
-            "0.0.0.0".parse::<IpAddr>().unwrap(),
-            "::".parse::<IpAddr>().unwrap(),
-        ]);
-        assert_eq!(
-            addresses,
-            vec!["192.168.1.40".to_string(), "2001:db8::2".to_string()]
-        );
-        assert!(normalize_show_lan_interfaces(Vec::<IpAddr>::new()).is_empty());
-        let many = (1..=64).map(|index| format!("10.0.0.{index}").parse::<IpAddr>().unwrap());
-        assert_eq!(
-            normalize_show_lan_interfaces(many).len(),
-            MAX_SHOW_LAN_INTERFACES
-        );
-    }
-
-    #[test]
-    fn show_lan_interface_parser_accepts_multiple_ipv4_ipv6_and_ignores_unknown_lines() {
-        let output = "\
-        Ethernet adapter LAN:\n\
-           IPv4 Address. . . . . . . . . . . : 192.168.1.40\n\
-           IPv6 Address. . . . . . . . . . . : 2001:db8::2\n\
-           Default Gateway . . . . . . . . . : 192.168.1.1\n\
-        Unknown field: 203.0.113.8\n";
-        let parsed = parse_show_lan_interface_addresses(output);
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(
-            normalize_show_lan_interfaces(parsed),
-            vec!["192.168.1.40".to_string(), "2001:db8::2".to_string()]
-        );
-        assert!(parse_show_lan_interface_addresses("not an address listing").is_empty());
-    }
-
-    #[test]
     fn normalize_video_layer_label_trims_and_rejects_empty() {
         assert_eq!(
             normalize_video_layer_label("  Clip A  ".to_string()).unwrap(),
@@ -112712,7 +112784,7 @@ f 1 2 3
             "payload": {
                 "authToken": token,
                 "version": protocol::DJ_LINK_PROTOCOL_VERSION,
-                "capabilities": protocol::DJ_LINK_REQUIRED_CAPABILITIES
+                "capabilities": protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES
             }
         })
     }
@@ -112747,9 +112819,11 @@ f 1 2 3
                 "activePlaySessionId": "production-stop-play"
             }
         }));
+        let sync_ack = client.read_ack();
         assert_eq!(
-            client.read_ack().outcome,
-            protocol::DjLinkAckOutcome::Accepted
+            sync_ack.outcome,
+            protocol::DjLinkAckOutcome::Accepted,
+            "DJ Link state sync was rejected: {sync_ack:?}"
         );
         client.send_json(&json!({
             "v": protocol::DJ_LINK_PROTOCOL_VERSION,
@@ -112769,6 +112843,373 @@ f 1 2 3
     }
 
     #[test]
+    fn authenticated_dj_track_active_is_blocked_before_project_mapping_is_loaded() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let engine_before = state.engine.snapshot();
+        let runtime_before = state.dj_link_runtime.lock().unwrap().clone();
+        let mappings_before = state
+            .project_coordinator
+            .lock()
+            .unwrap()
+            .mappings
+            .dj_track_triggers
+            .clone();
+        let active = dj_link_test_envelope(
+            protocol::DjLinkMessageType::TrackActive,
+            1,
+            "cold-project-active",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "masterDeckRevision": 1,
+                "contentId": "cold-project-content",
+                "trackBpm": 120.0,
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 120.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
+                "isPlaying": true,
+                "master": true,
+                "startedAt": "2026-08-26T00:00:00Z",
+                "playSessionId": "cold-project-play",
+                "loop": null
+            }),
+        );
+        assert!(matches!(
+            dispatch_authenticated_dj_link_event_for_project(
+                false,
+                active.clone(),
+                &state.engine,
+                state.project_coordinator.as_ref(),
+                state.dj_link_runtime.as_ref(),
+                state.project_external_command_admission.as_ref(),
+                state.project_transaction_active.as_ref(),
+            ),
+            DjLinkDispatchOutcome::Rejected { code, .. } if code == "project_mapping_not_loaded"
+        ));
+        assert_eq!(state.engine.snapshot(), engine_before);
+        assert_eq!(*state.dj_link_runtime.lock().unwrap(), runtime_before);
+        assert_eq!(
+            state
+                .project_coordinator
+                .lock()
+                .unwrap()
+                .mappings
+                .dj_track_triggers,
+            mappings_before
+        );
+
+        let timeline_id = state.engine.snapshot().timeline.id;
+        {
+            let mut coordinator = state.project_coordinator.lock().unwrap();
+            let mut mapping = dj_link_test_mapping(
+                "cold-project-content",
+                protocol::DjTrackSelector {
+                    content_id: Some("cold-project-content".to_string()),
+                    title: None,
+                    artist: None,
+                },
+            );
+            mapping.timeline_id = timeline_id;
+            coordinator.mappings.dj_track_triggers = vec![mapping];
+        }
+        *state.current_project_path.lock().unwrap() = Some(PathBuf::from("loaded-project.sdc"));
+        assert!(matches!(
+            dispatch_authenticated_dj_link_event_for_project(
+                true,
+                active,
+                &state.engine,
+                state.project_coordinator.as_ref(),
+                state.dj_link_runtime.as_ref(),
+                state.project_external_command_admission.as_ref(),
+                state.project_transaction_active.as_ref(),
+            ),
+            DjLinkDispatchOutcome::TimelineState { .. }
+        ));
+    }
+
+    #[test]
+    fn dj_only_listener_rejects_generic_start_without_losing_old_authentication() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let token = "0123456789abcdef0123456789abcdef";
+        state
+            .dj_link_machine
+            .lock()
+            .unwrap()
+            .install_test_armed_listener_authority("127.0.0.1", port, token);
+        let dj_only = RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            allow_lan: true,
+            web_remote_enabled: false,
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            ..RemoteControlConfig::default()
+        };
+        let generic = RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            pairing_pin: "123456".to_string(),
+            ..RemoteControlConfig::default()
+        };
+        let error = start_remote_control_for_state(&state, generic.clone())
+            .expect_err("armed authority must reject a raw Web-only start");
+        assert!(error.contains("armed"), "unexpected error: {error}");
+        assert!(state.remote_control.lock().unwrap().is_none());
+        let armed_status = state.dj_link_machine.lock().unwrap().status();
+        assert!(armed_status.auto_start_armed);
+        assert!(armed_status.credential_ready);
+        start_remote_control_for_state(&state, dj_only.clone()).expect("start DJ-only listener");
+
+        let error = start_remote_control_for_state(&state, generic.clone())
+            .expect_err("must not replace DJ-only");
+        assert!(
+            error.contains("already active"),
+            "unexpected error: {error}"
+        );
+        let status = state
+            .remote_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(RemoteWsServer::status)
+            .expect("DJ-only listener retained");
+        assert!(status.running);
+        assert!(!status.web_remote_enabled);
+        assert!(status.dj_link_enabled);
+
+        let mut retained_client = DjLinkLoopbackClient::connect(port);
+        retained_client.send_json(&dj_link_socket_hello(
+            token,
+            "mode-guard-retained",
+            "mode-guard-retained-hello",
+        ));
+        assert_eq!(
+            retained_client.read_ack().outcome,
+            protocol::DjLinkAckOutcome::Accepted,
+            "rejected generic Start must retain the old DJ credential"
+        );
+        drop(retained_client);
+        stop_remote_control_for_state(&state).expect("stop retained listener");
+
+        let error = start_remote_control_for_state(&state, generic.clone())
+            .expect_err("post-stop raw Web-only start must remain blocked while armed");
+        assert!(error.contains("armed"), "unexpected error: {error}");
+        assert!(state.remote_control.lock().unwrap().is_none());
+        let unbound = std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect("rejected Web-only start must leave the port unbound");
+        drop(unbound);
+        let armed_status = state.dj_link_machine.lock().unwrap().status();
+        assert!(armed_status.auto_start_armed);
+        assert!(armed_status.credential_ready);
+
+        let mut hybrid = dj_only.clone();
+        hybrid.web_remote_enabled = true;
+        hybrid.pairing_pin = "123456".to_string();
+        start_remote_control_for_state(&state, hybrid).expect("exact hybrid listener starts");
+        let hybrid_status = state
+            .remote_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(RemoteWsServer::status)
+            .expect("hybrid listener active");
+        assert!(hybrid_status.web_remote_enabled);
+        assert!(hybrid_status.dj_link_enabled);
+        stop_remote_control_for_state(&state).expect("stop hybrid listener");
+
+        state
+            .dj_link_machine
+            .lock()
+            .unwrap()
+            .install_test_disarmed_listener_authority();
+        start_remote_control_for_state(&state, generic)
+            .expect("generic start is allowed after disarm");
+        let generic_status = state
+            .remote_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(RemoteWsServer::status)
+            .expect("generic listener active");
+        assert!(generic_status.web_remote_enabled);
+        assert!(!generic_status.dj_link_enabled);
+        stop_remote_control_for_state(&state).expect("stop generic listener");
+    }
+
+    #[test]
+    fn dj_link_lifecycle_serializes_start_against_disarm_and_rotate() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let reserve_port = || {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            port
+        };
+        let config_for = |port| RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            allow_lan: true,
+            web_remote_enabled: false,
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            ..RemoteControlConfig::default()
+        };
+
+        // Start owns lifecycle first; a queued disarm must run only after the
+        // listener has either been created or failed. The test mutation below
+        // models the already-unit-tested durable disarm result, while this
+        // AppState proof exercises the production listener lock/order itself.
+        let first_port = reserve_port();
+        state
+            .dj_link_machine
+            .lock()
+            .unwrap()
+            .install_test_armed_listener_authority(
+                "127.0.0.1",
+                first_port,
+                "0123456789abcdef0123456789abcdef",
+            );
+        let (start_entered_tx, start_entered_rx) = mpsc::channel();
+        let (release_start_tx, release_start_rx) = mpsc::channel();
+        let release_start_rx = Arc::new(Mutex::new(release_start_rx));
+        let hook_state = Arc::clone(&state);
+        let hook_release_start_rx = Arc::clone(&release_start_rx);
+        let first_hook = install_remote_control_lifecycle_test_hook(Arc::new(move |entered| {
+            if std::ptr::eq(entered, hook_state.as_ref()) {
+                start_entered_tx
+                    .send(())
+                    .expect("report start lifecycle entry");
+                hook_release_start_rx
+                    .lock()
+                    .expect("start lifecycle release mutex")
+                    .recv()
+                    .expect("release start lifecycle hook");
+            }
+        }));
+        let start_state = Arc::clone(&state);
+        let start = std::thread::spawn(move || {
+            start_remote_control_for_state(&start_state, config_for(first_port))
+        });
+        start_entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("start holds lifecycle before listener mutation");
+        let (disarm_ready_tx, disarm_ready_rx) = mpsc::channel();
+        let (disarm_done_tx, disarm_done_rx) = mpsc::channel();
+        let disarm_state = Arc::clone(&state);
+        let disarm = std::thread::spawn(move || {
+            disarm_ready_tx.send(()).expect("queue disarm");
+            disarm_dj_link_machine_for_state_with(&disarm_state, |machine| {
+                machine.install_test_disarmed_listener_authority();
+                disarm_done_tx.send(()).expect("report disarm completion");
+                Ok(())
+            })
+        });
+        disarm_ready_rx.recv().expect("disarm queued behind start");
+        assert!(matches!(
+            disarm_done_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release_start_tx.send(()).expect("release first start");
+        start
+            .join()
+            .expect("start worker did not panic")
+            .expect("start succeeds before queued disarm");
+        disarm
+            .join()
+            .expect("disarm worker did not panic")
+            .expect("queued disarm succeeds after start");
+        drop(first_hook);
+        assert!(state.remote_control.lock().unwrap().is_none());
+        let disarmed = state.dj_link_machine.lock().unwrap().status();
+        assert!(!disarmed.auto_start_armed);
+        assert!(!disarmed.credential_ready);
+
+        // Repeat the deterministic start boundary with the real rotate body.
+        // Rotation cannot run before start has published the sole listener;
+        // it then rejects without altering the accepted armed credential.
+        let second_port = reserve_port();
+        state
+            .dj_link_machine
+            .lock()
+            .unwrap()
+            .install_test_armed_listener_authority(
+                "127.0.0.1",
+                second_port,
+                "fedcba9876543210fedcba9876543210",
+            );
+        let (rotate_start_entered_tx, rotate_start_entered_rx) = mpsc::channel();
+        let (rotate_release_start_tx, rotate_release_start_rx) = mpsc::channel();
+        let rotate_release_start_rx = Arc::new(Mutex::new(rotate_release_start_rx));
+        let hook_state = Arc::clone(&state);
+        let hook_rotate_release_start_rx = Arc::clone(&rotate_release_start_rx);
+        let second_hook = install_remote_control_lifecycle_test_hook(Arc::new(move |entered| {
+            if std::ptr::eq(entered, hook_state.as_ref()) {
+                rotate_start_entered_tx
+                    .send(())
+                    .expect("report rotate/start lifecycle entry");
+                hook_rotate_release_start_rx
+                    .lock()
+                    .expect("rotate lifecycle release mutex")
+                    .recv()
+                    .expect("release rotate/start lifecycle hook");
+            }
+        }));
+        let start_state = Arc::clone(&state);
+        let start = std::thread::spawn(move || {
+            start_remote_control_for_state(&start_state, config_for(second_port))
+        });
+        rotate_start_entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second start holds lifecycle before listener mutation");
+        let (rotate_ready_tx, rotate_ready_rx) = mpsc::channel();
+        let (rotate_done_tx, rotate_done_rx) = mpsc::channel();
+        let rotate_state = Arc::clone(&state);
+        let rotate = std::thread::spawn(move || {
+            rotate_ready_tx.send(()).expect("queue rotate");
+            let result = rotate_dj_link_token_for_state(&rotate_state);
+            rotate_done_tx.send(()).expect("report rotate completion");
+            result
+        });
+        rotate_ready_rx.recv().expect("rotate queued behind start");
+        assert!(matches!(
+            rotate_done_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        rotate_release_start_tx
+            .send(())
+            .expect("release second start");
+        start
+            .join()
+            .expect("second start worker did not panic")
+            .expect("second start succeeds before queued rotate");
+        let rotate_error = rotate
+            .join()
+            .expect("rotate worker did not panic")
+            .expect_err("rotate must reject while the just-started listener is active");
+        assert!(rotate_error.contains("Stop the shared Remote listener"));
+        drop(second_hook);
+        let listener = state
+            .remote_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(RemoteWsServer::status)
+            .expect("single DJ listener remains active after rejected rotate");
+        assert!(listener.running && listener.dj_link_enabled && !listener.web_remote_enabled);
+        let armed = state.dj_link_machine.lock().unwrap().status();
+        assert!(armed.auto_start_armed);
+        assert!(armed.credential_ready);
+        stop_remote_control_for_state(&state).expect("cleanup retained DJ listener");
+    }
+
+    #[test]
     fn dj_link_production_remote_stop_is_bounded_and_replacement_rejects_replay() {
         let harness = MediaAssetA6CommandHarness::new();
         let state = Arc::clone(&harness.state);
@@ -112776,7 +113217,11 @@ f 1 2 3
         let port = probe.local_addr().unwrap().port();
         drop(probe);
         let token = "0123456789abcdef0123456789abcdef";
-        *state.dj_link_token.lock().unwrap() = Some(token.to_string());
+        state
+            .dj_link_machine
+            .lock()
+            .unwrap()
+            .install_test_armed_listener_authority("127.0.0.1", port, token);
         let mut production_timeline = state.engine.snapshot().timeline;
         production_timeline.phases = vec![TimelinePhaseSummary {
             id: protocol::TimelinePhaseId(1),
@@ -112854,10 +113299,12 @@ f 1 2 3
             "production stop fixture ACTIVE must establish a valid v3 owner, got {production_active_outcome:?}"
         );
         let production_timeline_id = production_timeline_id.0.to_string();
+        *state.current_project_path.lock().unwrap() = Some(PathBuf::from("production-stop.sdc"));
         let config = RemoteControlConfig {
             bind_ip: "127.0.0.1".to_string(),
             port,
             pairing_pin: "123456".to_string(),
+            allow_lan: true,
             max_connections: 2,
             max_messages_per_second: 1_000,
             dj_link_enabled: true,
@@ -113010,7 +113457,7 @@ f 1 2 3
         assert!(after_late_audio.clips.is_empty());
         assert!(after_late_audio.child_clips.is_empty());
 
-        // The production replacement call cannot bind until the old listener
+        // The explicit post-stop restart cannot bind until the old listener
         // and all retained socket workers have joined. It shares the same
         // process fence, so replaying the retired physical identity never
         // invokes the Engine handler or publishes a late B.
@@ -128850,6 +129297,34 @@ fn main() {
                 *configured_directory = Some(directory);
             }
             let state = app.state::<AppState>();
+            // DJ Link machine authority is intentionally separate from every
+            // project.  Startup restores only the non-secret binding and its
+            // Credential Manager token; it never opens a project or changes
+            // the default Timeline.  An armed, verified binding receives the
+            // sole existing RemoteWsServer in DJ-only mode.
+            let auto_start_config = match app.path().app_local_data_dir() {
+                Ok(local_data_dir) => match state.dj_link_machine.lock() {
+                    Ok(mut authority) => {
+                        authority.initialize(&local_data_dir);
+                        authority.dj_only_config()
+                    }
+                    Err(_) => Err("DJ Link machine state lock was poisoned during setup".to_string()),
+                },
+                Err(error) => {
+                    if let Ok(mut authority) = state.dj_link_machine.lock() {
+                        authority.block("machine_settings_initialization_failed");
+                    }
+                    Err(format!("Unable to resolve DJ Link machine settings directory: {error}"))
+                }
+            };
+            if let Ok(config) = auto_start_config {
+                if let Err(error) = start_remote_control_after_project_preflight(&state, config) {
+                    if let Ok(mut authority) = state.dj_link_machine.lock() {
+                        authority.block("startup_listener_or_network_validation_failed");
+                    }
+                    eprintln!("DJ Link auto-start remains blocked: {error}");
+                }
+            }
             let cue_settings_path = timeline_cue_audio::timeline_cue_audio_settings_path(
                 &app.path()
                     .app_local_data_dir()
@@ -128954,7 +129429,7 @@ fn main() {
             project_publication_reconcile_claim: Mutex::new(None),
             output_lease_clock_origin: Instant::now(),
             next_output_lease_request_id: AtomicU64::new(1),
-            dj_link_token: Mutex::new(generate_dj_link_token().ok()),
+            dj_link_machine: Mutex::new(DjLinkMachineAuthority::default()),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
             media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -129009,7 +129484,7 @@ fn main() {
             dj_link_process_fence: new_dj_link_process_fence(),
             dmx_input: Mutex::new(None),
             pending_project_open_paths: Mutex::new(Vec::new()),
-            current_project_path: Mutex::new(None),
+            current_project_path: Arc::new(Mutex::new(None)),
             operator_policy: Mutex::new(None),
             operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
             dj_link_runtime,
@@ -129202,7 +129677,10 @@ fn main() {
             start_osc_input,
             stop_osc_input,
             remote_access_urls,
-            list_show_lan_interfaces,
+            list_dj_link_wired_candidates,
+            get_dj_link_machine_status,
+            arm_dj_link_machine,
+            disarm_dj_link_machine,
             start_remote_control,
             remote_control_status,
             rotate_dj_link_token,

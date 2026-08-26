@@ -35,7 +35,7 @@ export function Phase1SmokeReportPanel(props: Phase1SmokeReportPanelProps) {
             <div class="phase1SmokeSummary">
               <span>
                 <small>Cue</small>
-                <strong>{report().cue_label}</strong>
+                <strong data-no-localize>{report().cue_label}</strong>
               </span>
               <span>
                 <small>Active</small>

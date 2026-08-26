@@ -18,3 +18,4 @@ serde_json.workspace = true
 serialport.workspace = true
 thiserror.workspace = true
 tungstenite.workspace = true
+zeroize = "=1.9.0"

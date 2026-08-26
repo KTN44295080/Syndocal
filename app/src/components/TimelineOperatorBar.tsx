@@ -316,7 +316,7 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
               <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
             </button>
             <Show when={props.armedCueLabel}>
-              {(label) => <output class="timelineArmedCue" data-timeline-armed-cue={props.armedCueId ?? undefined}>Armed: {label()}</output>}
+              {(label) => <output class="timelineArmedCue" data-timeline-armed-cue={props.armedCueId ?? undefined}>Armed: <span data-no-localize>{label()}</span></output>}
             </Show>
           </div>
           <TimelinePerformanceEditor

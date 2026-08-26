@@ -36328,7 +36328,11 @@ a[href]:focus-visible,
    the zone's remaining height.  The disclosure stack, not the whole Remote
    zone, owns the vertical scrollport. */
 .layoutSetup.setupMode-io .remoteControl {
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Keep the Web Remote identity/start action visible while reserving a real
+     scrollable row for its five disclosures. The old auto row could consume
+     the whole compact I/O zone, leaving the DJ Link controls in a 5px
+     scrollport even though no control dimensions had changed. */
+  grid-template-rows: 80px minmax(0, 1fr);
   overflow: hidden;
 }
 

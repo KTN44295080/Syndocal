@@ -20,6 +20,8 @@ export const emptyDjLinkRuntimeStatus = (): DjLinkRuntimeStatus => ({
 
 export const unavailableRemoteControlStatus = (): RemoteControlStatus => ({
   running: false,
+  web_remote_enabled: false,
+  dj_link_enabled: false,
   active_connections: 0,
   rejected_connections: 0,
   clients: [],
@@ -42,11 +44,26 @@ export const availableRemoteControlStatus = (
  */
 export const projectRemoteControlStatusPoll = (
   status: RemoteControlStatus | null,
-): { running: boolean; status: RemoteControlStatus } => {
+): {
+  listenerRunning: boolean;
+  genericRunning: boolean;
+  djListenerRunning: boolean;
+  status: RemoteControlStatus;
+} => {
   if (!status) {
-    return { running: false, status: unavailableRemoteControlStatus() };
+    return {
+      listenerRunning: false,
+      genericRunning: false,
+      djListenerRunning: false,
+      status: unavailableRemoteControlStatus(),
+    };
   }
-  return { running: status.running, status: availableRemoteControlStatus(status) };
+  return {
+    listenerRunning: status.running,
+    genericRunning: status.running && status.web_remote_enabled,
+    djListenerRunning: status.running && status.dj_link_enabled,
+    status: availableRemoteControlStatus(status),
+  };
 };
 
 export const clearedDjLinkSecret = (copied = false): DjLinkSecretViewState => ({

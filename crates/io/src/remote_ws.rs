@@ -25,12 +25,16 @@ use protocol::{
 use serde_json::{json, Value};
 use thiserror::Error;
 use tungstenite::{accept, Message};
+use zeroize::Zeroize;
 
 use crate::{parse_clock_source_label, parse_timecode_position_ms};
 
 const HTTP_PEEK_SIZE: usize = 2048;
 const REMOTE_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(100);
 const REMOTE_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
+/// HELLO bearer credentials must not enter canonical identity, replay, or
+/// session state after the authentication comparison succeeds.
+const DJ_LINK_AUTH_TOKEN_CANONICAL_SENTINEL: &str = "00000000000000000000000000000000";
 /// Production DJ Link dispatches wait at most three seconds for an Engine
 /// acknowledgement.  The listener stop path adds one second for socket and
 /// thread-join bookkeeping.  This is a testable service contract, not a
@@ -2921,11 +2925,30 @@ pub enum RemoteWsError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteParseError {
-    InvalidJson(String),
+    InvalidJson,
     MissingType,
-    UnknownType(String),
+    UnknownType,
     MissingField(&'static str),
     InvalidField(&'static str),
+}
+
+impl RemoteParseError {
+    /// Renderer-originated input is untrusted. Keep its detail out of both
+    /// diagnostics and response JSON; these stable codes are the entire
+    /// public contract for parse failures.
+    fn response_code(&self) -> &'static str {
+        match self {
+            Self::InvalidJson => "invalid_json",
+            Self::MissingType => "missing_type",
+            Self::UnknownType => "unknown_type",
+            Self::MissingField(_) => "missing_field",
+            Self::InvalidField(_) => "invalid_field",
+        }
+    }
+}
+
+fn remote_parse_error_response_json(error: &RemoteParseError) -> String {
+    json!({ "ok": false, "error": error.response_code() }).to_string()
 }
 
 /// Result returned by the app's DJ Link authority lane after the transport
@@ -4195,6 +4218,9 @@ pub struct RemoteWsServer {
     /// Remote can never be toggled onto a running listener; only a replaced
     /// listener may change it.
     web_remote_enabled: bool,
+    /// Immutable DJ Link mode, carried independently from generic Web Remote
+    /// so status consumers can distinguish a DJ-only listener.
+    dj_link_enabled: bool,
     /// Every accepted client worker is retained by the server until shutdown.
     /// A detached worker could otherwise keep a socket (and a DJ generation)
     /// alive after `RemoteWsServer` has been dropped.
@@ -4471,6 +4497,7 @@ impl RemoteWsServer {
             Arc::new(external_video_transport_sync_provider);
         let config = Arc::new(config);
         let web_remote_enabled = config.web_remote_enabled;
+        let dj_link_enabled = config.dj_link_enabled;
         let clients = Arc::new(Mutex::new(HashMap::new()));
         let next_client_id = Arc::new(AtomicU64::new(1));
         let rejected_connections = Arc::new(AtomicU64::new(0));
@@ -4668,6 +4695,7 @@ impl RemoteWsServer {
             rejected_connections,
             dj_link_registry,
             web_remote_enabled,
+            dj_link_enabled,
             client_workers,
             shutdown_sockets,
             dj_link_connections,
@@ -4699,6 +4727,7 @@ impl RemoteWsServer {
             rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
             clients,
             web_remote_enabled: self.web_remote_enabled,
+            dj_link_enabled: self.dj_link_enabled,
             dj_link: Some(self.dj_link_status()),
         }
     }
@@ -4891,36 +4920,23 @@ define_remote_wire_operations! {
 pub fn event_from_text(text: &str) -> Result<RemoteInputEvent, RemoteParseError> {
     match request_from_text(text)? {
         RemoteClientRequest::Event(event) => Ok(event),
-        RemoteClientRequest::GetSnapshot => {
-            Err(RemoteParseError::UnknownType("getSnapshot".to_string()))
-        }
-        RemoteClientRequest::GetVideoRuntimeStatus => Err(RemoteParseError::UnknownType(
-            "getVideoRuntimeStatus".to_string(),
-        )),
-        RemoteClientRequest::GetVideoOutputRenderPlans => Err(RemoteParseError::UnknownType(
-            "getVideoOutputRenderPlans".to_string(),
-        )),
-        RemoteClientRequest::GetExternalVideoIoPlans => Err(RemoteParseError::UnknownType(
-            "getExternalVideoIoPlans".to_string(),
-        )),
-        RemoteClientRequest::GetExternalVideoTransportStatus => Err(RemoteParseError::UnknownType(
-            "getExternalVideoTransportStatus".to_string(),
-        )),
-        RemoteClientRequest::SyncExternalVideoTransports => Err(RemoteParseError::UnknownType(
-            "syncExternalVideoTransports".to_string(),
-        )),
+        RemoteClientRequest::GetSnapshot => Err(RemoteParseError::UnknownType),
+        RemoteClientRequest::GetVideoRuntimeStatus => Err(RemoteParseError::UnknownType),
+        RemoteClientRequest::GetVideoOutputRenderPlans => Err(RemoteParseError::UnknownType),
+        RemoteClientRequest::GetExternalVideoIoPlans => Err(RemoteParseError::UnknownType),
+        RemoteClientRequest::GetExternalVideoTransportStatus => Err(RemoteParseError::UnknownType),
+        RemoteClientRequest::SyncExternalVideoTransports => Err(RemoteParseError::UnknownType),
     }
 }
 
 pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseError> {
-    let value: Value = serde_json::from_str(text)
-        .map_err(|error| RemoteParseError::InvalidJson(error.to_string()))?;
+    let value: Value = serde_json::from_str(text).map_err(|_| RemoteParseError::InvalidJson)?;
     let command_type = value
         .get("type")
         .and_then(Value::as_str)
         .ok_or(RemoteParseError::MissingType)?;
-    let operation = RemoteWireOperation::from_type(command_type)
-        .ok_or_else(|| RemoteParseError::UnknownType(command_type.to_string()))?;
+    let operation =
+        RemoteWireOperation::from_type(command_type).ok_or(RemoteParseError::UnknownType)?;
     match operation {
         RemoteWireOperation::GetSnapshot => Ok(RemoteClientRequest::GetSnapshot),
         RemoteWireOperation::GetVideoRuntimeStatus => {
@@ -5703,6 +5719,31 @@ fn constant_time_token_eq(candidate: &str, expected: &str) -> bool {
     difference == 0
 }
 
+/// Replace the parsed HELLO bearer credential before any envelope-derived
+/// identity, replay, or session state is retained. The sentinel itself is a
+/// syntactically valid token so `DjLinkEnvelope::canonical_shape` continues
+/// to exercise the exact production validation path.
+fn sanitize_authenticated_dj_link_hello(
+    hello: &mut DjLinkEnvelope,
+    payload: &mut protocol::DjLinkHelloPayload,
+) -> Result<(), serde_json::Error> {
+    let version = payload.version;
+    let capabilities = payload.capabilities.clone();
+    // `from_value` above clones the token, so overwrite both ownership sites
+    // before releasing either allocation. The expected listener token remains
+    // the intentional live authority in `RemoteControlConfig`.
+    payload.auth_token.zeroize();
+    if let Some(Value::String(auth_token)) = hello.payload.get_mut("authToken") {
+        auth_token.zeroize();
+    }
+    hello.payload = serde_json::to_value(protocol::DjLinkHelloPayload {
+        auth_token: DJ_LINK_AUTH_TOKEN_CANONICAL_SENTINEL.to_string(),
+        version,
+        capabilities,
+    })?;
+    Ok(())
+}
+
 fn handle_dj_link_client(
     stream: TcpStream,
     stop: Arc<AtomicBool>,
@@ -5733,7 +5774,7 @@ fn handle_dj_link_client(
         .get_ref()
         .set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
     let hello_deadline = Instant::now() + Duration::from_secs(5);
-    let hello = loop {
+    let mut hello = loop {
         match websocket.read() {
             Ok(Message::Text(text)) => {
                 // Ingress is exact-only: anything that is not a fully valid
@@ -5774,9 +5815,9 @@ fn handle_dj_link_client(
             Err(_) => return,
         }
     };
-    let hello_payload =
-        serde_json::from_value::<protocol::DjLinkHelloPayload>(hello.payload.clone());
-    let Ok(hello_payload) = hello_payload else {
+    let Ok(mut hello_payload) =
+        serde_json::from_value::<protocol::DjLinkHelloPayload>(hello.payload.clone())
+    else {
         return;
     };
     let Some(capability_family) = dj_link_capability_family(&hello_payload) else {
@@ -5793,6 +5834,13 @@ fn handle_dj_link_client(
         let _ = send_dj_link_ack(&mut websocket, &ack);
         return;
     }
+    // Do not retain the accepted raw bearer credential for the rest of the
+    // connection. Registry and session paths only receive the sanitized
+    // envelope below.
+    if sanitize_authenticated_dj_link_hello(&mut hello, &mut hello_payload).is_err() {
+        return;
+    }
+    drop(hello_payload);
     let now = Instant::now();
     let hello_shape = match hello.canonical_shape() {
         Ok(shape) => shape,
@@ -6388,9 +6436,8 @@ fn handle_websocket_client<F, S>(
                         let _ = websocket.send(Message::Text(response));
                     }
                     Err(error) => {
-                        let _ = websocket.send(Message::Text(format!(
-                            r#"{{"ok":false,"error":"{error:?}"}}"#
-                        )));
+                        let _ =
+                            websocket.send(Message::Text(remote_parse_error_response_json(&error)));
                     }
                 }
             }
@@ -6867,6 +6914,56 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_hello_sanitization_keeps_raw_token_out_of_retained_identity() {
+        let raw_token = "dj-link-raw-token-must-not-survive-auth";
+        let mut hello = DjLinkEnvelope {
+            v: protocol::DJ_LINK_PROTOCOL_VERSION,
+            message_type: DjLinkMessageType::Hello,
+            agent_id: DJ_V3_AGENT.to_string(),
+            session_id: "sanitized-session".to_string(),
+            sequence: 1,
+            event_id: "sanitized-hello".to_string(),
+            payload: json!({
+                "authToken": raw_token,
+                "version": protocol::DJ_LINK_PROTOCOL_VERSION,
+                "capabilities": protocol::DJ_LINK_REQUIRED_CAPABILITIES,
+            }),
+        };
+        let mut payload: protocol::DjLinkHelloPayload =
+            serde_json::from_value(hello.payload.clone()).unwrap();
+        assert!(constant_time_token_eq(&payload.auth_token, raw_token));
+        sanitize_authenticated_dj_link_hello(&mut hello, &mut payload).unwrap();
+        assert!(payload.auth_token.as_bytes().iter().all(|byte| *byte == 0));
+        drop(payload);
+
+        let shape = hello.canonical_shape().unwrap();
+        assert!(!shape.contains(raw_token));
+        assert!(shape.contains(DJ_LINK_AUTH_TOKEN_CANONICAL_SENTINEL));
+        assert!(!format!("{hello:?}").contains(raw_token));
+
+        let mut registry = DjLinkRegistry::default();
+        assert_eq!(
+            registry.admit_hello(&hello, &shape, Instant::now()),
+            DjLinkAdmission::Accepted
+        );
+        // Registry keeps only keyed digests at this point, never the HELLO
+        // payload or its bearer credential.
+        assert!(!format!("{registry:?}").contains(raw_token));
+    }
+
+    #[test]
+    fn remote_parse_errors_are_static_valid_json_without_attacker_reflection() {
+        let sentinel = "attacker\"\\dj-token-sentinel";
+        let error = request_from_text(&json!({ "type": sentinel }).to_string())
+            .expect_err("unknown renderer command must be rejected");
+        assert_eq!(error, RemoteParseError::UnknownType);
+        let response = remote_parse_error_response_json(&error);
+        let decoded: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(decoded, json!({ "ok": false, "error": "unknown_type" }));
+        assert!(!response.contains(sentinel));
+    }
+
+    #[test]
     fn dj_link_capability_family_rejects_cross_family_events_and_payloads() {
         let generic_hello = protocol::DjLinkHelloPayload {
             auth_token: DJ_V3_TOKEN.to_string(),
@@ -6965,16 +7062,16 @@ mod tests {
     fn dj_v3_state_sync_payload(released: bool) -> Value {
         json!({
             "released": released,
-            "masterDeck": if released { Value::Null } else { json!(1) },
+            "ownerDeck": if released { Value::Null } else { json!(1) },
+            "ownerDeckId": if released { Value::Null } else { json!("rekordbox-deck-1") },
             "activePlaySessionId": if released { Value::Null } else { json!("play-1") },
         })
     }
 
-    fn dj_v3_track_active_payload(play_session: &str) -> Value {
+    fn dj_v3_generic_track_active_payload(play_session: &str) -> Value {
         json!({
             "deck": 1,
             "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 3,
             "contentId": "track-1",
             "trackBpm": 128.0,
             "positionAtSendSec": 1.25,
@@ -6982,7 +7079,6 @@ mod tests {
             "positionRevision": 7,
             "sampleAgeMs": 42,
             "isPlaying": true,
-            "master": true,
             "startedAt": "2026-08-21T00:00:00Z",
             "playSessionId": play_session,
         })
@@ -7030,7 +7126,8 @@ mod tests {
                 dj_v3_hello(session, &format!("hello-{session}")).to_string(),
             ))
             .unwrap();
-        read_dj_ack(client);
+        let hello_ack = read_dj_ack(client);
+        assert_eq!(hello_ack.outcome, DjLinkAckOutcome::Accepted);
         client
             .send(Message::Text(
                 json!({
@@ -7045,7 +7142,8 @@ mod tests {
                 .to_string(),
             ))
             .unwrap();
-        read_dj_ack(client);
+        let sync_ack = read_dj_ack(client);
+        assert_eq!(sync_ack.outcome, DjLinkAckOutcome::Accepted);
         client
             .send(Message::Text(
                 json!({
@@ -7060,7 +7158,12 @@ mod tests {
                 .to_string(),
             ))
             .unwrap();
-        read_dj_ack(client);
+        let state_request_ack = read_dj_ack(client);
+        assert_eq!(
+            state_request_ack.outcome,
+            DjLinkAckOutcome::Accepted,
+            "state request acknowledgement: {state_request_ack:?}"
+        );
         match client.read().unwrap() {
             Message::Text(text) => {
                 let state: Value = serde_json::from_str(&text).unwrap();
@@ -7118,7 +7221,7 @@ mod tests {
             assert_eq!(operation.wire_type(), *wire_type);
             let parsed = request_from_text(&format!(r#"{{"type":"{wire_type}"}}"#));
             assert!(
-                !matches!(parsed, Err(RemoteParseError::UnknownType(_))),
+                !matches!(parsed, Err(RemoteParseError::UnknownType)),
                 "the parser must recognize every generated wire selector: {wire_type}"
             );
         }
@@ -7375,9 +7478,7 @@ mod tests {
         );
         assert_eq!(
             event_from_text(r#"{"type":"syncExternalVideoTransports"}"#),
-            Err(RemoteParseError::UnknownType(
-                "syncExternalVideoTransports".to_string()
-            ))
+            Err(RemoteParseError::UnknownType)
         );
         assert_eq!(
             event_from_text(r#"{"type":"allBlackout","enabled":true}"#),
@@ -7561,21 +7662,15 @@ mod tests {
         );
         assert_eq!(
             event_from_text(r#"{"type":"getExternalVideoIoPlans"}"#),
-            Err(RemoteParseError::UnknownType(
-                "getExternalVideoIoPlans".to_string()
-            ))
+            Err(RemoteParseError::UnknownType)
         );
         assert_eq!(
             event_from_text(r#"{"type":"getVideoOutputRenderPlans"}"#),
-            Err(RemoteParseError::UnknownType(
-                "getVideoOutputRenderPlans".to_string()
-            ))
+            Err(RemoteParseError::UnknownType)
         );
         assert_eq!(
             event_from_text(r#"{"type":"getExternalVideoTransportStatus"}"#),
-            Err(RemoteParseError::UnknownType(
-                "getExternalVideoTransportStatus".to_string()
-            ))
+            Err(RemoteParseError::UnknownType)
         );
     }
 
@@ -9014,29 +9109,36 @@ mod tests {
         let send_frame = |client: &mut tungstenite::WebSocket<_>, frame: Value| {
             client.send(Message::Text(frame.to_string())).unwrap();
         };
-        let state_sync =
-            |sequence: u64, event_id: &str, released: bool, master_deck: Option<u8>| {
+        let state_sync = |sequence: u64, event_id: &str, released: bool, owner_deck: Option<u8>| {
+            let payload = if released {
+                json!({ "released": true })
+            } else if let Some(owner_deck) = owner_deck {
                 json!({
-                    "v": 3,
-                    "type": "DJ_STATE_SYNC",
-                    "agentId": DJ_V3_AGENT,
-                    "sessionId": "quadrant-session",
-                    "sequence": sequence,
-                    "eventId": event_id,
-                    "payload": {
-                        "released": released,
-                        "masterDeck": master_deck.map(|deck| json!(deck)).unwrap_or(Value::Null),
-                        "activePlaySessionId": if released { Value::Null } else { json!("play-1") },
-                    },
+                    "released": false,
+                    "ownerDeck": owner_deck,
+                    "ownerDeckId": format!("rekordbox-deck-{owner_deck}"),
+                    "activePlaySessionId": "play-1",
                 })
+            } else {
+                json!({ "released": false })
             };
+            json!({
+                "v": 3,
+                "type": "DJ_STATE_SYNC",
+                "agentId": DJ_V3_AGENT,
+                "sessionId": "quadrant-session",
+                "sequence": sequence,
+                "eventId": event_id,
+                "payload": payload,
+            })
+        };
 
         // Every STATE_SYNC quadrant is nonphysical status traffic and remains
         // admissible even after the physical high-water latch below.
         for (sequence, event_id, released, deck) in [
             (4, "quadrant-observed", false, Some(1)),
             (5, "quadrant-released", true, None),
-            (6, "quadrant-released-deck", true, Some(2)),
+            (6, "quadrant-other-owner", false, Some(2)),
         ] {
             send_frame(&mut client, state_sync(sequence, event_id, released, deck));
             assert_eq!(read_value(&mut client)["outcome"], "accepted");
@@ -9056,7 +9158,6 @@ mod tests {
                 "payload": {
                     "deck": 1,
                     "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 3,
                     "playSessionId": "play-loop",
                     "loop": {
                         "active": true,
@@ -9960,7 +10061,8 @@ mod tests {
                     "eventId": "sync-snapshot-order",
                     "payload": {
                         "released": false,
-                        "masterDeck": 1,
+                        "ownerDeck": 1,
+                        "ownerDeckId": "rekordbox-deck-1",
                         "activePlaySessionId": "play-1",
                     },
                 })
@@ -10446,12 +10548,12 @@ mod tests {
         let active_frame = |session: &str, sequence: u64| {
             json!({
                 "v": 3,
-                "type": "DJ_MASTER_TRACK_ACTIVE",
+                "type": "DJ_TRACK_ACTIVE",
                 "agentId": DJ_V3_AGENT,
                 "sessionId": session,
                 "sequence": sequence,
                 "eventId": "event-active",
-                "payload": dj_v3_track_active_payload("play-1"),
+                "payload": dj_v3_generic_track_active_payload("play-1"),
             })
         };
 
@@ -10607,12 +10709,12 @@ mod tests {
 
         let active = json!({
             "v": 3,
-            "type": "DJ_MASTER_TRACK_ACTIVE",
+            "type": "DJ_TRACK_ACTIVE",
             "agentId": DJ_V3_AGENT,
             "sessionId": "old-session",
             "sequence": 4,
             "eventId": "event-active",
-            "payload": dj_v3_track_active_payload("play-1"),
+            "payload": dj_v3_generic_track_active_payload("play-1"),
         });
         old_client.send(Message::Text(active.to_string())).unwrap();
         let (entered_lock, entered_ready) = &*entered;
@@ -10724,7 +10826,7 @@ mod tests {
                 // The snapshot gate's STATE_SYNC/STATE_REQUEST traffic shares
                 // this handler and must complete normally; only the physical
                 // command under test may trip the one-shot panic.
-                if envelope.message_type != DjLinkMessageType::MasterTrackActive {
+                if envelope.message_type != DjLinkMessageType::TrackActive {
                     return inner(envelope);
                 }
                 dispatches.fetch_add(1, Ordering::SeqCst);
@@ -10768,12 +10870,12 @@ mod tests {
         complete_dj_v3_snapshot_gate(&mut client, port, "session-panic", &server);
         let active = json!({
             "v": 3,
-            "type": "DJ_MASTER_TRACK_ACTIVE",
+            "type": "DJ_TRACK_ACTIVE",
             "agentId": DJ_V3_AGENT,
             "sessionId": "session-panic",
             "sequence": 4,
             "eventId": "event-panic",
-            "payload": dj_v3_track_active_payload("play-panic"),
+            "payload": dj_v3_generic_track_active_payload("play-panic"),
         });
         client.send(Message::Text(active.to_string())).unwrap();
         let failed = read_ack(&mut client);
@@ -12045,7 +12147,7 @@ mod tests {
             let dispatched = Arc::clone(&dispatched);
             let inner = dj_v3_state_responder(5);
             Arc::new(move |envelope| {
-                if envelope.message_type == DjLinkMessageType::MasterTrackActive {
+                if envelope.message_type == DjLinkMessageType::TrackActive {
                     dispatched.fetch_add(1, Ordering::SeqCst);
                 }
                 inner(envelope)
@@ -12128,12 +12230,12 @@ mod tests {
         thread::sleep(Duration::from_millis(1100));
         let command = json!({
             "v": 3,
-            "type": "DJ_MASTER_TRACK_ACTIVE",
+            "type": "DJ_TRACK_ACTIVE",
             "agentId": DJ_V3_AGENT,
             "sessionId": "session-flood",
             "sequence": total + 4,
             "eventId": "flood-command",
-            "payload": dj_v3_track_active_payload("play-flood"),
+            "payload": dj_v3_generic_track_active_payload("play-flood"),
         });
         client.send(Message::Text(command.to_string())).unwrap();
         assert_eq!(read_ack(&mut client).outcome, DjLinkAckOutcome::Accepted);

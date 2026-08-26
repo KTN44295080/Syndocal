@@ -294,8 +294,31 @@ export interface RemoteControlConfig {
   max_connections: number;
   max_message_bytes: number;
   max_messages_per_second: number;
+  web_remote_enabled: boolean;
   dj_link_enabled: boolean;
   dj_link_bind_ip: string | null;
+}
+
+/** App-local, non-secret DJ Link authority state. The token is never in this DTO. */
+export interface DjLinkMachineStatus {
+  configured: boolean;
+  credentialReady: boolean;
+  autoStartArmed: boolean;
+  bindIp: string | null;
+  bindPort: number | null;
+  networkGuid: string | null;
+  adapterGuid: string | null;
+  credentialGeneration: number | null;
+  credentialCleanupPending: boolean;
+  blockReason: string | null;
+}
+
+/** Exact wired candidate tuple; all fields are required for a bind. */
+export interface DjLinkWiredCandidate {
+  networkGuid: string;
+  adapterGuid: string;
+  bindIp: string;
+  adapterAlias: string | null;
 }
 
 export interface RemoteClientSummary {
@@ -308,6 +331,8 @@ export interface RemoteClientSummary {
 
 export interface RemoteControlStatus {
   running: boolean;
+  web_remote_enabled: boolean;
+  dj_link_enabled: boolean;
   active_connections: number;
   rejected_connections: number;
   clients: RemoteClientSummary[];

@@ -5,7 +5,7 @@
 //! - Trust identity is EXACTLY the persisted `(network_guid, adapter_guid)`
 //!   pair compared against the live NLM observation. Network class, name,
 //!   category, domain type, connectivity state, registry profiles, IP/subnet/
-//!   gateway data, and [`crate::dj_link_machine::DjLinkMachineSettingsV1::
+//!   gateway data, and [`crate::dj_link_machine::DjLinkMachineSettingsV2::
 //!   bind_ip`] are NEVER consulted by the decision.
 //! - Auto-start Allow requires TWO stable observation passes, separated by a
 //!   validated nonzero settle dwell of real elapsed sleep, that are identical
@@ -184,10 +184,6 @@ impl DjLinkNetworkObservations {
 
     pub fn entries(&self) -> &[DjLinkObservedNetwork] {
         &self.entries
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 }
 
@@ -494,14 +490,6 @@ impl DjLinkRawIpv4Address {
             dad_preferred,
         }
     }
-
-    pub fn address(&self) -> Ipv4Addr {
-        self.address
-    }
-
-    pub fn dad_preferred(&self) -> bool {
-        self.dad_preferred
-    }
 }
 
 /// Cross-source identity observations for one GAA adapter row, before any
@@ -606,16 +594,6 @@ impl DjLinkRawAdapterSnapshot {
 
     pub fn adapter_guid(&self) -> &str {
         &self.identity.adapter_guid
-    }
-
-    /// Display-only alias text; never consulted by any decision.
-    pub fn adapter_alias(&self) -> Option<&str> {
-        self.diagnostics.adapter_alias.as_deref()
-    }
-
-    /// Ignored diagnostic: the GAA NetworkGuid is NOT NLM network identity.
-    pub fn ignored_gaa_network_guid(&self) -> Option<&str> {
-        self.diagnostics.gaa_network_guid.as_deref()
     }
 }
 
@@ -738,6 +716,7 @@ impl DjLinkIpv4Candidate {
     }
 
     /// Current diagnostic only; never persisted trust authority.
+    #[cfg(test)]
     pub fn interface_index(&self) -> u32 {
         self.interface_index
     }
@@ -760,18 +739,12 @@ pub struct DjLinkIpv4BlockedRow {
 }
 
 impl DjLinkIpv4BlockedRow {
+    #[cfg(test)]
     pub fn adapter_guid(&self) -> &str {
         &self.adapter_guid
     }
 
-    pub fn interface_index(&self) -> u32 {
-        self.interface_index
-    }
-
-    pub fn adapter_alias(&self) -> Option<&str> {
-        self.adapter_alias.as_deref()
-    }
-
+    #[cfg(test)]
     pub fn reason(&self) -> DjLinkIpv4BlockedReason {
         self.reason
     }
@@ -791,6 +764,7 @@ impl DjLinkIpv4CandidateReport {
         &self.eligible
     }
 
+    #[cfg(test)]
     pub fn blocked(&self) -> &[DjLinkIpv4BlockedRow] {
         &self.blocked
     }
@@ -2528,19 +2502,22 @@ mod tests {
     #[test]
     fn decision_never_consults_bind_ip() {
         use crate::dj_link_machine::{
-            DjLinkMachineSettingsV1, DjLinkMachineTransactionState,
+            DjLinkMachineSettingsV2, DjLinkMachineTransactionState,
             DJ_LINK_MACHINE_SETTINGS_VERSION,
         };
-        let make_settings = |bind_ip: &str| DjLinkMachineSettingsV1 {
+        let make_settings = |bind_ip: &str| DjLinkMachineSettingsV2 {
             version: DJ_LINK_MACHINE_SETTINGS_VERSION,
             revision: 3,
             transaction_state: DjLinkMachineTransactionState::Idle,
             credential_generation: Some(1),
+            credential_generation_high_water: 1,
             adapter_guid: Some(ADA_1.to_string()),
             network_guid: Some(NET_A.to_string()),
             bind_ip: Some(bind_ip.to_string()),
             bind_port: Some(49152),
             auto_start_armed: true,
+            disarm_cleanup_pending: false,
+            rollback: None,
         };
         let left = make_settings("192.168.7.9");
         let right = make_settings("10.255.255.1");

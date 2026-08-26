@@ -7968,6 +7968,11 @@ pub struct RemoteControlStatus {
     /// reports `false`: no generic Web Remote transport is available.
     #[serde(default)]
     pub web_remote_enabled: bool,
+    /// Immutable DJ Link transport mode of the owning listener. This is
+    /// separate from `dj_link` connection telemetry so a DJ-only listener is
+    /// never projected as a generic Web Remote listener in the UI.
+    #[serde(default)]
+    pub dj_link_enabled: bool,
     /// Additive process-local DJ Link truth.  The token is intentionally not
     /// represented anywhere in this status DTO.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -8078,7 +8083,7 @@ pub enum DjLinkMessageType {
     TimelineLoopSet,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkEnvelope {
     pub v: u8,
@@ -8094,13 +8099,41 @@ pub struct DjLinkEnvelope {
     pub payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// HELLO payloads contain a bearer credential. Keep every envelope payload
+/// out of diagnostics so formatting an ingress error can never disclose it.
+impl std::fmt::Debug for DjLinkEnvelope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DjLinkEnvelope")
+            .field("v", &self.v)
+            .field("message_type", &self.message_type)
+            .field("agent_id", &self.agent_id)
+            .field("session_id", &self.session_id)
+            .field("sequence", &self.sequence)
+            .field("event_id", &self.event_id)
+            .field("payload", &"REDACTED")
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkHelloPayload {
     #[serde(rename = "authToken")]
     pub auth_token: String,
     pub version: u8,
     pub capabilities: Vec<String>,
+}
+
+impl std::fmt::Debug for DjLinkHelloPayload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DjLinkHelloPayload")
+            .field("auth_token", &"REDACTED")
+            .field("version", &self.version)
+            .field("capabilities", &self.capabilities)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -17763,6 +17796,41 @@ mod tests {
         missing.as_object_mut().unwrap().remove("eventId").unwrap();
         assert!(super::DjLinkEnvelope::parse_json(&missing.to_string()).is_err());
     }
+
+    #[test]
+    fn dj_link_hello_debug_is_redacted_in_normal_and_pretty_output() {
+        let sentinel = "dj-link-auth-token-must-never-reach-debug";
+        let hello = super::DjLinkHelloPayload {
+            auth_token: sentinel.to_string(),
+            version: super::DJ_LINK_PROTOCOL_VERSION,
+            capabilities: vec!["track-active".to_string()],
+        };
+        let envelope = super::DjLinkEnvelope {
+            v: super::DJ_LINK_PROTOCOL_VERSION,
+            message_type: super::DjLinkMessageType::Hello,
+            agent_id: super::DJ_LINK_AGENT_ID.to_string(),
+            session_id: "session-1".to_string(),
+            sequence: 1,
+            event_id: "hello-1".to_string(),
+            payload: serde_json::json!({"authToken": sentinel}),
+        };
+        for rendered in [
+            format!("{hello:?}"),
+            format!("{hello:#?}"),
+            format!("{envelope:?}"),
+            format!("{envelope:#?}"),
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "Debug leaked credential: {rendered}"
+            );
+            assert!(
+                rendered.contains("REDACTED"),
+                "Debug did not mark redaction: {rendered}"
+            );
+        }
+    }
+
     #[test]
     fn dj_link_peer_wire_fixtures_are_strict_and_distinct() {
         fn envelope_text(message_type: &str, payload: &serde_json::Value) -> String {

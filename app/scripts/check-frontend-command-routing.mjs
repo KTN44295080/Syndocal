@@ -7,6 +7,10 @@ import ts from "typescript";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(appRoot, "src");
 const appPath = path.join(srcRoot, "App.tsx");
+// Authority-bearing project invokes intentionally live in the App facade and
+// the focused DVC controller. Audit both AST sources; scanning App alone
+// would silently omit the controller-owned import route.
+const dvcImportControllerPath = path.join(srcRoot, "dvcImportController.ts");
 const detachedVideoPath = path.join(srcRoot, "components", "VideoOutputWindow.tsx");
 const controlPlanePath = path.join(appRoot, "src-tauri", "src", "control_plane.rs");
 const manifest = JSON.parse(fs.readFileSync(path.join(srcRoot, "tauri-invoke-manifest.json"), "utf8"));
@@ -27,6 +31,10 @@ const sourceFiles = program.getSourceFiles().filter((sourceFile) => {
 });
 const appSource = sourceFiles.find((sourceFile) => path.resolve(sourceFile.fileName) === appPath);
 assert(appSource, "App.tsx must be part of the frontend TypeScript program");
+const dvcImportControllerSource = sourceFiles.find(
+  (sourceFile) => path.resolve(sourceFile.fileName) === dvcImportControllerPath,
+);
+assert(dvcImportControllerSource, "dvcImportController.ts must be part of the frontend TypeScript program");
 const appText = appSource.getFullText();
 
 const functionSlice = (source, marker, nextMarker) => {
@@ -42,45 +50,54 @@ const remoteAccessRefreshBody = functionSlice(
   "const refreshRemoteAccessUrls = async",
   "const copyRemoteUrl = async",
 );
-const djInterfaceRefreshBody = functionSlice(
+const djMachineRefreshBody = functionSlice(
   appText,
-  "const refreshDjLinkLanInterfaces = async",
-  "let djLinkTokenClearTimer",
+  "const refreshDjLinkMachineStatus = async",
+  "const refreshDjLinkWiredCandidates = async",
 );
-for (const [label, body, generation, setter] of [
-  ["remote URLs", remoteAccessRefreshBody, "remoteAccessUrlRequestGeneration", "setRemoteAccessUrls"],
-  ["DJ LAN interfaces", djInterfaceRefreshBody, "djLinkLanInterfaceRequestGeneration", "setDjLinkLanInterfaces"],
-]) {
-  assert.match(body, new RegExp(`const\\s+requestGeneration\\s*=\\s*\\+\\+${generation}`), `${label} production helper must capture its generation`);
-  const writes = [...body.matchAll(new RegExp(`${setter}\\(`, "g"))].length;
-  const guardedWrites = [...body.matchAll(new RegExp(`requestGeneration\\s*===\\s*${generation}[^\\n]*${setter}\\(`, "g"))].length
-    + [...body.matchAll(new RegExp(`requestGeneration\\s*===\\s*${generation}\\)\\s*\\{[\\s\\S]*?${setter}\\(`, "g"))].length;
-  assert(writes >= 2, `${label} production helper must own success/failure writes`);
-  assert(guardedWrites >= writes, `${label} production helper has an unguarded setter write`);
-}
+const countSetterWrites = (body, setter) => [...body.matchAll(new RegExp(`${setter}\\(`, "g"))].length;
+
+assert.match(
+  remoteAccessRefreshBody,
+  /const\s+requestGeneration\s*=\s*\+\+remoteAccessUrlRequestGeneration/,
+  "remote URLs production helper must capture its generation",
+);
+assert.equal(countSetterWrites(remoteAccessRefreshBody, "setRemoteAccessUrls"), 3, "remote URL helper must have exactly its guarded unavailable/success/failure writes");
+assert.match(remoteAccessRefreshBody, /if\s*\(requestGeneration\s*===\s*remoteAccessUrlRequestGeneration\)\s*setRemoteAccessUrls\(\[\]\)/, "remote URL unavailable/failure writes must be generation fenced");
+assert.match(remoteAccessRefreshBody, /if\s*\(requestGeneration\s*===\s*remoteAccessUrlRequestGeneration\)\s*setRemoteAccessUrls\(urls\)/, "remote URL success write must be generation fenced");
+
+assert.match(
+  djMachineRefreshBody,
+  /const\s+requestGeneration\s*=\s*\+\+djLinkMachineRequestGeneration/,
+  "DJ machine status production helper must capture its generation",
+);
+assert.equal(countSetterWrites(djMachineRefreshBody, "setDjLinkMachineStatus"), 2, "DJ machine status helper must have exactly its guarded success/failure writes");
+// The accepted-success path uses an early-return fence; the rejected path has
+// an equality block. Assert both exact shapes so a future unguarded setter
+// cannot be hidden by a broad cross-line regular expression.
+assert.match(
+  djMachineRefreshBody,
+  /if\s*\(requestGeneration\s*!==\s*djLinkMachineRequestGeneration\)\s*return null;\s*setDjLinkMachineStatus\(status\)/,
+  "DJ machine status success write must follow the stale-response early return",
+);
+assert.match(
+  djMachineRefreshBody,
+  /catch\s*\{[\s\S]*?if\s*\(requestGeneration\s*===\s*djLinkMachineRequestGeneration\)\s*\{[\s\S]*?setDjLinkMachineStatus\(/,
+  "DJ machine status failure write must remain inside its current-generation block",
+);
 
 assert.equal(
-  [...appText.matchAll(/void\s+refreshDjLinkLanInterfaces\s*\(\s*\)/g)].length,
+  [...appText.matchAll(/createEffect\(\(\) => \{\s*\/\/ The authority and candidate list live outside project persistence\.[\s\S]*?void refreshDjLinkMachineStatusAndCandidates\(\);\s*\}\);/g)].length,
   1,
-  "DJ Link enable must have exactly one automatic LAN-interface refresh",
-);
-const djLinkEnabledHandler = appText.match(
-  /onDjLinkEnabled=\{\(value\)\s*=>\s*\{([\s\S]*?)\n\s*\}\}/,
-);
-assert(djLinkEnabledHandler, "DJ Link enabled handler was not found");
-assert.doesNotMatch(
-  djLinkEnabledHandler[1],
-  /refreshDjLinkLanInterfaces/,
-  "DJ Link enabled handler must leave automatic refresh to the reactive effect",
+  "DJ Link must have exactly one mount-effect machine-status-and-candidates refresh",
 );
 assert.match(
   appText,
-  /djLinkLanInterfaceRequestGeneration\s*\+=\s*1;\s*setDjLinkLanInterfaces\(\[\]\)/,
-  "disabling DJ Link must retire in-flight interface refresh write authority",
+  /const refreshDjLinkWiredCandidates = async/,
+  "DJ Link must discover complete wired candidate tuples",
 );
 for (const [generation, minimumGuards] of [
   ["remoteAccessUrlRequestGeneration", 3],
-  ["djLinkLanInterfaceRequestGeneration", 3],
 ]) {
   assert.match(appText, new RegExp(`let\\s+${generation}\\s*=\\s*0`), `${generation} must be initialized`);
   const guards = [...appText.matchAll(new RegExp(`requestGeneration\\s*===\\s*${generation}`, "g"))];
@@ -305,12 +322,14 @@ const backendRendererMutations = rustClassification(
   "is_renderer_ticketed_project_mutation",
   "#[derive(Debug, Clone, PartialEq, Eq)]",
 );
-// The two correlated pane-window lifecycle routes intentionally advance the
-// used-by-frontend manifest from 417 to 419. The renderer-ticketed project
-// mutation inventory remains unchanged at 133.
-assert.equal(manifest.length, 419, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 133, "backend renderer-ticketed classification count drifted");
-assert.equal(backendServerMutations.length, 29, "backend authoritative classification count drifted");
+// The two correlated pane-window lifecycle routes and four DJ Link machine
+// authority routes intentionally advance the used-by-frontend manifest from
+// 417 to 422 after the retired address-only LAN picker route was removed. The existing project-mutation classifications remain the
+// control-plane's exact 130 renderer-ticketed and 31 backend-authoritative
+// routes; the machine-local DJ authority routes are neither category.
+assert.equal(manifest.length, 422, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 130, "backend renderer-ticketed classification count drifted");
+assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),
   [...backendRendererMutations].sort(),
@@ -348,7 +367,6 @@ assert.doesNotMatch(
 );
 const legacySingleCueCommands = [
   "update_cue_from_current",
-  "set_cue_list",
   "set_cue_metadata",
   "move_cue",
 ];
@@ -359,6 +377,9 @@ for (const command of legacySingleCueCommands) {
     new RegExp(`tauriInvoke(?:\\s*<[^>]+>)?\\s*\\(\\s*["']${command}["']`),
     `${command} must not use a raw literal renderer dispatch`,
   );
+}
+for (const retiredCommand of ["set_cue_list", "remove_cue_list"]) {
+  assert(!manifestSet.has(retiredCommand), `${retiredCommand} must remain absent after the Bank clean break`);
 }
 
 const atomicBatchCommands = [
@@ -523,7 +544,7 @@ const auditAuthorityCalls = (node) => {
   }
   ts.forEachChild(node, auditAuthorityCalls);
 };
-auditAuthorityCalls(appSource);
+for (const source of [appSource, dvcImportControllerSource]) auditAuthorityCalls(source);
 for (const command of requiredAuthorityFields.keys()) {
   assert(seenAuthorityCommands.has(command), `${command} authority-fenced frontend callsite was not found`);
 }

@@ -2300,6 +2300,7 @@ dependencies = [
  "serialport",
  "thiserror 1.0.69",
  "tungstenite",
+ "zeroize",
 ]
 
 [[package]]

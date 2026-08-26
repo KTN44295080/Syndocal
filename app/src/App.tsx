@@ -338,7 +338,9 @@ import type {
   DmxOutputConfig,
   DvcImportReport,
   DmxControlMapping,
+  DjLinkMachineStatus,
   DjLinkRuntimeStatus,
+  DjLinkWiredCandidate,
   DjTrackTriggerMapping,
   DaslightCustomCurveSource,
   DaslightCurveSource,
@@ -2994,13 +2996,36 @@ export default function App() {
   const [remoteMaxMessagesPerSecond, setRemoteMaxMessagesPerSecond] = createSignal(60);
   const [djLinkEnabled, setDjLinkEnabled] = createSignal(false);
   const [djLinkBindIp, setDjLinkBindIp] = createSignal<string | null>(null);
-  const [djLinkLanInterfaces, setDjLinkLanInterfaces] = createSignal<string[]>([]);
+  const [djLinkWiredCandidates, setDjLinkWiredCandidates] = createSignal<DjLinkWiredCandidate[]>([]);
+  const [djLinkSelectedBinding, setDjLinkSelectedBinding] = createSignal<string>("");
+  const [djLinkMachineStatus, setDjLinkMachineStatus] = createSignal<DjLinkMachineStatus>({
+    configured: false,
+    credentialReady: false,
+    autoStartArmed: false,
+    bindIp: null,
+    bindPort: null,
+    networkGuid: null,
+    adapterGuid: null,
+    credentialGeneration: null,
+    credentialCleanupPending: false,
+    blockReason: "machine_status_unavailable",
+  });
   const [djLinkToken, setDjLinkToken] = createSignal<string | null>(null);
   const [djLinkTokenCopied, setDjLinkTokenCopied] = createSignal(false);
   const [remoteRunning, setRemoteRunning] = createSignal(false);
   const [remoteAccessUrls, setRemoteAccessUrls] = createSignal<string[]>([]);
   const [remoteStatus, setRemoteStatus] = createSignal<RemoteControlStatus>(
     unavailableRemoteControlStatus(),
+  );
+  // Do not infer an absent listener from the initial false value. Until an
+  // authoritative status poll succeeds, starting Web Remote could replace a
+  // restored DJ-only listener that the renderer has not observed yet.
+  const [remoteStatusHydrated, setRemoteStatusHydrated] = createSignal(!isTauriRuntime());
+  const genericRemoteRunning = createMemo(
+    () => remoteRunning() && remoteStatus().web_remote_enabled,
+  );
+  const djListenerRunning = createMemo(
+    () => remoteRunning() && remoteStatus().dj_link_enabled,
   );
   const [cueLabel, setCueLabel] = createSignal("Cue 1");
   const [cueFadeMs, setCueFadeMs] = createSignal(1000);
@@ -10021,6 +10046,7 @@ export default function App() {
     max_connections: remoteMaxConnections(),
     max_message_bytes: remoteMaxMessageBytes(),
     max_messages_per_second: remoteMaxMessagesPerSecond(),
+    web_remote_enabled: true,
     dj_link_enabled: djLinkEnabled(),
     dj_link_bind_ip: djLinkBindIp(),
   }));
@@ -18570,42 +18596,97 @@ export default function App() {
       if (pollGeneration !== remoteStatusPollGeneration) return status;
       const projected = projectRemoteControlStatusPoll(status);
       setRemoteStatus(projected.status);
-      setRemoteRunning(projected.running);
+      setRemoteRunning(projected.listenerRunning);
+      setRemoteStatusHydrated(true);
       return status;
     } catch {
       if (pollGeneration !== remoteStatusPollGeneration) return null;
       const projected = projectRemoteControlStatusPoll(null);
       setRemoteStatus(projected.status);
-      setRemoteRunning(projected.running);
+      setRemoteRunning(projected.listenerRunning);
+      setRemoteStatusHydrated(false);
       return projected.status;
     }
   };
 
-  let djLinkLanInterfaceRequestGeneration = 0;
-  const refreshDjLinkLanInterfaces = async () => {
-    const requestGeneration = ++djLinkLanInterfaceRequestGeneration;
+  const djLinkBindingKey = (candidate: DjLinkWiredCandidate) =>
+    `${candidate.networkGuid}\u001f${candidate.adapterGuid}\u001f${candidate.bindIp}`;
+  const selectedDjLinkCandidate = createMemo(() =>
+    djLinkWiredCandidates().find((candidate) => djLinkBindingKey(candidate) === djLinkSelectedBinding()) ?? null,
+  );
+  let djLinkMachineRequestGeneration = 0;
+  let djLinkCandidateRequestGeneration = 0;
+  let djLinkTokenOperationGeneration = 0;
+  const [djLinkTokenOperationBusy, setDjLinkTokenOperationBusy] = createSignal(false);
+  const refreshDjLinkMachineStatus = async () => {
+    const requestGeneration = ++djLinkMachineRequestGeneration;
+    if (!isTauriRuntime()) return djLinkMachineStatus();
+    try {
+      const status = await invoke<DjLinkMachineStatus>("get_dj_link_machine_status");
+      if (requestGeneration !== djLinkMachineRequestGeneration) return null;
+      setDjLinkMachineStatus(status);
+      // These two signals are projections of the durable machine authority.
+      // Keep generic Web Remote editing separate: a late machine reply must
+      // never reset the operator's HTTP bind IP, port, or LAN checkbox.
+      setDjLinkEnabled(status.autoStartArmed);
+      setDjLinkBindIp(status.bindIp);
+      return status;
+    } catch {
+      if (requestGeneration === djLinkMachineRequestGeneration) {
+        // A rejected machine-authority read invalidates every derived display
+        // field. Do not leave an old endpoint or armed state actionable.
+        setDjLinkMachineStatus({
+          configured: false,
+          credentialReady: false,
+          autoStartArmed: false,
+          bindIp: null,
+          bindPort: null,
+          networkGuid: null,
+          adapterGuid: null,
+          credentialGeneration: null,
+          credentialCleanupPending: false,
+          blockReason: "machine_status_unavailable",
+        });
+        setDjLinkEnabled(false);
+        setDjLinkBindIp(null);
+        djLinkCandidateRequestGeneration += 1;
+        setDjLinkWiredCandidates([]);
+        setDjLinkSelectedBinding("");
+      }
+      return null;
+    }
+  };
+  const refreshDjLinkWiredCandidates = async () => {
+    const requestGeneration = ++djLinkCandidateRequestGeneration;
     if (!isTauriRuntime()) {
-      if (requestGeneration === djLinkLanInterfaceRequestGeneration) setDjLinkLanInterfaces([]);
+      if (requestGeneration === djLinkCandidateRequestGeneration) {
+        setDjLinkWiredCandidates([]);
+        setDjLinkSelectedBinding("");
+      }
       return [];
     }
     try {
-      const interfaces = await invoke<string[]>("list_show_lan_interfaces");
-      const next = [...new Set(interfaces
-        .map((address) => address.trim())
-        .filter((address) => address.length > 0
-          && address !== "0.0.0.0"
-          && address !== "::"
-          && address !== "127.0.0.1"
-          && address !== "::1"))];
-      if (requestGeneration === djLinkLanInterfaceRequestGeneration) {
-        setDjLinkLanInterfaces(next);
-        if (djLinkBindIp() !== null && !next.includes(djLinkBindIp()!)) setDjLinkBindIp(null);
-      }
-      return next;
-    } catch {
-      if (requestGeneration === djLinkLanInterfaceRequestGeneration) setDjLinkLanInterfaces([]);
+      const candidates = await invoke<DjLinkWiredCandidate[]>("list_dj_link_wired_candidates");
+      if (requestGeneration !== djLinkCandidateRequestGeneration) return candidates;
+      setDjLinkWiredCandidates(candidates);
+      const current = djLinkSelectedBinding();
+      const next = candidates.some((candidate) => djLinkBindingKey(candidate) === current)
+        ? current
+        : "";
+      setDjLinkSelectedBinding(next);
+      return candidates;
+    } catch (error) {
+      if (requestGeneration !== djLinkCandidateRequestGeneration) return [];
+      setDjLinkWiredCandidates([]);
+      setDjLinkSelectedBinding("");
+      setMessage(`DJ Link wired discovery failed: ${String(error)}`);
       return [];
     }
+  };
+  const refreshDjLinkMachineStatusAndCandidates = async () => {
+    const status = await refreshDjLinkMachineStatus();
+    if (!status || status.blockReason === "machine_status_unavailable") return [];
+    return refreshDjLinkWiredCandidates();
   };
 
   let djLinkTokenClearTimer: number | null = null;
@@ -18623,18 +18704,109 @@ export default function App() {
     setDjLinkToken(token);
     djLinkTokenClearTimer = window.setTimeout(clearDjLinkToken, 30_000);
   };
-  const rotateDjLinkToken = async () => {
+  const armDjLinkMachine = async () => {
+    if (djLinkTokenOperationBusy()) return;
+    if (!remoteStatusHydrated()) {
+      setMessage("Checking the shared Remote listener before arming DJ Link.");
+      void refreshRemoteControlStatus();
+      return;
+    }
     if (remoteRunning()) {
-      setMessage("Stop Web Remote before rotating the DJ Link token.");
+      setMessage("Stop the shared Remote listener before arming DJ Link.");
+      return;
+    }
+    const candidate = selectedDjLinkCandidate();
+    if (!candidate) {
+      setMessage("Choose one exact wired DJ Link binding before arming.");
+      return;
+    }
+    const operationGeneration = ++djLinkTokenOperationGeneration;
+    djLinkMachineRequestGeneration += 1;
+    setDjLinkTokenOperationBusy(true);
+    try {
+      const token = await invoke<string>("arm_dj_link_machine", {
+        request: {
+          networkGuid: candidate.networkGuid,
+          adapterGuid: candidate.adapterGuid,
+          bindIp: candidate.bindIp,
+          bindPort: remotePort(),
+        },
+      });
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
+      setDjLinkEnabled(true);
+      setDjLinkBindIp(candidate.bindIp);
+      setRemoteAllowLan(true);
+      setRemoteBindIp(candidate.bindIp);
+      showDjLinkTokenTemporarily(token);
+      await refreshDjLinkMachineStatusAndCandidates();
+      setMessage("DJ Link armed. Copy the generated token now; it will not be shown again.");
+    } catch (error) {
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
+      await refreshDjLinkMachineStatusAndCandidates();
+      setMessage(`DJ Link arm failed: ${String(error)}`);
+    } finally {
+      if (operationGeneration === djLinkTokenOperationGeneration) setDjLinkTokenOperationBusy(false);
+    }
+  };
+  const disarmDjLinkMachine = async () => {
+    if (djLinkTokenOperationBusy()) return;
+    if (!window.confirm("Disarm DJ Link? The machine credential will be removed and automatic start disabled.")) return;
+    const operationGeneration = ++djLinkTokenOperationGeneration;
+    djLinkMachineRequestGeneration += 1;
+    setDjLinkTokenOperationBusy(true);
+    try {
+      // The server owns a process-local copy of the token. Stop its shared
+      // listener first, including the DJ-only mode, before revoking CredMan.
+      if (remoteRunning()) {
+        await stopRemoteControl();
+        await refreshRemoteControlStatus();
+        if (remoteRunning()) {
+          setMessage("The shared Remote listener is still active; DJ Link was not disarmed.");
+          return;
+        }
+      }
+      await invoke("disarm_dj_link_machine");
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
+      clearDjLinkToken();
+      setDjLinkEnabled(false);
+      setDjLinkBindIp(null);
+      await refreshDjLinkMachineStatusAndCandidates();
+      setMessage("DJ Link disarmed and machine credential removed.");
+    } catch (error) {
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
+      await refreshDjLinkMachineStatusAndCandidates();
+      setMessage(`DJ Link disarm failed: ${String(error)}`);
+    } finally {
+      if (operationGeneration === djLinkTokenOperationGeneration) setDjLinkTokenOperationBusy(false);
+    }
+  };
+  const rotateDjLinkToken = async () => {
+    if (djLinkTokenOperationBusy()) return;
+    if (!remoteStatusHydrated()) {
+      setMessage("Checking the shared Remote listener before rotating the DJ Link token.");
+      void refreshRemoteControlStatus();
+      return;
+    }
+    if (remoteRunning()) {
+      setMessage("Stop the shared Remote listener before rotating the DJ Link token.");
       return;
     }
     if (!window.confirm("Rotate the DJ Link token? The current token will be invalidated and shown once.")) return;
+    const operationGeneration = ++djLinkTokenOperationGeneration;
+    djLinkMachineRequestGeneration += 1;
+    setDjLinkTokenOperationBusy(true);
     try {
       const token = await invoke<string>("rotate_dj_link_token");
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
       showDjLinkTokenTemporarily(token);
-      setMessage("DJ Link token generated. Copy it now; it will not be shown again.");
+      setMessage("DJ Link token rotated. Copy the replacement now; it will not be shown again.");
+      await refreshDjLinkMachineStatusAndCandidates();
     } catch (error) {
+      if (operationGeneration !== djLinkTokenOperationGeneration) return;
+      await refreshDjLinkMachineStatusAndCandidates();
       setMessage(`DJ Link token rotation failed: ${String(error)}`);
+    } finally {
+      if (operationGeneration === djLinkTokenOperationGeneration) setDjLinkTokenOperationBusy(false);
     }
   };
   const copyDjLinkToken = async () => {
@@ -18692,6 +18864,15 @@ export default function App() {
   const openRemoteUrl = async (url: string) => {
     let targetUrl = url;
     try {
+      if (!remoteStatusHydrated()) {
+        setMessage("Checking the shared Remote listener before opening Web Remote.");
+        void refreshRemoteControlStatus();
+        return;
+      }
+      if (remoteRunning() && !genericRemoteRunning()) {
+        setMessage("DJ Link is using the shared listener. Stop it before opening Web Remote.");
+        return;
+      }
       if (!remoteRunning() && isTauriRuntime()) {
         const urls = await startRemoteServer();
         targetUrl = urls.includes(url) ? url : urls[0] ?? url;
@@ -18712,26 +18893,37 @@ export default function App() {
     void refreshRemoteAccessUrls(config);
   });
   createEffect(() => {
-    if (djLinkEnabled()) {
-      void refreshDjLinkLanInterfaces();
-    } else {
-      // Disabling DJ Link is a newer state than any in-flight enumeration.
-      // Retire its write authority even though no replacement IPC is needed.
-      djLinkLanInterfaceRequestGeneration += 1;
-      setDjLinkLanInterfaces([]);
-    }
+    // The authority and candidate list live outside project persistence. A
+    // restored credential is never projected into the show-once token state.
+    void refreshDjLinkMachineStatusAndCandidates();
+  });
+  createEffect(() => {
+    // A DJ-only auto-start has no generic Web Remote transition to trigger a
+    // poll. Read the shared listener once on mount so mode truth is available
+    // before the recurring status timer observes `remoteRunning`.
+    if (isTauriRuntime()) void refreshRemoteControlStatus();
   });
 
   const startRemoteControl = async () => {
     try {
+      if (!remoteStatusHydrated()) {
+        setMessage("Checking the shared Remote listener before starting Web Remote.");
+        void refreshRemoteControlStatus();
+        return;
+      }
+      if (remoteRunning() && !genericRemoteRunning()) {
+        setMessage("DJ Link is using the shared listener. Stop it before starting Web Remote.");
+        return;
+      }
       if (!/^\d{6}$/.test(remotePairingPin())) {
         setMessage("Remote pairing PIN must contain exactly 6 digits.");
         return;
       }
       if (djLinkEnabled()) {
         const bind = djLinkBindIp();
-        if (!bind || bind === "0.0.0.0" || bind === "::" || bind === "127.0.0.1" || bind === "::1" || remoteBindIp() !== bind) {
-          setMessage("DJ Link requires one explicit non-loopback Show-LAN IP used as the Web Remote bind IP.");
+        const port = djLinkMachineStatus().bindPort;
+        if (!bind || bind === "0.0.0.0" || bind === "::" || bind === "127.0.0.1" || bind === "::1" || remoteBindIp() !== bind || !port || remotePort() !== port) {
+          setMessage("DJ Link requires the exact persisted Show-LAN bind IP and port before starting Web Remote.");
           return;
         }
       }
@@ -18751,6 +18943,7 @@ export default function App() {
       setRemoteRunning(false);
       clearDjLinkToken();
       setRemoteStatus(unavailableRemoteControlStatus());
+      setRemoteStatusHydrated(true);
       void refreshRemoteAccessUrls();
       setMessage("Remote WebSocket stopped.");
     } catch (error) {
@@ -18758,16 +18951,29 @@ export default function App() {
     }
   };
 
-  const remoteStatusTimer = isTauriRuntime()
+  const remoteStatusTimer = typeof window !== "undefined"
     ? window.setInterval(() => {
-        if (remoteRunning()) {
-          void refreshRemoteControlStatus();
-        }
+        if (!isTauriRuntime()) return;
+        // Failed initial polls retry while the UI still reads `running=false`.
+        // This is the only way to discover a DJ-only auto-start after a
+        // transient IPC failure without enabling a blind Start button.
+        void refreshRemoteControlStatus();
       }, 1_000)
+    : null;
+  const djLinkMachineStatusRetryTimer = typeof window !== "undefined"
+    ? window.setInterval(() => {
+      if (!isTauriRuntime()) return;
+      if (djLinkMachineStatus().blockReason === "machine_status_unavailable") {
+        void refreshDjLinkMachineStatusAndCandidates();
+      }
+    }, 1_000)
     : null;
   onCleanup(() => {
     if (remoteStatusTimer !== null) {
       window.clearInterval(remoteStatusTimer);
+    }
+    if (djLinkMachineStatusRetryTimer !== null) {
+      window.clearInterval(djLinkMachineStatusRetryTimer);
     }
     clearDjLinkToken();
   });
@@ -25332,7 +25538,7 @@ export default function App() {
               }}
             >
               <span>{pad.slot}</span>
-              <strong>{pad.cue?.label ?? "Empty"}</strong>
+              <strong>{pad.cue ? <span data-no-localize>{pad.cue.label}</span> : "Empty"}</strong>
               <small>{pad.cue ? `#${pad.index + 1} / ${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
             </button>
           )}
@@ -26529,7 +26735,7 @@ export default function App() {
                       }}
                     >
                       <span>{pad.slot}</span>
-                      <strong>{pad.cue?.label ?? "Empty"}</strong>
+                      <strong>{pad.cue ? <span data-no-localize>{pad.cue.label}</span> : "Empty"}</strong>
                       <small>{pad.cue ? `#${pad.index + 1} / ${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
                     </button>
                   )}
@@ -28638,13 +28844,18 @@ export default function App() {
             maxMessageBytes={remoteMaxMessageBytes()}
             maxMessagesPerSecond={remoteMaxMessagesPerSecond()}
             djLinkEnabled={djLinkEnabled()}
-            djLinkBindIp={djLinkBindIp()}
-            djLinkLanInterfaces={djLinkLanInterfaces()}
+            djLinkMachineStatus={djLinkMachineStatus()}
+            djLinkWiredCandidates={djLinkWiredCandidates()}
+            djLinkSelectedBinding={djLinkSelectedBinding()}
             djLinkToken={djLinkToken()}
             djLinkTokenCopied={djLinkTokenCopied()}
             djTrackTriggers={djTrackTriggers()}
             timelineOptions={djTimelineOptions()}
-            running={remoteRunning()}
+            listenerRunning={remoteRunning()}
+            listenerStatusHydrated={remoteStatusHydrated()}
+            genericRunning={genericRemoteRunning()}
+            djListenerRunning={djListenerRunning()}
+            djLinkTokenOperationBusy={djLinkTokenOperationBusy()}
             remoteUrls={remoteUrls()}
             status={remoteStatus()}
             onBindIp={setRemoteBindIp}
@@ -28652,9 +28863,12 @@ export default function App() {
             onPairingPin={setRemotePairingPin}
             onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
             onAllowLan={(value) => {
+              if (!value && djLinkEnabled()) {
+                setMessage("Disarm DJ Link before disabling trusted LAN access.");
+                return;
+              }
               setRemoteAllowLan(value);
               if (!value) {
-                setDjLinkEnabled(false);
                 setDjLinkBindIp(null);
                 setRemoteBindIp("127.0.0.1");
               } else {
@@ -28664,18 +28878,10 @@ export default function App() {
             onMaxConnections={setRemoteMaxConnections}
             onMaxMessageBytes={setRemoteMaxMessageBytes}
             onMaxMessagesPerSecond={setRemoteMaxMessagesPerSecond}
-            onDjLinkEnabled={(value) => {
-              setDjLinkEnabled(value);
-              if (!value) setDjLinkBindIp(null);
-            }}
-            onDjLinkBindIp={(value) => {
-              setDjLinkBindIp(value);
-              if (value) {
-                setRemoteAllowLan(true);
-                setRemoteBindIp(value);
-              }
-            }}
-            onRefreshDjLinkLanInterfaces={refreshDjLinkLanInterfaces}
+            onDjLinkSelectedBinding={setDjLinkSelectedBinding}
+            onRefreshDjLinkWiredCandidates={refreshDjLinkWiredCandidates}
+            onArmDjLinkMachine={armDjLinkMachine}
+            onDisarmDjLinkMachine={disarmDjLinkMachine}
             onRotateDjLinkToken={rotateDjLinkToken}
             onCopyDjLinkToken={copyDjLinkToken}
             onDjTrackTriggers={setDjTrackTriggersFromPanel}

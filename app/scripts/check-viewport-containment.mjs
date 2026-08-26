@@ -4356,9 +4356,9 @@ async function runStageSettingsViewport(client, viewport) {
   };
 }
 
-async function installSetupIoInvokeMock(client) {
-  return await evaluatePageFunction(client, () => {
+function installSetupIoInvokeMockInPage() {
     const clone = (value) => value === undefined ? undefined : structuredClone(value);
+    const capture = window.__syndocalSetupIoCapture ?? {};
     const standbyStatus = {
       running: false,
       role: null,
@@ -4383,11 +4383,31 @@ async function installSetupIoInvokeMock(client) {
       video_reason: "OwnedByMachineRole",
     };
     const remoteStatus = {
-      running: true,
+      running: false,
       active_connections: 0,
       rejected_connections: 0,
       clients: [],
+      web_remote_enabled: false,
+      dj_link_enabled: false,
     };
+    const djLinkMachineStatus = {
+      configured: true,
+      credentialReady: true,
+      autoStartArmed: true,
+      bindIp: "192.0.2.10",
+      bindPort: 9100,
+      adapterGuid: "11111111-1111-1111-1111-111111111111",
+      networkGuid: "22222222-2222-2222-2222-222222222222",
+      credentialGeneration: 7,
+      credentialCleanupPending: false,
+      blockReason: null,
+    };
+    const djLinkWiredCandidates = [{
+      adapterGuid: "11111111-1111-1111-1111-111111111111",
+      networkGuid: "22222222-2222-2222-2222-222222222222",
+      bindIp: "192.0.2.10",
+      adapterAlias: "DJ Link wired fixture",
+    }];
     const mock = { calls: [], transactionId: 0 };
     window.__syndocalSetupIoMock = mock;
     window.__TAURI_INTERNALS__ = {
@@ -4409,6 +4429,8 @@ async function installSetupIoInvokeMock(client) {
         if (command === "get_snapshot") throw new Error("Setup I/O viewport snapshot refresh intentionally omitted");
         if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
         if (command === "remote_control_status") return remoteStatus;
+        if (command === "get_dj_link_machine_status") return djLinkMachineStatus;
+        if (command === "list_dj_link_wired_candidates") return djLinkWiredCandidates;
         if (command === "standby_sync_status") return standbyStatus;
         if (command === "get_output_ownership_status") return ownershipStatus;
         if (command === "set_output_ownership_role") return ownershipStatus;
@@ -4416,7 +4438,10 @@ async function installSetupIoInvokeMock(client) {
       },
     };
     return true;
-  });
+}
+
+async function installSetupIoInvokeMock(client) {
+  return await evaluatePageFunction(client, installSetupIoInvokeMockInPage);
 }
 
 async function readSetupIoMockCalls(client) {
@@ -4803,7 +4828,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
 
     const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
-    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-enabled"]');
+    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-wired-binding"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
     remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);
@@ -4879,7 +4904,10 @@ async function runSetupIoRemoteScrollViewport(client, viewport) {
   await clickWorkspaceOption(client, "setup");
   await installSetupIoInvokeMock(client);
   await clickByText(client, "I/O");
-  await sleep(100);
+  // The initial browser fixture intentionally has no Tauri bridge. Once the
+  // mock arrives, the production retry interval must hydrate machine truth
+  // before this contract measures actionable DJ controls.
+  await sleep(1_200);
 
   const measurements = await measure(client, `setup-io-remote-scroll-${viewport.width}x${viewport.height}`);
   const remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);

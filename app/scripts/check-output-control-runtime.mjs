@@ -481,7 +481,6 @@ assert.match(ownershipStatusBody, /async fn get_output_ownership_status\(/);
 assert.match(ownershipStatusBody, /spawn_blocking/, "output ownership disclosure status must run off the event loop");
 for (const queryName of [
   "get_engine_telemetry_report",
-  "list_show_lan_interfaces",
   "remote_control_status",
   "dmx_input_status",
   "get_snapshot_delta",

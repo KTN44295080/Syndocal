@@ -17,7 +17,7 @@ import {
 import { retainDjTimelineOptions } from "../src/djTimelineOptions.ts";
 
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
-const [app, types, panel, chrome, invokes, manifest, localization] = await Promise.all([
+const [app, types, panel, chrome, invokes, manifest, localization, main, persistenceRuntime] = await Promise.all([
   read("src/App.tsx"),
   read("src/types.ts"),
   read("src/components/RemoteControlPanel.tsx"),
@@ -25,6 +25,8 @@ const [app, types, panel, chrome, invokes, manifest, localization] = await Promi
   read("src/tauriInvokeCommands.ts"),
   read("src/tauri-invoke-manifest.json"),
   read("src/uiLocalization.ts"),
+  read("src-tauri/src/main.rs"),
+  read("src-tauri/src/dj_link_persistence_runtime.rs"),
 ]);
 
 for (const source of [app, types]) {
@@ -35,12 +37,23 @@ assert.match(types, /DjTrackSelector/);
 assert.match(panel, /DjTrackTriggerMapping/);
 assert.match(panel, /djTrackTriggers/);
 assert.match(types, /interface DjLinkRuntimeStatus/);
+assert.match(types, /interface DjLinkMachineStatus/);
+assert.match(types, /credentialCleanupPending: boolean/);
+assert.match(types, /interface DjLinkWiredCandidate/);
+assert.match(types, /web_remote_enabled: boolean/);
+assert.match(types, /dj_link_enabled: boolean/);
 assert.match(types, /contentId/);
 assert.match(types, /timelineId/);
 assert.match(types, /outcome\?: string \| null/);
 assert.match(types, /ownerDeck\?: string \| null/);
 assert.match(types, /interface RemoteControlConfig[\s\S]*dj_link_enabled/);
 assert.match(panel, /data-io-disclosure="dj-link"/);
+assert.match(panel, /data-io-control="dj-link-wired-binding"/);
+assert.match(panel, /data-io-control="dj-link-arm"/);
+assert.match(panel, /data-io-control="dj-link-disarm"/);
+assert.match(panel, /djLinkMachineBlockReasonText/);
+assert.match(panel, /credentialCleanupPending/);
+assert.doesNotMatch(panel, /DJ Link blocked:\s*\{reason\(\)\}/);
 assert.match(panel, /Use Current Track/);
 assert.match(panel, /once_per_play_session/);
 assert.match(panel, /status\.available !== false/);
@@ -51,17 +64,67 @@ for (const label of ["Available", "Enabled", "Outcome", "Peer", "Generation", "H
   assert.match(panel, new RegExp(`>${label}\\s`), `${label} diagnostic is not rendered`);
 }
 assert.doesNotMatch(panel, /MIDI|Filter CC|Stop MIDI|hotkey/i);
-assert.match(app, /list_show_lan_interfaces/);
+assert.match(app, /list_dj_link_wired_candidates/);
+assert.match(app, /get_dj_link_machine_status/);
+assert.match(app, /arm_dj_link_machine/);
+assert.match(app, /disarm_dj_link_machine/);
 assert.match(app, /rotate_dj_link_token/);
 assert.match(app, /djLinkTokenClearTimer/);
 assert.match(app, /djLinkBindIp\(\)[\s\S]*remoteBindIp\(\)/);
+assert.match(app, /const genericRemoteRunning/);
+assert.match(app, /const djListenerRunning/);
+assert.match(app, /remoteStatusHydrated/);
+assert.match(app, /setRemoteStatusHydrated\(true\)/);
+assert.match(app, /setRemoteStatusHydrated\(false\)/);
+assert.match(app, /void refreshRemoteControlStatus\(\);\s*\}, 1_000\)/);
+assert.match(app, /setDjLinkMachineStatus\(\{[\s\S]*blockReason: "machine_status_unavailable"/);
+assert.match(app, /djLinkCandidateRequestGeneration \+= 1;\s*setDjLinkWiredCandidates\(\[\]\);\s*setDjLinkSelectedBinding\(""\)/);
+assert.match(app, /const refreshDjLinkMachineStatusAndCandidates = async \(\) => \{[\s\S]*?if \(!status \|\| status\.blockReason === "machine_status_unavailable"\) return \[\];[\s\S]*?return refreshDjLinkWiredCandidates\(\);/);
+assert.match(
+  app,
+  /const djLinkMachineStatusRetryTimer = typeof window !== "undefined"\s*\? window\.setInterval\(\(\) => \{\s*if \(!isTauriRuntime\(\)\) return;\s*if \(djLinkMachineStatus\(\)\.blockReason === "machine_status_unavailable"\) \{\s*void refreshDjLinkMachineStatusAndCandidates\(\);\s*\}\s*\}, 1_000\)\s*:\s*null/,
+  "machine-status retry must be browser-safe, Tauri-only, bounded, and authority-gated",
+);
+assert.match(app, /window\.clearInterval\(djLinkMachineStatusRetryTimer\)/);
+assert.doesNotMatch(app, /refreshDjLinkMachineStatus\(\)\.then\(\(\) => void refreshDjLinkWiredCandidates\(\)\)/);
+assert.match(app, /if \(remoteRunning\(\)\) \{\s*await stopRemoteControl\(\);\s*await refreshRemoteControlStatus\(\);/);
+assert.match(app, /if \(!remoteStatusHydrated\(\)\) \{\s*setMessage\("Checking the shared Remote listener before starting Web Remote\."\)/);
+assert.match(app, /remotePort\(\) !== port/);
+assert.match(panel, /listenerStatusHydrated/);
+assert.match(panel, /hasDjLinkDisarmWork/);
+assert.match(panel, /disabled=\{props\.listenerRunning \|\| props\.djLinkMachineStatus\.autoStartArmed\}/);
+assert.match(app, /Stop the shared Remote listener before rotating the DJ Link token/);
+assert.match(app, /if \(isTauriRuntime\(\)\) void refreshRemoteControlStatus\(\)/);
+assert.equal(
+  [...app.matchAll(/createEffect\(\(\) => \{\s*\/\/ A DJ-only auto-start[\s\S]*?if \(isTauriRuntime\(\)\) void refreshRemoteControlStatus\(\);\s*\}\);/g)].length,
+  1,
+  "DJ-only startup must have exactly one mount-effect listener-status poll",
+);
+assert.doesNotMatch(app, /candidates\[0\]\s*\?\s*djLinkBindingKey/);
+assert.match(app, /let djLinkCandidateRequestGeneration = 0/);
+assert.match(app, /setDjLinkSelectedBinding\(""\)/);
 assert.doesNotMatch(app, /localStorage[^\n]*(dj|DJ)[^\n]*token/i);
+const machineStatusFailureHandler = app.match(/const refreshDjLinkMachineStatus = async \(\) => \{[\s\S]*?\n  \};\n  const refreshDjLinkWiredCandidates/);
+assert.ok(machineStatusFailureHandler, "machine status refresh handler is present");
+assert.doesNotMatch(
+  machineStatusFailureHandler[0],
+  /setDjLinkToken\(/,
+  "a failed machine status poll must not erase a fresh show-once token",
+);
+assert.match(persistenceRuntime, /Credential Manager/);
+assert.match(persistenceRuntime, /web_remote_enabled: false/);
+assert.match(persistenceRuntime, /validate_network_binding/);
+assert.match(main, /project_mapping_not_loaded/);
+assert.match(main, /mod dj_link_persistence_runtime/);
+assert.doesNotMatch(main, /list_show_lan_interfaces/);
 // Header density contract: master values remain available to non-header
 // controls/API paths, while the two persistent slider widgets are gone.
 assert.doesNotMatch(chrome, /data-topbar-master|topbarMasterCluster/);
 
 const connected = availableRemoteControlStatus({
   running: true,
+  web_remote_enabled: false,
+  dj_link_enabled: true,
   active_connections: 1,
   rejected_connections: 0,
   clients: [],
@@ -93,7 +156,9 @@ assert.equal(unavailableAfterRejectedPoll.dj_link?.available, false);
 assert.equal(unavailableAfterRejectedPoll.dj_link?.connected, false);
 assert.equal(unavailableAfterRejectedPoll.dj_link?.trackContentId, undefined);
 const rejectedPollProjection = projectRemoteControlStatusPoll(null);
-assert.equal(rejectedPollProjection.running, false);
+assert.equal(rejectedPollProjection.listenerRunning, false);
+assert.equal(rejectedPollProjection.genericRunning, false);
+assert.equal(rejectedPollProjection.djListenerRunning, false);
 assert.equal(rejectedPollProjection.status.dj_link?.available, false);
 assert.equal(rejectedPollProjection.status.dj_link?.trackTitle, undefined);
 assert.match(app, /remoteStatusPollGeneration/);
@@ -169,21 +234,36 @@ assert.ok(invokeMatch, "frontend invoke tuple is present");
 const tupleCommands = [...invokeMatch[1].matchAll(/"([a-z0-9_]+)"/g)].map((match) => match[1]);
 assert.deepEqual(tupleCommands, [...tupleCommands].sort(), "frontend invoke tuple must stay sorted");
 assert.deepEqual(manifestCommands, [...manifestCommands].sort(), "invoke manifest must stay sorted");
-for (const command of ["list_show_lan_interfaces", "rotate_dj_link_token"]) {
+for (const command of [
+  "arm_dj_link_machine",
+  "disarm_dj_link_machine",
+  "get_dj_link_machine_status",
+  "list_dj_link_wired_candidates",
+  "rotate_dj_link_token",
+]) {
   assert.ok(tupleCommands.includes(command), `${command} missing from frontend tuple`);
   assert.ok(manifestCommands.includes(command), `${command} missing from invoke manifest`);
 }
+assert.ok(!tupleCommands.includes("list_show_lan_interfaces"), "retired address-only DJ picker must be absent from frontend tuple");
+assert.ok(!manifestCommands.includes("list_show_lan_interfaces"), "retired address-only DJ picker must be absent from manifest");
 
 for (const key of [
   "DJ Link",
   "Enable DJ Link",
+  "Arm DJ Link",
+  "Disarm DJ Link",
+  "Wired binding",
+  "Refresh wired bindings",
   "Show-LAN bind IP",
   "Owner deck / playing",
   "Legacy Master diagnostic",
   "Track mappings",
   "Use Current Track",
   "Rotate token",
-  "DJ Link token generated. Copy it now; it will not be shown again.",
+  "DJ Link token rotated. Copy the replacement now; it will not be shown again.",
+  "DJ Link credential cleanup is pending and will be retried at the next launch.",
+  "Checking listener…",
+  "Checking the shared Remote listener before starting Web Remote.",
 ]) {
   assert.match(localization, new RegExp(`['\"]${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['\"]\\s*:`), `${key} is not localized`);
 }

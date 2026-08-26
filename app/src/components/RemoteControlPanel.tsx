@@ -1,11 +1,13 @@
 import { For, Show, createSignal } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type {
-  DjLinkRuntimeStatus,
+  DjLinkMachineStatus,
+  DjLinkWiredCandidate,
   DjTrackTriggerMapping,
   RemoteControlStatus,
 } from "../types";
 import { StandbySyncPanel } from "./StandbySyncPanel";
+import { djLinkMachineBlockReasonText } from "../uiLocalization";
 
 interface RemoteControlPanelProps {
   backendAvailable: boolean;
@@ -18,13 +20,18 @@ interface RemoteControlPanelProps {
   maxMessageBytes: number;
   maxMessagesPerSecond: number;
   djLinkEnabled: boolean;
-  djLinkBindIp: string | null;
-  djLinkLanInterfaces: string[];
+  djLinkMachineStatus: DjLinkMachineStatus;
+  djLinkWiredCandidates: DjLinkWiredCandidate[];
+  djLinkSelectedBinding: string;
   djLinkToken: string | null;
   djLinkTokenCopied: boolean;
   djTrackTriggers: DjTrackTriggerMapping[];
   timelineOptions: { id: number; label: string }[];
-  running: boolean;
+  listenerRunning: boolean;
+  listenerStatusHydrated: boolean;
+  genericRunning: boolean;
+  djListenerRunning: boolean;
+  djLinkTokenOperationBusy: boolean;
   remoteUrls: string[];
   status: RemoteControlStatus;
   onBindIp: (value: string) => void;
@@ -35,9 +42,10 @@ interface RemoteControlPanelProps {
   onMaxConnections: (value: number) => void;
   onMaxMessageBytes: (value: number) => void;
   onMaxMessagesPerSecond: (value: number) => void;
-  onDjLinkEnabled: (value: boolean) => void;
-  onDjLinkBindIp: (value: string | null) => void;
-  onRefreshDjLinkLanInterfaces: () => void | Promise<unknown>;
+  onDjLinkSelectedBinding: (value: string) => void;
+  onRefreshDjLinkWiredCandidates: () => void | Promise<unknown>;
+  onArmDjLinkMachine: () => void | Promise<void>;
+  onDisarmDjLinkMachine: () => void | Promise<void>;
   onRotateDjLinkToken: () => void | Promise<void>;
   onCopyDjLinkToken: () => void | Promise<void>;
   onDjTrackTriggers: (value: DjTrackTriggerMapping[]) => void;
@@ -57,10 +65,15 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [mappingError, setMappingError] = createSignal<string | null>(null);
   const linkStatus = () => {
-    if (!props.running) return null;
+    if (!props.djListenerRunning) return null;
     const status = props.status.dj_link;
     return status && status.available !== false ? status : null;
   };
+  const machineStatusKnown = () => props.djLinkMachineStatus.blockReason !== "machine_status_unavailable";
+  const hasDjLinkDisarmWork = () => props.djLinkMachineStatus.autoStartArmed
+    || props.djLinkMachineStatus.credentialGeneration !== null
+    || props.djLinkMachineStatus.credentialCleanupPending
+    || props.djLinkMachineStatus.blockReason === "disarm_cleanup_pending";
   const resetMappingDraft = () => {
     setSelectorMode("content");
     setContentId("");
@@ -145,7 +158,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
             <h2>Web Remote</h2>
             <span>PIN-protected operator access</span>
           </div>
-          <span class={`ioConnectionState ${props.running ? "ok" : "idle"}`}><i aria-hidden="true" />{props.running ? "Running" : "Stopped"}</span>
+          <span class={`ioConnectionState ${props.genericRunning ? "ok" : "idle"}`}><i aria-hidden="true" />{props.genericRunning ? "Running" : "Stopped"}</span>
         </header>
         <div class="ioConnectionControls remoteConnectionControls">
           <details class="ioDisclosure" data-io-disclosure="remote-connection-settings">
@@ -156,7 +169,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <input
                   data-io-control="remote-bind-ip"
                   value={props.bindIp}
-                  disabled={props.running || !props.allowLan}
+                  disabled={props.listenerRunning || !props.allowLan}
                   onInput={(event) => props.onBindIp(event.currentTarget.value)}
                 />
               </label>
@@ -167,7 +180,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   type="number"
                   min="1"
                   value={props.port}
-                  disabled={props.running}
+                  disabled={props.listenerRunning || props.djLinkMachineStatus.autoStartArmed}
                   onInput={(event) => props.onPort(Number(event.currentTarget.value))}
                 />
               </label>
@@ -176,7 +189,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   data-io-control="remote-lan"
                   type="checkbox"
                   checked={props.allowLan}
-                  disabled={props.running}
+                  disabled={props.listenerRunning}
                   onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
                 />
                 Trusted LAN access
@@ -190,16 +203,28 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                     maxlength="6"
                     pattern="[0-9]{6}"
                     value={props.pairingPin}
-                    disabled={props.running}
+                    disabled={props.listenerRunning}
                     onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
                   />
-                  <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.running}>New PIN</button>
+                  <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.listenerRunning}>New PIN</button>
                 </div>
               </label>
             </div>
           </details>
-          <Show when={props.running} fallback={
-            <button data-io-control="remote-start" class="primary" onClick={() => void props.onStart()}>Start Remote</button>
+          <Show when={props.genericRunning} fallback={
+            <Show
+              when={props.djListenerRunning}
+              fallback={
+                <Show
+                  when={props.listenerStatusHydrated}
+                  fallback={<button data-io-control="remote-start" disabled>Checking listener…</button>}
+                >
+                  <button data-io-control="remote-start" class="primary" onClick={() => void props.onStart()}>Start Remote</button>
+                </Show>
+              }
+            >
+              <button data-io-control="remote-start" disabled>DJ Link listener active</button>
+            </Show>
           }>
             <button data-io-control="remote-stop" onClick={() => void props.onStop()}>Stop Remote</button>
           </Show>
@@ -225,7 +250,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   min="1"
                   max="64"
                   value={props.maxConnections}
-                  disabled={props.running}
+                  disabled={props.listenerRunning}
                   onInput={(event) => props.onMaxConnections(Number(event.currentTarget.value))}
                 />
               </label>
@@ -236,7 +261,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   min="1"
                   max="1024"
                   value={Math.round(props.maxMessageBytes / 1024)}
-                  disabled={props.running}
+                  disabled={props.listenerRunning}
                   onInput={(event) => props.onMaxMessageBytes(Number(event.currentTarget.value) * 1024)}
                 />
               </label>
@@ -247,7 +272,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   min="1"
                   max="1000"
                   value={props.maxMessagesPerSecond}
-                  disabled={props.running}
+                  disabled={props.listenerRunning}
                   onInput={(event) => props.onMaxMessagesPerSecond(Number(event.currentTarget.value))}
                 />
               </label>
@@ -263,19 +288,21 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <h2>Endpoints</h2>
                 <span>{props.remoteUrls.length}</span>
               </header>
-              <div class="remoteUrlList">
-                <For each={props.remoteUrls}>
-                  {(url) => (
-                    <div class="remoteUrlItem">
-                      <strong data-no-localize>{url}</strong>
-                      <div class="remoteUrlActions">
-                        <button data-io-control="remote-copy-url" onClick={() => void props.onCopyRemoteUrl(url)}>Copy</button>
-                        <button class="remoteUrlOpenButton" onClick={() => void props.onOpenRemoteUrl(url)}>Open</button>
+              <Show when={props.genericRunning} fallback={<p class="emptyHint">DJ Link is listener-only; no Web Remote URL is available.</p>}>
+                <div class="remoteUrlList">
+                  <For each={props.remoteUrls}>
+                    {(url) => (
+                      <div class="remoteUrlItem">
+                        <strong data-no-localize>{url}</strong>
+                        <div class="remoteUrlActions">
+                          <button data-io-control="remote-copy-url" onClick={() => void props.onCopyRemoteUrl(url)}>Copy</button>
+                          <button class="remoteUrlOpenButton" onClick={() => void props.onOpenRemoteUrl(url)}>Open</button>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </For>
-              </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
             </section>
             <section class="remoteEndpointDesk remoteClientDesk">
               <header class="ioDeskHeader">
@@ -315,48 +342,63 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 </span>
               </header>
               <div class="ioConnectionControls remoteConnectionControls">
-                <label class="remoteLanToggle">
-                  <input
-                    data-io-control="dj-link-enabled"
-                    type="checkbox"
-                    checked={props.djLinkEnabled}
-                    disabled={props.running}
-                    onChange={(event) => props.onDjLinkEnabled(event.currentTarget.checked)}
-                  />
-                  Enable DJ Link
-                </label>
                 <label>
-                  Show-LAN bind IP
+                  Wired binding
                   <select
-                    data-io-control="dj-link-bind-ip"
-                    value={props.djLinkBindIp ?? ""}
-                    disabled={props.running || !props.djLinkEnabled}
-                    onChange={(event) => props.onDjLinkBindIp(event.currentTarget.value || null)}
+                    data-io-control="dj-link-wired-binding"
+                    value={props.djLinkSelectedBinding}
+                    disabled={props.listenerRunning || props.djLinkTokenOperationBusy || !machineStatusKnown()}
+                    onChange={(event) => props.onDjLinkSelectedBinding(event.currentTarget.value)}
                   >
-                    <option value="">Select an actual LAN interface</option>
-                    <For each={props.djLinkLanInterfaces}>
-                      {(address) => <option data-no-localize value={address}>{address}</option>}
+                    <option value="">Select one exact wired binding</option>
+                    <For each={props.djLinkWiredCandidates}>
+                      {(candidate) => {
+                        const key = `${candidate.networkGuid}\u001f${candidate.adapterGuid}\u001f${candidate.bindIp}`;
+                        return <option data-no-localize value={key}>{candidate.adapterAlias ?? "Ethernet"} · {candidate.bindIp}</option>;
+                      }}
                     </For>
                   </select>
                 </label>
                 <button
                   type="button"
-                  data-io-control="dj-link-refresh-interfaces"
-                  disabled={props.running}
-                  onClick={() => void props.onRefreshDjLinkLanInterfaces()}
-                >Refresh interfaces</button>
+                  data-io-control="dj-link-refresh-wired-candidates"
+                  disabled={props.listenerRunning || props.djLinkTokenOperationBusy || !machineStatusKnown()}
+                  onClick={() => void props.onRefreshDjLinkWiredCandidates()}
+                >Refresh wired bindings</button>
+                <Show when={hasDjLinkDisarmWork()} fallback={
+                  <button
+                    type="button"
+                    data-io-control="dj-link-arm"
+                    disabled={props.listenerRunning || !props.listenerStatusHydrated || props.djLinkTokenOperationBusy || !machineStatusKnown() || !props.djLinkSelectedBinding}
+                    onClick={() => void props.onArmDjLinkMachine()}
+                  >Arm DJ Link</button>
+                }>
+                  <button
+                    type="button"
+                    class="danger"
+                    data-io-control="dj-link-disarm"
+                    disabled={props.djLinkTokenOperationBusy}
+                    onClick={() => void props.onDisarmDjLinkMachine()}
+                  >Disarm DJ Link</button>
+                </Show>
                 <button
                   type="button"
                   data-io-control="dj-link-rotate-token"
-                  disabled={props.running}
+                  disabled={props.listenerRunning || !props.listenerStatusHydrated || props.djLinkTokenOperationBusy || !machineStatusKnown() || !props.djLinkEnabled}
                   onClick={() => void props.onRotateDjLinkToken()}
                 >Rotate token</button>
               </div>
-              <p class={props.djLinkEnabled && !props.djLinkBindIp ? "inlineWarning" : "hint"}>
-                {props.djLinkEnabled
-                  ? `Endpoint: ws://${props.djLinkBindIp ?? "[select LAN IP]"}:${props.port}/dj-link`
+              <p class={props.djLinkMachineStatus.blockReason ? "inlineWarning" : "hint"}>
+                {props.djLinkMachineStatus.autoStartArmed
+                  ? `Endpoint: ws://${props.djLinkMachineStatus.bindIp ?? "[select LAN IP]"}:${props.djLinkMachineStatus.bindPort ?? "[select port]"}/dj-link`
                   : "DJ Link is disabled. It never uses the Web Remote pairing PIN."}
               </p>
+              <Show when={props.djLinkMachineStatus.blockReason}>
+                {(reason) => <p class="inlineWarning">{djLinkMachineBlockReasonText(reason())}</p>}
+              </Show>
+              <Show when={props.djLinkMachineStatus.credentialCleanupPending}>
+                <p class="inlineWarning">DJ Link credential cleanup is pending and will be retried at the next launch.</p>
+              </Show>
               <Show when={props.djLinkToken}>
                 {(token) => (
                   <div class="remoteUrlItem">
@@ -369,11 +411,11 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
               <Show when={props.djLinkTokenCopied}>
                 <p class="inlineSuccess">Token copied and cleared.</p>
               </Show>
-              <Show when={linkStatus()} fallback={<p class="emptyHint">DJ Link status is unavailable while Web Remote is stopped.</p>}>
+              <Show when={linkStatus()} fallback={<p class="emptyHint">DJ Link status is unavailable while its listener is stopped.</p>}>
                 {(status) => (
                   <div class="split remoteLimitGrid" data-dj-link-status>
                     <span>Available <strong>{status().available === false ? "No" : "Yes"}</strong></span>
-                    <span>Enabled <strong>{props.djLinkEnabled ? "Yes" : "No"}</strong></span>
+                    <span>Enabled <strong>{props.djLinkMachineStatus.autoStartArmed ? "Yes" : "No"}</strong></span>
                     <span>Peer <strong data-no-localize>{status().peer ?? "—"}</strong></span>
                     <span>Generation <strong class="tabularNums" data-no-localize>{status().generation}</strong></span>
                     <span>Heartbeat <strong class="tabularNums" data-no-localize>{status().ageMs ?? "—"} ms</strong></span>

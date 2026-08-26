@@ -8,7 +8,7 @@
 //!   `CRED_PERSIST_LOCAL_MACHINE` credential wrapped in a strict
 //!   magic/version/generation blob. The six-digit Web Remote PIN is process
 //!   local by contract and is never persisted by this module.
-//! - [`DjLinkMachineSettingsV1`] persists non-secret metadata only (revision,
+//! - [`DjLinkMachineSettingsV2`] persists non-secret metadata only (revision,
 //!   transaction state, credential generation, NIC/network GUIDs, bind
 //!   endpoint, auto-start arming). No token, token hash, PIN, or blob ever
 //!   enters the settings file, which is enforced structurally by the field
@@ -40,6 +40,11 @@ use zeroize::{Zeroize, Zeroizing};
 
 /// Fixed Windows Credential Manager target for the Syndocal DJ-Link token.
 pub const DJ_LINK_CREDENTIAL_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1";
+/// Separate machine-local Credential Manager target used only while an arm or
+/// rotation transaction is active. It holds the previously accepted token so
+/// a crash or a failed final settings write can restore the authority without
+/// ever placing secret material in the settings journal.
+pub const DJ_LINK_CREDENTIAL_ROLLBACK_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1/rollback";
 /// Raw DJ-Link token length in bytes.
 pub const DJ_LINK_TOKEN_LEN: usize = 32;
 const DJ_LINK_TOKEN_BLOB_MAGIC: [u8; 8] = *b"SYNDJLK!";
@@ -57,9 +62,9 @@ pub const DJ_LINK_MACHINE_SETTINGS_FILE: &str = "dj-link-machine-settings.json";
 /// Bounded settings-file read limit; larger files are corrupt by definition.
 pub const MAX_DJ_LINK_MACHINE_SETTINGS_BYTES: u64 = 4 * 1024;
 /// Current settings schema version; readers reject newer schemas fail-closed.
-pub const DJ_LINK_MACHINE_SETTINGS_VERSION: u32 = 1;
+pub const DJ_LINK_MACHINE_SETTINGS_VERSION: u32 = 2;
 
-const SETTINGS_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static SETTINGS_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Secret-bearing token type
@@ -79,6 +84,19 @@ impl DjLinkToken {
         let mut array = [0_u8; DJ_LINK_TOKEN_LEN];
         array.copy_from_slice(bytes);
         Some(Self(array))
+    }
+
+    /// Draw a new nonzero token from the operating-system CSPRNG.  The raw
+    /// bytes remain inside the zeroizing token wrapper until the caller
+    /// deliberately injects its encoded wire form into a live listener.
+    pub fn generate() -> Result<Self, DjLinkCredentialError> {
+        let mut bytes = Zeroizing::new([0_u8; DJ_LINK_TOKEN_LEN]);
+        getrandom::getrandom(&mut *bytes).map_err(|error| DjLinkCredentialError::RandomFailed {
+            detail: error.to_string(),
+        })?;
+        Self::from_bytes(&*bytes).ok_or(DjLinkCredentialError::RandomFailed {
+            detail: "OS CSPRNG returned an all-zero DJ-Link token".to_string(),
+        })
     }
 
     /// Explicit accessor marking every place the secret material is exposed.
@@ -182,7 +200,7 @@ impl fmt::Display for DjLinkTokenBlobError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DjLinkCredentialError {
     PlatformUnsupported,
     TargetNameInvalid,
@@ -193,6 +211,7 @@ pub enum DjLinkCredentialError {
     /// verification of our own write.
     StoredBlobInvalid,
     BlobEncode(DjLinkTokenBlobError),
+    #[cfg(test)]
     NotConfigured,
     WriteFailed {
         code: i32,
@@ -205,6 +224,9 @@ pub enum DjLinkCredentialError {
     },
     VerifyMismatch,
     PersistenceDowngraded,
+    RandomFailed {
+        detail: String,
+    },
 }
 
 impl fmt::Display for DjLinkCredentialError {
@@ -219,6 +241,7 @@ impl fmt::Display for DjLinkCredentialError {
                 formatter.write_str("stored DJ-Link credential blob is unusable")
             }
             Self::BlobEncode(error) => write!(formatter, "credential blob rejected: {error}"),
+            #[cfg(test)]
             Self::NotConfigured => formatter.write_str("no DJ-Link credential is configured"),
             Self::WriteFailed { code } => {
                 write!(formatter, "credential write failed (code {code})")
@@ -232,6 +255,9 @@ impl fmt::Display for DjLinkCredentialError {
             }
             Self::PersistenceDowngraded => {
                 formatter.write_str("credential was not persisted machine-local as required")
+            }
+            Self::RandomFailed { detail } => {
+                write!(formatter, "DJ-Link token generation failed: {detail}")
             }
         }
     }
@@ -321,6 +347,7 @@ pub fn decode_dj_link_token_blob(blob: &[u8]) -> Result<DjLinkTokenRecord, DjLin
 // Credential store trait and platform implementations
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkCredentialPersistenceScope {
     /// Windows Credential Manager with `CRED_PERSIST_LOCAL_MACHINE`: the
@@ -345,16 +372,28 @@ pub fn dj_link_machine_credential_persistence_supported() -> bool {
 }
 
 pub trait DjLinkCredentialStore {
+    #[cfg(test)]
     fn persistence_scope(&self) -> DjLinkCredentialPersistenceScope;
     fn save_token(&self, generation: u64, token: &DjLinkToken)
         -> Result<(), DjLinkCredentialError>;
     fn load_token(&self) -> Result<Option<DjLinkTokenRecord>, DjLinkCredentialError>;
     fn revoke_token(&self) -> Result<(), DjLinkCredentialError>;
+    /// Saves the previously accepted primary credential for an in-flight
+    /// settings transaction. The rollback target is still Windows Credential
+    /// Manager; no secret ever enters the JSON journal.
+    fn save_rollback_token(
+        &self,
+        generation: u64,
+        token: &DjLinkToken,
+    ) -> Result<(), DjLinkCredentialError>;
+    fn load_rollback_token(&self) -> Result<Option<DjLinkTokenRecord>, DjLinkCredentialError>;
+    fn revoke_rollback_token(&self) -> Result<(), DjLinkCredentialError>;
 }
 
 #[derive(Debug)]
 pub struct PlatformDjLinkCredentialStore {
     backend: Option<Box<dyn DjLinkCredentialBackend>>,
+    rollback_backend: Option<Box<dyn DjLinkCredentialBackend>>,
 }
 
 impl PlatformDjLinkCredentialStore {
@@ -365,7 +404,12 @@ impl PlatformDjLinkCredentialStore {
         #[cfg(target_os = "windows")]
         {
             Ok(Self {
-                backend: Some(Box::new(win_credentials::WindowsCredentialBackend)),
+                backend: Some(Box::new(win_credentials::WindowsCredentialBackend::new(
+                    DJ_LINK_CREDENTIAL_TARGET,
+                ))),
+                rollback_backend: Some(Box::new(win_credentials::WindowsCredentialBackend::new(
+                    DJ_LINK_CREDENTIAL_ROLLBACK_TARGET,
+                ))),
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -376,6 +420,7 @@ impl PlatformDjLinkCredentialStore {
 }
 
 impl DjLinkCredentialStore for PlatformDjLinkCredentialStore {
+    #[cfg(test)]
     fn persistence_scope(&self) -> DjLinkCredentialPersistenceScope {
         if self.backend.is_some() {
             DjLinkCredentialPersistenceScope::MachineLocal
@@ -407,6 +452,34 @@ impl DjLinkCredentialStore for PlatformDjLinkCredentialStore {
     fn revoke_token(&self) -> Result<(), DjLinkCredentialError> {
         let backend = self
             .backend
+            .as_deref()
+            .ok_or(DjLinkCredentialError::PlatformUnsupported)?;
+        backend.delete_credential()
+    }
+
+    fn save_rollback_token(
+        &self,
+        generation: u64,
+        token: &DjLinkToken,
+    ) -> Result<(), DjLinkCredentialError> {
+        let backend = self
+            .rollback_backend
+            .as_deref()
+            .ok_or(DjLinkCredentialError::PlatformUnsupported)?;
+        save_token_via_backend(backend, generation, token)
+    }
+
+    fn load_rollback_token(&self) -> Result<Option<DjLinkTokenRecord>, DjLinkCredentialError> {
+        let backend = self
+            .rollback_backend
+            .as_deref()
+            .ok_or(DjLinkCredentialError::PlatformUnsupported)?;
+        load_token_via_backend(backend)
+    }
+
+    fn revoke_rollback_token(&self) -> Result<(), DjLinkCredentialError> {
+        let backend = self
+            .rollback_backend
             .as_deref()
             .ok_or(DjLinkCredentialError::PlatformUnsupported)?;
         backend.delete_credential()
@@ -558,7 +631,7 @@ mod win_credentials {
 
     use super::{
         CredentialReadback, DjLinkCredentialBackend, DjLinkCredentialError, ReadbackType, Zeroize,
-        Zeroizing, DJ_LINK_CREDENTIAL_TARGET, MAX_DJ_LINK_CREDENTIAL_TARGET_CHARS,
+        Zeroizing, MAX_DJ_LINK_CREDENTIAL_TARGET_CHARS,
     };
     use windows::core::{HRESULT, PCWSTR, PWSTR};
     use windows::Win32::Foundation::ERROR_NOT_FOUND;
@@ -568,13 +641,21 @@ mod win_credentials {
     };
 
     #[derive(Debug)]
-    pub(super) struct WindowsCredentialBackend;
+    pub(super) struct WindowsCredentialBackend {
+        target: &'static str,
+    }
 
-    fn target_wide() -> Vec<u16> {
-        DJ_LINK_CREDENTIAL_TARGET
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect()
+    impl WindowsCredentialBackend {
+        pub(super) const fn new(target: &'static str) -> Self {
+            Self { target }
+        }
+
+        fn target_wide(&self) -> Vec<u16> {
+            self.target
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        }
     }
 
     fn is_not_found(error: &windows::core::Error) -> bool {
@@ -612,7 +693,7 @@ mod win_credentials {
 
     impl DjLinkCredentialBackend for WindowsCredentialBackend {
         fn write_credential(&self, blob: &[u8]) -> Result<(), DjLinkCredentialError> {
-            let mut target = target_wide();
+            let mut target = self.target_wide();
             let mut credential = CREDENTIALW::default();
             credential.Type = CRED_TYPE_GENERIC;
             credential.TargetName = PWSTR(target.as_mut_ptr());
@@ -637,7 +718,7 @@ mod win_credentials {
         }
 
         fn read_credential(&self) -> Result<Option<CredentialReadback>, DjLinkCredentialError> {
-            let target = target_wide();
+            let target = self.target_wide();
             let mut pointer: *mut CREDENTIALW = std::ptr::null_mut();
             // SAFETY: pointer receives an OS-allocated CREDENTIALW that we own
             // until CredFree; target stays alive for the duration of the call.
@@ -711,7 +792,7 @@ mod win_credentials {
         }
 
         fn delete_credential(&self) -> Result<(), DjLinkCredentialError> {
-            let target = target_wide();
+            let target = self.target_wide();
             // SAFETY: target outlives the CredDeleteW call.
             if let Err(error) =
                 unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None) }
@@ -737,22 +818,50 @@ pub enum DjLinkMachineTransactionState {
     /// Stable committed state; all values authoritative.
     Idle,
     /// Update journal written; the credential store mutation may or may not
-    /// have happened. Values are staged intent only.
+    /// have happened. Values are staged intent only; recovery must restore
+    /// the separately retained old authority.
     PrepareCommit,
-    /// Credential store mutation completed; values authoritative pending the
-    /// final idle rewrite.
+    /// A new credential may have been written, but it is not authoritative
+    /// until the final `Idle` settings persist succeeds. Recovery restores
+    /// the old authority from the rollback credential/preimage.
     Committing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DjLinkMachineSettingsV1 {
+pub struct DjLinkMachineSettingsV2 {
     pub version: u32,
     /// Compare-and-swap revision; strictly monotonic across persisted writes.
     pub revision: u64,
     pub transaction_state: DjLinkMachineTransactionState,
     /// Generation recorded in the persisted token blob; `None` when no
     /// credential is configured. Never carries token, hash, PIN, or blob.
+    pub credential_generation: Option<u64>,
+    /// Non-secret reservation watermark. It survives a rolled-back journal
+    /// and a disarm so a staged generation is never reused.
+    #[serde(default)]
+    pub credential_generation_high_water: u64,
+    pub adapter_guid: Option<String>,
+    pub network_guid: Option<String>,
+    pub bind_ip: Option<String>,
+    pub bind_port: Option<u16>,
+    pub auto_start_armed: bool,
+    /// A disarm reached durable intent but Credential Manager deletion still
+    /// needs retrying. It is non-secret and prevents credential restoration
+    /// until both primary and rollback records have been removed.
+    #[serde(default)]
+    pub disarm_cleanup_pending: bool,
+    /// Non-secret last-known-good metadata retained only while an active
+    /// journal is recoverable. The corresponding token is held separately in
+    /// `DJ_LINK_CREDENTIAL_ROLLBACK_TARGET`.
+    pub rollback: Option<DjLinkMachineRollback>,
+}
+
+/// The prior stable non-secret settings snapshot for an active transaction.
+/// It deliberately excludes all credential bytes and derivatives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkMachineRollback {
     pub credential_generation: Option<u64>,
     pub adapter_guid: Option<String>,
     pub network_guid: Option<String>,
@@ -761,18 +870,21 @@ pub struct DjLinkMachineSettingsV1 {
     pub auto_start_armed: bool,
 }
 
-impl Default for DjLinkMachineSettingsV1 {
+impl Default for DjLinkMachineSettingsV2 {
     fn default() -> Self {
         Self {
             version: DJ_LINK_MACHINE_SETTINGS_VERSION,
             revision: 1,
             transaction_state: DjLinkMachineTransactionState::Idle,
             credential_generation: None,
+            credential_generation_high_water: 0,
             adapter_guid: None,
             network_guid: None,
             bind_ip: None,
             bind_port: None,
             auto_start_armed: false,
+            disarm_cleanup_pending: false,
+            rollback: None,
         }
     }
 }
@@ -784,15 +896,19 @@ pub enum DjLinkMachineSettingsError {
     },
     InvalidRevision,
     InvalidGeneration,
+    GenerationHighWaterInconsistent,
     InvalidAdapterGuid,
     InvalidNetworkGuid,
     /// Exactly one of adapter/network GUID is present; identity is pair-only.
     GuidPairIncomplete,
     /// `auto_start_armed` was set without the complete identity pair.
     ArmedWithoutGuidPair,
+    /// Credential cleanup intent is only valid for a disarmed idle authority.
+    DisarmCleanupInconsistent,
     InvalidBindIp,
     InvalidBindPort,
     TransactionStateInconsistent,
+    TransactionRollbackInconsistent,
     CasMismatch {
         expected: u64,
         found: u64,
@@ -820,6 +936,9 @@ impl fmt::Display for DjLinkMachineSettingsError {
             Self::InvalidGeneration => {
                 formatter.write_str("DJ-Link credential generation must be nonzero")
             }
+            Self::GenerationHighWaterInconsistent => formatter.write_str(
+                "DJ-Link credential generation high-water mark is below persisted authority",
+            ),
             Self::InvalidAdapterGuid => formatter.write_str(
                 "adapter GUID must be a canonical lowercase hyphenated UUID and not nil",
             ),
@@ -830,11 +949,17 @@ impl fmt::Display for DjLinkMachineSettingsError {
                 .write_str("adapter GUID and network GUID must be stored together or not at all"),
             Self::ArmedWithoutGuidPair => formatter
                 .write_str("auto-start arming requires the complete adapter/network GUID pair"),
+            Self::DisarmCleanupInconsistent => formatter.write_str(
+                "credential cleanup pending authority must be idle, disarmed, and free of a rollback journal",
+            ),
             Self::InvalidBindIp => formatter.write_str("bind IP is not a canonical IP address"),
             Self::InvalidBindPort => formatter.write_str("bind port must be nonzero"),
             Self::TransactionStateInconsistent => {
                 formatter.write_str("active DJ-Link transaction requires a credential generation")
             }
+            Self::TransactionRollbackInconsistent => formatter.write_str(
+                "active DJ-Link transaction requires non-secret rollback metadata and idle settings must not retain it",
+            ),
             Self::CasMismatch { expected, found } => {
                 write!(
                     formatter,
@@ -854,8 +979,8 @@ impl fmt::Display for DjLinkMachineSettingsError {
     }
 }
 
-impl DjLinkMachineSettingsV1 {
-    pub fn validated(self) -> Result<Self, DjLinkMachineSettingsError> {
+impl DjLinkMachineSettingsV2 {
+    pub fn validated(mut self) -> Result<Self, DjLinkMachineSettingsError> {
         if self.version != DJ_LINK_MACHINE_SETTINGS_VERSION {
             return Err(DjLinkMachineSettingsError::UnsupportedVersion {
                 found: self.version,
@@ -866,6 +991,32 @@ impl DjLinkMachineSettingsV1 {
         }
         if self.credential_generation == Some(0) {
             return Err(DjLinkMachineSettingsError::InvalidGeneration);
+        }
+        // Pre-watermark V2 metadata has an exact non-secret lower bound in
+        // its present authority. Materialize that bound in memory; the next
+        // settings write records it explicitly.
+        if self.credential_generation_high_water == 0 {
+            self.credential_generation_high_water = self
+                .credential_generation
+                .into_iter()
+                .chain(
+                    self.rollback
+                        .as_ref()
+                        .and_then(|rollback| rollback.credential_generation),
+                )
+                .max()
+                .unwrap_or(0);
+        }
+        if self
+            .credential_generation
+            .is_some_and(|generation| generation > self.credential_generation_high_water)
+            || self.rollback.as_ref().is_some_and(|rollback| {
+                rollback
+                    .credential_generation
+                    .is_some_and(|generation| generation > self.credential_generation_high_water)
+            })
+        {
+            return Err(DjLinkMachineSettingsError::GenerationHighWaterInconsistent);
         }
         // Trust identity pairing: adapter and network GUIDs are stored
         // together or not at all, in every persisted valid state, disarmed
@@ -887,16 +1038,36 @@ impl DjLinkMachineSettingsV1 {
         if self.auto_start_armed && self.adapter_guid.is_none() {
             return Err(DjLinkMachineSettingsError::ArmedWithoutGuidPair);
         }
+        if self.disarm_cleanup_pending
+            && (self.auto_start_armed
+                || self.transaction_state != DjLinkMachineTransactionState::Idle
+                || self.rollback.is_some())
+        {
+            return Err(DjLinkMachineSettingsError::DisarmCleanupInconsistent);
+        }
         if let Some(ip) = self.bind_ip.as_deref() {
             validate_canonical_ip(ip)?;
         }
         if self.bind_port == Some(0) {
             return Err(DjLinkMachineSettingsError::InvalidBindPort);
         }
-        if self.transaction_state != DjLinkMachineTransactionState::Idle
-            && self.credential_generation.is_none()
-        {
-            return Err(DjLinkMachineSettingsError::TransactionStateInconsistent);
+        match self.transaction_state {
+            DjLinkMachineTransactionState::Idle => {
+                if self.rollback.is_some() {
+                    return Err(DjLinkMachineSettingsError::TransactionRollbackInconsistent);
+                }
+            }
+            DjLinkMachineTransactionState::PrepareCommit
+            | DjLinkMachineTransactionState::Committing => {
+                if self.credential_generation.is_none() {
+                    return Err(DjLinkMachineSettingsError::TransactionStateInconsistent);
+                }
+                let rollback = self
+                    .rollback
+                    .as_ref()
+                    .ok_or(DjLinkMachineSettingsError::TransactionRollbackInconsistent)?;
+                rollback.validated()?;
+            }
         }
         Ok(self)
     }
@@ -935,10 +1106,27 @@ impl DjLinkMachineSettingsV1 {
 
     /// Journal phase 1: `Idle -> PrepareCommit`, staging the credential
     /// generation the caller intends to materialize in the credential store.
+    #[cfg(test)]
     pub fn begin_prepare_commit(
         &self,
         expected_revision: u64,
         staged_credential_generation: u64,
+    ) -> Result<Self, DjLinkMachineSettingsError> {
+        let rollback = DjLinkMachineRollback::from_stable(self)?;
+        self.begin_prepare_commit_with_rollback(
+            expected_revision,
+            staged_credential_generation,
+            rollback,
+        )
+    }
+
+    /// Starts a journal whose staged settings differ from the accepted stable
+    /// settings. The caller must provide that older, validated preimage.
+    pub fn begin_prepare_commit_with_rollback(
+        &self,
+        expected_revision: u64,
+        staged_credential_generation: u64,
+        rollback: DjLinkMachineRollback,
     ) -> Result<Self, DjLinkMachineSettingsError> {
         let revision = self.check_cas_and_edge(
             expected_revision,
@@ -949,6 +1137,10 @@ impl DjLinkMachineSettingsV1 {
         next.revision = revision;
         next.transaction_state = DjLinkMachineTransactionState::PrepareCommit;
         next.credential_generation = Some(staged_credential_generation);
+        next.credential_generation_high_water = next
+            .credential_generation_high_water
+            .max(staged_credential_generation);
+        next.rollback = Some(rollback);
         next.validated()
     }
 
@@ -976,16 +1168,37 @@ impl DjLinkMachineSettingsV1 {
             DjLinkMachineTransactionState::Committing,
             "idle",
         )?;
-        self.clone_with_state(revision, DjLinkMachineTransactionState::Idle)
+        let mut next = self.clone();
+        next.revision = revision;
+        next.transaction_state = DjLinkMachineTransactionState::Idle;
+        next.rollback = None;
+        next.validated()
     }
 
-    /// Roll back an unfinished update from either active state to `Idle`.
-    pub fn abort_transaction(
+    /// Restores the prior non-secret settings from an active journal. The
+    /// caller must independently restore/verify its associated rollback
+    /// credential before persisting this state.
+    pub fn restore_rollback(
         &self,
         expected_revision: u64,
     ) -> Result<Self, DjLinkMachineSettingsError> {
         let revision = self.check_active_transaction_cas(expected_revision)?;
-        self.clone_with_state(revision, DjLinkMachineTransactionState::Idle)
+        let rollback = self
+            .rollback
+            .clone()
+            .ok_or(DjLinkMachineSettingsError::TransactionRollbackInconsistent)?;
+        let mut restored = rollback.into_idle_settings(revision);
+        restored.version = self.version;
+        restored.credential_generation_high_water = self.credential_generation_high_water;
+        restored.validated()
+    }
+
+    #[cfg(test)]
+    pub fn abort_transaction(
+        &self,
+        expected_revision: u64,
+    ) -> Result<Self, DjLinkMachineSettingsError> {
+        self.restore_rollback(expected_revision)
     }
 
     fn check_active_transaction_cas(
@@ -1009,6 +1222,49 @@ impl DjLinkMachineSettingsV1 {
             }
         }
         next_revision(self.revision)
+    }
+}
+
+impl DjLinkMachineRollback {
+    pub fn from_stable(
+        settings: &DjLinkMachineSettingsV2,
+    ) -> Result<Self, DjLinkMachineSettingsError> {
+        let stable = settings.clone().validated()?;
+        if stable.transaction_state != DjLinkMachineTransactionState::Idle {
+            return Err(DjLinkMachineSettingsError::InvalidTransition {
+                from: transaction_state_label(stable.transaction_state),
+                to: "rollback_snapshot",
+            });
+        }
+        Ok(Self {
+            credential_generation: stable.credential_generation,
+            adapter_guid: stable.adapter_guid,
+            network_guid: stable.network_guid,
+            bind_ip: stable.bind_ip,
+            bind_port: stable.bind_port,
+            auto_start_armed: stable.auto_start_armed,
+        })
+    }
+
+    fn validated(&self) -> Result<(), DjLinkMachineSettingsError> {
+        self.clone().into_idle_settings(1).validated().map(|_| ())
+    }
+
+    fn into_idle_settings(self, revision: u64) -> DjLinkMachineSettingsV2 {
+        DjLinkMachineSettingsV2 {
+            version: DJ_LINK_MACHINE_SETTINGS_VERSION,
+            revision,
+            transaction_state: DjLinkMachineTransactionState::Idle,
+            credential_generation: self.credential_generation,
+            credential_generation_high_water: 0,
+            adapter_guid: self.adapter_guid,
+            network_guid: self.network_guid,
+            bind_ip: self.bind_ip,
+            bind_port: self.bind_port,
+            auto_start_armed: self.auto_start_armed,
+            disarm_cleanup_pending: false,
+            rollback: None,
+        }
     }
 }
 
@@ -1044,54 +1300,6 @@ fn validate_canonical_ip(value: &str) -> Result<(), DjLinkMachineSettingsError> 
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DjLinkMachineReconciliationOutcome {
-    AlreadyStable,
-    /// Crash during `PrepareCommit`: the credential-store mutation is in an
-    /// unknown state. The caller MUST re-verify the stored credential against
-    /// the recorded generation before trusting it.
-    RecoveredPrepareRequiresVerification,
-    /// Crash during `Committing`: the credential-store mutation completed, so
-    /// the recorded values are authoritative.
-    RecoveredCommitAuthoritative,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DjLinkMachineReconciliation {
-    pub reconciled: DjLinkMachineSettingsV1,
-    pub outcome: DjLinkMachineReconciliationOutcome,
-}
-
-/// Pure crash recovery: any persisted non-idle transaction state folds back to
-/// a deterministic idle view without inventing progress (the revision is kept
-/// unchanged; the next persisted transition bumps it).
-pub fn reconcile_dj_link_machine_settings(
-    settings: DjLinkMachineSettingsV1,
-) -> Result<DjLinkMachineReconciliation, DjLinkMachineSettingsError> {
-    match settings.transaction_state {
-        DjLinkMachineTransactionState::Idle => Ok(DjLinkMachineReconciliation {
-            reconciled: settings.validated()?,
-            outcome: DjLinkMachineReconciliationOutcome::AlreadyStable,
-        }),
-        DjLinkMachineTransactionState::Committing => Ok(DjLinkMachineReconciliation {
-            reconciled: DjLinkMachineSettingsV1 {
-                transaction_state: DjLinkMachineTransactionState::Idle,
-                ..settings.validated()?
-            }
-            .validated()?,
-            outcome: DjLinkMachineReconciliationOutcome::RecoveredCommitAuthoritative,
-        }),
-        DjLinkMachineTransactionState::PrepareCommit => Ok(DjLinkMachineReconciliation {
-            reconciled: DjLinkMachineSettingsV1 {
-                transaction_state: DjLinkMachineTransactionState::Idle,
-                ..settings.validated()?
-            }
-            .validated()?,
-            outcome: DjLinkMachineReconciliationOutcome::RecoveredPrepareRequiresVerification,
-        }),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Bounded, atomic settings I/O (timeline_cue_audio pattern)
 // ---------------------------------------------------------------------------
@@ -1102,8 +1310,8 @@ pub fn dj_link_machine_settings_path(local_data_dir: &Path) -> PathBuf {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DjLinkMachineSettingsLoadOutcome {
-    Loaded(DjLinkMachineSettingsV1),
-    MissingDefaults(DjLinkMachineSettingsV1),
+    Loaded(DjLinkMachineSettingsV2),
+    MissingDefaults(DjLinkMachineSettingsV2),
     /// Corrupt, unreadable, or oversized. The file on disk is never modified.
     BlockedCorrupt {
         detail: String,
@@ -1114,6 +1322,10 @@ pub enum DjLinkMachineSettingsLoadOutcome {
     BlockedFutureVersion {
         found_version: u64,
     },
+    /// A known retired schema cannot safely recover an active journal.
+    BlockedRetiredVersion {
+        found_version: u64,
+    },
 }
 
 pub fn load_dj_link_machine_settings_from_path(path: &Path) -> DjLinkMachineSettingsLoadOutcome {
@@ -1121,7 +1333,7 @@ pub fn load_dj_link_machine_settings_from_path(path: &Path) -> DjLinkMachineSett
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return DjLinkMachineSettingsLoadOutcome::MissingDefaults(
-                DjLinkMachineSettingsV1::default(),
+                DjLinkMachineSettingsV2::default(),
             )
         }
         Err(error) => {
@@ -1163,7 +1375,7 @@ pub fn load_dj_link_machine_settings_from_path(path: &Path) -> DjLinkMachineSett
             ),
         };
     }
-    match serde_json::from_slice::<DjLinkMachineSettingsV1>(&bytes)
+    match serde_json::from_slice::<DjLinkMachineSettingsV2>(&bytes)
         .map_err(|error| error.to_string())
         .and_then(|settings| settings.validated().map_err(|error| error.to_string()))
     {
@@ -1178,6 +1390,7 @@ fn classify_blocked_load(bytes: &[u8], detail: String) -> DjLinkMachineSettingsL
         .and_then(|value| value.get("version").and_then(serde_json::Value::as_u64))
         .filter(|version| *version != u64::from(DJ_LINK_MACHINE_SETTINGS_VERSION));
     match found_version {
+        Some(1) => DjLinkMachineSettingsLoadOutcome::BlockedRetiredVersion { found_version: 1 },
         Some(version) => DjLinkMachineSettingsLoadOutcome::BlockedFutureVersion {
             found_version: version,
         },
@@ -1187,7 +1400,7 @@ fn classify_blocked_load(bytes: &[u8], detail: String) -> DjLinkMachineSettingsL
 
 pub fn persist_dj_link_machine_settings_to_path(
     path: &Path,
-    settings: &DjLinkMachineSettingsV1,
+    settings: &DjLinkMachineSettingsV2,
 ) -> Result<(), String> {
     persist_dj_link_machine_settings_to_path_with(path, settings, |temporary, target| {
         super::replace_file_atomically(temporary, target)
@@ -1196,7 +1409,7 @@ pub fn persist_dj_link_machine_settings_to_path(
 
 pub fn persist_dj_link_machine_settings_to_path_with(
     path: &Path,
-    settings: &DjLinkMachineSettingsV1,
+    settings: &DjLinkMachineSettingsV2,
     replace: impl FnOnce(&Path, &Path) -> Result<(), String>,
 ) -> Result<(), String> {
     let settings = settings
@@ -1319,17 +1532,20 @@ mod tests {
         DjLinkToken::from_bytes(&[byte; DJ_LINK_TOKEN_LEN]).expect("non-zero token")
     }
 
-    fn fully_populated_settings() -> DjLinkMachineSettingsV1 {
-        DjLinkMachineSettingsV1 {
+    fn fully_populated_settings() -> DjLinkMachineSettingsV2 {
+        DjLinkMachineSettingsV2 {
             version: DJ_LINK_MACHINE_SETTINGS_VERSION,
             revision: 7,
             transaction_state: DjLinkMachineTransactionState::Idle,
             credential_generation: Some(3),
+            credential_generation_high_water: 3,
             adapter_guid: Some("0123abcd-5678-90ef-abcd-ef0123456789".to_string()),
             network_guid: Some("ffffffff-0000-aaaa-bbbb-ccccddddeeee".to_string()),
             bind_ip: Some("192.168.7.9".to_string()),
             bind_port: Some(49152),
             auto_start_armed: true,
+            disarm_cleanup_pending: false,
+            rollback: None,
         }
         .validated()
         .expect("populated settings validate")
@@ -1660,6 +1876,7 @@ mod tests {
     fn store_over(backend: MemoryCredentialBackend) -> PlatformDjLinkCredentialStore {
         PlatformDjLinkCredentialStore {
             backend: Some(Box::new(backend)),
+            rollback_backend: Some(Box::new(MemoryCredentialBackend::default())),
         }
     }
 
@@ -1793,7 +2010,10 @@ mod tests {
 
     #[test]
     fn unsupported_platform_fails_closed() {
-        let store = PlatformDjLinkCredentialStore { backend: None };
+        let store = PlatformDjLinkCredentialStore {
+            backend: None,
+            rollback_backend: None,
+        };
         assert_eq!(
             store.persistence_scope(),
             DjLinkCredentialPersistenceScope::Unsupported
@@ -1842,7 +2062,7 @@ mod tests {
 
     #[test]
     fn settings_default_validates_and_serializes_exact_key_set() {
-        let settings = DjLinkMachineSettingsV1::default()
+        let settings = DjLinkMachineSettingsV2::default()
             .validated()
             .expect("valid");
         let object = serde_json::to_value(&settings)
@@ -1860,11 +2080,85 @@ mod tests {
                 "bind_ip",
                 "bind_port",
                 "credential_generation",
+                "credential_generation_high_water",
+                "disarm_cleanup_pending",
                 "network_guid",
                 "revision",
+                "rollback",
                 "transaction_state",
                 "version"
             ]
+        );
+    }
+
+    #[test]
+    fn v2_without_disarm_cleanup_marker_is_accepted_as_false() {
+        // This V2 authority was introduced before cleanup intent existed.
+        // The absent non-secret marker exactly means no interrupted disarm;
+        // retain those local V2 files instead of silently classifying them as
+        // corrupt or widening the retired-version boundary.
+        let dir = TempDir::new("v2-no-cleanup-marker");
+        let path = dir.path().join("machine-settings.json");
+        let mut value = serde_json::to_value(DjLinkMachineSettingsV2::default())
+            .expect("serialize V2 settings");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("disarm_cleanup_pending");
+        fs::write(
+            &path,
+            serde_json::to_vec(&value).expect("encode V2 settings"),
+        )
+        .expect("write V2 settings");
+        match load_dj_link_machine_settings_from_path(&path) {
+            DjLinkMachineSettingsLoadOutcome::Loaded(settings) => {
+                assert!(!settings.disarm_cleanup_pending);
+            }
+            other => panic!("expected compatible V2 settings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_without_generation_watermark_derives_the_present_authority_bound() {
+        // The marker is a V2 additive clean extension. A previously written
+        // V2 authority still contains an exact non-secret lower bound: its
+        // accepted generation. Materialize it rather than reopening g1.
+        let dir = TempDir::new("v2-no-generation-watermark");
+        let path = dir.path().join("machine-settings.json");
+        let mut value =
+            serde_json::to_value(fully_populated_settings()).expect("serialize V2 settings");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("credential_generation_high_water");
+        fs::write(
+            &path,
+            serde_json::to_vec(&value).expect("encode V2 settings"),
+        )
+        .expect("write V2 settings");
+        match load_dj_link_machine_settings_from_path(&path) {
+            DjLinkMachineSettingsLoadOutcome::Loaded(settings) => {
+                assert_eq!(settings.credential_generation, Some(3));
+                assert_eq!(settings.credential_generation_high_water, 3);
+            }
+            other => panic!("expected compatible V2 settings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn disarm_cleanup_marker_rejects_mixed_transaction_journals() {
+        let stable = fully_populated_settings();
+        let mut hostile = stable
+            .begin_prepare_commit_with_rollback(
+                stable.revision,
+                4,
+                DjLinkMachineRollback::from_stable(&stable).expect("stable preimage"),
+            )
+            .expect("prepared journal");
+        hostile.disarm_cleanup_pending = true;
+        assert_eq!(
+            hostile.validated(),
+            Err(DjLinkMachineSettingsError::DisarmCleanupInconsistent)
         );
     }
 
@@ -1885,10 +2179,12 @@ mod tests {
         let base = fully_populated_settings();
 
         let mut future = base.clone();
-        future.version = 2;
+        future.version = DJ_LINK_MACHINE_SETTINGS_VERSION + 1;
         assert_eq!(
             future.clone().validated(),
-            Err(DjLinkMachineSettingsError::UnsupportedVersion { found: 2 })
+            Err(DjLinkMachineSettingsError::UnsupportedVersion {
+                found: DJ_LINK_MACHINE_SETTINGS_VERSION + 1
+            })
         );
 
         for revision in [0_u64, u64::MAX] {
@@ -1905,6 +2201,13 @@ mod tests {
         assert_eq!(
             zero_gen.clone().validated(),
             Err(DjLinkMachineSettingsError::InvalidGeneration)
+        );
+
+        let mut stale_high_water = base.clone();
+        stale_high_water.credential_generation_high_water = 2;
+        assert_eq!(
+            stale_high_water.validated(),
+            Err(DjLinkMachineSettingsError::GenerationHighWaterInconsistent)
         );
 
         for guid in [
@@ -1947,7 +2250,7 @@ mod tests {
             Err(DjLinkMachineSettingsError::InvalidBindPort)
         );
 
-        let mut inconsistent = DjLinkMachineSettingsV1 {
+        let mut inconsistent = DjLinkMachineSettingsV2 {
             transaction_state: DjLinkMachineTransactionState::PrepareCommit,
             ..base.clone()
         };
@@ -1966,20 +2269,20 @@ mod tests {
 
     #[test]
     fn guid_pair_must_be_complete_even_when_disarmed() {
-        let half_adapter = DjLinkMachineSettingsV1 {
+        let half_adapter = DjLinkMachineSettingsV2 {
             adapter_guid: Some(SAMPLE_ADAPTER_GUID.to_string()),
             network_guid: None,
-            ..DjLinkMachineSettingsV1::default()
+            ..DjLinkMachineSettingsV2::default()
         };
         assert_eq!(
             half_adapter.clone().validated(),
             Err(DjLinkMachineSettingsError::GuidPairIncomplete)
         );
-        let half_network = DjLinkMachineSettingsV1 {
+        let half_network = DjLinkMachineSettingsV2 {
             adapter_guid: None,
             network_guid: Some(SAMPLE_NETWORK_GUID.to_string()),
             auto_start_armed: false,
-            ..DjLinkMachineSettingsV1::default()
+            ..DjLinkMachineSettingsV2::default()
         };
         assert_eq!(
             half_network.clone().validated(),
@@ -2000,13 +2303,13 @@ mod tests {
             half_adapter.begin_prepare_commit(half_adapter.revision, 4),
             Err(DjLinkMachineSettingsError::GuidPairIncomplete)
         );
-        // Crash reconciliation of a persisted half-bound file fails closed.
-        assert!(reconcile_dj_link_machine_settings(half_network).is_err());
+        // Runtime recovery only accepts a fully validated rollback preimage.
+        assert!(half_network.validated().is_err());
     }
 
     #[test]
     fn auto_start_arming_requires_complete_identity_pair() {
-        let unarmed_empty = DjLinkMachineSettingsV1::default();
+        let unarmed_empty = DjLinkMachineSettingsV2::default();
         assert_eq!(unarmed_empty.auto_start_armed, false);
         let mut armed_empty = unarmed_empty.clone();
         armed_empty.auto_start_armed = true;
@@ -2078,7 +2381,7 @@ mod tests {
             );
         }
         // Positive control: a second distinct canonical pair validates.
-        let alternate = DjLinkMachineSettingsV1 {
+        let alternate = DjLinkMachineSettingsV2 {
             adapter_guid: Some(NIL_UUID.replacen('0', "a", 1).as_str().to_string()),
             network_guid: Some(SAMPLE_NETWORK_GUID.to_string()),
             ..fully_populated_settings()
@@ -2110,10 +2413,10 @@ mod tests {
         );
 
         let persist_target = dir.path().join("never.json");
-        let half = DjLinkMachineSettingsV1 {
+        let half = DjLinkMachineSettingsV2 {
             adapter_guid: Some(SAMPLE_ADAPTER_GUID.to_string()),
             network_guid: None,
-            ..DjLinkMachineSettingsV1::default()
+            ..DjLinkMachineSettingsV2::default()
         };
         assert!(persist_dj_link_machine_settings_to_path_with(
             &persist_target,
@@ -2217,53 +2520,6 @@ mod tests {
         );
     }
 
-    // -- crash reconciliation -------------------------------------------------
-
-    #[test]
-    fn reconciliation_is_deterministic_per_state() {
-        let stable = fully_populated_settings();
-        let reconciliation = reconcile_dj_link_machine_settings(stable.clone()).expect("stable");
-        assert_eq!(
-            reconciliation.outcome,
-            DjLinkMachineReconciliationOutcome::AlreadyStable
-        );
-        assert_eq!(reconciliation.reconciled, stable);
-
-        let prepared = stable
-            .begin_prepare_commit(stable.revision, 21)
-            .expect("begin");
-        let reconciliation =
-            reconcile_dj_link_machine_settings(prepared.clone()).expect("prepared");
-        assert_eq!(
-            reconciliation.outcome,
-            DjLinkMachineReconciliationOutcome::RecoveredPrepareRequiresVerification
-        );
-        assert_eq!(
-            reconciliation.reconciled.transaction_state,
-            DjLinkMachineTransactionState::Idle
-        );
-        assert_eq!(reconciliation.reconciled.revision, prepared.revision);
-        assert_eq!(reconciliation.reconciled.credential_generation, Some(21));
-
-        let committing = prepared.stage_committing(prepared.revision).expect("stage");
-        let reconciliation =
-            reconcile_dj_link_machine_settings(committing.clone()).expect("committing");
-        assert_eq!(
-            reconciliation.outcome,
-            DjLinkMachineReconciliationOutcome::RecoveredCommitAuthoritative
-        );
-        assert_eq!(
-            reconciliation.reconciled.transaction_state,
-            DjLinkMachineTransactionState::Idle
-        );
-        assert_eq!(reconciliation.reconciled.revision, committing.revision);
-        assert_eq!(reconciliation.reconciled, {
-            let mut idle = committing.clone();
-            idle.transaction_state = DjLinkMachineTransactionState::Idle;
-            idle
-        });
-    }
-
     // -- bounded, atomic settings I/O -----------------------------------------
 
     #[test]
@@ -2272,7 +2528,7 @@ mod tests {
         let path = dj_link_machine_settings_path(dir.path());
         assert_eq!(
             load_dj_link_machine_settings_from_path(&path),
-            DjLinkMachineSettingsLoadOutcome::MissingDefaults(DjLinkMachineSettingsV1::default())
+            DjLinkMachineSettingsLoadOutcome::MissingDefaults(DjLinkMachineSettingsV2::default())
         );
         let settings = fully_populated_settings();
         persist_dj_link_machine_settings_to_path_with(&path, &settings, |temporary, target| {
@@ -2303,18 +2559,18 @@ mod tests {
 
         let future_path = dir.path().join("future.json");
         let future_body =
-            br#"{"version":2,"revision":1,"transaction_state":"idle","auto_start_armed":false}"#;
+            br#"{"version":3,"revision":1,"transaction_state":"idle","auto_start_armed":false}"#;
         fs::write(&future_path, future_body).expect("seed");
         match load_dj_link_machine_settings_from_path(&future_path) {
             DjLinkMachineSettingsLoadOutcome::BlockedFutureVersion { found_version } => {
-                assert_eq!(found_version, 2);
+                assert_eq!(found_version, 3);
             }
             other => panic!("expected future block, got {other:?}"),
         }
         assert_eq!(fs::read(&future_path).expect("after"), future_body);
 
         let unknown_path = dir.path().join("unknown.json");
-        let unknown_body = br#"{"version":1,"revision":1,"transaction_state":"idle","auto_start_armed":false,"web_remote_pin":"123456"}"#;
+        let unknown_body = br#"{"version":2,"revision":1,"transaction_state":"idle","auto_start_armed":false,"web_remote_pin":"123456"}"#;
         fs::write(&unknown_path, unknown_body).expect("seed");
         match load_dj_link_machine_settings_from_path(&unknown_path) {
             DjLinkMachineSettingsLoadOutcome::BlockedCorrupt { .. } => {}
@@ -2359,7 +2615,7 @@ mod tests {
     fn settings_persist_rejects_invalid_settings_and_leaves_target_absent() {
         let dir = TempDir::new("persist-invalid");
         let path = dj_link_machine_settings_path(dir.path());
-        let mut future = DjLinkMachineSettingsV1::default();
+        let mut future = DjLinkMachineSettingsV2::default();
         future.version = 99;
         assert!(persist_dj_link_machine_settings_to_path_with(
             &path,
