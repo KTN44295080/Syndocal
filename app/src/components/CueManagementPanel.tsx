@@ -16,7 +16,6 @@ import type {
   TimelineTrackKind,
 } from "../types";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
-import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { timelineConformRateBadge } from "../timelineSceneBlocks";
 import { cueIdentityCss } from "../identityColor";
@@ -527,8 +526,6 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
               && (!Number.isFinite(draft().authored_beats)
                 || draft().authored_beats! < 0.25
                 || draft().authored_beats! > 1024);
-            const canSaveRecall = () => canSaveCueEffectTargets(cue, draft().effect_targets);
-            const recallSaveHintId = `cue-${cue.id}-recall-save-hint`;
             const placements = () => props.cueTimelinePlacementsForCue(cue.id);
             const visiblePlacements = () => placements().slice(0, timelinePlacementsPerCue);
             const hiddenPlacementCount = () => Math.max(0, placements().length - timelinePlacementsPerCue);
@@ -1075,7 +1072,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   effects={props.effects}
                   targets={draft().effect_targets}
                   currentMode="refresh"
-                  applyHint="Save Recall stores only this Effect Recall list, including an empty list when the Cue still has another target."
+                  applyHint="Save Recall stores this Effect Recall list. An empty list clears all saved Effect Recall targets."
                   onChange={(effect_targets) => props.onUpdateCueMetadataDraft(cue, { effect_targets })}
                 />
                 <p class="cueLookUpdateHint cueEditOnly">
@@ -1083,9 +1080,9 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <strong>{cueCaptureScopeLabel(props.cueCaptureScope)}</strong>.{" "}
                   <span>It does not save Recall edits.</span>
                 </p>
-                <Show when={!canSaveRecall()}>
-                  <p id={recallSaveHintId} class="cueRecallSaveHint cueEditOnly">
-                    A Cue needs at least one target. Remove this Cue instead of saving an empty Effect-only Recall.
+                <Show when={draft().effect_targets.length === 0}>
+                  <p class="cueLookUpdateHint cueEditOnly">
+                    No Effect Recall targets are selected. Save Recall will clear all saved Effect Recall targets.
                   </p>
                 </Show>
                 <div class="cueActionRow">
@@ -1107,8 +1104,6 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   </button>
                   <button
                     class="cueEditOnly cueSaveRecall"
-                    aria-describedby={!canSaveRecall() ? recallSaveHintId : undefined}
-                    disabled={!canSaveRecall()}
                     onClick={() => void props.onSetCueEffectTargets(cue.id, draft().effect_targets)}
                   >
                     Save Recall

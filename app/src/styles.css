@@ -14295,8 +14295,7 @@ input[type="color"] {
   font-weight: 800;
 }
 
-.cueLookUpdateHint,
-.cueRecallSaveHint {
+.cueLookUpdateHint {
   margin: 0;
   color: #8d9aaa;
   font-size: 11px;
@@ -14306,10 +14305,6 @@ input[type="color"] {
 
 .cueLookUpdateHint strong {
   color: #c7d0dc;
-}
-
-.cueRecallSaveHint {
-  color: #ffb4b4;
 }
 
 .cueEffectRecallState.on:not(:disabled) {

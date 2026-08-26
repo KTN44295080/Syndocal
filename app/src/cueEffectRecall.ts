@@ -1,4 +1,4 @@
-import type { CueEffectTarget, CueSummary, EffectSummary, PatchedFixtureSummary } from "./types";
+import type { CueEffectTarget, EffectSummary, PatchedFixtureSummary } from "./types";
 
 export type CueEffectCaptureScope = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 
@@ -16,24 +16,6 @@ export interface CueEffectScopeContext {
   selectedFixtureId: number | null;
   selectedGroupId: string | null;
 }
-
-type CueNonEffectTargets = Partial<Pick<
-  CueSummary,
-  "targets" | "video_targets" | "video_output_targets" | "node_graph_targets" | "palette_targets" | "steps"
->>;
-
-export const cueHasNonEffectTargets = (cue: CueNonEffectTargets) =>
-  (cue.targets?.length ?? 0) > 0
-  || (cue.video_targets?.length ?? 0) > 0
-  || (cue.video_output_targets?.length ?? 0) > 0
-  || (cue.node_graph_targets?.length ?? 0) > 0
-  || (cue.palette_targets?.length ?? 0) > 0
-  || (cue.steps?.length ?? 0) > 0;
-
-export const canSaveCueEffectTargets = (
-  cue: CueNonEffectTargets,
-  targets: CueEffectTarget[],
-) => targets.length > 0 || cueHasNonEffectTargets(cue);
 
 const normalizedGroupId = (value: string) => {
   const segments = value.trim().split("/").map((segment) => segment.trim());

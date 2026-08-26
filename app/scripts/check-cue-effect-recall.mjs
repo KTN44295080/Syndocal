@@ -16,6 +16,12 @@ const helpers = await import(
 );
 const guardSource = await readFile(new URL("../src/snapshotRequestGuard.ts", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const cueManagementPanelSource = await readFile(
+  new URL("../src/components/CueManagementPanel.tsx", import.meta.url),
+  "utf8",
+);
+const localizationSource = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
+const stylesSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const authoredEffectEnableSource = await readFile(
   new URL("../src/authoredEffectEnableController.ts", import.meta.url),
   "utf8",
@@ -32,6 +38,39 @@ const guardTranspiled = ts.transpileModule(guardSource, {
 const snapshotGuards = await import(
   `data:text/javascript;base64,${Buffer.from(guardTranspiled.outputText).toString("base64")}`
 );
+
+for (const retiredPolicy of ["cueHasNonEffectTargets", "canSaveCueEffectTargets", "CueNonEffectTargets"]) {
+  assert.equal(source.includes(retiredPolicy), false, `${retiredPolicy} must remain retired`);
+}
+for (const retiredPanelBranch of ["canSaveRecall", "recallSaveHintId", "cueRecallSaveHint"]) {
+  assert.equal(cueManagementPanelSource.includes(retiredPanelBranch), false, `${retiredPanelBranch} must remain retired`);
+}
+const saveRecallButton = cueManagementPanelSource.match(
+  /<button\s+class="cueEditOnly cueSaveRecall"([\s\S]*?)>\s*Save Recall\s*<\/button>/,
+);
+assert.ok(saveRecallButton, "Cue Management must render the Save Recall button");
+assert.doesNotMatch(saveRecallButton[1], /\bdisabled=|\baria-describedby=/, "Save Recall must stay enabled without a last-target hint");
+assert.match(
+  saveRecallButton[1],
+  /onClick=\{\(\) => void props\.onSetCueEffectTargets\(cue\.id, draft\(\)\.effect_targets\)\}/,
+  "Save Recall must dispatch the authoritative effect-target replacement",
+);
+const retiredRecallCopy = "A Cue needs at least one target. Remove this Cue instead of saving an empty Effect-only Recall.";
+assert.equal(cueManagementPanelSource.includes(retiredRecallCopy), false, "retired last-target warning must be absent from the panel");
+assert.equal(localizationSource.includes(retiredRecallCopy), false, "retired last-target warning must be absent from localization");
+assert.equal(stylesSource.includes(".cueRecallSaveHint"), false, "retired last-target warning style must be absent");
+const emptyListHint = "Save Recall stores this Effect Recall list. An empty list clears all saved Effect Recall targets.";
+assert.equal(cueManagementPanelSource.includes(emptyListHint), true, "Save Recall must explain empty-list clearing truthfully");
+assert.equal(localizationSource.includes(emptyListHint), true, "empty-list Save Recall hint must be localized");
+const visibleEmptyListHint = "No Effect Recall targets are selected. Save Recall will clear all saved Effect Recall targets.";
+assert.match(
+  cueManagementPanelSource,
+  new RegExp(
+    `<Show when=\\{draft\\(\\)\\.effect_targets\\.length === 0\\}>[\\s\\S]*?${visibleEmptyListHint.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}[\\s\\S]*?<\\/Show>\\s*<div class="cueActionRow">`,
+  ),
+  "the destructive empty-list result must be visible beside Save Recall when the draft is empty",
+);
+assert.equal(localizationSource.includes(visibleEmptyListHint), true, "visible empty-list warning must be localized");
 
 assert.match(
   appSource,
@@ -192,6 +231,7 @@ assert.deepEqual(normalized, [
   { effect_id: 10, enabled: false },
   { effect_id: 20, enabled: true },
 ]);
+assert.deepEqual(helpers.normalizedCueEffectTargets(effects, []), []);
 
 assert.deepEqual(helpers.selectAllCueEffects(effects, normalized), [
   { effect_id: 10, enabled: false },
@@ -269,26 +309,6 @@ assert.equal(
   ),
   false,
   "clearing a transition must restore the legacy request shape",
-);
-
-const emptyCueTargets = {
-  targets: [],
-  video_targets: [],
-  video_output_targets: [],
-  node_graph_targets: [],
-  palette_targets: [],
-};
-assert.equal(helpers.cueHasNonEffectTargets(emptyCueTargets), false);
-assert.equal(helpers.canSaveCueEffectTargets(emptyCueTargets, []), false);
-assert.equal(helpers.canSaveCueEffectTargets(emptyCueTargets, [{ effect_id: 10, enabled: true }]), true);
-assert.equal(helpers.cueHasNonEffectTargets({ ...emptyCueTargets, targets: [{ fixture_id: 1, values: [] }] }), true);
-assert.equal(helpers.cueHasNonEffectTargets({ ...emptyCueTargets, video_targets: [{}] }), true);
-assert.equal(helpers.cueHasNonEffectTargets({ ...emptyCueTargets, video_output_targets: [{}] }), true);
-assert.equal(helpers.cueHasNonEffectTargets({ ...emptyCueTargets, node_graph_targets: [{ graph_id: 1, enabled: true }] }), true);
-assert.equal(helpers.cueHasNonEffectTargets({ ...emptyCueTargets, palette_targets: [{ palette_id: 1, fixture_ids: [1] }] }), true);
-assert.equal(
-  helpers.canSaveCueEffectTargets({ ...emptyCueTargets, node_graph_targets: [{ graph_id: 1, enabled: true }] }, []),
-  true,
 );
 
 const snapshotGuard = snapshotGuards.createSnapshotRequestGuard();

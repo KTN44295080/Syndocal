@@ -28627,23 +28627,28 @@ fn move_cue_between_scene_banks_batch(
     )
 }
 
+fn set_cue_effect_targets_on_engine(
+    engine: &EngineHandle,
+    cue_id: CueId,
+    effect_targets: Vec<CueEffectTarget>,
+) -> Result<(), String> {
+    let snapshot = engine.snapshot();
+    snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    validate_cue_effect_targets(&snapshot, &effect_targets)?;
+    engine.set_cue_effect_targets_published(cue_id, effect_targets)
+}
+
 #[tauri::command]
 fn set_cue_effect_targets(
     state: State<'_, AppState>,
     cue_id: CueId,
     effect_targets: Vec<CueEffectTarget>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let cue = snapshot
-        .cues
-        .iter()
-        .find(|cue| cue.id == cue_id)
-        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
-    validate_cue_effect_targets(&snapshot, &effect_targets)?;
-    validate_cue_effect_target_replacement(cue, &effect_targets)?;
-    state
-        .engine
-        .set_cue_effect_targets_published(cue_id, effect_targets)
+    set_cue_effect_targets_on_engine(&state.engine, cue_id, effect_targets)
 }
 
 fn add_cue_owned_effect_to_engine(
@@ -28667,7 +28672,6 @@ fn add_cue_owned_effect_to_engine(
         transition_ms: None,
     });
     validate_cue_effect_targets(&snapshot, &effect_targets)?;
-    validate_cue_effect_target_replacement(cue, &effect_targets)?;
     engine.set_cue_effect_targets_published(cue_id, effect_targets)?;
     Ok(effect_id)
 }
@@ -72779,27 +72783,6 @@ fn validate_cue_effect_targets(
     Ok(())
 }
 
-fn validate_cue_effect_target_replacement(
-    cue: &protocol::CueSummary,
-    effect_targets: &[CueEffectTarget],
-) -> Result<(), String> {
-    ensure_cue_targets_present(
-        &cue.targets,
-        &cue.video_targets,
-        &cue.video_output_targets,
-        &cue.node_graph_targets,
-        effect_targets,
-        !cue.palette_targets.is_empty(),
-        "updating",
-    )
-    .map_err(|_| {
-        format!(
-            "Cue {} would contain no targets after clearing Effect Recall; remove the Cue instead",
-            cue.id
-        )
-    })
-}
-
 fn cue_targets_from_snapshot_with_scope(
     snapshot: &EngineSnapshot,
     scope: &CueCaptureScope,
@@ -102299,13 +102282,6 @@ f 1 2 3
             cues: vec![protocol::CueSummary {
                 id: cue_id,
                 label: "Editable scene".to_string(),
-                targets: vec![CueFixtureTarget {
-                    fixture_id: 1,
-                    values: vec![protocol::AttributeValueSummary {
-                        attribute: "Dimmer".to_string(),
-                        value: 32_768,
-                    }],
-                }],
                 ..protocol::CueSummary::default()
             }],
             ..EngineSnapshot::default()
@@ -102359,10 +102335,24 @@ f 1 2 3
         );
         assert!(roundtrip.snapshot.effects.is_empty());
 
-        engine
-            .set_cue_effect_targets_published(cue_id, Vec::new())
-            .unwrap();
-        assert!(engine.snapshot().cues[0].effect_targets.is_empty());
+        set_cue_effect_targets_on_engine(&engine, cue_id, Vec::new()).unwrap();
+        let cleared = engine.snapshot();
+        assert!(cleared.cues[0].targets.is_empty());
+        assert!(cleared.cues[0].effect_targets.is_empty());
+
+        let cleared_project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            operator_policy: None,
+            custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
+            snapshot: cleared,
+        };
+        validate_project_file(&cleared_project).unwrap();
+        let cleared_json = project_json_for_write(&cleared_project).unwrap();
+        let cleared_roundtrip: ProjectFile = serde_json::from_str(&cleared_json).unwrap();
+        assert!(cleared_roundtrip.snapshot.cues[0].targets.is_empty());
+        assert!(cleared_roundtrip.snapshot.cues[0].effect_targets.is_empty());
     }
 
     #[test]
@@ -106182,7 +106172,7 @@ f 1 2 3
     }
 
     #[test]
-    fn effects_only_explicit_clear_validates_the_final_preserved_cue_body() {
+    fn effects_only_explicit_clear_preserves_the_final_cue_body() {
         let existing = protocol::CueSummary {
             id: 42,
             label: "Mixed Look".to_string(),
@@ -106243,31 +106233,11 @@ f 1 2 3
             Some(Vec::new()),
         )
         .unwrap();
-        assert!(ensure_cue_targets_present(
-            &empty.0, &empty.1, &empty.2, &empty.3, &empty.4, false, "updating",
-        )
-        .is_err());
-        assert_eq!(
-            validate_cue_effect_target_replacement(&empty_snapshot.cues[0], &[]).unwrap_err(),
-            "Cue 43 would contain no targets after clearing Effect Recall; remove the Cue instead"
-        );
-
-        let palette_only = protocol::CueSummary {
-            id: 44,
-            label: "Palette Recall".to_string(),
-            palette_targets: vec![protocol::CuePaletteTarget {
-                palette_id: 7,
-                fixture_ids: vec![1],
-            }],
-            effect_targets: vec![CueEffectTarget {
-                effect_id: 11,
-                enabled: true,
-                params: None,
-                transition_ms: None,
-            }],
-            ..protocol::CueSummary::default()
-        };
-        validate_cue_effect_target_replacement(&palette_only, &[]).unwrap();
+        assert!(empty.0.is_empty());
+        assert!(empty.1.is_empty());
+        assert!(empty.2.is_empty());
+        assert!(empty.3.is_empty());
+        assert!(empty.4.is_empty());
     }
 
     #[test]

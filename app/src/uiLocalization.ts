@@ -1252,12 +1252,12 @@ const japaneseText: Record<string, string> = {
   "No Effects match this filter.": "絞り込み条件に一致するエフェクトはありません。",
   "Create an Effect in the Effect rack first.": "先にエフェクトラックでエフェクトを作成してください。",
   "No Effects match this Cue scope.": "このキュー範囲に一致するエフェクトはありません。",
-  "Save Recall stores only this Effect Recall list, including an empty list when the Cue still has another target.":
-    "呼び出しを保存では、このエフェクト呼び出しリストだけを保存します。キューに別のターゲットがあれば空のリストも保存できます。",
+  "Save Recall stores this Effect Recall list. An empty list clears all saved Effect Recall targets.":
+    "「呼び出しを保存」はこのエフェクト呼び出しリストを保存します。空のリストは保存済みのエフェクト呼び出し対象をすべて解除します。",
+  "No Effect Recall targets are selected. Save Recall will clear all saved Effect Recall targets.":
+    "エフェクト呼び出し対象が選択されていません。「呼び出しを保存」を押すと、保存済みのエフェクト呼び出し対象をすべて解除します。",
   "Update Look recaptures the current Store Scope:": "ルックを更新すると、現在の保存範囲を再取得します:",
   "It does not save Recall edits.": "呼び出し設定の編集内容は保存しません。",
-  "A Cue needs at least one target. Remove this Cue instead of saving an empty Effect-only Recall.":
-    "キューには1つ以上のターゲットが必要です。エフェクト専用の呼び出しを空で保存せず、このキューを削除してください。",
   "Press Update to store Effect Recall edits with the Cue.": "更新を押すと、エフェクト呼び出し設定をキューへ保存します。",
   "Only Effects matching this Cue scope are listed. Mixed Lighting/Video Effects appear in both scopes.":
     "このキュー範囲に一致するエフェクトだけを表示します。照明と映像の両方を対象にするエフェクトは、両方の範囲に表示されます。",
