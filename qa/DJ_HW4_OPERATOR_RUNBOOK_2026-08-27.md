@@ -108,8 +108,9 @@ including `1280x720`. An independent review found that rejected DMX network-rout
 buttons still changed the protocol draft before reporting `no state changed`;
 the corrected candidate-only path now leaves the full draft and all `128` route
 signatures unchanged, invokes neither retired output command, and independently
-re-reviewed GO with P0/P1/P2 all zero. Native visual capture is verified above;
-only the direct native refresh-button click remains unconfirmed.
+re-reviewed GO with P0/P1/P2 all zero. The earlier native visual capture belongs
+only to the historical alpha.18 artifact; its direct native refresh-button click
+also remains unconfirmed and neither observation accepts alpha.19.
 `app/dist` is freshly rebuilt (old stale
 marker `0`); the ignored peer `dist` remains stale but is outside this source
 acceptance checkpoint. These observations do not promote native or HW-4
