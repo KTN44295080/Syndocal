@@ -1104,3 +1104,19 @@ reviewer baseline
 is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
 direct cleanup remains policy-blocked. The DJ/Pedal matrix remains **0/12
 checked (0%)**; none of this continuation is native or physical acceptance.
+
+### 2026-08-27 production title-selector editor source checkpoint
+
+Branch `codex/syndocal-v1.2` advances from exact upstream-equal
+`129d08d76141e7e69363a454d429bc3acca6b50e`. The source editor can now
+author `titleContains = 人生オーバー` with explicit `fallbackDeck = 1`, edit
+and display it, and preserve it through the project-control mapping path.
+`Use Current Track` remains exact. A dedicated pure policy outside `App.tsx`
+rejects mixed, duplicate, over-limit, invalid-ID, over-256-byte, or
+control-character selectors and keeps a rejected editor draft visible.
+
+Focused DJ Link, localization **3564/3564**, TypeScript, production build, and
+all five Setup I/O viewport gates passed with zero first-party warnings.
+Independent Terra xHigh review is GO after the local-error/draft-retention P1
+was fixed. This is source/UI evidence only: no alpha.19 native artifact exists,
+the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.

@@ -54,7 +54,7 @@
     "check:video-output-window-observation": "node scripts/check-video-output-window-observation.mjs",
     "check:timeline-external-dnd": "node scripts/check-timeline-external-dnd.mjs",
     "check:video-setup-viewport": "node scripts/check-viewport-containment.mjs --setup-video-only",
-    "check:dj-link": "node scripts/check-dj-link-runtime.mjs",
+    "check:dj-link": "node scripts/check-dj-track-mapping-policy.mjs && node scripts/check-dj-link-runtime.mjs",
     "check:bundled-library": "node scripts/check-bundled-library-runtime.mjs",
     "check:localization": "node scripts/check-localization.mjs",
     "check:fullscreen-vj": "node scripts/check-viewport-containment.mjs --fullscreen-vj",

@@ -7,6 +7,7 @@ import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } f
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import { retainDjTimelineOptions, type DjTimelineOption } from "./djTimelineOptions";
+import { normalizeDjTrackTriggerMappings } from "./djTrackMappingPolicy";
 import {
   AuthoredSetEffectEnabledCommandError,
   authoredSetEffectEnabledOperationId,
@@ -19021,30 +19022,12 @@ export default function App() {
   };
 
   const setDjTrackTriggersFromPanel = (next: DjTrackTriggerMapping[]) => {
-    if (next.length > 128 || new Set(next.map((mapping) => mapping.id)).size !== next.length) {
-      setMessage("DJ Link mappings must contain at most 128 unique IDs.");
+    const normalized = normalizeDjTrackTriggerMappings(next);
+    if (!normalized.ok) {
+      setMessage(normalized.error);
       return;
     }
-    if (next.some((mapping) => {
-      const selector = mapping.selector;
-      const hasContent = Boolean(selector.contentId?.trim());
-      const hasTitleArtist = Boolean(selector.title?.trim() && selector.artist?.trim());
-      return !mapping.id.trim() || !Number.isSafeInteger(mapping.timelineId) || mapping.timelineId <= 0
-        || (!hasContent && !hasTitleArtist);
-    })) {
-      setMessage("Each DJ Link mapping needs a Content ID or an exact Title and Artist pair.");
-      return;
-    }
-    setDjTrackTriggers(next.map((mapping) => ({
-      ...mapping,
-      id: mapping.id.trim(),
-      retrigger: "once_per_play_session",
-      selector: {
-        contentId: mapping.selector.contentId?.trim() || null,
-        title: mapping.selector.title?.trim() || null,
-        artist: mapping.selector.artist?.trim() || null,
-      },
-    })));
+    setDjTrackTriggers(normalized.value);
   };
 
   const disconnectRemoteClient = async (clientId: number) => {

@@ -8,6 +8,13 @@ import type {
 } from "../types";
 import { StandbySyncPanel } from "./StandbySyncPanel";
 import { djLinkMachineBlockReasonText } from "../uiLocalization";
+import {
+  DEFAULT_DJ_TITLE_CONTAINS,
+  buildDjTrackSelector,
+  djTrackSelectorMode,
+  normalizeDjTrackTriggerMappings,
+  type DjTrackSelectorMode,
+} from "../djTrackMappingPolicy";
 
 interface RemoteControlPanelProps {
   backendAvailable: boolean;
@@ -60,10 +67,12 @@ interface RemoteControlPanelProps {
 }
 
 export function RemoteControlPanel(props: RemoteControlPanelProps) {
-  const [selectorMode, setSelectorMode] = createSignal<"content" | "title_artist">("content");
+  const [selectorMode, setSelectorMode] = createSignal<DjTrackSelectorMode>("title_contains");
   const [contentId, setContentId] = createSignal("");
   const [title, setTitle] = createSignal("");
   const [artist, setArtist] = createSignal("");
+  const [titleContains, setTitleContains] = createSignal(DEFAULT_DJ_TITLE_CONTAINS);
+  const [fallbackDeck1, setFallbackDeck1] = createSignal(true);
   const [timelineId, setTimelineId] = createSignal<number | null>(null);
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [mappingError, setMappingError] = createSignal<string | null>(null);
@@ -78,10 +87,12 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
     || props.djLinkMachineStatus.credentialCleanupPending
     || props.djLinkMachineStatus.blockReason === "disarm_cleanup_pending";
   const resetMappingDraft = () => {
-    setSelectorMode("content");
+    setSelectorMode("title_contains");
     setContentId("");
     setTitle("");
     setArtist("");
+    setTitleContains(DEFAULT_DJ_TITLE_CONTAINS);
+    setFallbackDeck1(true);
     setTimelineId(null);
     setEditingId(null);
     setMappingError(null);
@@ -95,22 +106,42 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
     if (current.trackContentId) {
       setSelectorMode("content");
       setContentId(current.trackContentId);
+      setTitle("");
+      setArtist("");
     } else {
       setSelectorMode("title_artist");
+      setContentId("");
       setTitle(current.trackTitle ?? "");
       setArtist(current.trackArtist ?? "");
     }
     setMappingError(null);
   };
   const editMapping = (mapping: DjTrackTriggerMapping) => {
-    if (mapping.selector.contentId) {
+    const mode = djTrackSelectorMode(mapping.selector);
+    if (mode === null) {
+      setMappingError("This DJ Link mapping has an invalid selector.");
+      return;
+    }
+    setSelectorMode(mode);
+    if (mode === "content") {
       setSelectorMode("content");
-      setContentId(mapping.selector.contentId);
-    } else {
-      setSelectorMode("title_artist");
+      setContentId(mapping.selector.contentId ?? "");
+      setTitle("");
+      setArtist("");
+      setTitleContains(DEFAULT_DJ_TITLE_CONTAINS);
+      setFallbackDeck1(true);
+    } else if (mode === "title_artist") {
       setContentId("");
       setTitle(mapping.selector.title ?? "");
       setArtist(mapping.selector.artist ?? "");
+      setTitleContains(DEFAULT_DJ_TITLE_CONTAINS);
+      setFallbackDeck1(true);
+    } else {
+      setContentId("");
+      setTitle("");
+      setArtist("");
+      setTitleContains(mapping.selector.titleContains ?? DEFAULT_DJ_TITLE_CONTAINS);
+      setFallbackDeck1(mapping.selector.fallbackDeck === 1);
     }
     setTimelineId(mapping.timelineId);
     setEditingId(mapping.id);
@@ -118,34 +149,38 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
   };
   const saveMapping = () => {
     const targetTimeline = timelineId();
-    const content = contentId().trim();
-    const trackTitle = title().trim();
-    const trackArtist = artist().trim();
     if (!Number.isSafeInteger(targetTimeline) || targetTimeline === null || targetTimeline <= 0) {
       setMappingError("Choose an authored Timeline target.");
       return;
     }
-    if (selectorMode() === "content" && !content) {
-      setMappingError("Enter a Content ID, or choose exact Title + Artist.");
-      return;
-    }
-    if (selectorMode() === "title_artist" && (!trackTitle || !trackArtist)) {
-      setMappingError("Exact Title and Artist are both required.");
+    const selector = buildDjTrackSelector({
+      mode: selectorMode(),
+      contentId: contentId(),
+      title: title(),
+      artist: artist(),
+      titleContains: titleContains(),
+      fallbackDeck1: fallbackDeck1(),
+    });
+    if (!selector.ok) {
+      setMappingError(selector.error);
       return;
     }
     const id = editingId() ?? (globalThis.crypto?.randomUUID?.() ?? `dj-${Date.now().toString(36)}`);
     const nextMapping: DjTrackTriggerMapping = {
       id,
-      selector: selectorMode() === "content"
-        ? { contentId: content, title: null, artist: null }
-        : { contentId: null, title: trackTitle, artist: trackArtist },
+      selector: selector.value,
       timelineId: targetTimeline,
       retrigger: "once_per_play_session",
     };
     const next = editingId()
       ? props.djTrackTriggers.map((mapping) => mapping.id === id ? nextMapping : mapping)
       : [...props.djTrackTriggers, nextMapping];
-    props.onDjTrackTriggers(next);
+    const normalized = normalizeDjTrackTriggerMappings(next);
+    if (!normalized.ok) {
+      setMappingError(normalized.error);
+      return;
+    }
+    props.onDjTrackTriggers(normalized.value);
     resetMappingDraft();
   };
   const removeMapping = (id: string) => {
@@ -462,14 +497,15 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
               <header class="ioDeskHeader">
                 <div>
                   <h2>Track mappings</h2>
-                  <span>Exact Content ID or exact Title + Artist; each starts one authored Timeline.</span>
+                  <span>Title contains, exact Content ID, or exact Title + Artist starts one authored Timeline.</span>
                 </div>
                 <span class="tabularNums">{props.djTrackTriggers.length} / 128</span>
               </header>
               <div class="remoteConnectionControls">
                 <label>
                   Selector
-                  <select value={selectorMode()} onChange={(event) => setSelectorMode(event.currentTarget.value as "content" | "title_artist")}>
+                  <select data-io-control="dj-track-selector-mode" value={selectorMode()} onChange={(event) => setSelectorMode(event.currentTarget.value as DjTrackSelectorMode)}>
+                    <option value="title_contains">Title contains</option>
                     <option value="content">Content ID</option>
                     <option value="title_artist">Exact Title + Artist</option>
                   </select>
@@ -480,6 +516,13 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <Show when={selectorMode() === "title_artist"}>
                   <label>Exact title<input data-no-localize value={title()} onInput={(event) => setTitle(event.currentTarget.value)} /></label>
                   <label>Exact artist<input data-no-localize value={artist()} onInput={(event) => setArtist(event.currentTarget.value)} /></label>
+                </Show>
+                <Show when={selectorMode() === "title_contains"}>
+                  <label>Title contains<input data-io-control="dj-track-title-contains" data-no-localize value={titleContains()} onInput={(event) => setTitleContains(event.currentTarget.value)} /></label>
+                  <label class="checkbox inlineCheckbox">
+                    <input data-io-control="dj-track-fallback-deck1" type="checkbox" checked={fallbackDeck1()} onChange={(event) => setFallbackDeck1(event.currentTarget.checked)} />
+                    Accept playing Deck 1 when no title matches
+                  </label>
                 </Show>
                 <label>
                   Start Timeline
@@ -497,15 +540,22 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 </div>
                 <Show when={mappingError()}>{(error) => <p class="inlineWarning">{error()}</p>}</Show>
               </div>
-              <Show when={props.djTrackTriggers.length > 0} fallback={<p class="emptyHint">No DJ Link mappings. Add one exact selector.</p>}>
+              <Show when={props.djTrackTriggers.length > 0} fallback={<p class="emptyHint">No DJ Link mappings. Add a selector.</p>}>
                 <div class="remoteUrlList">
                   <For each={props.djTrackTriggers}>
                     {(mapping) => (
                       <div class="remoteUrlItem remoteClientItem">
                         <div>
-                          <strong data-no-localize>{mapping.selector.contentId ?? `${mapping.selector.title} · ${mapping.selector.artist}`}</strong>
+                          <Show when={mapping.selector.titleContains} fallback={
+                            <strong data-no-localize>{mapping.selector.contentId ?? `${mapping.selector.title} · ${mapping.selector.artist}`}</strong>
+                          }>
+                            {(needle) => <strong>Title contains <span data-no-localize>“{needle()}”</span></strong>}
+                          </Show>
                           <small>
                             Start Timeline <span data-no-localize>{mapping.timelineId}</span>
+                            <Show when={mapping.selector.fallbackDeck === 1}>
+                              <span> · Deck 1 fallback</span>
+                            </Show>
                             <Show when={!props.timelineOptions.some((timeline) => timeline.id === mapping.timelineId)}>
                               <span class="inlineWarning"> · Missing authored Timeline</span>
                             </Show>

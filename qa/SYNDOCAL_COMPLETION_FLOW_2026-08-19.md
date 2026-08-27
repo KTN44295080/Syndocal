@@ -2243,3 +2243,37 @@ reviewer baseline
 is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
 direct cleanup remains policy-blocked. HW-4 remains **0/12**; this continuation
 does not claim native or physical acceptance.
+
+## 50. 2026-08-27 production title-selector editor checkpoint
+
+This source-only checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `129d08d76141e7e69363a454d429bc3acca6b50e`. The DJ Link
+mapping editor now authors the production `titleContains = 人生オーバー`
+selector with an explicit Deck 1 fallback, while `Use Current Track` remains an
+exact Content ID or exact Title + Artist operation. The retired editor path
+silently stripped `titleContains` and `fallbackDeck`; the new path preserves,
+normalizes, validates, edits, displays, and persists both fields.
+
+The selector policy is isolated from the 29-thousand-line `App.tsx` in the new
+191-line `app/src/djTrackMappingPolicy.ts`. It applies trim plus NFC without
+case folding, makes selector forms mutually exclusive, canonicalizes unused
+fields to null, and rejects more than 128 mappings, duplicate trimmed IDs,
+duplicate normalized selectors, invalid Timeline IDs, control characters, and
+values over 256 UTF-8 bytes. Panel validation occurs before the parent callback,
+so a rejected add/edit keeps its draft and renders the error locally; App still
+performs the final independent normalization before accepting state.
+
+`pnpm --dir app run check:dj-link`, `check:localization`, TypeScript, and the
+frontend production build passed. Localization is **3564/3564** with **0**
+unprotected user-data labels; the App chunk is **498.92 kB** (gzip
+**152.36 kB**) without a Vite warning. The dedicated Setup I/O gate passed all
+five viewports, including `1280x720`, without resizing typography, controls, or
+targets. `git diff --check` passed with only Git LF-to-CRLF notices and the
+modified frontend emitted **0 first-party warnings**. Independent Terra xHigh
+review is **GO** after it found and verified the draft-retention P1 fix. Ox was
+unavailable, so this is the recorded narrow review exception.
+
+No native build, deployed process, saved show project, or physical DJ/pedal
+acceptance is claimed. The running alpha.18 process remains the prior artifact.
+The next safe action is to finish the separate Follow-hold/F13 source tranches,
+advance the prerelease, and execute the exact native and HW-4 gates.

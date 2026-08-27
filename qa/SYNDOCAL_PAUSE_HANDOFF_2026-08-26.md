@@ -1333,3 +1333,40 @@ physical F13 pedal releases either hold. The next safe action is to finish the
 separate engine/runtime Follow-hold and F13 routing tranches, advance the
 prerelease, run the exact native build/launch/maximized-window gate, and then
 perform both physical pedal acceptances.
+
+## 27. 2026-08-27 production title-selector editor checkpoint
+
+This source checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `129d08d76141e7e69363a454d429bc3acca6b50e`. Its owned
+files are the DJ mapping policy/checker, the narrow App and Remote panel hunks,
+localization, the package checker entry, and these active QA documents. The
+concurrent Rust protocol/engine/app Follow-hold files remain unstaged.
+
+The previous editor knew only exact Content ID and exact Title + Artist and its
+App normalizer discarded the already-supported production fields. The new
+default draft is `titleContains = 人生オーバー` with explicit Deck 1 fallback;
+`Use Current Track` deliberately remains exact. The new 191-line pure policy
+module keeps validation out of the oversized App, applies trim plus NFC without
+case folding, nulls unused selector fields, and rejects mixed forms, invalid
+fallbacks, duplicate normalized selectors/trimmed IDs, more than 128 mappings,
+invalid Timeline IDs, control characters, and values over 256 UTF-8 bytes.
+Rejected add/edit attempts keep the local draft and show the exact local error.
+
+`pnpm --dir app run check:dj-link`, `check:localization`, TypeScript, frontend
+production build, and `check-viewport-containment --setup-io-only` passed. The
+viewport gate passed **5/5**, including `1280x720`; localization is
+**3564/3564** with **0** unprotected user-data labels. The App chunk is
+**498.92 kB** (gzip **152.36 kB**) without a Vite warning. `git diff --check`
+passed with only LF-to-CRLF Git notices and first-party warnings are **0**.
+Independent Terra xHigh review is **GO** after identifying and verifying the
+draft-retention P1 fix. Ox was unavailable, so this is the recorded narrow
+review exception. The `baseline-ui` constraints influenced this tranche by
+retaining native labeled controls, the existing checkbox class, existing
+sizes, and the disclosure-owned scrollport; no animation or new CSS was added.
+
+No native build or hardware acceptance is claimed. Read-only live verification
+found the prior exact-checkout alpha.18 PID `80264` still listening on
+`192.168.50.1:9100` with an established `.50.2` peer; it and Rekordbox were not
+stopped. The next safe action is to finish, review, and commit the concurrent
+Follow-hold/F13 source work, advance to alpha.19, then replace that process only
+at the explicit native-build boundary and execute the physical matrix.
