@@ -114437,12 +114437,8 @@ f 1 2 3
                 "the identical SYNC after a no-op dedupe hit must not be suppressed: {other:?}"
             ),
         }
-        // Freeze the clock before reading the playhead so the assertion has a
-        // deterministic bound instead of racing the running ticker.
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
+        // DJ Link owns the external clock, so the playhead is already frozen
+        // between correlated SYNC frames without pausing the Timeline.
         let converged_position = engine.snapshot().timeline.position_ms;
         assert!(
             (4_100..4_300).contains(&converged_position),
@@ -115056,10 +115052,7 @@ f 1 2 3
         assert_eq!(engine.snapshot(), engine_before_released_sync);
         assert!(!runtime.lock().unwrap().released);
 
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
+        let release_position_before = engine.snapshot().timeline.position_ms;
         let transport_before_release = engine.snapshot().timeline.transport_generation;
         let release = dj_link_test_envelope(
             protocol::DjLinkMessageType::Release,
@@ -115081,6 +115074,7 @@ f 1 2 3
         ) {
             DjLinkDispatchOutcome::TimelineState { state, .. } => {
                 assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+                assert!(!state.loop_active);
                 assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
                 assert_eq!(
                     state.release_event_id.as_deref(),
@@ -115093,6 +115087,15 @@ f 1 2 3
             engine.snapshot().timeline.transport_generation > transport_before_release,
             "StateSync(released=true) must not consume the later canonical RELEASE"
         );
+        assert_eq!(
+            engine.snapshot().timeline.position_ms,
+            release_position_before,
+            "canonical RELEASE must disable the loop without seeking the playhead"
+        );
+        assert!(matches!(
+            engine.snapshot().timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        ));
         assert!(
             runtime.lock().unwrap().released,
             "the release latch changes only after the canonical engine RELEASE ACK"
@@ -115426,9 +115429,11 @@ f 1 2 3
             "the reverse jump returns to the engine-authored grid origin"
         );
         engine
-            .send(EngineCommand::SetTimelinePlaying(true))
+            .dj_link_start_timeline_at_with_canonical_snapshot(
+                TimelineId(mapping_timeline_id),
+                engine.snapshot().timeline.position_ms,
+            )
             .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
 
         let missing = dj_link_test_envelope(
             protocol::DjLinkMessageType::MasterTrackActive,
@@ -115451,12 +115456,8 @@ f 1 2 3
                 "loop": null
             }),
         );
-        // Freeze the clock so the zero-mutation proofs below compare stable
-        // engine images instead of racing the running ticker.
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
+        // DJ Link still owns the external clock, so the zero-mutation proofs
+        // compare stable images without pausing the Timeline.
         let runtime_before_missing = runtime.lock().unwrap().clone();
         let engine_before_missing = engine.snapshot();
         assert!(matches!(
@@ -115589,6 +115590,7 @@ f 1 2 3
         // rejections: its canonical correlated RELEASE must succeed even
         // while an unmapped peer is present, proving no residual control
         // block latches onto the Timeline.
+        let owner_release_position = engine.snapshot().timeline.position_ms;
         let owner_transport_before_release = engine.snapshot().timeline.transport_generation;
         match dispatch_dj_link_event(
             dj_link_test_envelope(
@@ -115609,6 +115611,7 @@ f 1 2 3
         ) {
             DjLinkDispatchOutcome::TimelineState { state, .. } => {
                 assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+                assert!(!state.loop_active);
                 assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
                 assert_eq!(
                     state.release_event_id.as_deref(),
@@ -115622,6 +115625,11 @@ f 1 2 3
         assert!(
             engine.snapshot().timeline.transport_generation > owner_transport_before_release,
             "the owner's canonical RELEASE must still reach the engine after a foreign NoMapping"
+        );
+        assert_eq!(
+            engine.snapshot().timeline.position_ms,
+            owner_release_position,
+            "the owner's canonical RELEASE must not seek beside a foreign NoMapping"
         );
         assert!(
             runtime.lock().unwrap().released,
@@ -115757,10 +115765,6 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::TimelineState { .. }
         ));
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
         assert!(matches!(
             dispatch_dj_link_event(
                 dj_link_test_envelope(
@@ -116092,10 +116096,6 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::TimelineState { .. }
         ));
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
         assert!(matches!(
             dispatch_dj_link_event(
                 dj_link_test_envelope(
@@ -116255,10 +116255,6 @@ f 1 2 3
             ),
             DjLinkDispatchOutcome::TimelineState { .. }
         ));
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
         assert!(matches!(
             dispatch_dj_link_event(
                 dj_link_test_envelope(
@@ -117095,6 +117091,16 @@ f 1 2 3
                 "timelineId": engine.snapshot().timeline.id.0.to_string(),
                 "playSessionId": "play-error",
                 "active": true
+            }),
+        ));
+        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+            protocol::DjLinkMessageType::Release,
+            6,
+            "release-paused-engine-error",
+            json!({
+                "state": "released",
+                "timelineId": timeline_id,
+                "playSessionId": "play-error"
             }),
         ));
     }

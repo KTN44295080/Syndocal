@@ -539,7 +539,7 @@ export const installCueAudioMock = (eventTargets) => {
       }
       if (command === "get_application_update_configuration") {
         if (!exactKeys(args, [])) throw new Error("Cue Audio update startup payload must be empty");
-        return { enabled: false, current_version: "1.2.0-alpha.16", channel: "alpha", endpoint_origin: null, reason: "disabled in browser gate" };
+        return { enabled: false, current_version: "1.2.0-alpha.17", channel: "alpha", endpoint_origin: null, reason: "disabled in browser gate" };
       }
       if (command === "remote_access_urls") {
         if (!exactKeys(args, ["config"]) || !args.config || typeof args.config !== "object") throw new Error("Cue Audio remote-access startup payload differs from the exact config contract");

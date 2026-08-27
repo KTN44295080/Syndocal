@@ -17,7 +17,7 @@ $script:GoodPid = [uint32]4242
 $script:WrongPid = [uint32]4243
 $script:GoodHash = ("ab" * 32)
 $script:WrongHash = ("cd" * 32)
-$script:GoodVersion = "1.2.0-alpha.16"
+$script:GoodVersion = "1.2.0-alpha.17"
 $script:WrongVersion = "9.9.9-wrong"
 $script:GoodHead = ("face" * 10)
 $script:WrongHead = ("dead" * 10)
@@ -403,11 +403,11 @@ function Invoke-FocusedChecks {
       $prior = $script:CurrentHead; $script:CurrentHead = $script:WrongHead; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "git HEAD mismatch" } finally { $script:CurrentHead = $prior }
     } })
     $checks.Add([pscustomobject]@{ Name = "dirty checkout is rejected before display acceptance"; Run = {
-      Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) throw "Fail closed: exact alpha.16 artifact acceptance requires a clean checkout; git status reported 1 change(s)." }
+      Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) throw "Fail closed: exact alpha.17 artifact acceptance requires a clean checkout; git status reported 1 change(s)." }
       try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "requires a clean checkout" } finally { Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) $true } }
     } })
-    $checks.Add([pscustomobject]@{ Name = "non-alpha.16 configuration is rejected"; Run = {
-      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.16"
+    $checks.Add([pscustomobject]@{ Name = "non-alpha.17 configuration is rejected"; Run = {
+      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.17"
     } })
     $checks.Add([pscustomobject]@{ Name = "GDI renumbering of the same stable identity is accepted"; Run = {
       $priorName = $script:World.monitors[1].device_name
@@ -676,7 +676,7 @@ function Invoke-FocusedChecks {
         @{ name = "empty stdout"; stdout = ""; stderr = ""; exit = 0; expect = "not exactly one line" },
         @{ name = "padded line"; stdout = " $validLine"; stderr = ""; exit = 0; expect = "leading or trailing whitespace" },
         @{ name = "stderr noise"; stdout = $validLine; stderr = "[show-asio-check] hint"; exit = 0; expect = "unexpected stderr" },
-        @{ name = "relative directory"; stdout = "Show-ASIO local artifact PASS: target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.16_facefaceface_x64 files=3 distributionApproved=false"; stderr = ""; exit = 0; expect = "plain rooted Windows path" }
+        @{ name = "relative directory"; stdout = "Show-ASIO local artifact PASS: target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.17_facefaceface_x64 files=3 distributionApproved=false"; stderr = ""; exit = 0; expect = "plain rooted Windows path" }
       )
       $allRejected = $true
       foreach ($hostile in $hostileLines) {
@@ -691,7 +691,7 @@ function Invoke-FocusedChecks {
     } })
     $checks.Add([pscustomobject]@{ Name = "checker-derived directory outside this checkout is rejected"; Run = {
       [void](New-ShowArtifactFixture)
-      Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.16_facefaceface_x64")
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.17_facefaceface_x64")
       try {
         $config = New-ShowConfiguration
         $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "outside this checkout"
@@ -888,7 +888,7 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "runner static contract forbids process and output mutations"; Run = {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.16", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.17", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
       $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }

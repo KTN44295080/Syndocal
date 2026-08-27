@@ -4599,8 +4599,8 @@ define_engine_command! {
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
-    /// One queue item for DJ Link RELEASE: disable the loop and resume the
-    /// timeline as one rollback-capable runtime publication.
+    /// One queue item for DJ Link RELEASE: disable the loop and relinquish DJ
+    /// Link clock ownership without starting or seeking the Timeline.
     DjLinkRelease {
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
@@ -6696,9 +6696,10 @@ impl EngineHandle {
         )
     }
 
-    /// Submit the atomic DJ Link RELEASE publication.  Disable-loop and
-    /// resume are one queue item and are rolled back together if either side
-    /// rejects the transition.
+    /// Submit the atomic DJ Link RELEASE publication. Disabling the loop and
+    /// handing an already-running playhead from DJ Link back to the local
+    /// clock are one queue item and are rolled back together if either side
+    /// rejects the transition. RELEASE never starts or seeks a Timeline.
     pub fn dj_link_release(&self) -> Result<(), String> {
         self.dj_link_release_with_timeout(DJ_LINK_ENGINE_ACK_TIMEOUT)
     }
@@ -25895,16 +25896,10 @@ impl EngineRuntime {
                 }
                 let planning = admitted && admission.begin_dj_link_planning();
                 let result = if planning {
-                    {
-                        self.set_timeline_loop_enabled_state(false);
-                        self.apply_timeline_playing_command(true, true).map(|_| ())
-                    }
+                    self.apply_dj_link_release_without_transport_change()
                 } else {
                     Err("DJ Link release expired or was cancelled before commit".to_string())
                 };
-                if planning && result.is_err() {
-                    self.rollback_pending_command(rollback.clone());
-                }
                 if planning && result.is_ok() {
                     admission.run_dj_link_planning_hook();
                 }
@@ -39788,6 +39783,37 @@ impl EngineRuntime {
             // behavior above, but they do not fabricate a new authority epoch.
             Ok(TimelineTransportSetPlayingDisposition::NoOp)
         }
+    }
+
+    /// Disable the loop and, when necessary, relinquish DJ Link's clock for a
+    /// Timeline that is already playing. All fallible guards run before the
+    /// first mutation, so a rejected RELEASE preserves even the private DJ
+    /// observation baseline without invoking the broader rollback image.
+    fn apply_dj_link_release_without_transport_change(&mut self) -> Result<(), String> {
+        if !self.timeline_playing {
+            return Err("DJ Link release requires an already-playing Timeline".to_string());
+        }
+        let relinquish_dj_clock = match self.timeline_external_sync_source.as_ref() {
+            Some(ClockSource::DjLink) => {
+                self.preflight_timeline_transport_authority_invalidation()?;
+                true
+            }
+            None => false,
+            Some(_) => {
+                return Err(
+                    "DJ Link release cannot take ownership from another external clock".to_string(),
+                )
+            }
+        };
+
+        if relinquish_dj_clock {
+            self.invalidate_timeline_transport_authority()
+                .expect("DJ Link RELEASE transport invalidation was preflighted");
+            self.timeline_external_sync_source = None;
+            self.timeline_dj_link_observation = None;
+        }
+        self.set_timeline_loop_enabled_state(false);
+        Ok(())
     }
 
     fn timeline_follow_is_abortable(&self) -> bool {
@@ -61149,6 +61175,9 @@ mod tests {
     use protocol::{AudioWaveformPoint, DmxModeSummary, GeometrySummary, Vec3, VideoMediaMetadata};
     use std::net::UdpSocket;
     use std::sync::Barrier;
+
+    #[path = "dj_link_release.rs"]
+    mod dj_link_release_tests;
 
     const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
     const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;
@@ -108488,6 +108517,14 @@ mod tests {
         engine
     }
 
+    fn prepare_dj_link_transaction_test_operation(engine: &EngineHandle, operation: &str) {
+        if operation == "release" {
+            engine
+                .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+                .unwrap();
+        }
+    }
+
     fn dj_link_transaction_test_command(
         operation: &str,
         expires_at: Instant,
@@ -108620,6 +108657,7 @@ mod tests {
     fn dj_link_all_four_commands_cancel_during_provisional_planning_to_exact_a() {
         for operation in ["start", "loop", "beat jump", "release"] {
             let engine = dj_link_transaction_test_engine();
+            prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
             let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
@@ -108683,6 +108721,7 @@ mod tests {
     fn dj_link_all_four_commands_cancel_after_resource_reservation_to_exact_a() {
         for operation in ["start", "loop", "beat jump", "release"] {
             let engine = dj_link_transaction_test_engine();
+            prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
             let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
@@ -108745,6 +108784,7 @@ mod tests {
     fn dj_link_all_four_commands_commit_boundary_wins_with_canonical_snapshot_and_audio() {
         for operation in ["start", "loop", "beat jump", "release"] {
             let engine = dj_link_transaction_test_engine();
+            prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
             let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -108863,8 +108903,12 @@ mod tests {
             .is_err());
         assert_eq!(engine.snapshot().timeline.position_ms, 4_800);
 
-        engine.dj_link_release().unwrap();
-        let released_at = engine.snapshot().timeline.position_ms;
+        let released = engine.dj_link_release_with_canonical_snapshot().unwrap();
+        assert_eq!(
+            released.timeline.position_ms, 4_800,
+            "RELEASE must not seek or advance the externally-owned playhead"
+        );
+        let released_at = released.timeline.position_ms;
         thread::sleep(Duration::from_millis(50));
         assert!(
             engine.snapshot().timeline.position_ms > released_at,
@@ -109210,8 +109254,11 @@ mod tests {
             .unwrap();
         assert!(runtime.timeline_dj_link_observation.is_some());
 
-        // The DJ Link release core hands the playhead back to the local clock.
-        runtime.apply_timeline_playing_command(true, true).unwrap();
+        // The DJ Link release core hands the already-running playhead back to
+        // the local clock without issuing a generic Play command.
+        runtime
+            .apply_dj_link_release_without_transport_change()
+            .unwrap();
         assert!(runtime.timeline_external_sync_source.is_none());
         assert!(runtime.timeline_dj_link_observation.is_none());
 
@@ -109229,31 +109276,19 @@ mod tests {
     }
 
     #[test]
-    fn dj_link_release_is_idempotent_without_generation_drift() {
-        let mut runtime = runtime_with_lfo_effects(&[]);
-        runtime.timeline_loop_runtime.a_ms = Some(100);
-        runtime.timeline_loop_runtime.b_ms = Some(900);
-        runtime.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
-        let generation_before_release = runtime.timeline_loop_runtime.generation;
-        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
-        let generation_after_release = runtime.timeline_loop_runtime.generation;
-        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
-        assert_eq!(
-            runtime.timeline_loop_runtime.generation,
-            generation_after_release
-        );
-        assert!(generation_after_release > generation_before_release);
-    }
-
-    #[test]
-    fn dj_link_ack_lane_rejects_unpublished_targets_and_bad_absolute_loop() {
+    fn dj_link_ack_lane_rejects_unpublished_targets_bad_loop_and_stopped_release() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
         assert!(engine.dj_link_start_timeline(TimelineId(u64::MAX)).is_err());
         assert!(engine.dj_link_set_timeline_loop_absolute(1, true).is_err());
-        assert!(engine.dj_link_release().is_ok());
+        let before_release = engine.snapshot();
+        assert_eq!(
+            engine.dj_link_release().unwrap_err(),
+            "DJ Link release requires an already-playing Timeline"
+        );
+        assert_eq!(engine.snapshot(), before_release);
     }
 
     #[test]
@@ -109452,10 +109487,10 @@ mod tests {
 
     #[test]
     fn dj_link_admission_with_held_snapshot_finishes_exact_a_before_caller_deadline() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
         let mut before = engine.snapshot().timeline;
         for _ in 0..20 {
             if !before.layers.is_empty() {
@@ -109524,10 +109559,10 @@ mod tests {
 
     #[test]
     fn dj_link_public_api_read_guard_rolls_back_before_shutdown_deadline() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
         let mut before = engine.snapshot().timeline;
         for _ in 0..20 {
             if !before.layers.is_empty() {
@@ -109638,10 +109673,10 @@ mod tests {
 
     #[test]
     fn dj_link_publication_failure_rolls_back_release_to_exact_snapshot() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
         let mut before = engine.snapshot().timeline;
         for _ in 0..20 {
             if !before.layers.is_empty() {
