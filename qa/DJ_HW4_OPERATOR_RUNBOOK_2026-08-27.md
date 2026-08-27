@@ -227,10 +227,16 @@ the checkbox open and name the missing subcheck.
   fresh generation and State Sync. Old-close/ABA protection requires an explicit
   two-session protocol/fault test; a normal reconnect alone is insufficient.
 - [ ] **HW-4.2 — negative track admission.** Pre-load, preview, Cue, stopped,
-  non-playing, unmapped, and nonmatching identity do not trigger. Ambiguous
-  identity requires a bounded injected protocol case.
-- [ ] **HW-4.3 — any-deck exact playback.** Play an exact mapped track on every
-  intended deck; any Master display state is irrelevant to admission. Require one `DJ_TRACK_ACTIVE`, one
+  non-playing, unmapped, ambiguous mapping, and a nonmatching identity outside
+  the explicitly authored Deck 1 fallback do not trigger. Deck 2 must never
+  enter that fallback. Ambiguous mapping requires a bounded injected protocol
+  case.
+- [ ] **HW-4.3 — any-deck mapped playback and explicit fallback arbitration.**
+  Play an exact mapped track on every intended deck; any Master display state
+  is irrelevant to admission. Then prove the production selector separately:
+  zero title positives may select only fresh playing Deck 1 after the 1400 ms
+  metadata wait; multiple positives prefer fresh playing Deck 1 and otherwise
+  the lowest valid positive deck. Require one `DJ_TRACK_ACTIVE`, one
   admitted owner, and exactly one mapped Timeline start.
 - [ ] **HW-4.4 — concurrent owner fencing.** A second playing deck cannot steal
   the admitted owner. Terminally release it, then prove a later mapped deck or

@@ -608,8 +608,8 @@ denominator, which remains **19/71 (26.8%)**.
 | Check | Required demonstration | Status |
 | --- | --- | --- |
 | [ ] HW-4.1 | Wired `/dj-link` HELLO/authentication, session replacement, and old-close protection | Required / Peer and hardware pending |
-| [ ] HW-4.2 | Track pre-load, preview, Cue, non-playing, nonmatching, and ambiguous identity do not trigger | Required / Peer and hardware pending |
-| [ ] HW-4.3 | Actual exact mapped playback on any deck emits one `DJ_TRACK_ACTIVE` and starts one mapped Timeline | Required / Peer and hardware pending |
+| [ ] HW-4.2 | Track pre-load, preview, Cue, non-playing, ambiguous mapping, and nonmatching identity outside the explicitly authored Deck 1 fallback do not trigger; Deck 2 never enters that fallback | Required / Peer and hardware pending |
+| [ ] HW-4.3 | Actual mapped playback on any deck emits one `DJ_TRACK_ACTIVE` and starts one mapped Timeline; additionally prove the explicit production arbitration: zero title positives may select only fresh playing Deck 1 after the 1400 ms metadata wait, while multiple positives prefer fresh playing Deck 1 and otherwise the lowest valid positive deck | Required / Peer and hardware pending |
 | [ ] HW-4.4 | Concurrent playing decks cannot steal an admitted owner; terminal release permits a later mapped deck/session | Required / Peer and hardware pending |
 | [ ] HW-4.5 | Stage 1 F14 local LoopHalf plus repeated absolute measured-loop `DJ_LOOP_STATE` reports | Required / Peer and hardware pending |
 | [ ] HW-4.6 | Current v1.1.8 Stage 1 F13: HPF CC16 start plus immediate exactly-once `DJ_RELEASE`, then ChannelFader CC17 fade, Cue/Stop, HPF/fader reset; local MIDI failures do not gate Release | Required / Peer and hardware pending |

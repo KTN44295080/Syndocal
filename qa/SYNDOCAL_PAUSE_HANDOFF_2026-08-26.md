@@ -1535,3 +1535,43 @@ Real fixture placement against the supplied Daslight project, DMX output and
 input/merge, MIDI, Rekordbox, DJ Link, pedal HW-4 (`0/12`), target-PC deployment,
 three-display operation, and the remaining ASIO matrix are still unverified.
 Those are the next show-critical boundaries.
+
+## 30. 2026-08-27 Deck 1 fallback contract adjudication
+
+The clean starting point was branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `45386a49eca0f9e53a4a11b17aaeba5140b68776`. The responsive
+alpha.20 release process at exact checkout path remained running; this
+documentation-only adjudication did not stop or replace it.
+
+An adversarial audit correctly found that Syndocal's explicit
+`fallbackDeck = 1` accepts a known nonmatching playing Deck 1. That behavior is
+not an accidental implicit resolver fallback: it is the operator-requested
+zero-positive rule already implemented by the controlled rb-output `1.1.9`
+peer at exact clean/upstream-equal commit
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Its strict production selector is
+`titleContains = 人生オーバー`, NFC/case-sensitive, with
+`deck1MetadataWaitMs = 1400`. One positive selects that Deck; zero positives may
+select only a fresh actually-playing Deck 1 after the wait; multiple positives
+prefer fresh playing Deck 1 and otherwise the lowest valid positive Deck.
+Rekordbox Master state is not an admission input.
+
+The rejected alternative was to silently narrow the KDMX fallback to
+content-ID-only input. That would have contradicted the current peer wire and
+the user's explicit zero/multiple-positive Deck 1 fallback requirement. No
+runtime source was changed. Instead, HW-4.2 now keeps the true negative cases
+(pre-load, preview, Cue, stopped/non-playing, ambiguous mapping, and
+nonmatching identity outside the explicit Deck 1 fallback), while HW-4.3 owns
+the exact zero/multiple-positive fallback demonstration. Deck 2 never gains
+fallback authority. This resolves the documentation contradiction without
+claiming physical acceptance.
+
+Current-head software revalidation used exact `vcvars64.bat
+-vcvars_ver=14.44`, pinned
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and verified that linker first in `where.exe link.exe`. Engine DJ-Link focused
+tests passed `28/28`; Syndocal DJ-Link focused tests passed `119`, failed `0`,
+ignored `1` live-network test; first-party warnings were `0`. The first two
+shell attempts never started Cargo and are not accepted evidence. HW-4 remains
+exactly `0/12`; real token, wired peer, Rekordbox decks, pedal/MIDI,
+response/no-response, reconnect/restart, and shared Art-Net/sACN observations
+remain required.

@@ -2440,3 +2440,27 @@ Real fixture placement against the supplied Daslight project, DMX output and
 input/merge, MIDI, Rekordbox, DJ Link, pedal HW-4 (`0/12`), target-PC deployment,
 three-display operation, and the remaining ASIO matrix are still unverified.
 Those are the next show-critical boundaries.
+
+## 53. 2026-08-27 current Deck 1 fallback acceptance boundary
+
+The current controlled peer remains rb-output `1.1.9` at exact
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Its production
+`titleContains = 人生オーバー` selector deliberately owns the operator-requested
+zero/multiple-positive policy: zero positives may select only fresh playing
+Deck 1 after `deck1MetadataWaitMs = 1400`; multiple positives prefer fresh
+playing Deck 1 and otherwise the lowest valid positive Deck. Master state never
+participates. KDMX's explicit authored `fallbackDeck = 1` accepts that peer
+decision and never grants fallback authority to Deck 2.
+
+This policy is not the retired implicit content-ID-to-title fallthrough. Exact
+content and exact title + artist selectors do not cross-fall through, and
+duplicate/ambiguous authored fallback mappings remain fail-closed. The earlier
+HW-4.2 wording incorrectly classified the explicitly configured Deck 1 case as
+a negative; the current acceptance split keeps negative identity cases outside
+that fallback in HW-4.2 and requires the zero/multiple-positive demonstration
+in HW-4.3. No runtime source changed in this adjudication, and HW-4 remains
+`0/12` pending real wired Rekordbox/DJ/pedal evidence.
+
+Current-head focused revalidation used exact MSVC 14.44 and its pinned linker
+first: engine DJ-Link `28/28`; Syndocal DJ-Link `119` passed / `0` failed / `1`
+intentional live-network ignore; first-party warnings `0`.
