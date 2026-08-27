@@ -16,7 +16,7 @@ const LIFE_FIXED_BPM = 170;
 const MADOW_BPM = 194;
 const LIFE_AUTHORED_MEASURES = 156;
 const LIFE_LOOP_MEASURE = 98;
-const LIFE_LOOP_PASSES = 8;
+const LIFE_LOOP_END_MEASURE_EXCLUSIVE = 99;
 const LIFE_RAMP_START_MEASURE = 149;
 const LIFE_RAMP_BEATS = 32;
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -55,7 +55,7 @@ function parseExportArgs(args) {
     }
   }
   assert(mode === "default" || mode === "perceptual-preview", `unsupported export mode ${mode}`);
-  return { output: output ?? "C:/TEMP/syndocal-show-audio", mode };
+  return { output: output ?? "C:/TEMP/syndocal-show-audio-indefinite-loop", mode };
 }
 
 const EXPORT_OPTIONS = parseExportArgs(process.argv.slice(2));
@@ -341,12 +341,9 @@ function buildSchedules() {
   };
 
   for (let measure = 1; measure <= 148; measure += 1) {
-    const passes = measure === LIFE_LOOP_MEASURE ? LIFE_LOOP_PASSES : 1;
-    for (let pass = 1; pass <= passes; pass += 1) {
-      for (let beat = 1; beat <= 4; beat += 1) {
-        appendLifeBeat(measure, pass, beat, LIFE_FIXED_BPM, seconds);
-        seconds += 60 / LIFE_FIXED_BPM;
-      }
+    for (let beat = 1; beat <= 4; beat += 1) {
+      appendLifeBeat(measure, 1, beat, LIFE_FIXED_BPM, seconds);
+      seconds += 60 / LIFE_FIXED_BPM;
     }
   }
 
@@ -383,19 +380,17 @@ function buildSchedules() {
   const madowFrames = Math.round(madowBeatOffset * 60 / MADOW_BPM * SAMPLE_RATE);
 
   // Bridge at measure 98 is intentionally silent because its requested cue
-  // would collide with the required Looping cue for pass 1.
+  // would collide with the one loop-entry cue. Runtime A-B transport repeats
+  // this single authored measure indefinitely until the operator presses F13.
   const lifeGuides = LIFE_SECTION_GUIDES.filter((guide) => guide.label !== "Bridge").map((guide) => guideBeforeTarget(lifeClicks, {
     ...guide,
     allowSongStart: guide.measure === 1,
   }));
-  for (let pass = 1; pass <= LIFE_LOOP_PASSES; pass += 1) {
-    lifeGuides.push(guideBeforeTarget(lifeClicks, {
-      label: "Looping",
-      measure: LIFE_LOOP_MEASURE,
-      pass,
-      kind: "operation",
-    }));
-  }
+  lifeGuides.push(guideBeforeTarget(lifeClicks, {
+    label: "Looping",
+    measure: LIFE_LOOP_MEASURE,
+    kind: "operation",
+  }));
   lifeGuides.push(guideBeforeTarget(lifeClicks, { label: "Break", measure: 99, kind: "operation" }));
   for (let measure = LIFE_RAMP_START_MEASURE; measure <= LIFE_AUTHORED_MEASURES; measure += 2) {
     lifeGuides.push(guideBeforeTarget(lifeClicks, { label: "Trans", measure, kind: "transition" }));
@@ -572,13 +567,12 @@ const connectedGuideEvents = baseConnectedGuideEvents.map((event) => {
 }).sort((left, right) => left.globalFrame - right.globalFrame);
 
 assert(LIFE_AUTHORED_MEASURES * 4 === 624, "Life authored beat count is 624");
-assert((LIFE_LOOP_PASSES - 1) * 4 === 28, "Life loop adds 28 beats");
-assert(schedule.life.clicks.length === 652, "Life performance click count is 652");
+assert(schedule.life.clicks.length === 624, "Life source click count is the natural 624 beats");
 assert(schedule.madow.clicks.length === 840, "Madow click count is 840");
-assert(schedule.life.clicks.length + schedule.madow.clicks.length === 1492, "connected click count is 1492");
-assert(schedule.life.frames === 11_010_639, "Life timeline frames stay unchanged");
+assert(schedule.life.clicks.length + schedule.madow.clicks.length === 1464, "connected source click count is 1464");
+assert(schedule.life.frames === 10_536_286, "Life natural timeline frames stay exact");
 assert(schedule.madow.frames === 12_470_103, "Madow timeline frames stay unchanged");
-assert(clickScheduleFingerprint(schedule.life.clicks) === "6e27f826d53572fe914d0e551b38261b3ec7f474a2219846d60061bc5785e46b", "Life click sample schedule stays byte-for-byte unchanged");
+assert(clickScheduleFingerprint(schedule.life.clicks) === "a8e3f3ad5ed102a93b2fc1081b85a1c4814e0c563381a8c5d77a881c2feb4550", "Life natural click sample schedule stays byte-for-byte unchanged");
 assert(clickScheduleFingerprint(schedule.madow.clicks) === "809aa5faa51df68f1298ef9c239fae77a6ff56c2604150f89fa0efe4be3f573b", "Madow click sample schedule stays byte-for-byte unchanged");
 const physicalGuideCounts = countBy(connectedGuideEvents, "label");
 assert(physicalGuideCounts.Intro === 1, "Guide has one Life Intro cue and intentionally no Madow Intro cue");
@@ -589,11 +583,11 @@ assert(physicalGuideCounts.Interlude === 2, "Guide has 2 Interlude cues");
 assert(physicalGuideCounts.Breakdown === 1, "Guide has one chart-section Breakdown cue");
 assert(physicalGuideCounts.Outro === 2, "Guide has 2 Outro cues");
 assert(physicalGuideCounts.Bridge === undefined, "Guide intentionally suppresses the colliding measure-98 Bridge cue");
-assert(physicalGuideCounts.Looping === 8, "Guide has 8 Looping cues");
+assert(physicalGuideCounts.Looping === 1, "Guide source has one loop-entry cue");
 assert(physicalGuideCounts.Break === 1, "Guide has 1 Break cue");
 assert(physicalGuideCounts.Trans === 4, "Guide has 4 two-measure Trans cues");
 assert(physicalGuideCounts.Complete === 1, "Guide has one Complete cue and no Madow Intro voice");
-assert(connectedGuideEvents.length === 33, "Guide has 33 non-overlapping physical events");
+assert(connectedGuideEvents.length === 26, "Guide has 26 non-overlapping source events");
 const semanticGuideCounts = {};
 for (const event of connectedGuideEvents) {
   for (const label of event.semanticLabels) {
@@ -608,11 +602,11 @@ assert(semanticGuideCounts.Interlude === 2, "Guide semantically announces 2 Inte
 assert(semanticGuideCounts.Bridge === undefined, "Guide has no Bridge semantic event because Looping owns the coincident entry");
 assert(semanticGuideCounts.Breakdown === 1, "Guide semantically announces one Breakdown section");
 assert(semanticGuideCounts.Outro === 2, "Guide semantically announces 2 Outros");
-assert(semanticGuideCounts.Looping === 8, "Guide semantically announces 8 loop passes");
+assert(semanticGuideCounts.Looping === 1, "Guide semantically announces the loop entry once per transport pass");
 assert(semanticGuideCounts.Break === 1, "Guide semantically announces one Break");
 assert(semanticGuideCounts.Trans === 4, "Guide semantically announces 4 two-measure transition blocks");
 assert(semanticGuideCounts.Complete === 1, "Guide semantically announces Complete once");
-assert(Object.values(semanticGuideCounts).reduce((sum, count) => sum + count, 0) === 33, "Guide has 33 semantic announcements");
+assert(Object.values(semanticGuideCounts).reduce((sum, count) => sum + count, 0) === 26, "Guide has 26 semantic source announcements");
 const chartKeys = (song, kind) => connectedGuideEvents
   .filter((event) => event.announcesSong === song && event.kind === kind)
   .map((event) => `${event.label}@${event.announcesMeasure}:${event.announcesPass}`);
@@ -626,9 +620,8 @@ assert(JSON.stringify(chartKeys("madow-hoshi", "section")) === JSON.stringify([
   "Verse@125:1", "Pre Chorus@147:1", "Chorus@164:1", "Outro@192:1",
 ]), "Madow section Guide chart matches every approved boundary and omits Intro exactly");
 assert(JSON.stringify(chartKeys("jinsei-over", "operation")) === JSON.stringify([
-  "Looping@98:1", "Looping@98:2", "Looping@98:3", "Looping@98:4",
-  "Looping@98:5", "Looping@98:6", "Looping@98:7", "Looping@98:8", "Break@99:1",
-]), "Life operational Guide chart has every loop pass then Break exactly");
+  "Looping@98:1", "Break@99:1",
+]), "Life operational Guide chart has one loop entry and the post-release Break");
 assert(JSON.stringify(chartKeys("jinsei-over", "transition")) === JSON.stringify([
   "Trans@149:1", "Trans@151:1", "Trans@153:1", "Trans@155:1",
 ]), "Life transition Guide chart announces every two-measure block exactly");
@@ -814,7 +807,7 @@ const decorateGuide = (event) => ({
 });
 
 const manifest = {
-  schema: "syndocal-show-audio-export/v2",
+  schema: "syndocal-show-audio-export/v3",
   deterministicSource: "tools/audio/export-jinsei-madow-click-guide.mjs",
   mode: EXPORT_MODE,
   audioFormat: { codec: "pcm_s16le", sampleRate: SAMPLE_RATE, channels: 1, bitsPerSample: 16 },
@@ -852,7 +845,7 @@ const manifest = {
       life: "LIFE_OVER_SONG_MAP: Intro 1, Verse 18/58, Pre Chorus 26/66, Chorus 34/82/117, Interlude 50, Bridge 98, Breakdown 114, Outro 142, End/Trans 149",
       madow: "MADOW_SONG_MAP: Intro 1, Verse 19/125, Pre Chorus 43/147, Chorus 77/164, Interlude 101, Outro 192",
       productExceptions: [
-        "Life Bridge 98 is silent because Looping pass 1 owns the same required pre-entry beat.",
+        "Life Bridge 98 is silent because the runtime-repeated Looping entry owns the same required pre-entry beat.",
         "Madow Intro 1 is silent; Complete is the sole transition-boundary voice.",
         "Life End 149-156 uses Trans every two measures at 149/151/153/155.",
       ],
@@ -877,9 +870,13 @@ const manifest = {
     "jinsei-over": {
       authoredMeasures: LIFE_AUTHORED_MEASURES,
       authoredBeats: 624,
-      loopMeasure: LIFE_LOOP_MEASURE,
-      loopTotalPasses: LIFE_LOOP_PASSES,
-      loopAddedBeats: 28,
+      runtimeLoop: {
+        startMeasure: LIFE_LOOP_MEASURE,
+        endMeasureExclusive: LIFE_LOOP_END_MEASURE_EXCLUSIVE,
+        repeatMode: "indefinite",
+        releaseTrigger: "F13",
+        automaticRelease: false,
+      },
       performanceClicks: schedule.life.clicks.length,
       timelineFrames: schedule.life.frames,
       timelineDurationSeconds: round9(schedule.life.frames / SAMPLE_RATE),

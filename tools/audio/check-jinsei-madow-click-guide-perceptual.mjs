@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const [baselineArg, defaultCurrentArg, run1Arg, run2Arg] = process.argv.slice(2);
-const BASELINE_DIR = resolve(baselineArg ?? "C:/TEMP/syndocal-show-audio");
+const BASELINE_DIR = resolve(baselineArg ?? "C:/TEMP/syndocal-show-audio-indefinite-loop");
 const DEFAULT_CURRENT_DIR = resolve(defaultCurrentArg ?? "C:/TEMP/syndocal-show-audio-default-review");
 const RUN1_DIR = resolve(run1Arg ?? "C:/TEMP/syndocal-show-audio-perceptual-review-1");
 const RUN2_DIR = resolve(run2Arg ?? "C:/TEMP/syndocal-show-audio-perceptual-review-2");
@@ -218,14 +218,15 @@ function canonicalManifest(manifest) {
 }
 
 function verifySemanticSchedule(manifest, expectedMode) {
+  assert(manifest.schema === "syndocal-show-audio-export/v3", "manifest uses the indefinite-loop schema");
   assert(manifest.mode === expectedMode, `manifest mode is ${expectedMode}`);
   assert(manifest.guideSpec.mode === expectedMode, `guideSpec mode is ${expectedMode}`);
   assert(manifest.guideSpec.activityRule.windowFrames === ACTIVITY_WINDOW_FRAMES, "manifest describes 10 ms activity windows");
   assert(manifest.guideSpec.activityRule.description.includes("forward-looking"), "activity-window direction is truthful");
   assert(!manifest.guideSpec.activityRule.description.includes("trailing"), "activity rule does not claim a trailing window");
   assert(manifest.guideSpec.activityRule.perceptualEndMarginFrames === END_MARGIN_FRAMES, "manifest describes a 150 ms perceptual margin");
-  assert(manifest.totals.clickCount === 1492, "click count is 1492");
-  assert(manifest.totals.physicalGuideEventCount === 33, "physical guide count is 33");
+  assert(manifest.totals.clickCount === 1464, "natural source click count is 1464");
+  assert(manifest.totals.physicalGuideEventCount === 26, "physical source guide count is 26");
   const counts = {};
   for (const event of manifest.guideEvents) {
     counts[event.label] = (counts[event.label] ?? 0) + 1;
@@ -238,12 +239,21 @@ function verifySemanticSchedule(manifest, expectedMode) {
   }
   assert(counts.Intro === 1 && counts.Verse === 4 && counts["Pre Chorus"] === 4, "Intro/Verse/Pre Chorus counts are exact");
   assert(counts.Chorus === 5 && counts.Interlude === 2 && counts.Breakdown === 1 && counts.Outro === 2, "section counts are exact");
-  assert(counts.Looping === 8 && counts.Break === 1 && counts.Trans === 4 && counts.Complete === 1, "operation/transition counts are exact");
+  assert(counts.Looping === 1 && counts.Break === 1 && counts.Trans === 4 && counts.Complete === 1, "operation/transition source counts are exact");
   assert(counts.Bridge === undefined, "Bridge remains suppressed by Looping priority");
   const transMeasures = manifest.guideEvents.filter((event) => event.label === "Trans").map((event) => event.announcesMeasure);
   assert(JSON.stringify(transMeasures) === JSON.stringify([149, 151, 153, 155]), "Trans remains every two measures");
-  const loopingPasses = manifest.guideEvents.filter((event) => event.label === "Looping").map((event) => event.announcesPass);
-  assert(JSON.stringify(loopingPasses) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8]), "Looping remains eight passes");
+  const loopingEntries = manifest.guideEvents.filter((event) => event.label === "Looping");
+  assert(loopingEntries.length === 1 && loopingEntries[0].announcesMeasure === 98, "Looping has one reusable measure-98 entry");
+  assert(manifest.songs["jinsei-over"].loopTotalPasses === undefined, "manifest has no finite loop pass count");
+  assert(manifest.songs["jinsei-over"].loopAddedBeats === undefined, "manifest has no synthetic loop-added beats");
+  assert(JSON.stringify(manifest.songs["jinsei-over"].runtimeLoop) === JSON.stringify({
+    startMeasure: 98,
+    endMeasureExclusive: 99,
+    repeatMode: "indefinite",
+    releaseTrigger: "F13",
+    automaticRelease: false,
+  }), "manifest declares one indefinite F13-released runtime measure");
   const complete = manifest.guideEvents.find((event) => event.label === "Complete");
   assert(complete.announcesSong === "madow-hoshi" && complete.announcesMeasure === 1 && complete.announcesBeat === 1, "Complete remains the Madow boundary cue");
   assert(!manifest.guideEvents.some((event) => event.announcesSong === "madow-hoshi" && event.announcesMeasure === 1 && event.label !== "Complete"), "Madow Intro has no competing voice");

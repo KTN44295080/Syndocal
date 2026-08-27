@@ -1311,8 +1311,10 @@ The operator confirmed the show chart as `人生オーバー` 156 measures, all 
 despite the separate FRET STEP definition still ending at 151. Its Guide chart
 announces Intro, Verse, Pre Chorus, Chorus, Interlude, Breakdown, and Outro on
 the preceding measure's final beat, except Intro at frame zero. Measure 98 is
-performed for eight total passes with `Looping` on every pass. `Bridge` is
-deliberately suppressed, and `Break` targets measure 99 from its preceding beat.
+an indefinite one-measure runtime A-B loop. The source chart has one reusable
+`Looping` entry, F13 is the only release, and there is no repeat counter or
+automatic exit. `Bridge` is deliberately suppressed, and `Break` targets measure
+99 from its preceding beat after release.
 Measures 149-156 ramp phase-continuously from 170 to 194 BPM with `Trans` targeting
 measures 149, 151, 153, and 155. There is no song overlap: `Complete` begins on
 the final beat of `人生オーバー` and continues uncut across the identical frame
@@ -1323,18 +1325,21 @@ preceding-beat rule over the pinned 207-measure 4/4, 5/4, and 6/4 map.
 The reproducible exporter and Zira generator are
 `tools/audio/export-jinsei-madow-click-guide.mjs` and
 `tools/audio/generate-guide-complete.ps1`; `complete.wav` and `interlude.wav` are
-now in the embedded English Guide source pack. Canonical audition files are in
-`C:\TEMP\syndocal-show-audio`. Independent PCM review accepted P0/P1/P2 all zero:
-all nine WAVs are 48 kHz PCM16 mono, total click count is 1,492, and physical and
-semantic Guide event counts are both 33. Thirty-two Guide onsets are exactly one
-beat before their target and the only exception is the frame-zero `人生オーバー`
-Intro. The song boundary is frame 11,010,639, connected duration is 489.182125
-seconds, fresh-export WAV hashes are identical, all voice intervals are globally
-non-overlapping, and all mixes remain below clip.
+now in the embedded English Guide source pack. The superseding 2026-08-27
+indefinite-loop audition files are in
+`C:\TEMP\syndocal-show-audio-indefinite-loop`. All nine WAVs are 48 kHz PCM16
+mono, total natural source click count is 1,464, and physical and semantic Guide
+event counts are both 26. Twenty-five Guide onsets are exactly one beat before
+their target and the only exception is the frame-zero `人生オーバー` Intro. The
+song boundary is frame 10,536,286, connected duration is 479.299770833 seconds,
+two perceptual runs and a fresh default export are deterministic, all voice
+intervals are globally non-overlapping, and all mixes remain below clip.
 The canonical manifest SHA-256 is
-`FA2613B575E0AB68026E3A91AB49ABF6418FDDD2DE2544A5C26F4440ED24CF58`;
-exporter, generator, and Interlude asset hashes are respectively
-`8516F8C18099CF21D32C419E0774116CEE99ABBB06B1854518A31DED8BFD9C7A`,
+`F5F940F55532C75905C8E738698E4D92DA7B65FC98519DA619B1262E8DE800EC`;
+exporter, perceptual checker, generator, and Interlude asset hashes are
+respectively
+`8BAD5DEE68A762697560011C1AEAD68EC72D89A6A8E5A875BD83991740E46E01`,
+`5ADBB19B2771FC83F6BBAFF2DA7D2052A739630C2D161F6D3F026F87F07CDE09`,
 `C13A377E926790AAE4006252738A30272CE5C7DB712586CBFE654CC19ED37259`,
 and `695E2ADDF83D1F3C236E14B57BF20124269B587A098293293A4EE9CAB99EAE21`.
 This is a pre-rendered material checkpoint only. Runtime click/Guide completion

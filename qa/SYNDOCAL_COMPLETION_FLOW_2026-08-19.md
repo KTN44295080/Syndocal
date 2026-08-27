@@ -162,12 +162,15 @@ between the registered UI command path and the backend production driver.
 
 The operator-confirmed show chart, rather than the currently truncated FRET STEP
 `totalMeasures: 151`, is authoritative for this Syndocal material. `人生オーバー`
-has 156 authored 4/4 measures at 170 BPM. Its fixed Guide chart announces Intro,
+has 156 authored 4/4 measures at 170 BPM. Its Guide chart announces Intro,
 Verse, Pre Chorus, Chorus, Interlude, Breakdown, and Outro; each phrase begins on
 the preceding measure's final beat, except the first Intro at frame zero. Measure
-98 is performed exactly eight times and every pass announces `Looping`. `Bridge`
-is deliberately suppressed so it cannot overlap the loop call, and measure 99
-announces `Break` from its preceding beat. Measures 149-156 form one
+98 is one authored A-B measure repeated indefinitely by runtime transport until
+F13 releases it. The source Guide has one `Looping` entry at measure 98; transport
+rewind replays the same entry on every held pass without a counter. `Bridge` is
+deliberately suppressed so it cannot overlap the loop call, and measure 99
+announces `Break` only after release lets transport cross the boundary. Measures
+149-156 form one
 phase-continuous 32-quarter-note tempo ramp from 170 to 194 BPM. `Trans` is
 announced every two measures, targeting measures 149, 151, 153, and 155 from each
 preceding beat. The songs do not overlap; `Complete` begins on the final beat of
@@ -182,15 +185,20 @@ The deterministic pre-render tool is
 `tools/audio/export-jinsei-madow-click-guide.mjs`; the matching Zira voice
 generator is `tools/audio/generate-guide-complete.ps1`, and the product source
 asset is `app/src-tauri/assets/timeline-guide/en/complete.wav`. Canonical
-audition outputs live outside Git at `C:\TEMP\syndocal-show-audio`: nine
+audition outputs live outside Git at
+`C:\TEMP\syndocal-show-audio-indefinite-loop`: nine
 48 kHz, PCM16, mono WAVs (per-song and connected click/Guide/mix stems) plus a
-sample-frame manifest. Independent review recomputed all PCM samples and accepted
-P0/P1/P2 as zero: 652 `人生オーバー` performance clicks, 840 `惑う星`
-clicks, 1,492 total clicks, and 33 physical/semantic Guide events. Thirty-two
-Guide onsets are exactly one beat before their target and the sole exception is
-the frame-zero `人生オーバー` Intro. The connected boundary is frame
-11,010,639; duration is 23,480,742 frames / 489.182125 seconds. Fresh export
-reproduced every WAV SHA-256 exactly and no output clipped. These files prove the
+sample-frame manifest. The 2026-08-27 clean-break export contains 624 natural
+`人生オーバー` source clicks, 840 `惑う星` clicks, 1,464 total clicks, and
+26 physical/semantic source Guide events. Twenty-five Guide onsets are exactly
+one beat before their target and the sole exception is the frame-zero
+`人生オーバー` Intro. The connected boundary is frame 10,536,286; duration
+is 23,006,389 frames / 479.299770833 seconds. Two independent perceptual exports
+were byte-identical, all nine default WAVs reproduced against a fresh baseline,
+all full PCM voices remained non-overlapping, and no output clipped. Manifest
+schema v3 removes the finite-pass and synthetic-added-beat fields and records
+exact `{98,99,indefinite,F13,automaticRelease:false}` runtime-loop authority.
+These files prove the
 pinned authored material and provide audition/backstop stems; they do not replace
 the required runtime sample-frame click/Guide scheduler for DJ/MTC seek, loop,
 tempo, or discontinuity handling.

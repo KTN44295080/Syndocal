@@ -1288,3 +1288,48 @@ A-B loops are already indefinite, but current Timeline-control assigns F13 to
 and the click/Guide exporter plus older completion-flow text still encode eight
 measure-98 passes. Those are explicit remaining implementation and clean-break
 items, not acceptance evidence.
+
+## 26. 2026-08-27 C-melody indefinite-loop clean-break checkpoint
+
+This source checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `0de98aad4d4398c66acccbfb85cc4f35b1648319`. Its owned
+changes are limited to the Life Over / Madow Hoshi click-and-Guide exporter,
+its perceptual checker, and the two active completion/handoff documents. The
+concurrent protocol, engine, and app Rust Follow-hold changes remain unstaged.
+
+The retired path rendered measure 98 eight times by appending 28 synthetic
+beats, then placed an automatic Break cue. The new path preserves the natural
+624-beat `人生オーバー` source schedule and declares exactly one runtime loop
+`[measure 98, measure 99)` with `repeatMode = indefinite`,
+`releaseTrigger = F13`, and `automaticRelease = false`. It emits one Looping
+Guide at measure 98 and one post-release Break Guide at measure 99. There is no
+repeat counter and no automatic release; the pedal releases the authored
+one-measure loop. The manifest clean-break advances from schema v2 to v3 and
+removes `loopTotalPasses` and `loopAddedBeats` rather than retaining a legacy
+finite-loop representation.
+
+The canonical no-argument exporter wrote
+`C:\TEMP\syndocal-show-audio-indefinite-loop`: Life frames **10,536,286**,
+Madow frames **12,470,103**, connected frames **23,006,389**, clicks **1,464**,
+physical/semantic Guide events **26/26**, outputs **9**. The no-argument
+perceptual checker passed all **12/12** deterministic PCM/hash/non-overlap/
+no-clipping/semantic gates. Canonical manifest and click-schedule hashes are
+`c763d7776a77247d5da6809132fa781c7fba23133b4d140b54d381cb81e288a9`
+and `0f6d83cbf869a45998980f6db8afba070a781acf09d334b2e2d5627fa27551c1`.
+The physical manifest/exporter/checker SHA-256 values are respectively
+`F5F940F55532C75905C8E738698E4D92DA7B65FC98519DA619B1262E8DE800EC`,
+`8BAD5DEE68A762697560011C1AEAD68EC72D89A6A8E5A875BD83991740E46E01`,
+and `5ADBB19B2771FC83F6BBAFF2DA7D2052A739630C2D161F6D3F026F87F07CDE09`.
+`node --check` for both modified scripts and `git diff --check` passed; the
+latter emitted only Git LF-to-CRLF notices. First-party warnings are **0**.
+Independent Terra xHigh adversarial review is **GO**, including its own
+no-argument checker execution. Ox was unavailable, so this is the recorded
+narrow review exception.
+
+This checkpoint proves only the generated show-audio and documentation
+clean-break. It does not prove that the running native engine holds or releases
+the C-melody loop, that Follow settles into the destination hold, or that the
+physical F13 pedal releases either hold. The next safe action is to finish the
+separate engine/runtime Follow-hold and F13 routing tranches, advance the
+prerelease, run the exact native build/launch/maximized-window gate, and then
+perform both physical pedal acceptances.
