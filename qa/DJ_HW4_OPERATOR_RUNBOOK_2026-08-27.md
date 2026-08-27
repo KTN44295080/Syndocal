@@ -44,48 +44,47 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PeerRoot)) {
 }
 Set-Location -LiteralPath $PeerRoot
 $ExpectedBranch = 'beta-v1.1.2'
-$ExpectedDocsHead = '789f7724a699324cd87171ef835b69486bcd4e70'
-$RequiredRuntimeCheckpoint = 'ee2f6c3148f36dfd63e0b70e2ab372247dbb8572'
+$ExpectedPeerHead = 'e4f6929a30d321215abbdf05ef0cb163f1aa3215'
+$ExpectedPeerVersion = '1.1.8'
 $branch = (git branch --show-current).Trim()
 $dirty = @(git status --porcelain=v1)
 $head = (git rev-parse HEAD).Trim()
 $upstream = (git rev-parse '@{upstream}').Trim()
 $version = (node -p "require('./package.json').version").Trim()
-git merge-base --is-ancestor $RequiredRuntimeCheckpoint $head
-$runtimePresent = ($LASTEXITCODE -eq 0)
 if ($branch -ne $ExpectedBranch -or $dirty.Count -ne 0 -or
-    $head -ne $ExpectedDocsHead -or $upstream -ne $ExpectedDocsHead -or
-    $version -ne '1.1.6' -or -not $runtimePresent) {
+    $head -ne $ExpectedPeerHead -or $upstream -ne $ExpectedPeerHead -or
+    $version -ne $ExpectedPeerVersion) {
   throw 'DJ-PC checkout failed exact controlled-source identity validation.'
 }
 [pscustomobject]@{
   Root=$PeerRoot; Branch=$branch; Clean=($dirty.Count -eq 0)
   Head=$head; Upstream=$upstream; Version=$version
-  RuntimeCheckpointPresent=$runtimePresent
 }
 ```
 
-The required identities are the clean upstream-equal docs tip
-`789f7724a699324cd87171ef835b69486bcd4e70` containing runtime checkpoint
-`ee2f6c3148f36dfd63e0b70e2ab372247dbb8572`, source version `1.1.6`, and strict
-adapter `syndocal-envelope-v3`. Branch name alone is insufficient. Do not use
-an installer, the blocked v1.1.3 release, or a historical v1.1.5 configuration
-as current acceptance evidence.
+The required identity is a clean, upstream-equal peer commit at source version
+`1.1.8`, exactly `e4f6929a30d321215abbdf05ef0cb163f1aa3215` for both `HEAD` and
+`@{upstream}`, with strict adapter `syndocal-envelope-v3`. The stable peer suite
+is `413` total / `411` pass / `0` fail / `2` intentional skips; affected focused
+proof is `110/110`, MinHook+Inno `59/59`, Root key `59/59`, and Node syntax
+`26/26`. Branch name alone is insufficient. Do not use an installer, the blocked
+v1.1.3 release, or a historical v1.1.5/v1.1.6/v1.1.7 configuration as current
+acceptance evidence.
 
-If and only if the v1.1.6 external configuration is absent:
+If and only if the v1.1.8 external configuration is absent:
 
 ```powershell
 .\start-all.bat --init-config
 ```
 
-Edit only `C:\SyndocalShow\dj-agent-v1.1.6.json`. Replace the one-time token
+Edit only `C:\SyndocalShow\dj-agent-v1.1.8.json`. Replace the one-time token
 placeholder. Before preflight, record the versioned Rekordbox mapping artifact
-from this exact target checkout; do not substitute the historical v1.1.5 file:
+from this exact target checkout; do not substitute a historical mapping:
 
 ```powershell
-$MidiMappingPath = Join-Path $PeerRoot 'server\public\setup\CustomMIDI1-Syndocal-v1.1.6.csv'
+$MidiMappingPath = Join-Path $PeerRoot 'server\public\setup\CustomMIDI1-Syndocal-v1.1.8.csv'
 if (-not (Test-Path -LiteralPath $MidiMappingPath -PathType Leaf)) {
-  throw 'Missing current v1.1.6 Rekordbox CustomMIDI mapping artifact.'
+  throw 'Missing current v1.1.8 Rekordbox CustomMIDI mapping artifact.'
 }
 $MidiMappingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $MidiMappingPath).Hash
 [pscustomobject]@{ Path=$MidiMappingPath; SHA256=$MidiMappingHash }
@@ -93,13 +92,29 @@ $MidiMappingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $MidiMappingPath
 
 Record that path and SHA-256 in the row evidence, then obtain operator
 confirmation that this exact CSV is applied in Rekordbox. Record the exact
-`CustomMIDI1` port and expected targets: F13 configured `stop` maps to
-Rekordbox Cue/Stop, and F14 configured `loopHalf` maps to Rekordbox LoopHalf.
-The launcher validates only the configured device name and integer port; it
-does not apply or prove the Rekordbox CSV. Then, in the same PowerShell:
+`CustomMIDI1` port and expected targets: owner-channel CC16 controls HPF,
+configured `stop` Note37 maps to Rekordbox Cue/Stop, and configured `loopHalf`
+Note36 maps to Rekordbox LoopHalf. The launcher validates only the configured
+device name and integer port; it does not apply or prove the Rekordbox CSV.
+Then, in the same PowerShell:
 
 ```powershell
-$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.6.json'
+$ForbiddenOverrides = @(
+  'DJ_AGENT_CONFIG','DJ_AGENT_ENABLED','DJ_AGENT_ALLOW_REMOTE_ACTIONS',
+  'SYNDOCAL_ENABLED','SYNDOCAL_HOST','SYNDOCAL_PORT','SYNDOCAL_PATH',
+  'SYNDOCAL_NIC','SYNDOCAL_TOKEN','SYNDOCAL_WS_ADAPTER',
+  'SYNDOCAL_HEARTBEAT_MS','PEDAL_ENABLED','PEDAL_MODULE','MIDI_ENABLED',
+  'MIDI_MODULE','MIDI_DEVICE','MIDI_PORT','MIDI_RELEASE_FADE',
+  'MIDI_RELEASE_MACRO','MIDI_DECK_CHANNELS','PORT','RB_OUTPUT_HOST',
+  'RB_OUTPUT_SETUP_MAPPING_PATH'
+)
+$PresentOverrides = @(Get-ChildItem Env: | Where-Object {
+  $ForbiddenOverrides -contains $_.Name.ToUpperInvariant()
+} | Select-Object -ExpandProperty Name)
+if ($PresentOverrides.Count -ne 0) {
+  throw "Remove forbidden show overrides from this PowerShell first: $($PresentOverrides -join ', ')"
+}
+$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.8.json'
 .\start-all.bat --preflight-only
 .\start-all.bat
 ```
@@ -165,20 +180,25 @@ the checkbox open and name the missing subcheck.
   repeated absolute measured `DJ_LOOP_STATE` down through `1/64`. Record MIDI
   monitor and payload timestamps. A true no-response prediction is separate and
   must never replace a stale/invalid/contradictory measurement.
-- [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.6 accepts
-  only `releaseMacro.enabled=false`; prove direct local Stop, one independently
-  routed Syndocal `DJ_RELEASE`, and no filter/fade MIDI. The disabled template
-  may retain an inert `sequence` field such as `filter-then-fade`; do not edit
-  it or enable the macro, because it does not execute while `enabled=false`.
-  Enabling/selecting that macro requires a separately implemented, reviewed,
-  and deployed peer change. If the show still requires it, stop and leave this
-  row open.
+- [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.8 requires
+  `releaseMacro.enabled=true`, exact sequence `filter-then-fade-then-stop`, and
+  `releaseFade.enabled=true`. On the accepted F13 edge, prove that owner-channel
+  HPF CC16 starts `64 -> 127` over `1000 ms` in `50 ms` updates and exactly one
+  correlated `DJ_RELEASE` is routed to Syndocal before local MIDI completion.
+  After HPF completes, prove the independent ChannelFader CC17 leg
+  `127 -> 0` over `1000 ms` in `50 ms` updates, exactly one Cue/Stop Note37,
+  then HPF CC16 reset `127 -> 64` and fader CC17 reset `0 -> 127`. Syndocal
+  Release delivery is independent of every local MIDI leg; a local HPF, fade,
+  Stop, or reset failure remains visible and must not suppress that Release.
 - [ ] **HW-4.7 — Release result.** F13 produces local Stop and one correlated
   Release. Only accepted/duplicate ACK succeeds. Rejection, timeout, disconnect,
   and send failure remain visible and fail closed; withheld/rejected ACK needs a
   bounded protocol/fault harness.
-- [ ] **HW-4.8 — Stage 2.** With authoritative `running`, F13/F15 perform
-  Timeline `-4/+4`, F14 applies the absolute loop, and no MIDI is emitted.
+- [ ] **HW-4.8 — Stage 2.** With authoritative `running`, the existing
+  `timeline-control` boundary remains F13/F15 Timeline `-4/+4`, F14 absolute
+  loop, and zero Rekordbox MIDI. This Stage 2 beat-jump contract is unchanged
+  by v1.1.8 and still requires direct confirmation; it is not the Stage 1
+  release path.
 - [ ] **HW-4.9 — disconnect/reconnect.** Stage 1 local controls continue while
   disconnected. Reconnect requires fresh State Sync. Stage 2 stays fail-closed
   until a fresh authoritative snapshot exists.
@@ -201,8 +221,8 @@ to hide a failed session; record the failed generation and cause first.
 
 If the new build cannot reach the authenticated baseline, stop acceptance,
 record the exact failure, and restore only a previously identified artifact by
-an explicit operator decision. Do not call the restored alpha.15 artifact
-alpha.16, and do not mark any HW-4 row passed from the rollback.
+an explicit operator decision. Do not call a restored older artifact alpha.17,
+and do not mark any HW-4 row passed from the rollback.
 
 ## 7. Final manifest
 

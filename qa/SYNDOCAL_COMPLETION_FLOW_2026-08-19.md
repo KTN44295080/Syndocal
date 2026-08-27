@@ -346,7 +346,7 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.16`.
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.17`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -365,12 +365,20 @@ published tag or installer, and it does not close Show-ASIO or physical DJ
 acceptance. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from it.
 
-The current `1.2.0-alpha.16` any-deck DJ-Link/source and synchronized metadata
-checkpoint is `ad3faa253c155cb1173b17fb81a711f60baea1f1` and has no native
-artifact. Its focused software gates and independent adversarial review passed
-with first-party warnings 0. The parent lane must run the required native gate before any
-alpha.16 artifact, warning, or acceptance claim. The verified alpha.15 native
-artifact remains immutable historical evidence and is not relabelled.
+The current `1.2.0-alpha.17` any-deck DJ-Link/source and synchronized metadata
+checkpoint is the pushed, upstream-equal
+`fb5d18fdf898a1435bed173ddd17934a04a97897`. Its engine `dj_link_` proof is
+`25/25`, Syndocal `dj_link_dispatch_` is `8/8`, the three-display harness is
+`80/80`, the frontend build passed, detached `check:release` passed including
+`169` ASIO packaging assertions, and first-party warnings are `0`. Its exact
+native artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.17`, size `59,021,824` bytes, SHA-256
+`8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`, with
+  exactly one responsive maximized Syndocal window at PID `57640`. The external
+  rb-output v1.1.8 source is pushed and clean at exact commit
+  `e4f6929a30d321215abbdf05ef0cb163f1aa3215`; its stable suite passed `413` total
+  / `411` pass / `0` fail / `2` intentional skips. The verified alpha.16/alpha.15
+  artifacts remain immutable historical evidence and are not relabeled.
 
 The synchronized product-version surfaces are:
 
@@ -629,8 +637,11 @@ Audio/recording/live-source clock and ownership semantics are complete.
 - [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS <!-- completion-ledger: Open: AUDIO-AUTHORED-001 -->
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
 - [x] Extend the existing Web Remote listener with authenticated DJ Link events. Map
-  `DJ_MASTER_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B
-  Loop from absolute `DJ_LOOP_STATE`, and make `DJ_RELEASE` idempotently disable/resume.
+  `DJ_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B
+  Loop from absolute `DJ_LOOP_STATE`, and make `DJ_RELEASE` idempotently turn
+  the DJ loop OFF and relinquish DJ clock authority without changing transport,
+  position, playing state, child transport, or Follow; the local clock continues
+  from the current playhead.
   Do not add a second Agent/server or send rekordbox MIDI from Syndocal.
 - [ ] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability, <!-- completion-ledger: Open: VIDEO-LIVE-SOURCES-001 -->
   permission/fault/reconnect truth, and old-worker retirement.
@@ -1942,7 +1953,7 @@ launch may promote this objective. The final artistic Lighting design and final
 video assets remain user-authored after the complete product path is proven with
 representative scenes and deterministic temporary media.
 
-## 42. 2026-08-27 show-critical DJ machine authority checkpoint
+## 42. SUPERSEDED / HISTORICAL — 2026-08-27 show-critical DJ machine authority checkpoint
 
 Commit `dcf6e524eddfaf79a54856af458efef202c079e1` is the pushed source checkpoint
 for HW-4.11. The old process-local-token/address-only/listener-manual-repair path
@@ -1964,7 +1975,7 @@ a blocking P0/P1/P2 finding. The authored `New Scene` label is now protected in
 all discovered Cue Pad/Armed/report views while operation text remains
 localizable.
 
-This is source completion, not show acceptance. The running untouched artifact
+This was source completion, not show acceptance. The running untouched artifact
 is still alpha.15 PID `46120` with an established DJ-PC socket; alpha.16 native
 build/launch, real Windows credential/NLM restart, rb-output `1.1.6` deployment,
 and HW-4.1 through HW-4.12 are pending. The DJ matrix remains **0/12**. Cleanup
@@ -1973,7 +1984,7 @@ tree remains hardlinked to external `.tmp.driveupload` paths. The next safe
 show-critical action is the exact alpha.16 native build and full hardware matrix
 after the operator authorizes replacement of the live alpha.15 process.
 
-## 43. 2026-08-27 bounded DJ machine test extraction
+## 43. SUPERSEDED / HISTORICAL — 2026-08-27 bounded DJ machine test extraction
 
 Pushed commit `684ecc01ceba141047f49cc595337f138719b749` reduces the
 show-critical `dj_link_machine.rs` compilation unit from `2,644` to `1,491`
@@ -1986,7 +1997,7 @@ zero. This is a refactor-only checkpoint: the live alpha.15 process, cleanup
 state, HW-4 **0/12** matrix, and all alpha.16 native/hardware boundaries in
 section 42 are unchanged.
 
-## 44. 2026-08-27 transaction-capacity and zero-owned-FX source checkpoint
+## 44. SUPERSEDED / HISTORICAL — 2026-08-27 transaction-capacity and zero-owned-FX source checkpoint
 
 Pushed commit `33912001bfaa4c7b7d1ad10fec6bf0313e2debc2` closes the source
 capacity leak from dead-owner terminal project receipts. Compaction requires the
@@ -2024,7 +2035,7 @@ or restarted and still owns the established DJ-PC connection. The reviewed
 HW-4 companion is `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`; it checks no
 hardware row, so HW-4 remains **0/12**.
 
-## 45. 2026-08-27 bounded media/audio playback test extraction
+## 45. SUPERSEDED / HISTORICAL — 2026-08-27 bounded media/audio playback test extraction
 
 Pushed commit `6cfb71c4e23141103e5ce33542b404d759828e95` moves the inline
 `media_audio_playback_tests` child module from `app/src-tauri/src/main.rs` to
@@ -2046,3 +2057,89 @@ Terra xHigh comparison approved with no P0/P1/P2 and a matching normalized body
 hash. This is test-only maintainability work, not a native or show acceptance
 claim; PID `46120`, HW-4 **0/12**, and every alpha.16/hardware boundary remain
 unchanged.
+
+## 46. SUPERSEDED / HISTORICAL — 2026-08-27 DJ peer v1.1.7 source authority
+
+Peer commit `2577496767cf4ca8c8abdcadddbb891c7a609a32` is pushed and
+upstream-equal on `beta-v1.1.2` at version `1.1.7`. It replaces the retired
+v1.1.6 direct-Stop profile with one exact Stage 1 `filter-then-stop` route: HPF
+CC16 `64 -> 127 / 1000 ms / 50 ms`, one planned Cue/Stop Note37, one independent
+correlated `DJ_RELEASE`, and best-effort reset to CC16 `64`, with no fade MIDI.
+Measured F14 loop authority extends through `1/64`; prediction is restricted to
+true non-response. Stage 2 remains Timeline-only and emits zero MIDI. MASTER is
+diagnostic; any exact mapped actually-playing deck may be admitted, and a MASTER
+change cannot replace the owner.
+
+The final peer suite passed `404/406`, with `0` failures and two explicit
+REAL-package opt-in skips; syntax was `30/30`, focused proof `17/17`, and
+independent review found no P0/P1/P2. Distribution artifacts are not yet built,
+and source proof checks no HW-4 row. The next DJ-PC action is to pull the exact
+commit, create and validate `C:\SyndocalShow\dj-agent-v1.1.7.json`, import
+`CustomMIDI1-Syndocal-v1.1.7.csv` into the now licensed Rekordbox MIDI surface,
+then execute the current operator runbook. HW-4 remains **0/12** until direct
+hardware and bounded fault evidence is recorded.
+
+## 47. SUPERSEDED / HISTORICAL — 2026-08-27 alpha.16 standard native artifact checkpoint
+
+The exact-checkout historical alpha.15 PID `46120` was re-resolved and solely
+terminated immediately before the release build. The first exact-linker attempt
+failed closed before product linking because `FFMPEG_DIR`/`LIBCLANG_PATH` were
+absent. The gate was restarted from the beginning with the complete installed
+shared FFmpeg SDK and LLVM path, while retaining `vcvars64.bat
+-vcvars_ver=14.44`, the absolute Community `14.44.35207` Cargo linker pin, and
+that linker first in `where.exe link.exe`.
+
+`pnpm --dir app tauri build --no-bundle` passed from source
+`15b2d3f8886d11d571b2fc804ca9b774afff4746` in `2m 53s`, with zero observed
+first-party warnings. The resulting `1.2.0-alpha.16` standard executable is
+`59,024,384` bytes with SHA-256
+`CB2CCA8102F71C187A35F645EAEBB6C5A99052A48F2575B59782D44D57274C4C`.
+It is active as sole exact-path PID `74772`, responsive with title `Syndocal`.
+Computer Use confirmed the sole owned window, native restore state, and
+`1920x1032` maximized client. The I/O right pane rendered Web Remote and expanded
+DJ Link in the same contained native view.
+
+This closes the standard alpha.16 build/launch/maximize gate only. DJ Link was
+not armed and HW-4 remains **0/12**. Show-ASIO physical/fault/endurance/latency,
+three displays, representative show content, and full rehearsal remain open.
+
+## 48. 2026-08-27 current alpha.17 and DJ peer v1.1.8 handoff
+
+The current KDMX source checkpoint is pushed and upstream-equal at
+`fb5d18fdf898a1435bed173ddd17934a04a97897`, product version
+`1.2.0-alpha.17`. The current native artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, size
+`59,021,824` bytes, SHA-256
+`8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`,
+Product/FileVersion `1.2.0-alpha.17`, with exactly one responsive maximized
+Syndocal window at PID `57640`. Focused engine `dj_link_` proof passed `25/25`,
+Syndocal `dj_link_dispatch_` passed `8/8`, the three-display harness passed
+`80/80`, the frontend build passed, detached `check:release` passed including
+`169` ASIO packaging assertions, and first-party warnings are `0`.
+
+The current DJ-PC source target is branch `beta-v1.1.2`, package version
+`1.1.8`, clean and upstream-equal at exact commit
+`e4f6929a30d321215abbdf05ef0cb163f1aa3215`, exact adapter
+`syndocal-envelope-v3`, and the checkout-external `dj-agent-v1.1.8.json`
+configuration with its versioned `CustomMIDI1` mapping. The stable peer suite
+passed `413` total / `411` pass / `0` fail / `2` intentional skips; affected
+focused proof passed `110/110`, MinHook+Inno `59/59`, Root key `59/59`, and Node
+syntax `26/26`. Final Terra xHigh review is GO with no P0/P1; the dedicated
+deck-2 full F13 CC17 byte-sequence test remains a future P2 item. v1.1.7 is
+historical only and no peer or hardware row is promoted from it.
+
+The accepted Stage 1 F13 contract is: start HPF and synchronously route exactly
+one correlated `DJ_RELEASE` at the accepted edge, before local MIDI completion;
+Syndocal turns the DJ loop OFF and relinquishes DJ clock authority only when the
+Timeline is already playing, without seek, jump, start, or changes to position,
+playing state, child transport, or Follow. Independently, the DJ Agent completes
+HPF CC16 `64 -> 127`, ChannelFader CC17 `127 -> 0`, Cue/Stop Note37, then resets
+HPF/fader to `64`/`127`; both ramps are `1000 ms` with `50 ms` updates, and a
+local MIDI failure never suppresses Release delivery. The existing Stage 2
+`timeline-control` F13/F15 `-4/+4` beat-jump and F14 absolute-loop boundary is
+unchanged and still requires direct confirmation; it is not this Stage 1 path.
+
+This is software/native evidence, not physical acceptance. DJ deployment,
+authenticated two-process behavior, Rekordbox/MIDI/pedal evidence, and HW-4
+remain **0/12**; the 2026-08-29 completion deadline and 2026-08-30 performance
+remain in force.
