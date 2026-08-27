@@ -225,25 +225,29 @@ export function MappingSetupContextPanel(props: MappingSetupContextPanelProps) {
         onOpenSceneFx={props.onOpenSceneFx}
         onClearSelection={props.onClearSelection}
       />
-      <MappingFixtureInspectorPanel
-        fixture={props.selectedFixture}
-        geometryRows={props.selectedGeometryRows}
-        unresolvedGeometryReferences={props.unresolvedGeometryReferences}
-        filteredFixtureCount={props.filteredFixtureCount}
-        onSetTransform={props.onSetFixtureTransform}
-        onLayoutFixtures={props.onLayoutFixtures}
-        onControl={props.onControlFixture}
-        onPatch={props.onPatchFixture}
-        onRemove={props.onRemoveSelected}
-      />
-      <MappingProjectorSelectionPanel
-        outputs={props.outputs}
-        selectedOutput={props.selectedOutput}
-        selectedOutputId={props.selectedOutputId}
-        selectedStageObject={props.selectedStageObject}
-        onSelectOutput={props.onSelectOutput}
-        onEditProjection={props.onEditOutputProjection}
-      />
+      <Show when={props.selectedFixture}>
+        <MappingFixtureInspectorPanel
+          fixture={props.selectedFixture}
+          geometryRows={props.selectedGeometryRows}
+          unresolvedGeometryReferences={props.unresolvedGeometryReferences}
+          filteredFixtureCount={props.filteredFixtureCount}
+          onSetTransform={props.onSetFixtureTransform}
+          onLayoutFixtures={props.onLayoutFixtures}
+          onControl={props.onControlFixture}
+          onPatch={props.onPatchFixture}
+          onRemove={props.onRemoveSelected}
+        />
+      </Show>
+      <Show when={props.outputs.length > 0}>
+        <MappingProjectorSelectionPanel
+          outputs={props.outputs}
+          selectedOutput={props.selectedOutput}
+          selectedOutputId={props.selectedOutputId}
+          selectedStageObject={props.selectedStageObject}
+          onSelectOutput={props.onSelectOutput}
+          onEditProjection={props.onEditOutputProjection}
+        />
+      </Show>
     </div>
   );
 }

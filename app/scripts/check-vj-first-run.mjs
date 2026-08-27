@@ -2,18 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-function balancedSourceBlock(source, start, label) {
-  const open = source.indexOf("{", start);
-  assert.ok(open >= start, `${label} opening brace is missing`);
-  let depth = 0;
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    if (source[index] === "}") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
-  }
-  assert.fail(`${label} closing brace is missing`);
+async function importTsModule(path) {
+  const source = await readFile(new URL(path, import.meta.url), "utf8");
+  return importTsSource(source, path);
 }
 
 async function importTsSource(source, fileName) {
@@ -25,6 +16,7 @@ async function importTsSource(source, fileName) {
 }
 
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const mediaAssetUiFences = await importTsModule("../src/mediaAssetUiFences.ts");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const mediaAuthority = await readFile(new URL("../src/mediaAssetAuthority.ts", import.meta.url), "utf8");
@@ -35,11 +27,10 @@ const workflowStart = app.indexOf("const createFirstRunVjShow = async () => {");
 const workflowEnd = app.indexOf("const videoThumbnailSourceSignature", workflowStart);
 assert.ok(workflowStart >= 0 && workflowEnd > workflowStart, "first-run VJ workflow is missing");
 const workflow = app.slice(workflowStart, workflowEnd);
-const firstRunLeaseStart = app.indexOf("export function createVjFirstRunOperationLease()");
-assert.ok(firstRunLeaseStart >= 0, "first-run operation lease is missing from the production App");
-const firstRunLease = await importTsSource(
-  balancedSourceBlock(app, firstRunLeaseStart, "first-run operation lease"),
-  "App.first-run-operation-lease.ts",
+assert.match(
+  app,
+  /import \{[\s\S]*?createVjFirstRunOperationLease,[\s\S]*?\} from "\.\/mediaAssetUiFences";/,
+  "App imports the first-run operation lease from the focused media/VJ fence module",
 );
 assert.ok(
   workflow.indexOf("preflightAndBeginMediaAssetOperation") < workflow.indexOf('"select_video_source_files"'),
@@ -191,7 +182,7 @@ assert.ok(liveMonitors.includes("props.onClearPreview"));
 // Abort keeps its lease current, so finally clears busy; reset revokes A before
 // C begins, and A's delayed finally cannot clear C's busy state.
 {
-  const lease = firstRunLease.createVjFirstRunOperationLease();
+  const lease = mediaAssetUiFences.createVjFirstRunOperationLease();
   const sameProjectAbort = lease.begin();
   assert.equal(lease.isCurrent(sameProjectAbort), true, "a same-project abort owns its finally and clears busy");
   const oldA = lease.begin();

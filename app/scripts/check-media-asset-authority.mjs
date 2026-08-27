@@ -20,48 +20,16 @@ async function importTsSource(source, fileName) {
   return import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
 }
 
-function balancedSourceBlock(source, start, label) {
-  const open = source.indexOf("{", start);
-  assert.ok(open >= start, `${label} opening brace is missing`);
-  let depth = 0;
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    if (source[index] === "}") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
-  }
-  assert.fail(`${label} closing brace is missing`);
-}
-
 const authority = await importTsModule("../src/mediaAssetAuthority.ts");
 const liveSnapshotState = await importTsModule("../src/engineSnapshotLiveState.ts");
+const mediaAssetUiFences = await importTsModule("../src/mediaAssetUiFences.ts");
 const controller = await readFile(new URL("../src/createVideoRuntimeController.ts", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const mediaAuthority = await readFile(new URL("../src/mediaAssetAuthority.ts", import.meta.url), "utf8");
-const availabilityFenceStart = app.indexOf("export function createMediaAssetAvailabilityApplyFence()");
-assert.ok(availabilityFenceStart >= 0, "availability apply fence is missing from the production App");
-const availabilityFence = await importTsSource(
-  balancedSourceBlock(app, availabilityFenceStart, "availability apply fence"),
-  "App.availability-fence.ts",
-);
-const mediaLibraryStatusLeaseStart = app.indexOf("export function createMediaLibraryStatusLease()");
-assert.ok(mediaLibraryStatusLeaseStart >= 0, "Media Library shared status lease is missing from the production App");
-const mediaLibraryStatusLease = await importTsSource(
-  balancedSourceBlock(app, mediaLibraryStatusLeaseStart, "Media Library shared status lease"),
-  "App.media-library-status-lease.ts",
-);
-const availabilityRowsStart = app.indexOf("export function createMediaAssetAvailabilityRowAuthority()");
-assert.ok(availabilityRowsStart >= 0, "availability row-authority ledger is missing from the production App");
-const availabilityRows = await importTsSource(
-  balancedSourceBlock(app, availabilityRowsStart, "availability row-authority ledger"),
-  "App.availability-rows.ts",
-);
-const mappingPreflightStart = app.indexOf("export function mediaAssetMappingPreflightProvenance(");
-assert.ok(mappingPreflightStart >= 0, "mapping media preflight provenance is missing from the production App");
-const mappingPreflight = await importTsSource(
-  balancedSourceBlock(app, mappingPreflightStart, "mapping media preflight provenance"),
-  "App.mapping-media-preflight.ts",
+assert.match(
+  app,
+  /import \{\s*createMediaAssetAvailabilityApplyFence,\s*createMediaAssetAvailabilityRowAuthority,\s*createMediaLibraryStatusLease,\s*createVjFirstRunOperationLease,\s*mediaAssetMappingPreflightProvenance,\s*\} from "\.\/mediaAssetUiFences";/s,
+  "App imports every media/VJ UI fence from the focused helper module",
 );
 
 const liveSnapshot = (mediaAssets = []) => ({
@@ -133,7 +101,7 @@ assert.equal(allocatedRequestIdB, allocatedRequestIdA + 1, "one renderer allocat
 // does not reserve/invalidate Verify by invocation order; its exact terminal
 // E/R/H decides whether an already-published row is stale.
 {
-  const fence = availabilityFence.createMediaAssetAvailabilityApplyFence();
+  const fence = mediaAssetUiFences.createMediaAssetAvailabilityApplyFence();
   const apply = (target, reservation, entries) => {
     for (const entry of entries) {
       if (fence.canApply(reservation, entry.assetId)) target[entry.assetId] = entry.value;
@@ -201,7 +169,7 @@ assert.equal(allocatedRequestIdB, allocatedRequestIdA + 1, "one renderer allocat
 // changing Verify's per-row E/R/H ledger. The status owner is selected when an
 // action starts, not when an async response happens to return.
 {
-  const lease = mediaLibraryStatusLease.createMediaLibraryStatusLease();
+  const lease = mediaAssetUiFences.createMediaLibraryStatusLease();
   const status = { value: "initial" };
   const publish = (owner, text) => {
     if (lease.isCurrent(owner)) status.value = text;
@@ -248,7 +216,7 @@ assert.equal(allocatedRequestIdB, allocatedRequestIdA + 1, "one renderer allocat
 // already the post-relink truth and must remain. A canceled relink has no
 // reservation and cannot suppress an independent Verify.
 {
-  const rows = availabilityRows.createMediaAssetAvailabilityRowAuthority();
+  const rows = mediaAssetUiFences.createMediaAssetAvailabilityRowAuthority();
   const A = { project_epoch: 4, project_revision: 10, checkpoint_hash: "A" };
   const B = { project_epoch: 4, project_revision: 11, checkpoint_hash: "B" };
   const C = { project_epoch: 5, project_revision: 1, checkpoint_hash: "C" };
@@ -266,7 +234,7 @@ assert.equal(allocatedRequestIdB, allocatedRequestIdA + 1, "one renderer allocat
   assert.equal(canApplyTerminal(verifyA), false, "a pending V(A) completion is suppressed after R(B)");
   assert.equal(canApplyTerminal(verifyB), true, "V(B) remains applicable after R(B)");
 
-  const verification = availabilityFence.createMediaAssetAvailabilityApplyFence().reserveVerification([7]);
+  const verification = mediaAssetUiFences.createMediaAssetAvailabilityApplyFence().reserveVerification([7]);
   assert.equal(verification.assets.has(7), true, "relink cancellation owns no availability reservation and cannot suppress Verify");
 
   rows.reset();
@@ -284,27 +252,27 @@ assert.equal(allocatedRequestIdB, allocatedRequestIdA + 1, "one renderer allocat
   const externalSameEpoch = { project_epoch: 9, project_revision: 3, checkpoint_hash: "external" };
   const externalAfterAck = { project_epoch: 9, project_revision: 4, checkpoint_hash: "external-after-ack" };
   assert.equal(
-    mappingPreflight.mediaAssetMappingPreflightProvenance(A, A, []),
+    mediaAssetUiFences.mediaAssetMappingPreflightProvenance(A, A, []),
     "unchanged",
     "unchanged exact E/R/H is admitted",
   );
   assert.equal(
-    mappingPreflight.mediaAssetMappingPreflightProvenance(A, ownAck, [ownAck]),
+    mediaAssetUiFences.mediaAssetMappingPreflightProvenance(A, ownAck, [ownAck]),
     "own_mapping_ack",
     "the exact final local ACK is admitted",
   );
   assert.equal(
-    mappingPreflight.mediaAssetMappingPreflightProvenance(A, externalSameEpoch, []),
+    mediaAssetUiFences.mediaAssetMappingPreflightProvenance(A, externalSameEpoch, []),
     null,
     "an external same-epoch mutation is rejected rather than guessed as a local ACK",
   );
   assert.equal(
-    mappingPreflight.mediaAssetMappingPreflightProvenance(A, externalSameEpoch, [ownAck]),
+    mediaAssetUiFences.mediaAssetMappingPreflightProvenance(A, externalSameEpoch, [ownAck]),
     null,
     "CAS recovery/read authority is rejected even when its revision resembles an ACK",
   );
   assert.equal(
-    mappingPreflight.mediaAssetMappingPreflightProvenance(A, externalAfterAck, [ownAck]),
+    mediaAssetUiFences.mediaAssetMappingPreflightProvenance(A, externalAfterAck, [ownAck]),
     null,
     "an external change after a local ACK rejects the media preflight",
   );
@@ -908,8 +876,8 @@ for (const command of [
   assert.match(app, new RegExp(`serverAuthoritativeProjectMutationCommands[\\s\\S]*?"${command}"`), `${command} stays classified as a mutation`);
 }
 assert.match(app, /const projectMutation = rendererTicketedMutation \|\| serverAuthoritativeMutation;/, "operator policy sees authoritative commands as mutations");
-assert.match(app, /const currentEpoch = await flushProjectControlMappingsBeforeProjectMutation[\s\S]*?if \(shouldAbortProjectMutation\?\.\(\)\)[\s\S]*?if \(serverAuthoritativeMutation\)[\s\S]*?return result;[\s\S]*?begin_project_transaction/, "mapping flush and abort fence precede direct authoritative dispatch and bypass Begin");
-assert.match(app, /const terminalRecovery = mediaAssetTerminalRecoveryCommands\.has\(command\);[\s\S]*?!terminalRecovery && !mediaAssetAvailabilityReadOnly[\s\S]*?!operatorCommandAllowed/, "Full Lock still permits exact terminal query/cancel cleanup");
+assert.match(app, /const currentEpoch = authoredEffectFencePrepared \|\| projectMappingsFencePrepared[\s\S]*?: await flushProjectControlMappingsBeforeProjectMutation\?\.\(\) \?\? 0;[\s\S]*?if \(shouldAbortProjectMutation\?\.\(\)\)[\s\S]*?if \(serverAuthoritativeMutation\)[\s\S]*?return result;[\s\S]*?begin_project_transaction/, "mapping flush and abort fence precede direct authoritative dispatch and bypass Begin");
+assert.match(app, /const terminalRecovery = mediaAssetTerminalRecoveryCommands\.has\(command\)[\s\S]*?const mediaAssetAvailabilityReadOnly = mediaAssetAvailabilityReadOnlyCommands\.has\(command\);[\s\S]*?!terminalRecovery && !mediaAssetAvailabilityReadOnly[\s\S]*?!operatorCommandAllowed/, "Full Lock still permits exact terminal query/cancel cleanup");
 const mediaStartFence = app.slice(
   app.indexOf("const prepareMediaAssetOperationStart = async"),
   app.indexOf("  createEffect(() =>", app.indexOf("const prepareMediaAssetOperationStart = async")),
