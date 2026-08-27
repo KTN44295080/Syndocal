@@ -1,4 +1,4 @@
-import { For, Show, type JSX } from "solid-js";
+import { For, Show, createMemo, type JSX } from "solid-js";
 import "../setupIo.css";
 
 export type IoConnectionId = "dmx" | "midi" | "osc" | "web" | "dj";
@@ -75,7 +75,14 @@ export function IoDisclosure(props: IoDisclosureProps) {
 
 export function IoConnectionDeck(props: IoConnectionDeckProps) {
   const workbenchId = () => props.workbenchId ?? "setup-io-connection-workbench";
-  const activeItem = () => props.items.find((item) => item.id === props.activeId) ?? props.items[0];
+  const activeItem = createMemo(
+    () => props.items.find((item) => item.id === props.activeId) ?? props.items[0],
+  );
+  // Items are intentionally rebuilt when a connection's live status changes.
+  // Keep the selected workbench keyed by its primitive connection id so those
+  // status refreshes update the header without remounting local draft state in
+  // the workbench (for example, a DJ Link mapping draft).
+  const activeItemId = createMemo(() => activeItem()?.id);
   const tabId = (id: IoConnectionId) => `${workbenchId()}-tab-${id}`;
 
   return (
@@ -151,17 +158,17 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
         aria-labelledby={activeItem() ? tabId(activeItem()!.id) : undefined}
         aria-live="polite"
       >
-        <Show when={activeItem()}>
-          {(item) => (
+        <Show when={activeItemId()} keyed>
+          {(itemId) => (
             <>
               <header class="setupIoWorkbenchHeader">
-                <h2>{item().label}</h2>
-                <span class={`setupIoConnectionState ${item().stateTone ?? "idle"}`}>
-                  <i aria-hidden="true" />{item().state}
+                <h2>{activeItem()?.label}</h2>
+                <span class={`setupIoConnectionState ${activeItem()?.stateTone ?? "idle"}`}>
+                  <i aria-hidden="true" />{activeItem()?.state}
                 </span>
               </header>
               <div class="setupIoWorkbenchBody" data-io-workbench-body>
-                {props.renderWorkbench(item().id)}
+                {props.renderWorkbench(itemId)}
               </div>
             </>
           )}

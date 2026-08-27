@@ -4537,6 +4537,12 @@ function installSetupIoInvokeMockInPage() {
       djLinkWiredCandidates: [],
       djLinkWiredCandidatesDelayMs: 0,
       djLinkWiredCandidatesError: null,
+      setDjLinkListenerRunning(value) {
+        const running = Boolean(value);
+        remoteStatus.running = running;
+        remoteStatus.web_remote_enabled = false;
+        remoteStatus.dj_link_enabled = running;
+      },
     };
     window.__syndocalSetupIoMock = mock;
     window.__TAURI_INTERNALS__ = {
@@ -5272,6 +5278,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       connectionDeck.enterSelectsExactWorkbench &&
       connectionDeck.spaceSelectsExactWorkbench,
     connectionDeckQuickActionIsolation: connectionDeck.inactiveQuickActionPreservesSelection,
+    connectionDeckDraftContinuity: connectionDeck.draftContinuity?.passed === true,
     connectionDeckFifthTabPointerHitTestable: connectionDeck.fifthTabPointerHitTestable,
     activeWorkbenchLabelState: connectionDeck.activeWorkbenchLabelState,
     selectedWorkbenchMountsOneZone:
