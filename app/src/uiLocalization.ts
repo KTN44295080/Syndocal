@@ -3097,6 +3097,8 @@ const japaneseText: Record<string, string> = {
   Checking: "確認中",
   "Clear Pending": "クリア待ち",
   "System default audio input": "システム既定の音声入力",
+  "Prior audio input": "以前の音声入力",
+  "Unavailable input": "利用できない入力",
   "Reselect input": "入力を再選択",
   "Reselect audio input": "音声入力を再選択",
   "Bass level": "低域レベル",
@@ -3316,6 +3318,19 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^Audio input backend (wasapi_shared|asio) is absent from the current catalogue; devices and Start are locked\.$/,
+    (backend) => `音声入力バックエンド ${backend} は現在のカタログにありません。デバイスと開始はロックされています。`,
+  ],
+  [
+    /^Audio input backend (wasapi_shared|asio) has an invalid catalogue entry \(([^)]+)\); devices and Start are locked\.$/,
+    (backend, reason) => `音声入力バックエンド ${backend} のカタログ項目は無効です（${reason}）。デバイスと開始はロックされています。`,
+  ],
+  [
+    /^Audio input device catalogue for (wasapi_shared|asio) failed \(([^)]+)\); devices and Start are locked\.$/,
+    (backend, reason) => `音声入力デバイスカタログ ${backend} に失敗しました（${reason}）。デバイスと開始はロックされています。`,
+  ],
+  [/^Unavailable: (.+) \((.+)\)$/, (label, id) => `利用不可: ${label}（${id}）`],
   [/^(.+) \(missing\)$/, (name) => `${name}（見つかりません）`],
   [/^(.+) \((\d+) matching outputs; ambiguous\)$/, (name, count) => `${name}（一致する出力 ${count} 件・曖昧）`],
   [/^This Timeline drop is not a recognized source\.$/, () => "このタイムラインドロップは認識できるソースではありません。"],

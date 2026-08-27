@@ -63,6 +63,7 @@
     "check:audio-reactive-viewport": "node scripts/check-viewport-containment.mjs --audio-reactive-only",
     "check:live-audio": "node scripts/check-live-audio-input.mjs",
     "check:live-audio-ipc-v1": "node --no-warnings --experimental-strip-types scripts/check-live-audio-input-ipc-v1.mjs",
+    "check:live-audio-restore": "node scripts/check-viewport-containment.mjs --live-audio-restore-only",
     "check:live-audio-viewport": "node scripts/check-viewport-containment.mjs --live-audio-only",
     "check:move-effect-helpers": "node scripts/check-move-effect-helpers.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",

@@ -9,6 +9,11 @@ const selectionStorageSource = await readFile(
   "utf8",
 );
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const viewportContainment = await readFile(new URL("./check-viewport-containment.mjs", import.meta.url), "utf8");
+const disappearanceContract = await readFile(
+  new URL("./live-audio-backend-disappearance-contract.mjs", import.meta.url),
+  "utf8",
+);
 const ipcV1Source = await readFile(new URL("../src/liveAudioInputIpcV1.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
@@ -20,7 +25,9 @@ const inputRail = await readFile(
   new URL("../src/components/LiveAudioInputRail.tsx", import.meta.url),
   "utf8",
 );
+const uiLocalization = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const packageManifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 const transpiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -1262,6 +1269,168 @@ assert.doesNotMatch(
   "live-audio list/capability invokes must not retain the retired flat backend payload",
 );
 assert.ok(app.includes('backendId === "wasapi_shared"'));
+assert.match(
+  app,
+  /if \(backend === null \|\| backend === undefined\) \{\s*return `Audio input backend \$\{requestedBackend\} is absent from the current catalogue; devices and Start are locked\.`;/,
+  "a missing backend must be visible as absent rather than being mislabeled as a malformed catalogue entry",
+);
+assert.match(
+  app,
+  /createSignal<\{ reason_code: string \} \| null>\(null\)/,
+  "a malformed backend catalogue must retain its typed rejection reason instead of collapsing into a missing backend",
+);
+assert.match(
+  app,
+  /message: liveAudioInputBackendInvalidCatalogueMessage\(backendId, catalogueRejection\.reason_code\)/,
+  "the direct Start barrier must preserve a malformed catalogue reason",
+);
+assert.match(
+  inputRail,
+  /localize: \(source: string\) => string;[\s\S]*?const unavailableSelectedDeviceLabel =[\s\S]*?props\.localize\(`Unavailable: \$\{label\} \(\$\{selectedId\}\)`\);/,
+  "a missing selected device must retain its exact label/id through the App-owned locale source",
+);
+assert.match(
+  inputRail,
+  /selectedDeviceRequiresReselection\(\)[\s\S]*?props\.localize\("Unavailable input"\)/,
+  "the stale device format must be localized instead of leaving its dynamic unavailable state English-only",
+);
+assert.ok(
+  [...app.matchAll(/localize: \(source\) => translateUiText\(source, uiLocale\(\)\)/g)].length >= 3,
+  "both mounted Live Audio rails must receive the same App-owned locale source without disturbing existing localized callers",
+);
+assert.ok(
+  uiLocalization.includes('"Prior audio input": "以前の音声入力",') &&
+    uiLocalization.includes('"Unavailable input": "利用できない入力",') &&
+    uiLocalization.includes('/^Unavailable: (.+) \\((.+)\\)$/'),
+  "Japanese UI localization must cover both unavailable text and the dynamic label/id identity",
+);
+assert.ok(
+  uiLocalization.includes('^Audio input backend (wasapi_shared|asio) is absent from the current catalogue; devices and Start are locked\\.$') &&
+    uiLocalization.includes('^Audio input backend (wasapi_shared|asio) has an invalid catalogue entry \\(([^)]+)\\); devices and Start are locked\\.$') &&
+    uiLocalization.includes('^Audio input device catalogue for (wasapi_shared|asio) failed \\(([^)]+)\\); devices and Start are locked\\.$'),
+  "Japanese localization must preserve backend ids and typed reasons for absent, malformed, and failed device catalogues",
+);
+assert.match(
+  inputRail,
+  /data-live-audio-stale-device="true"[\s\S]*?\{unavailableSelectedDeviceLabel\(\)\}/,
+  "the stale device option must render the retained unavailable identity",
+);
+assert.doesNotMatch(
+  inputRail,
+  />\s*Reselect input\s*</,
+  "a generic stale device option must not hide the prior device identity",
+);
+const startLiveAudioInputStart = app.indexOf("const startLiveAudioInput = async () => {");
+const startLiveAudioInputEnd = app.indexOf("const stopLiveAudioInput = async () => {", startLiveAudioInputStart);
+const startLiveAudioInputSource = app.slice(startLiveAudioInputStart, startLiveAudioInputEnd);
+assert.ok(
+  startLiveAudioInputStart >= 0 && startLiveAudioInputEnd > startLiveAudioInputStart,
+  "the direct Start source boundary must remain identifiable",
+);
+assert.match(
+  startLiveAudioInputSource,
+  /const selectedBackendId = selectedLiveAudioInputBackend\(\);[\s\S]*?const catalogueRejection = liveAudioInputBackendCatalogueRejection\(\);[\s\S]*?if \(catalogueRejection\)[\s\S]*?liveAudioInputBackendInvalidCatalogueMessage\([\s\S]*?catalogueRejection\.reason_code[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/,
+  "the direct Start catalogue barrier must precede saved-runtime stale handling",
+);
+assert.match(
+  startLiveAudioInputSource,
+  /if \(liveAudioInputBackendsKnown\(\)\) \{[\s\S]*?liveAudioInputBackendDispatchDenial\(selectedBackendId, selectedBackend\)[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/,
+  "a missing saved backend must publish the exact absent denial before saved-runtime handling",
+);
+assert.match(
+  app,
+  /const nextBackend = backends\.find\(\(backend\) => backend\.id === currentBackend\) \?\? null;/,
+  "backend refresh must retain only the exact selected backend identity",
+);
+assert.doesNotMatch(
+  app,
+  /backends\.find\(\(backend\) => backend\.id === "wasapi_shared"\) \?\? backends\[0\]/,
+  "backend refresh must never auto-fallback to WASAPI or a first catalogue entry",
+);
+const refreshBackendsStart = app.indexOf("const refreshLiveAudioInputBackends =");
+const refreshBackendsEnd = app.indexOf("const refreshLiveAudioInputCapabilities =", refreshBackendsStart);
+const refreshBackendsSource = app.slice(refreshBackendsStart, refreshBackendsEnd);
+assert.ok(
+  refreshBackendsStart >= 0 && refreshBackendsEnd > refreshBackendsStart,
+  "the backend-refresh source boundary must remain identifiable",
+);
+assert.doesNotMatch(
+  refreshBackendsSource,
+  /setSelectedLiveAudioInputBackend\(/,
+  "catalogue refresh must never rewrite the selected backend; explicit operator selection owns that transition",
+);
+assert.match(
+  app,
+  /const selectLiveAudioInputBackend =[\s\S]*?setSelectedLiveAudioInputBackend\(backendId\);/,
+  "the selected backend may move only through the explicit operator-selection path",
+);
+assert.doesNotMatch(
+  refreshBackendsSource,
+  /setSelectedLiveAudioInputBackend\(|wasapi_shared"\) \?\? backends\[0\]/,
+  "refresh must not mutate backend identity through any setter or WASAPI/first fallback path",
+);
+assert.match(
+  disappearanceContract,
+  /export async function runLiveAudioBackendDisappearanceContract\(\{[\s\S]*?missing_wasapi[\s\S]*?missing_availability[\s\S]*?missing_asio/,
+  "the focused disappearance contract must own the WASAPI, malformed catalogue, and ASIO scenarios",
+);
+assert.match(
+  disappearanceContract,
+  /forcedStartControlCommands = \[[\s\S]*?live_audio_input_backends[\s\S]*?list_audio_input_devices[\s\S]*?get_live_audio_input_capabilities[\s\S]*?start_live_audio_input[\s\S]*?assert\.deepEqual\([\s\S]*?must not probe a backend\/device\/capability or dispatch Start/,
+  "every forced Start must retain all control-plane IPC counters exactly",
+);
+assert.ok(
+  [
+    "runSavedCatalogueBarrierScenario",
+    "saved ASIO missing backend",
+    "saved ASIO malformed catalogue",
+    "saved WASAPI missing backend",
+    "storedAfterForcedStart === rawSelection",
+    "requiresExplicitAsioReselection",
+  ].every((needle) => disappearanceContract.includes(needle)),
+  "the focused browser contract must retain saved ASIO/WASAPI bytes, catalogue reasons, and explicit ASIO reselection gating",
+);
+assert.ok(
+  [
+    "runSavedDeviceCatalogueFailureScenario",
+    "runColdSavedDeviceCatalogueFailureScenario",
+    "saved WASAPI device catalogue reject",
+    "saved ASIO malformed device catalogue",
+    "cold saved WASAPI device catalogue reject",
+    "cold saved ASIO malformed device catalogue",
+    "DEVICE_CATALOGUE_REQUEST_FAILED",
+    "DEVICE_CATALOGUE_ENTRY_INVALID",
+    "forced Start keeps every live-audio IPC count unchanged",
+    "same-identity new-id recovery Refresh",
+    "storedAfterPassiveForcedStart === rawSelection",
+    "forged stale ASIO forced Start",
+    "forgedStaleDeviceInputCannotProbeOrRetainReadyStart",
+    "Unavailable: Viewport Studio Microphone · WASAPI (Viewport Studio Microphone)",
+    "利用不可: Viewport ASIO Studio Driver · ASIO（Viewport ASIO Studio Driver）",
+    "利用不可: Viewport ASIO Studio Driver · ASIO（viewport-asio-studio-g1）",
+  ].every((needle) => disappearanceContract.includes(needle)),
+  "the focused browser contract must prove cold and ready saved reject/malformed failures, exact retained identity, passive same-identity lock, zero forced-Start IPC, and Japanese rendering",
+);
+assert.equal(
+  packageManifest.scripts["check:live-audio-restore"],
+  "node scripts/check-viewport-containment.mjs --live-audio-restore-only",
+  "the focused live-audio restore browser contract must have a standard package gate",
+);
+assert.match(
+  disappearanceContract,
+  /Unavailable: Viewport ASIO Studio Driver · ASIO \(viewport-asio-studio-g1\)[\s\S]*?invalid catalogue entry \(AVAILABILITY_MISSING\)/,
+  "the focused contract must prove the human-readable stale device identity and typed malformed reason",
+);
+assert.match(
+  viewportContainment,
+  /import \{ runLiveAudioBackendDisappearanceContract \} from "\.\/live-audio-backend-disappearance-contract\.mjs";[\s\S]*?runLiveAudioBackendDisappearanceContract\(\{[\s\S]*?countLiveAudioRestoreCalls,/,
+  "the large viewport runner must inject existing fixture helpers into the focused disappearance contract",
+);
+assert.doesNotMatch(
+  viewportContainment,
+  /async function runLiveAudioUnsavedAsioDisappearanceAcceptance/,
+  "the large viewport runner must not retain the extracted FC-09 scenario implementation",
+);
 assert.ok(app.includes('backend: selectedLiveAudioInputBackend()'));
 assert.ok(app.includes('liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null'));
 assert.ok(app.includes("const capabilitiesReady = await refreshLiveAudioInputCapabilities("));
@@ -1354,18 +1523,52 @@ assert.ok(
   "startup restore must be outside the operator-unlock flow",
 );
 assert.ok(
-  /const restoreSavedLiveAudioInputSelectionAtStartup[\s\S]*?restoredRuntime\.phase === "stale"[\s\S]*?setSelectedLiveAudioInputBackend\(restoredRuntime\.selection\.backend\)/.test(app),
-  "a saved stale selection may pin only its exact backend before catalogue revalidation",
+  /const restoreSavedLiveAudioInputSelectionAtStartup[\s\S]*?restoredRuntime\.phase === "stale"[\s\S]*?setSelectedLiveAudioInputBackend\(restoredRuntime\.selection\.backend\);[\s\S]*?hydrateSavedLiveAudioInputDeviceIdentity\(restoredRuntime\.selection\)/.test(app),
+  "a cold saved stale selection must pin its exact backend and render-safe identity before catalogue revalidation",
+);
+assert.match(
+  app,
+  /const hydrateSavedLiveAudioInputDeviceIdentity = \([\s\S]*?const staleOptionId = selection\.device_identity\.name;[\s\S]*?setSelectedLiveAudioInputDevice\(staleOptionId\);[\s\S]*?id: staleOptionId,[\s\S]*?label: selection\.device_identity\.label/,
+  "cold startup may expose only the persisted stable name/label as a renderer-local unavailable option, never a fabricated native id",
 );
 assert.ok(
-  /const devices = await invoke<LiveAudioInputDeviceSummary\[]>\([\s\S]*?"list_audio_input_devices",[\s\S]*?buildLiveAudioInputBackendArgsV1\(backendId\),[\s\S]*?setLiveAudioInputDevices\(devices\);[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/.test(app),
-  "the exact enumerated device catalogue must publish before saved-selection revalidation; it cannot synthesize a selected option",
+  /const parsedDevices = parseLiveAudioInputDeviceCatalogue\(rawDevices, backendId\);[\s\S]*?if \(!parsedDevices\.ok\) \{[\s\S]*?rejectLiveAudioInputDeviceCatalogue\(backendId, parsedDevices\.reason_code, announce\);[\s\S]*?const devices = parsedDevices\.devices;[\s\S]*?setLiveAudioInputDevices\(devices\);[\s\S]*?setLiveAudioInputDeviceCatalogueRejection\(null\);[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);/.test(app),
+  "only a parsed current device catalogue may publish or revalidate a saved selection",
 );
-assert.ok(app.includes("pinnedSavedBackendId"), "backend discovery must honor the saved-selection pin");
-assert.ok(
-  app.indexOf("pinnedSavedBackendId") <
-    app.indexOf('backends.find((backend) => backend.id === "wasapi_shared")'),
-  "the WASAPI/first-backend fallback must be guarded by the saved-selection pin",
+assert.match(
+  app,
+  /type LiveAudioInputDeviceCatalogueFailureReason =[\s\S]*?DEVICE_CATALOGUE_REQUEST_FAILED[\s\S]*?parseLiveAudioInputDeviceCatalogue[\s\S]*?DEVICE_CATALOGUE_ENTRY_INVALID/,
+  "device request failures and malformed responses must retain typed fail-closed reasons",
+);
+assert.match(
+  app,
+  /const rejectLiveAudioInputDeviceCatalogue =[\s\S]*?setLiveAudioInputDevices\(\[\]\);[\s\S]*?setLiveAudioInputCapabilities\(null\);[\s\S]*?phase: "stale"[\s\S]*?reason_code: reasonCode/,
+  "a failed current device catalogue must clear capabilities and downgrade saved ready state without erasing the retained device identity",
+);
+assert.match(
+  app,
+  /const selectLiveAudioInputDevice = \(deviceId: string\) => \{[\s\S]*?const selectedDevice = liveAudioInputDevices\(\)\.find\(\(device\) => device\.id === deviceId\);[\s\S]*?if \(deviceId && !selectedDevice\) \{[\s\S]*?setLiveAudioInputCapabilities\(null\);[\s\S]*?setLiveAudioInputSavedSelection\(liveAudioInputSavedRuntimeFromRaw\(savedRuntime\.raw\)\);[\s\S]*?return;[\s\S]*?void refreshLiveAudioInputCapabilities\(/,
+  "a forged stale device id must clear readiness and return before any capability IPC path",
+);
+assert.match(
+  inputRail,
+  /data-live-audio-stale-device="true"[\s\S]*?>[\s\S]*?\{unavailableSelectedDeviceLabel\(\)\}/,
+  "the rail must retain the exact stale device identity for visibility",
+);
+assert.match(
+  inputRail,
+  /selected=\{selectedDeviceRequiresReselection\(\)\}\s+disabled\s+data-live-audio-stale-device="true"/,
+  "the visible stale option must be non-selectable through the normal control",
+);
+assert.match(
+  app,
+  /setLiveAudioInputDeviceCatalogueRejection\(null\);[\s\S]*?if \(savedRuntimeAppliesToCurrentBackend\(savedRuntime, backendId\)\) \{[\s\S]*?savedRuntime\.phase === "stale"[\s\S]*?isLiveAudioInputDeviceCatalogueFailureReason\(savedRuntime\.reason_code\)[\s\S]*?setLiveAudioInputCapabilities\(null\);[\s\S]*?return;[\s\S]*?applySavedLiveAudioInputSelectionRevalidation\(savedRuntime, catalogue, announce, true\)/,
+  "a recovered same-name/label catalogue must remain stale after a device-catalogue failure until the explicit operator selection path retries it",
+);
+assert.match(
+  startLiveAudioInputSource,
+  /const deviceCatalogueRejection = liveAudioInputDeviceCatalogueRejection\(\);[\s\S]*?if \(deviceCatalogueRejection\?\.backend === selectedBackendId\)[\s\S]*?liveAudioInputDeviceCatalogueFailureMessage[\s\S]*?const savedRuntime = liveAudioInputSavedSelection\(\);[\s\S]*?const currentDeviceCatalogueRejection = liveAudioInputDeviceCatalogueRejection\(\);[\s\S]*?currentDeviceCatalogueRejection\?\.backend === requestedBackendId/,
+  "both direct and final Start fences must reject a failed current device catalogue before trusting a saved request",
 );
 assert.ok(
   app.includes("request = savedRuntime.startRequest;"),

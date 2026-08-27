@@ -39,6 +39,8 @@ export interface LiveAudioInputRailProps {
   liveAudioInputBackendError: string | null;
   liveAudioInputDevices: LiveAudioInputDeviceSummary[];
   selectedLiveAudioInputDevice: string;
+  lastKnownLiveAudioInputDeviceIdentity: Pick<LiveAudioInputDeviceSummary, "id" | "label"> | null;
+  localize: (source: string) => string;
   liveAudioInputCapabilities: LiveAudioInputCapabilities | null;
   liveAudioInputCapabilitiesBusy: boolean;
   liveAudioInputSampleRate: number | null;
@@ -189,16 +191,24 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
   const selectedDeviceRequiresReselection = createMemo(
     () => Boolean(props.selectedLiveAudioInputDevice && !selectedDevice()),
   );
+  const unavailableSelectedDeviceLabel = createMemo(() => {
+    const selectedId = props.selectedLiveAudioInputDevice;
+    const lastKnown = props.lastKnownLiveAudioInputDeviceIdentity;
+    const label = lastKnown?.id === selectedId && lastKnown.label.trim()
+      ? lastKnown.label
+      : props.localize("Prior audio input");
+    return props.localize(`Unavailable: ${label} (${selectedId})`);
+  });
   const selectedDeviceLabel = createMemo(() =>
     selectedDeviceRequiresReselection()
-      ? "Reselect audio input"
+      ? unavailableSelectedDeviceLabel()
       : selectedDevice()?.label ?? (backendRequiresExplicitDevice()
         ? "Select ASIO driver"
         : "System default audio input"),
   );
   const configFormat = createMemo(() =>
     selectedDeviceRequiresReselection()
-      ? "Reselect input"
+      ? props.localize("Unavailable input")
       : props.liveAudioInputCapabilitiesBusy
         ? "I/O…"
         : props.liveAudioInputCapabilities
@@ -375,8 +385,10 @@ export function LiveAudioInputRail(props: LiveAudioInputRailProps) {
               <option
                 value={props.selectedLiveAudioInputDevice}
                 selected={selectedDeviceRequiresReselection()}
+                disabled
+                data-live-audio-stale-device="true"
               >
-                Reselect input
+                {unavailableSelectedDeviceLabel()}
               </option>
             </Show>
             <Show

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import ts from "typescript";
 import { runPaneBrowserFallbackRuntimeProof } from "./check-pane-browser-fallback-runtime.mjs";
+import { runLiveAudioBackendDisappearanceContract } from "./live-audio-backend-disappearance-contract.mjs";
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1242,6 +1243,7 @@ function installLiveAudioMockInPage() {
     asioGeneration: 0,
     asioCatalogMode: "exact",
     backendCatalogueMode: "ready",
+    deviceCatalogueMode: "ready",
     stopReturnsCleared: false,
     levelsPaused: false,
     // Hostile levers for the ASIO revalidation arm-consumption acceptance:
@@ -1408,6 +1410,10 @@ function installLiveAudioMockInPage() {
         delete backends[1].availability;
       } else if (mock.backendCatalogueMode === "unknown_availability") {
         backends[1].availability = "not_built";
+      } else if (mock.backendCatalogueMode === "missing_asio") {
+        backends.pop();
+      } else if (mock.backendCatalogueMode === "missing_wasapi") {
+        backends.shift();
       } else if (["not_packaged", "fault", "unsupported"].includes(mock.backendCatalogueMode)) {
         backends[1].availability = mock.backendCatalogueMode;
         backends[1].availability_detail = `Viewport ${mock.backendCatalogueMode} probe`;
@@ -1421,6 +1427,17 @@ function installLiveAudioMockInPage() {
         command,
       );
       await delay(mock.deviceListHoldMs ?? 120);
+      if (mock.deviceCatalogueMode === "reject") {
+        throw new Error("Viewport device catalogue request rejected.");
+      }
+      if (mock.deviceCatalogueMode === "malformed") {
+        return [{
+          id: "",
+          name: "Viewport malformed device",
+          label: "Viewport malformed device",
+          backend: request.backend === "asio" ? "ASIO" : "WASAPI",
+        }];
+      }
       if (request.backend === "asio") {
         if (!mock.freezeDeviceGeneration) {
           mock.asioGeneration += 1;
@@ -1690,6 +1707,7 @@ function readLiveAudioRailStateInPage() {
     backendAvailability: rail.getAttribute("data-live-audio-backend-availability") ?? "",
     backendBuilt: rail.getAttribute("data-live-audio-backend-built") ?? "",
     backendOptions: optionValues(backend),
+    backendOptionLabels: optionLabels(backend),
     actionText: (action?.textContent ?? "").trim(),
     actionDisabled: Boolean(action?.disabled),
     refreshDisabled: Boolean(refresh?.disabled),
@@ -12488,8 +12506,8 @@ async function runLiveAudioAcceptance(client, locale, label) {
     ? {
         systemDefaultTitle: "システム既定の音声入力",
         systemDefaultOption: "システム既定",
-        reselectTitle: "音声入力を再選択",
-        reselectFormat: "入力を再選択",
+        unavailableTitle: "利用不可: Viewport Studio Microphone · WASAPI（viewport-wasapi-studio-g2）",
+        unavailableFormat: "利用できない入力",
         checking: "確認中",
         liveAnnouncement: "ライブ音声入力は動作中です。",
         clearingAction: "クリア待ち",
@@ -12502,8 +12520,8 @@ async function runLiveAudioAcceptance(client, locale, label) {
     : {
         systemDefaultTitle: "System default audio input",
         systemDefaultOption: "System default",
-        reselectTitle: "Reselect audio input",
-        reselectFormat: "Reselect input",
+        unavailableTitle: "Unavailable: Viewport Studio Microphone · WASAPI (viewport-wasapi-studio-g2)",
+        unavailableFormat: "Unavailable input",
         checking: "Checking",
         liveAnnouncement: "Live audio input active.",
         clearingAction: "Clear Pending",
@@ -12547,8 +12565,8 @@ async function runLiveAudioAcceptance(client, locale, label) {
       ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g3a") &&
       ambiguousIdentity?.deviceOptions?.includes("viewport-wasapi-studio-g3b") &&
       ambiguousIdentity?.deviceInvalid === "true" &&
-      ambiguousIdentity?.deviceTitle === expected.reselectTitle &&
-      ambiguousIdentity?.configFormat?.endsWith(expected.reselectFormat) &&
+      ambiguousIdentity?.deviceTitle === expected.unavailableTitle &&
+      ambiguousIdentity?.configFormat?.endsWith(expected.unavailableFormat) &&
       ambiguousIdentity?.actionDisabled === true,
     explicitReselectionUnlocksStart:
       finalDeviceSelected &&
@@ -12783,7 +12801,7 @@ const persistedViewportAsioSelection = (identity = {
  * the first device discovery and avoids treating a synthetic native boot as a
  * browser fixture.
  */
-async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection) {
+async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection, locale = "en") {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -12798,7 +12816,7 @@ async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection) {
   await client.evaluate(
     "window.localStorage.clear();" +
       persistedSelection +
-      "window.localStorage.setItem('syndocal.uiLocale.v1', 'en');",
+      "window.localStorage.setItem('syndocal.uiLocale.v1', " + JSON.stringify(locale) + ");",
   );
   await reloadReadyApp(client);
   await pressKey(client, "F2");
@@ -14497,6 +14515,19 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
   for (const availability of ["not_packaged", "fault", "unsupported"]) {
     unavailableBackends.push(await unavailableBackend(availability));
   }
+  const unsavedAsioDisappearance = await runLiveAudioBackendDisappearanceContract({
+    client,
+    viewport,
+    liveAudioInputSelectionStorageKey,
+    prepareLiveAudioRestoreViewport,
+    installLiveAudioInvokeMock,
+    dispatchLiveAudioCdpControlClick,
+    waitForClientCondition,
+    readLiveAudioRailState,
+    readLiveAudioRestoreMockAudit,
+    setLiveAudioSelectWhenEnabled,
+    countLiveAudioRestoreCalls,
+  });
   const nativeAsioVerdict = await runLiveAudioNativeAsioVerdictAcceptance(client, viewport);
   const armConsumptionHostile =
     await runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport);
@@ -14547,7 +14578,10 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
       exact.startup.beforeMock?.backend === "asio" &&
       exact.startup.beforeMock?.savedSelectionState === "stale" &&
       exact.startup.beforeMock?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
-      exact.startup.beforeMock?.selectedDevice === "" &&
+      exact.startup.beforeMock?.selectedDevice === "Viewport ASIO Studio Driver" &&
+      exact.startup.beforeMock?.deviceOptionLabels?.includes(
+        "Unavailable: Viewport ASIO Studio Driver · ASIO (Viewport ASIO Studio Driver)",
+      ) &&
       exact.startup.beforeMock?.actionDisabled === true &&
       exact.startup.storedBeforeMock === exactRaw,
     exactCatalogueRevalidatesWithoutFallback:
@@ -14635,7 +14669,10 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
         result.settled?.backendAvailability === result.id &&
         result.settled?.savedSelectionState === "stale" &&
         result.settled?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
-        result.settled?.selectedDevice === "" &&
+        result.settled?.selectedDevice === "Viewport ASIO Studio Driver" &&
+        result.settled?.deviceOptionLabels?.includes(
+          "Unavailable: Viewport ASIO Studio Driver · ASIO (Viewport ASIO Studio Driver)",
+        ) &&
         result.settled?.actionDisabled === true &&
         result.storedAfter === exactRaw &&
         countLiveAudioRestoreCalls(calls, "live_audio_input_backends") === 1 &&
@@ -14651,7 +14688,10 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
         result.settled?.backendState === "fault" &&
         result.settled?.savedSelectionState === "stale" &&
         result.settled?.savedSelectionReason === "REVALIDATION_REQUIRED" &&
-        result.settled?.selectedDevice === "" &&
+        result.settled?.selectedDevice === "Viewport ASIO Studio Driver" &&
+        result.settled?.deviceOptionLabels?.includes(
+          "Unavailable: Viewport ASIO Studio Driver · ASIO (Viewport ASIO Studio Driver)",
+        ) &&
         result.settled?.actionDisabled === true &&
         result.storedAfter === exactRaw &&
         countLiveAudioRestoreCalls(calls, "live_audio_input_backends") === 1 &&
@@ -14660,6 +14700,7 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
         noWasapiFallback(calls) &&
         noStart(calls);
     }),
+    unsavedManualAsioDisappearanceFailsClosed: unsavedAsioDisappearance.passed,
     nativeAsioVerdictRestoredInvalidAndScoped: nativeAsioVerdict.passed,
     asioRevalidationArmConsumptionHostileProofs: armConsumptionHostile.passed,
     savedSelectionBackendScopeIsFailClosedAndDoesNotGloballyLock: savedSelectionBackendScope.passed,
@@ -14677,6 +14718,7 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
     ambiguous,
     unavailableBackends,
     catalogueFailures,
+    unsavedAsioDisappearance,
     nativeAsioVerdict,
     armConsumptionHostile,
     savedSelectionBackendScope,
@@ -38017,6 +38059,18 @@ async function main() {
                 state: entry.settled?.backendState,
                 calls: entry.calls.map((call) => call.command),
               })),
+              unsavedAsioDisappearance: {
+                passed: result.unsavedAsioDisappearance.passed,
+                failedChecks: result.unsavedAsioDisappearance.failedChecks,
+                checks: result.unsavedAsioDisappearance.checks,
+                missing: {
+                  backend: result.unsavedAsioDisappearance.missing?.backend,
+                  selectedDevice: result.unsavedAsioDisappearance.missing?.selectedDevice,
+                  actionDisabled: result.unsavedAsioDisappearance.missing?.actionDisabled,
+                  appStatus: result.unsavedAsioDisappearance.missing?.appStatus,
+                  forcedStartWasDisabled: result.unsavedAsioDisappearance.forcedMissingStartTarget?.wasDisabled,
+                },
+              },
             }),
         );
       }

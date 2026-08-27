@@ -949,9 +949,12 @@ const liveAudioInputBackendDispatchDenial = (
   requestedBackend: LiveAudioInputBackendId,
   backend: unknown,
 ): string => {
+  if (backend === null || backend === undefined) {
+    return `Audio input backend ${requestedBackend} is absent from the current catalogue; devices and Start are locked.`;
+  }
   const parsed = parseLiveAudioInputBackendSummary(backend);
   if (!parsed.ok) {
-    return `Audio input backend ${requestedBackend} has an invalid catalogue entry (${parsed.reason_code}); devices and Start are locked.`;
+    return liveAudioInputBackendInvalidCatalogueMessage(requestedBackend, parsed.reason_code);
   }
   if (parsed.summary.id !== requestedBackend) {
     return `Audio input backend ${requestedBackend} is absent from the current catalogue; devices and Start are locked.`;
@@ -960,6 +963,83 @@ const liveAudioInputBackendDispatchDenial = (
     return `Audio input backend ${requestedBackend} is not built; devices and Start are locked.`;
   }
   return `Audio input backend ${requestedBackend} is ${parsed.summary.availability}; devices and Start are locked.`;
+};
+
+const liveAudioInputBackendInvalidCatalogueMessage = (
+  requestedBackend: LiveAudioInputBackendId,
+  reasonCode: string,
+): string =>
+  `Audio input backend ${requestedBackend} has an invalid catalogue entry (${reasonCode}); devices and Start are locked.`;
+
+type LiveAudioInputDeviceCatalogueFailureReason =
+  | "DEVICE_CATALOGUE_REQUEST_FAILED"
+  | "DEVICE_CATALOGUE_RESPONSE_NOT_ARRAY"
+  | "DEVICE_CATALOGUE_ENTRY_INVALID"
+  | "DEVICE_CATALOGUE_ENTRY_DUPLICATE"
+  | "DEVICE_CATALOGUE_BACKEND_MISMATCH";
+
+const liveAudioInputDeviceCatalogueFailureReasons = new Set<LiveAudioInputDeviceCatalogueFailureReason>([
+  "DEVICE_CATALOGUE_REQUEST_FAILED",
+  "DEVICE_CATALOGUE_RESPONSE_NOT_ARRAY",
+  "DEVICE_CATALOGUE_ENTRY_INVALID",
+  "DEVICE_CATALOGUE_ENTRY_DUPLICATE",
+  "DEVICE_CATALOGUE_BACKEND_MISMATCH",
+]);
+
+const isLiveAudioInputDeviceCatalogueFailureReason = (
+  reasonCode: string,
+): reasonCode is LiveAudioInputDeviceCatalogueFailureReason =>
+  liveAudioInputDeviceCatalogueFailureReasons.has(
+    reasonCode as LiveAudioInputDeviceCatalogueFailureReason,
+  );
+
+const liveAudioInputDeviceCatalogueFailureMessage = (
+  backend: LiveAudioInputBackendId,
+  reasonCode: LiveAudioInputDeviceCatalogueFailureReason,
+): string =>
+  `Audio input device catalogue for ${backend} failed (${reasonCode}); devices and Start are locked.`;
+
+const parseLiveAudioInputDeviceCatalogue = (
+  raw: unknown,
+  requestedBackend: LiveAudioInputBackendId,
+):
+  | { ok: true; devices: LiveAudioInputDeviceSummary[] }
+  | { ok: false; reason_code: LiveAudioInputDeviceCatalogueFailureReason } => {
+  if (!Array.isArray(raw)) return { ok: false, reason_code: "DEVICE_CATALOGUE_RESPONSE_NOT_ARRAY" };
+  const expectedBackend = requestedBackend === "asio" ? "ASIO" : "WASAPI";
+  const devices: LiveAudioInputDeviceSummary[] = [];
+  const seenIds = new Set<string>();
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, reason_code: "DEVICE_CATALOGUE_ENTRY_INVALID" };
+    }
+    const record = entry as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (
+      keys.length !== 4 ||
+      !["id", "name", "label", "backend"].every((key) => Object.hasOwn(record, key)) ||
+      typeof record.id !== "string" || !record.id.trim() ||
+      typeof record.name !== "string" || !record.name.trim() ||
+      typeof record.label !== "string" || !record.label.trim() ||
+      typeof record.backend !== "string" || !record.backend.trim()
+    ) {
+      return { ok: false, reason_code: "DEVICE_CATALOGUE_ENTRY_INVALID" };
+    }
+    if (record.backend !== expectedBackend) {
+      return { ok: false, reason_code: "DEVICE_CATALOGUE_BACKEND_MISMATCH" };
+    }
+    if (seenIds.has(record.id)) {
+      return { ok: false, reason_code: "DEVICE_CATALOGUE_ENTRY_DUPLICATE" };
+    }
+    seenIds.add(record.id);
+    devices.push({
+      id: record.id,
+      name: record.name,
+      label: record.label,
+      backend: record.backend,
+    });
+  }
+  return { ok: true, devices };
 };
 
 const emptyTimelineFollowRuntime = (): TimelineFollowRuntimeSummary => ({
@@ -3347,7 +3427,13 @@ export default function App() {
   const [liveAudioInputBackendsKnown, setLiveAudioInputBackendsKnown] = createSignal(false);
   const [liveAudioInputBackendsBusy, setLiveAudioInputBackendsBusy] = createSignal(false);
   const [liveAudioInputBackendError, setLiveAudioInputBackendError] = createSignal<string | null>(null);
+  const [liveAudioInputBackendCatalogueRejection, setLiveAudioInputBackendCatalogueRejection] =
+    createSignal<{ reason_code: string } | null>(null);
+  const [liveAudioInputDeviceCatalogueRejection, setLiveAudioInputDeviceCatalogueRejection] =
+    createSignal<{ backend: LiveAudioInputBackendId; reason_code: LiveAudioInputDeviceCatalogueFailureReason } | null>(null);
   const [selectedLiveAudioInputDevice, setSelectedLiveAudioInputDevice] = createSignal("");
+  const [lastKnownLiveAudioInputDeviceIdentity, setLastKnownLiveAudioInputDeviceIdentity] =
+    createSignal<Pick<LiveAudioInputDeviceSummary, "id" | "label"> | null>(null);
   const [liveAudioInputCapabilities, setLiveAudioInputCapabilities] =
     createSignal<LiveAudioInputCapabilities | null>(null);
   const [liveAudioInputCapabilitiesBusy, setLiveAudioInputCapabilitiesBusy] = createSignal(false);
@@ -3459,6 +3545,19 @@ export default function App() {
           message: restored.message,
       };
   };
+  const hydrateSavedLiveAudioInputDeviceIdentity = (
+    selection: PersistedLiveAudioInputSelectionV1,
+  ): void => {
+    // Generation-scoped native ids are deliberately not persisted. Until an
+    // explicit current selection succeeds, use the exact persisted stable
+    // name only as a renderer-local stale-option key; it can never reach IPC.
+    const staleOptionId = selection.device_identity.name;
+    setSelectedLiveAudioInputDevice(staleOptionId);
+    setLastKnownLiveAudioInputDeviceIdentity({
+      id: staleOptionId,
+      label: selection.device_identity.label,
+    });
+  };
   /**
    * A machine-local saved intent applies only to the backend it names.  Its
    * stale/invalid verdict remains visible, but it must never lock a separately
@@ -3544,6 +3643,7 @@ export default function App() {
     setLiveAudioInputSavedSelection(restoredRuntime);
     if (restoredRuntime.phase === "stale") {
       setSelectedLiveAudioInputBackend(restoredRuntime.selection.backend);
+      hydrateSavedLiveAudioInputDeviceIdentity(restoredRuntime.selection);
     }
   };
   restoreSavedLiveAudioInputSelectionAtStartup();
@@ -21815,44 +21915,35 @@ export default function App() {
         const rawBackends = await invoke<unknown>("live_audio_input_backends");
         const parsedBackends = parseLiveAudioInputBackendSummaries(rawBackends);
         if (!parsedBackends.ok) {
-          const location = parsedBackends.index >= 0
-            ? `entry ${parsedBackends.index}`
-            : "payload";
-          throw new Error(
-            `Audio input backend catalogue rejected at ${location}: ${parsedBackends.reason_code}.`,
+          if (epoch !== liveAudioInputBackendsEpoch) return false;
+          const detail = liveAudioInputBackendInvalidCatalogueMessage(
+            selectedLiveAudioInputBackend(),
+            parsedBackends.reason_code,
           );
+          setLiveAudioInputBackends([]);
+          setLiveAudioInputBackendsKnown(true);
+          setLiveAudioInputBackendCatalogueRejection({ reason_code: parsedBackends.reason_code });
+          setLiveAudioInputBackendError(detail);
+          setLiveAudioInputDevices([]);
+          setLiveAudioInputCapabilities(null);
+          if (announce) setMessage(detail);
+          return false;
         }
         const backends = parsedBackends.summaries;
         if (epoch !== liveAudioInputBackendsEpoch) return false;
-        const savedRuntime = liveAudioInputSavedSelection();
         const currentBackend = selectedLiveAudioInputBackend();
-        const pinnedSavedBackendId =
-          savedRuntimeAppliesToCurrentBackend(savedRuntime, currentBackend)
-            ? savedRuntime.selection.backend
-            : null;
-        let nextBackend = backends.find((backend) => backend.id === currentBackend) ?? null;
-        if (!nextBackend && pinnedSavedBackendId === null) {
-          nextBackend =
-            backends.find((backend) => backend.id === "wasapi_shared") ?? backends[0] ?? null;
-        }
+        const nextBackend = backends.find((backend) => backend.id === currentBackend) ?? null;
         setLiveAudioInputBackends(backends);
         setLiveAudioInputBackendsKnown(true);
+        setLiveAudioInputBackendCatalogueRejection(null);
         setLiveAudioInputBackendError(null);
-        if (nextBackend && nextBackend.id !== currentBackend) {
-          setSelectedLiveAudioInputBackend(nextBackend.id);
-          setLiveAudioInputDevices([]);
-          setSelectedLiveAudioInputDevice("");
-          setLiveAudioInputCapabilities(null);
-          setLiveAudioInputSampleRate(null);
-          setLiveAudioInputBufferFrames(null);
-          setLiveAudioInputChannelMix({ mode: "average_all" });
-        }
         return liveAudioInputBackendCanDispatch(nextBackend);
       } catch (error) {
         if (epoch !== liveAudioInputBackendsEpoch) return false;
         const detail = String(error);
         setLiveAudioInputBackends([]);
         setLiveAudioInputBackendsKnown(true);
+        setLiveAudioInputBackendCatalogueRejection(null);
         setLiveAudioInputBackendError(detail);
         setLiveAudioInputDevices([]);
         setLiveAudioInputCapabilities(null);
@@ -21921,6 +22012,7 @@ export default function App() {
   };
   const clearAppliedLiveAudioInputSavedSelectionSignals = () => {
     setSelectedLiveAudioInputDevice("");
+    setLastKnownLiveAudioInputDeviceIdentity(null);
     setLiveAudioInputCapabilities(null);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
@@ -21944,6 +22036,30 @@ export default function App() {
       };
     },
   );
+  const rejectLiveAudioInputDeviceCatalogue = (
+    backend: LiveAudioInputBackendId,
+    reasonCode: LiveAudioInputDeviceCatalogueFailureReason,
+    announce: boolean,
+  ): void => {
+    const message = liveAudioInputDeviceCatalogueFailureMessage(backend, reasonCode);
+    setLiveAudioInputDeviceCatalogueRejection({ backend, reason_code: reasonCode });
+    setLiveAudioInputDevices([]);
+    setLiveAudioInputCapabilities(null);
+    const savedRuntime = liveAudioInputSavedSelection();
+    if (savedRuntimeAppliesToCurrentBackend(savedRuntime, backend)) {
+      // Preserve the current selected id and last-known label. The Rail then
+      // renders that exact identity as unavailable while the saved ready
+      // request is explicitly downgraded for this failed catalogue generation.
+      setLiveAudioInputSavedSelection({
+        phase: "stale",
+        raw: savedRuntime.raw,
+        selection: savedRuntime.selection,
+        reason_code: reasonCode,
+        message,
+      });
+    }
+    if (announce) setMessage(message);
+  };
   const applySavedLiveAudioInputSelectionRevalidation = (
     runtime: Extract<LiveAudioInputSavedSelectionRuntime, { phase: "stale" | "ready" }>,
     catalogue: readonly LiveAudioInputSelectionCatalogueEntry[],
@@ -21978,6 +22094,10 @@ export default function App() {
         );
         if (appliedEntry?.capabilities) {
           setSelectedLiveAudioInputDevice(appliedEntry.device.id);
+          setLastKnownLiveAudioInputDeviceIdentity({
+            id: appliedEntry.device.id,
+            label: appliedEntry.device.label,
+          });
           setLiveAudioInputCapabilities(appliedEntry.capabilities);
           setLiveAudioInputSampleRate(result.selection.sample_rate);
           setLiveAudioInputBufferFrames(result.selection.buffer_frames);
@@ -22038,17 +22158,16 @@ export default function App() {
   };
   const noteLiveAudioInputOperatorChange = (): void => {
     const runtime = liveAudioInputSavedSelection();
-    const previousRaw = runtime && runtime.phase !== "invalid" ? runtime.raw : null;
     if (runtime && runtime.phase === "ready") {
       setLiveAudioInputSavedSelection(liveAudioInputSavedRuntimeFromRaw(runtime.raw));
     }
     maybePersistLiveAudioInputSelection();
     const updated = liveAudioInputSavedSelection();
-    if (
-      updated &&
-      updated.phase === "stale" &&
-      (previousRaw === null || updated.raw !== previousRaw)
-    ) {
+    // An explicit operator selection is allowed to retry a stale saved intent
+    // even when the serialized bytes are identical (for example, choosing the
+    // same ASIO name/label after its catalogue disappeared and returned under
+    // a new current id). Passive refreshes never call this path.
+    if (updated && updated.phase === "stale") {
       applySavedLiveAudioInputSelectionRevalidation(
         updated,
         liveAudioInputSavedCatalogueFromCurrentSignals(),
@@ -22060,6 +22179,26 @@ export default function App() {
   const selectLiveAudioInputDevice = (deviceId: string) => {
     if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
     setLiveAudioInputAsioRevalidationArm(null);
+    const selectedDevice = liveAudioInputDevices().find((device) => device.id === deviceId);
+    if (deviceId && !selectedDevice) {
+      // Stale select options exist only to identify the unavailable prior
+      // choice. A forged input event must never turn that display value into a
+      // capability probe or retain a ready/saved Start request.
+      setSelectedLiveAudioInputDevice(deviceId);
+      setLiveAudioInputCapabilities(null);
+      setLiveAudioInputSampleRate(null);
+      setLiveAudioInputBufferFrames(null);
+      setLiveAudioInputChannelMix({ mode: "average_all" });
+      const savedRuntime = liveAudioInputSavedSelection();
+      if (savedRuntime?.phase === "ready") {
+        setLiveAudioInputSavedSelection(liveAudioInputSavedRuntimeFromRaw(savedRuntime.raw));
+      }
+      setMessage("Selected audio input is absent from the current catalogue; select a current input before Start.");
+      return;
+    }
+    setLastKnownLiveAudioInputDeviceIdentity(
+      selectedDevice ? { id: selectedDevice.id, label: selectedDevice.label } : null,
+    );
     setSelectedLiveAudioInputDevice(deviceId);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
@@ -22108,6 +22247,12 @@ export default function App() {
     const previousDeviceId = selectedLiveAudioInputDevice();
     const previousDevices = liveAudioInputDevices();
     const previousDevice = previousDevices.find((device) => device.id === previousDeviceId);
+    if (previousDevice) {
+      setLastKnownLiveAudioInputDeviceIdentity({
+        id: previousDevice.id,
+        label: previousDevice.label,
+      });
+    }
     const epoch = ++liveAudioInputDevicesRefreshEpoch;
     liveAudioInputCapabilitiesEpoch += 1;
     setLiveAudioInputBusy(true);
@@ -22142,18 +22287,50 @@ export default function App() {
           }
           return;
         }
-        const devices = await invoke<LiveAudioInputDeviceSummary[]>(
-          "list_audio_input_devices",
-          buildLiveAudioInputBackendArgsV1(backendId),
-        );
+        let rawDevices: unknown;
+        try {
+          rawDevices = await invoke<unknown>(
+            "list_audio_input_devices",
+            buildLiveAudioInputBackendArgsV1(backendId),
+          );
+        } catch {
+          if (epoch === liveAudioInputDevicesRefreshEpoch) {
+            rejectLiveAudioInputDeviceCatalogue(
+              backendId,
+              "DEVICE_CATALOGUE_REQUEST_FAILED",
+              announce,
+            );
+          }
+          return;
+        }
         if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
+        const parsedDevices = parseLiveAudioInputDeviceCatalogue(rawDevices, backendId);
+        if (!parsedDevices.ok) {
+          rejectLiveAudioInputDeviceCatalogue(backendId, parsedDevices.reason_code, announce);
+          return;
+        }
+        const devices = parsedDevices.devices;
         // Publish the exact returned catalogue before saved-selection
         // revalidation. Revalidation may apply one freshly generated device
         // id, but never synthesizes an option or falls back to a default.
         setLiveAudioInputDevices(devices);
+        setLiveAudioInputDeviceCatalogueRejection(null);
 
         const savedRuntime = liveAudioInputSavedSelection();
         if (savedRuntimeAppliesToCurrentBackend(savedRuntime, backendId)) {
+          if (
+            savedRuntime.phase === "stale" &&
+            isLiveAudioInputDeviceCatalogueFailureReason(savedRuntime.reason_code)
+          ) {
+            // A later successful passive probe establishes only that a
+            // catalogue is available again. It must never promote a saved
+            // request that this App instance already downgraded after a
+            // device-catalogue failure, even when name/label match under a
+            // new id. The exact operator device-selection path owns retry.
+            setLiveAudioInputCapabilities(null);
+            if (announce) setMessage(savedRuntime.message);
+            return;
+          }
           const identityMatches = devices.filter(
             (device) =>
               device.backend === savedRuntime.selection.device_identity.backend &&
@@ -22229,6 +22406,13 @@ export default function App() {
         if (selectedDeviceId !== previousDeviceId) {
           setSelectedLiveAudioInputDevice(selectedDeviceId);
         }
+        const selectedDevice = devices.find((device) => device.id === selectedDeviceId);
+        if (selectedDevice) {
+          setLastKnownLiveAudioInputDeviceIdentity({
+            id: selectedDevice.id,
+            label: selectedDevice.label,
+          });
+        }
         const capabilitiesReady = await refreshLiveAudioInputCapabilities(
           selectedDeviceId,
           announce,
@@ -22240,9 +22424,11 @@ export default function App() {
         }
       } catch (error) {
         if (epoch !== liveAudioInputDevicesRefreshEpoch) return;
-        setLiveAudioInputDevices([]);
-        setLiveAudioInputCapabilities(null);
-        if (announce) setMessage(String(error));
+        rejectLiveAudioInputDeviceCatalogue(
+          selectedLiveAudioInputBackend(),
+          "DEVICE_CATALOGUE_REQUEST_FAILED",
+          announce,
+        );
       }
     })().finally(() => {
       if (liveAudioInputDevicesRefreshInFlight === request) {
@@ -22271,11 +22457,13 @@ export default function App() {
     setSelectedLiveAudioInputBackend(backendId);
     setLiveAudioInputDevices([]);
     setSelectedLiveAudioInputDevice("");
+    setLastKnownLiveAudioInputDeviceIdentity(null);
     setLiveAudioInputCapabilities(null);
     setLiveAudioInputSampleRate(null);
     setLiveAudioInputBufferFrames(null);
     setLiveAudioInputChannelMix({ mode: "average_all" });
     setLiveAudioInputBackendError(null);
+    setLiveAudioInputDeviceCatalogueRejection(null);
     noteLiveAudioInputOperatorChange();
     const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
     if (!liveAudioInputBackendCanDispatch(backend)) {
@@ -22290,8 +22478,28 @@ export default function App() {
   } => {
     const backendId = selectedLiveAudioInputBackend();
     const backend = liveAudioInputBackends().find((candidate) => candidate.id === backendId);
-    if (!liveAudioInputBackendsKnown() || !backend || !liveAudioInputBackendCanDispatch(backend)) {
+    const catalogueRejection = liveAudioInputBackendCatalogueRejection();
+    if (catalogueRejection) {
+      return {
+        ok: false,
+        message: liveAudioInputBackendInvalidCatalogueMessage(backendId, catalogueRejection.reason_code),
+      };
+    }
+    const deviceCatalogueRejection = liveAudioInputDeviceCatalogueRejection();
+    if (deviceCatalogueRejection?.backend === backendId) {
+      return {
+        ok: false,
+        message: liveAudioInputDeviceCatalogueFailureMessage(
+          backendId,
+          deviceCatalogueRejection.reason_code,
+        ),
+      };
+    }
+    if (!liveAudioInputBackendsKnown()) {
       return { ok: false, message: "Select a ready audio input backend before Start." };
+    }
+    if (!backend || !liveAudioInputBackendCanDispatch(backend)) {
+      return { ok: false, message: liveAudioInputBackendDispatchDenial(backendId, backend) };
     }
     const deviceId = selectedLiveAudioInputDevice().trim();
     if (backend.requires_explicit_device && !deviceId) {
@@ -22438,8 +22646,36 @@ export default function App() {
     const asioRevalidationArmAtAttempt = liveAudioInputAsioRevalidationArm();
     setLiveAudioInputAsioRevalidationArm(null);
     if (liveAudioInputBusy() || liveAudioInputBackendsBusy()) return;
-    const savedRuntime = liveAudioInputSavedSelection();
     const selectedBackendId = selectedLiveAudioInputBackend();
+    // The latest catalogue is authoritative over any restored saved runtime.
+    // A forced/direct Start must therefore surface the exact malformed or
+    // absent backend rejection before the saved-selection stale message.
+    const catalogueRejection = liveAudioInputBackendCatalogueRejection();
+    if (catalogueRejection) {
+      setMessage(liveAudioInputBackendInvalidCatalogueMessage(
+        selectedBackendId,
+        catalogueRejection.reason_code,
+      ));
+      return;
+    }
+    const deviceCatalogueRejection = liveAudioInputDeviceCatalogueRejection();
+    if (deviceCatalogueRejection?.backend === selectedBackendId) {
+      setMessage(liveAudioInputDeviceCatalogueFailureMessage(
+        selectedBackendId,
+        deviceCatalogueRejection.reason_code,
+      ));
+      return;
+    }
+    if (liveAudioInputBackendsKnown()) {
+      const selectedBackend = liveAudioInputBackends().find(
+        (candidate) => candidate.id === selectedBackendId,
+      );
+      if (!liveAudioInputBackendCanDispatch(selectedBackend)) {
+        setMessage(liveAudioInputBackendDispatchDenial(selectedBackendId, selectedBackend));
+        return;
+      }
+    }
+    const savedRuntime = liveAudioInputSavedSelection();
     const savedRuntimeApplies = savedRuntimeAppliesToCurrentBackend(savedRuntime, selectedBackendId);
     let request: LiveAudioInputStartRequest | null = null;
     if (savedRuntimeApplies) {
@@ -22464,6 +22700,7 @@ export default function App() {
     const currentBackend = liveAudioInputBackends().find(
       (candidate) => candidate.id === requestedBackendId,
     );
+    const currentDeviceCatalogueRejection = liveAudioInputDeviceCatalogueRejection();
     const savedRequestMatchesCurrentSelection = !savedRuntimeApplies || (
       savedRuntime.phase === "ready" &&
       savedRuntime.selection.backend === requestedBackendId &&
@@ -22471,12 +22708,18 @@ export default function App() {
     );
     if (
       !liveAudioInputBackendsKnown() ||
+      currentDeviceCatalogueRejection?.backend === requestedBackendId ||
       !savedRequestMatchesCurrentSelection ||
       selectedLiveAudioInputBackend() !== requestedBackendId ||
       !liveAudioInputBackendCanDispatch(currentBackend)
     ) {
       if (!liveAudioInputBackendsKnown()) {
         setMessage("Audio input backend catalogue is unavailable; Start is locked.");
+      } else if (currentDeviceCatalogueRejection?.backend === requestedBackendId) {
+        setMessage(liveAudioInputDeviceCatalogueFailureMessage(
+          requestedBackendId,
+          currentDeviceCatalogueRejection.reason_code,
+        ));
       } else if (!savedRequestMatchesCurrentSelection) {
         setMessage("Saved audio input backend no longer matches the current selection; Start is locked.");
       } else if (selectedLiveAudioInputBackend() !== requestedBackendId) {
@@ -27432,6 +27675,8 @@ export default function App() {
             get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+            get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
+            localize: (source) => translateUiText(source, uiLocale()),
             get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
             get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
             get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
@@ -27598,6 +27843,8 @@ export default function App() {
             get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+            get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
+            localize: (source) => translateUiText(source, uiLocale()),
             get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
             get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
             get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
