@@ -18,6 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  canonicalCommonBundleResources,
   canonicalWindowsFfmpegRuntimeDllNames,
   commonBundleResourceMap,
   loadWindowsRuntimeInventory,
@@ -34,6 +35,12 @@ const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
 
 export const windowsFfmpegRuntimeDlls = canonicalWindowsFfmpegRuntimeDllNames;
+export const pinnedCommonResourceAttributeLines = Object.freeze(
+  canonicalCommonBundleResources.map((resource) => {
+    const repositoryRelativePath = resource.source.replace(/^(?:\.\.\/)+/u, "");
+    return `${repositoryRelativePath} text eol=lf`;
+  }),
+);
 
 export const blockedAsioRuntimeDlls = Object.freeze([
   "syndocal_asio_bridge.dll",
@@ -98,6 +105,71 @@ export function validateAsioSdkPin(sdkPin) {
   return Object.freeze(structuredClone(sdkPin));
 }
 
+export function assertPinnedCommonResourceLineEndings(gitattributesText) {
+  const activeLines = String(gitattributesText)
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  for (const requiredLine of pinnedCommonResourceAttributeLines) {
+    const repositoryRelativePath = requiredLine.slice(0, -" text eol=lf".length);
+    const occurrences = activeLines.filter((line) => line === requiredLine).length;
+    if (occurrences !== 1) {
+      throw new Error(
+        `.gitattributes must pin ${repositoryRelativePath} exactly once as 'text eol=lf' so clean Windows checkouts preserve its pinned byte identity.`,
+      );
+    }
+  }
+}
+
+export function assertEffectivePinnedCommonResourceLineEndings(attributeOutput) {
+  const fields = String(attributeOutput).split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const repositoryRelativePaths = pinnedCommonResourceAttributeLines.map((line) =>
+    line.slice(0, -" text eol=lf".length));
+  const expectedRecordCount = repositoryRelativePaths.length * 2;
+  if (fields.length !== expectedRecordCount * 3) {
+    throw new Error(
+      `git check-attr returned ${fields.length / 3} records for pinned common resources; expected exactly ${expectedRecordCount}.`,
+    );
+  }
+  const effectiveAttributes = new Map();
+  for (let index = 0; index < fields.length; index += 3) {
+    const [path, attribute, value] = fields.slice(index, index + 3);
+    const key = `${path}\0${attribute}`;
+    if (effectiveAttributes.has(key)) {
+      throw new Error(`git check-attr returned duplicate effective attribute ${attribute} for ${path}.`);
+    }
+    effectiveAttributes.set(key, value);
+  }
+  for (const path of repositoryRelativePaths) {
+    const text = effectiveAttributes.get(`${path}\0text`);
+    const eol = effectiveAttributes.get(`${path}\0eol`);
+    if (text !== "set" || eol !== "lf") {
+      throw new Error(
+        `${path} must resolve through Git to effective attributes text=set and eol=lf; actual text=${text ?? "missing"}, eol=${eol ?? "missing"}.`,
+      );
+    }
+  }
+}
+
+export function verifyPinnedCommonResourceGitAttributes(workspace = workspaceRoot) {
+  const repositoryRelativePaths = pinnedCommonResourceAttributeLines.map((line) =>
+    line.slice(0, -" text eol=lf".length));
+  let attributeOutput;
+  try {
+    attributeOutput = execFileSync(
+      "git",
+      ["check-attr", "-z", "text", "eol", "--", ...repositoryRelativePaths],
+      { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+  } catch (error) {
+    throw new Error(
+      `Unable to resolve effective Git attributes for pinned common resources in ${workspace}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  assertEffectivePinnedCommonResourceLineEndings(attributeOutput);
+}
+
 export const requiredPrepareRuntimeLibsCommand = "pnpm --dir app run prepare:runtime-libs";
 
 export class MissingStagedWindowsRuntimeError extends Error {
@@ -130,6 +202,8 @@ export function validateAsioPackagingBoundary(
   readManifest = read,
   { workspace = workspaceRoot, verifyWindowsRuntimeSources = process.platform === "win32" } = {},
 ) {
+  assertPinnedCommonResourceLineEndings(readManifest(".gitattributes"));
+  verifyPinnedCommonResourceGitAttributes(workspace);
   const inventory = loadWindowsRuntimeInventory({ workspace });
   const sdkPin = validateAsioSdkPin(
     parseRequiredJson(readManifest("qa/ASIO_SDK_PIN.json"), "qa/ASIO_SDK_PIN.json"),

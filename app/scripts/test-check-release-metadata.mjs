@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  assertEffectivePinnedCommonResourceLineEndings,
   authoritativeMemberPackageNames,
   collectGitCandidateState,
   compareSemver,
@@ -27,12 +28,14 @@ import {
   parseRuntimeUpdaterIdentity,
   parseSemver,
   parseWorkspaceMembers,
+  pinnedCommonResourceAttributeLines,
   readVerifiedEvidenceFile,
   readmeProductLine,
   readmeWindowsInstallerLine,
   requiredWorkspaceMembers,
   validateCandidateEvidence,
   validateStaticReleaseMetadata,
+  verifyPinnedCommonResourceGitAttributes,
   windowsInstallerNames,
   withMaterializedVerifiedExecutable,
 } from "./check-release-metadata.mjs";
@@ -470,6 +473,7 @@ try {
   const workspaceRoot = resolve(scriptDir, "..", "..");
   const readRepoFile = (relativePath) => readFileSync(resolve(workspaceRoot, relativePath), "utf8");
   const staticFixturePaths = [
+    ".gitattributes",
     "Cargo.toml",
     "Cargo.lock",
     "README.md",
@@ -506,6 +510,42 @@ try {
   };
 
   validateStaticReleaseMetadata(readRepoFile);
+  assertions += 1;
+  for (const requiredLine of pinnedCommonResourceAttributeLines) {
+    const repositoryRelativePath = requiredLine.slice(0, -" text eol=lf".length);
+    staticRejects(
+      (files) => {
+        files.set(".gitattributes", replaceOnce(files.get(".gitattributes"), requiredLine, `${repositoryRelativePath} text`));
+      },
+      new RegExp(`must pin ${repositoryRelativePath.replaceAll(".", "\\.")} exactly once as 'text eol=lf'`),
+      `${repositoryRelativePath} line-ending policy is required`,
+    );
+    staticRejects(
+      (files) => {
+        files.set(".gitattributes", replaceOnce(files.get(".gitattributes"), requiredLine, `${requiredLine}\n${requiredLine}`));
+      },
+      new RegExp(`must pin ${repositoryRelativePath.replaceAll(".", "\\.")} exactly once as 'text eol=lf'`),
+      `${repositoryRelativePath} line-ending policy rejects duplicates`,
+    );
+  }
+  const attributeFixtureRoot = join(tempRoot, "git-attributes-fixture");
+  mkdirSync(attributeFixtureRoot);
+  git(["init", "--quiet"], attributeFixtureRoot);
+  writeFileSync(
+    join(attributeFixtureRoot, ".gitattributes"),
+    `${pinnedCommonResourceAttributeLines.join("\n")}\n* text eol=crlf\n`,
+  );
+  assert.throws(
+    () => verifyPinnedCommonResourceGitAttributes(attributeFixtureRoot),
+    /effective attributes text=set and eol=lf; actual text=set, eol=crlf/,
+    "later matching .gitattributes rules cannot override the pinned LF policy",
+  );
+  assertions += 1;
+  assert.throws(
+    () => assertEffectivePinnedCommonResourceLineEndings("malformed\0output\0"),
+    /expected exactly 8/,
+    "malformed git check-attr output fails closed",
+  );
   assertions += 1;
   const manifestPackageNames = requiredWorkspaceMembers.map((member) =>
     parseCargoPackageIdentity(readRepoFile(`${member}/Cargo.toml`), `${member}/Cargo.toml`),
