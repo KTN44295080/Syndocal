@@ -22,6 +22,7 @@ interface RemoteControlPanelProps {
   djLinkEnabled: boolean;
   djLinkMachineStatus: DjLinkMachineStatus;
   djLinkWiredCandidates: DjLinkWiredCandidate[];
+  djLinkWiredCandidateCount: number | null;
   djLinkSelectedBinding: string;
   djLinkToken: string | null;
   djLinkTokenCopied: boolean;
@@ -366,7 +367,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <button
                   type="button"
                   data-io-control="dj-link-refresh-wired-candidates"
-                  disabled={props.listenerRunning || props.djLinkTokenOperationBusy || !machineStatusKnown()}
+                  disabled={props.djLinkTokenOperationBusy || !machineStatusKnown()}
                   onClick={() => void props.onRefreshDjLinkWiredCandidates()}
                 >Refresh wired bindings</button>
                 <Show when={hasDjLinkDisarmWork()} fallback={
@@ -397,6 +398,18 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   ? `Endpoint: ws://${props.djLinkMachineStatus.bindIp ?? "[select LAN IP]"}:${props.djLinkMachineStatus.bindPort ?? "[select port]"}/dj-link`
                   : "DJ Link is disabled. It never uses the Web Remote pairing PIN."}
               </p>
+              <Show when={props.djLinkWiredCandidateCount !== null}>
+                <p
+                  class={props.djLinkWiredCandidateCount! > 0 ? "inlineSuccess" : "inlineWarning"}
+                  data-io-status="dj-link-wired-discovery"
+                  data-dj-link-wired-candidate-count={props.djLinkWiredCandidateCount!}
+                >
+                  <Show when={props.djLinkWiredCandidateCount! > 0} fallback="No eligible wired DJ Link bindings found.">
+                    <span>Eligible wired DJ Link bindings: </span>
+                    <strong class="tabularNums" data-no-localize>{props.djLinkWiredCandidateCount}</strong>
+                  </Show>
+                </p>
+              </Show>
               <Show when={props.djLinkMachineStatus.blockReason}>
                 {(reason) => <p class="inlineWarning">{djLinkMachineBlockReasonText(reason())}</p>}
               </Show>

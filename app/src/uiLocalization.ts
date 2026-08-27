@@ -3239,6 +3239,8 @@ const japaneseText: Record<string, string> = {
   "Wired binding": "有線バインディング",
   "Select one exact wired binding": "正確な有線バインディングを1つ選択",
   "Refresh wired bindings": "有線バインディングを更新",
+  "Eligible wired DJ Link bindings:": "利用可能なDJ Link有線バインディング:",
+  "No eligible wired DJ Link bindings found.": "利用可能なDJ Link有線バインディングが見つかりません。",
   "DJ Link machine settings are corrupt. Keep the file for recovery and repair it before continuing.": "DJ Linkのマシン設定が破損しています。復旧用にファイルを保持し、修復してから続行してください。",
   "DJ Link machine settings were created by a newer version. Keep the file and update this application.": "DJ Linkのマシン設定は新しいバージョンで作成されています。ファイルを保持し、このアプリケーションを更新してください。",
   "DJ Link machine settings use a retired format and were left unchanged. Re-arm DJ Link after explicit recovery.": "DJ Linkのマシン設定は廃止形式のため変更していません。明示的に復旧してからDJ Linkを再アームしてください。",

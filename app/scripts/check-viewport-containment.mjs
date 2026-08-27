@@ -4529,13 +4529,7 @@ function installSetupIoInvokeMockInPage() {
       credentialCleanupPending: false,
       blockReason: null,
     };
-    const djLinkWiredCandidates = [{
-      adapterGuid: "11111111-1111-1111-1111-111111111111",
-      networkGuid: "22222222-2222-2222-2222-222222222222",
-      bindIp: "192.0.2.10",
-      adapterAlias: "DJ Link wired fixture",
-    }];
-    const mock = { calls: [], transactionId: 0 };
+    const mock = { calls: [], transactionId: 0, djLinkWiredCandidates: [] };
     window.__syndocalSetupIoMock = mock;
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args) => {
@@ -4557,7 +4551,7 @@ function installSetupIoInvokeMockInPage() {
         if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
         if (command === "remote_control_status") return clone(remoteStatus);
         if (command === "get_dj_link_machine_status") return djLinkMachineStatus;
-        if (command === "list_dj_link_wired_candidates") return djLinkWiredCandidates;
+        if (command === "list_dj_link_wired_candidates") return clone(mock.djLinkWiredCandidates);
         if (command === "start_remote_control") {
           remoteStatus.running = true;
           remoteStatus.web_remote_enabled = true;
@@ -5036,6 +5030,83 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       })(),
       genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
     }))()`);
+    // Wired discovery is a read-only machine query and remains available while
+    // the shared listener is running. Start this flow with no candidates so a
+    // click must prove both the native invoke and the rendered result rather
+    // than merely reusing an initial fixture.
+    const djLinkRefreshFixture = {
+      adapterGuid: "44444444-4444-4444-4444-444444444444",
+      networkGuid: "55555555-5555-5555-5555-555555555555",
+      bindIp: "192.168.50.1",
+      adapterAlias: "Ethernet4",
+    };
+    const djLinkRefresh = await evaluatePageFunction(client, async (candidate) => {
+      const disclosure = document.querySelector('[data-io-disclosure="dj-link"]');
+      const summary = disclosure?.querySelector(':scope > summary');
+      if (disclosure && !disclosure.open && summary instanceof HTMLElement) summary.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (window.__syndocalSetupIoMock) window.__syndocalSetupIoMock.djLinkWiredCandidates = [];
+      const read = () => {
+        const select = document.querySelector('[data-io-control="dj-link-wired-binding"]');
+        const refresh = document.querySelector('[data-io-control="dj-link-refresh-wired-candidates"]');
+        const arm = document.querySelector('[data-io-control="dj-link-arm"]');
+        const rotate = document.querySelector('[data-io-control="dj-link-rotate-token"]');
+        const candidateOptions = select instanceof HTMLSelectElement
+          ? [...select.options].filter((option) => option.value !== "")
+          : [];
+        const discovery = document.querySelector('[data-io-status="dj-link-wired-discovery"]');
+        return {
+          refreshEnabled: refresh instanceof HTMLButtonElement && !refresh.disabled,
+          selectDisabled: select instanceof HTMLSelectElement && select.disabled,
+          armDisabled: arm instanceof HTMLButtonElement && arm.disabled,
+          rotateDisabled: rotate instanceof HTMLButtonElement && rotate.disabled,
+          candidateOptionCount: candidateOptions.length,
+          candidateOptions: candidateOptions.map((option) => option.textContent?.trim() ?? ""),
+          discoveryCount: discovery?.getAttribute('data-dj-link-wired-candidate-count') ?? null,
+          discoveryText: discovery?.textContent?.trim() ?? "",
+        };
+      };
+      const before = read();
+      const callsBefore = window.__syndocalSetupIoMock?.calls
+        .filter((call) => call.command === 'list_dj_link_wired_candidates').length ?? 0;
+      const refresh = document.querySelector('[data-io-control="dj-link-refresh-wired-candidates"]');
+      if (refresh instanceof HTMLButtonElement && !refresh.disabled) refresh.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const callsAfterEmpty = window.__syndocalSetupIoMock?.calls
+        .filter((call) => call.command === 'list_dj_link_wired_candidates').length ?? 0;
+      const empty = read();
+      if (window.__syndocalSetupIoMock) window.__syndocalSetupIoMock.djLinkWiredCandidates = [candidate];
+      if (refresh instanceof HTMLButtonElement && !refresh.disabled) refresh.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const callsAfterCandidate = window.__syndocalSetupIoMock?.calls
+        .filter((call) => call.command === 'list_dj_link_wired_candidates').length ?? 0;
+      const after = read();
+      if (disclosure?.open && summary instanceof HTMLElement) summary.click();
+      const listenerControlsRemainDisabled = (state) =>
+        state.selectDisabled && state.armDisabled && state.rotateDisabled;
+      return {
+        before,
+        empty,
+        after,
+        firstListCallDelta: callsAfterEmpty - callsBefore,
+        secondListCallDelta: callsAfterCandidate - callsAfterEmpty,
+        passed:
+          before.refreshEnabled &&
+          before.candidateOptionCount === 0 &&
+          listenerControlsRemainDisabled(before) &&
+          empty.refreshEnabled &&
+          empty.candidateOptionCount === 0 &&
+          empty.discoveryCount === '0' &&
+          (empty.discoveryText.includes('No eligible wired DJ Link bindings found.') || empty.discoveryText.includes('利用可能なDJ Link有線バインディングが見つかりません。')) &&
+          listenerControlsRemainDisabled(empty) &&
+          after.refreshEnabled &&
+          listenerControlsRemainDisabled(after) &&
+          after.candidateOptions.some((option) => option.includes('Ethernet4') && option.includes('192.168.50.1')) &&
+          after.discoveryCount === '1' &&
+          callsAfterEmpty - callsBefore === 1 &&
+          callsAfterCandidate - callsAfterEmpty === 1,
+      };
+    }, djLinkRefreshFixture);
     await clickVisibleSelector(client, '[data-io-control="remote-stop"]');
     await sleep(180);
     const remoteStoppedState = await client.evaluate(`(() => ({
@@ -5075,12 +5146,13 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       !remoteStoppedState.stopVisible &&
       remoteStoppedState.genericStatus === 'Stopped';
     flows.remote = {
-      passed: startedExactlyOnce && stoppedExactlyOnce && ordered && startedStatePassed && stoppedStatePassed,
+      passed: startedExactlyOnce && stoppedExactlyOnce && ordered && startedStatePassed && stoppedStatePassed && djLinkRefresh.passed,
       startedExactlyOnce,
       stoppedExactlyOnce,
       ordered,
       startedStatePassed,
       stoppedStatePassed,
+      djLinkRefresh,
     };
   }
 
@@ -5110,6 +5182,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
     remoteStartFlow: dmxOnly || flows.remote.passed,
+    remoteDjLinkRefreshFlow: dmxOnly || flows.remote.djLinkRefresh?.passed === true,
     remoteDisclosureScrollReachability: dmxOnly || remoteDisclosureScroll.passed,
     legacyStoredIoTabsNormalize: legacyStoredTabs.passed,
     fixedFrameContained: isContained(measurements.io),

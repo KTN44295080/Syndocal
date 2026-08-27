@@ -3086,6 +3086,7 @@ export default function App() {
   const [djLinkEnabled, setDjLinkEnabled] = createSignal(false);
   const [djLinkBindIp, setDjLinkBindIp] = createSignal<string | null>(null);
   const [djLinkWiredCandidates, setDjLinkWiredCandidates] = createSignal<DjLinkWiredCandidate[]>([]);
+  const [djLinkWiredCandidateCount, setDjLinkWiredCandidateCount] = createSignal<number | null>(null);
   const [djLinkSelectedBinding, setDjLinkSelectedBinding] = createSignal<string>("");
   const [djLinkMachineStatus, setDjLinkMachineStatus] = createSignal<DjLinkMachineStatus>({
     configured: false,
@@ -18857,6 +18858,7 @@ export default function App() {
         setDjLinkBindIp(null);
         djLinkCandidateRequestGeneration += 1;
         setDjLinkWiredCandidates([]);
+        setDjLinkWiredCandidateCount(null);
         setDjLinkSelectedBinding("");
       }
       return null;
@@ -18864,9 +18866,13 @@ export default function App() {
   };
   const refreshDjLinkWiredCandidates = async () => {
     const requestGeneration = ++djLinkCandidateRequestGeneration;
+    setDjLinkWiredCandidates([]);
+    setDjLinkSelectedBinding("");
+    setDjLinkWiredCandidateCount(null);
     if (!isTauriRuntime()) {
       if (requestGeneration === djLinkCandidateRequestGeneration) {
         setDjLinkWiredCandidates([]);
+        setDjLinkWiredCandidateCount(0);
         setDjLinkSelectedBinding("");
       }
       return [];
@@ -18875,6 +18881,7 @@ export default function App() {
       const candidates = await invoke<DjLinkWiredCandidate[]>("list_dj_link_wired_candidates");
       if (requestGeneration !== djLinkCandidateRequestGeneration) return candidates;
       setDjLinkWiredCandidates(candidates);
+      setDjLinkWiredCandidateCount(candidates.length);
       const current = djLinkSelectedBinding();
       const next = candidates.some((candidate) => djLinkBindingKey(candidate) === current)
         ? current
@@ -18884,6 +18891,7 @@ export default function App() {
     } catch (error) {
       if (requestGeneration !== djLinkCandidateRequestGeneration) return [];
       setDjLinkWiredCandidates([]);
+      setDjLinkWiredCandidateCount(null);
       setDjLinkSelectedBinding("");
       setMessage(`DJ Link wired discovery failed: ${String(error)}`);
       return [];
@@ -29209,6 +29217,7 @@ export default function App() {
             djLinkEnabled={djLinkEnabled()}
             djLinkMachineStatus={djLinkMachineStatus()}
             djLinkWiredCandidates={djLinkWiredCandidates()}
+            djLinkWiredCandidateCount={djLinkWiredCandidateCount()}
             djLinkSelectedBinding={djLinkSelectedBinding()}
             djLinkToken={djLinkToken()}
             djLinkTokenCopied={djLinkTokenCopied()}

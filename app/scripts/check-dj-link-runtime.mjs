@@ -73,6 +73,23 @@ assert.match(
 );
 assert.doesNotMatch(styles, /grid-template-rows: 80px minmax\(0, 1fr\);/);
 assert.match(panel, /data-io-control="dj-link-wired-binding"/);
+assert.match(panel, /djLinkWiredCandidateCount/);
+assert.match(panel, /data-io-status="dj-link-wired-discovery"/);
+assert.match(panel, /data-dj-link-wired-candidate-count/);
+const refreshButton = panel.match(
+  /<button\s+type="button"\s+data-io-control="dj-link-refresh-wired-candidates"[\s\S]*?<\/button>/,
+)?.[0];
+assert.ok(refreshButton, "wired discovery refresh button is present");
+assert.match(
+  refreshButton,
+  /disabled=\{props\.djLinkTokenOperationBusy \|\| !machineStatusKnown\(\)\}/,
+  "wired discovery refresh must stay available while the read-only listener is running",
+);
+assert.doesNotMatch(
+  refreshButton,
+  /listenerRunning/,
+  "wired discovery refresh must not be blocked by the listener state",
+);
 assert.match(panel, /data-io-control="dj-link-arm"/);
 assert.match(panel, /data-io-control="dj-link-disarm"/);
 assert.match(panel, /djLinkMachineBlockReasonText/);
@@ -102,7 +119,7 @@ assert.match(app, /setRemoteStatusHydrated\(true\)/);
 assert.match(app, /setRemoteStatusHydrated\(false\)/);
 assert.match(app, /void refreshRemoteControlStatus\(\);\s*\}, 1_000\)/);
 assert.match(app, /setDjLinkMachineStatus\(\{[\s\S]*blockReason: "machine_status_unavailable"/);
-assert.match(app, /djLinkCandidateRequestGeneration \+= 1;\s*setDjLinkWiredCandidates\(\[\]\);\s*setDjLinkSelectedBinding\(""\)/);
+assert.match(app, /djLinkCandidateRequestGeneration \+= 1;\s*setDjLinkWiredCandidates\(\[\]\);\s*(?:setDjLinkWiredCandidateCount\(null\);\s*)?setDjLinkSelectedBinding\(""\)/);
 assert.match(app, /const refreshDjLinkMachineStatusAndCandidates = async \(\) => \{[\s\S]*?if \(!status \|\| status\.blockReason === "machine_status_unavailable"\) return \[\];[\s\S]*?return refreshDjLinkWiredCandidates\(\);/);
 assert.match(
   app,
@@ -126,6 +143,13 @@ assert.equal(
 );
 assert.doesNotMatch(app, /candidates\[0\]\s*\?\s*djLinkBindingKey/);
 assert.match(app, /let djLinkCandidateRequestGeneration = 0/);
+assert.match(
+  app,
+  /const refreshDjLinkWiredCandidates = async \(\) => \{\s*const requestGeneration = \+\+djLinkCandidateRequestGeneration;\s*setDjLinkWiredCandidates\(\[\]\);\s*setDjLinkSelectedBinding\(""\);\s*setDjLinkWiredCandidateCount\(null\);/,
+  "wired refresh must clear stale candidates and selection before awaiting the read-only query",
+);
+assert.match(app, /setDjLinkWiredCandidateCount\(candidates\.length\)/);
+assert.match(app, /setDjLinkWiredCandidateCount\(null\)/);
 assert.match(app, /setDjLinkSelectedBinding\(""\)/);
 assert.doesNotMatch(app, /localStorage[^\n]*(dj|DJ)[^\n]*token/i);
 const machineStatusFailureHandler = app.match(/const refreshDjLinkMachineStatus = async \(\) => \{[\s\S]*?\n  \};\n  const refreshDjLinkWiredCandidates/);
@@ -276,6 +300,8 @@ for (const key of [
   "Disarm DJ Link",
   "Wired binding",
   "Refresh wired bindings",
+  "Eligible wired DJ Link bindings:",
+  "No eligible wired DJ Link bindings found.",
   "Show-LAN bind IP",
   "Owner deck / playing",
   "Track mappings",
