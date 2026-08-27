@@ -899,3 +899,26 @@ non-OneDrive release gate passed at exact `41faefc`. Peer v1.1.9 is
 committed/pushed at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, full suite
 `453/0/2`. The old alpha.18 PID `80264` is still running; alpha.19 native and
 hardware acceptance remain pending and HW-4 stays **0/12**.
+
+## 2026-08-28 alpha.26 source/UI readiness update
+
+Current source metadata is `1.2.0-alpha.26`. The Cue/Recall helper split is
+committed/pushed at `c13db1f2614e577d4b35399a89d4c63f8a9d5b23`; the DJ Link
+workbench draft-continuity fix is committed/pushed at upstream-equal
+`991de0762d5aec205d73cd3ea0c1648012633551`. The old object-identity remount
+path is retired: same-connection status changes now preserve the Start Timeline
+and mapping draft, while selecting another connection still remounts the exact
+new workbench.
+
+Supervisor TypeScript/Vite gates passed with `297` modules and first-party
+warnings `0`. The exact Setup I/O contract passed `5/5` viewports with
+`remote=1` and `failed=[]`; independent Terra xHigh review is GO with
+P0/P1/P2 zero. The currently running alpha.25 DJ session was deliberately not
+stopped, so alpha.26 native build/window QA and the physical selector
+confirmation remain open.
+
+Live Deck 1 detection is present for the temporary unmapped track, including a
+Content ID, BPM `140`, fresh playhead revision, and observed Rekordbox loop.
+The `DJ_TRACK_ACTIVE` ACK is correctly `no_mapping`, Timeline remains idle, and
+HW-4 remains **0/12**. Next hardware action: play mapped `Demo Track 2`, confirm
+Track Active/Timeline ownership, and only then continue the ordered pedal rows.

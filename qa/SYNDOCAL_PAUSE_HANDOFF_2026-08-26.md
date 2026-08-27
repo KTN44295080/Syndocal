@@ -1928,3 +1928,45 @@ verified the exact helper extraction, executable behavioral assertions for all
 four moved exports, PS5.1/PS7 parsing of all six migration blocks, the corrected
 non-causal `SYNDOCAL_TOKEN` wording, and the preserved HW-4 `0/12` boundary.
 Native and hardware acceptance remain explicitly unclaimed.
+
+## 36. 2026-08-28 alpha.26 DJ Link workbench draft-continuity checkpoint
+
+The DJ Link Start Timeline selector reset was traced to the shared I/O deck
+remounting the selected workbench whenever live connection status rebuilt the
+item objects. The old path keyed the Solid `Show` boundary by object identity;
+the new path keys it by the primitive connection ID while the label and state
+remain reactive. This preserves an in-progress DJ mapping/Timeline draft across
+same-connection `Disarmed -> Connected -> Disarmed` updates and still replaces
+the workbench when the operator selects a different connection. No legacy or
+fallback workbench path was added.
+
+The implementation and executable regression contract are committed and
+pushed at upstream-equal
+`991de0762d5aec205d73cd3ea0c1648012633551` on
+`codex/syndocal-v1.2`. Supervisor TypeScript and Vite gates passed; the build
+transformed `297` modules with first-party warnings `0`. The exact Setup I/O
+contract passed all five viewports (`1920x1080`, `1920x1032`, `2048x1152`,
+`1366x768`, and `1280x720`) with `remote=1` and `failed=[]`. Its regression
+changes the same DJ connection from Disarmed to Connected and back, proves the
+same input node and value survive, proves a MIDI-to-DJ connection switch creates
+a new input node, and restores candidate/error fixture state. An independent
+Terra xHigh review is GO with P0/P1/P2 all zero. `git diff --check` passed;
+LF-to-CRLF messages were Git working-copy notices only.
+
+The live DJ session remains on the historical alpha.25 native executable and
+was not stopped for this source/UI checkpoint. Therefore alpha.26 native build,
+launch, maximized-window verification, and physical confirmation of this
+selector fix remain open. The first safe native action is to finish or
+explicitly stop the preserved DJ session, run the exact MSVC 14.44 native build
+gate, launch one responsive maximized alpha.26 window, and repeat the selector
+status-update observation there.
+
+The latest read-only DJ-PC state still reports Deck 1 playing `More One Night x
+動く、動く (Agate Trance&Makina bootleg)` at BPM `140` with a present Content
+ID, fresh position revision, and an observed eight-beat Rekordbox loop. Its
+`DJ_TRACK_ACTIVE` receipt remains `no_mapping`; Syndocal Timeline state remains
+idle with no owner or Timeline ID. This proves live detection and the zero-match
+Deck 1 owner fallback reached the fail-closed mapping boundary, but it does not
+promote any HW-4 row. HW-4 remains exactly **0/12**. The next non-destructive
+hardware action is to load the existing mapped `Demo Track 2` on Deck 1 and
+observe Track Active/Timeline ownership before touching the pedal.
