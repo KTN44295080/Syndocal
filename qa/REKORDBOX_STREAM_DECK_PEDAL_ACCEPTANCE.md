@@ -2,17 +2,33 @@
 
 Date: 2026-08-21
 Updated: 2026-08-28
-Status: Required; current KDMX native authority is `1.2.0-alpha.25`, whose source acceptance, native build, artifact identity, launch, and native UI acceptance are pending the supervisor build. Controlled rb-output checkout authority remains `1.1.9` at exact peer commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`, with release implementation provenance at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Historical alpha.24 native evidence must not be promoted; target-DJ-PC authoritative running state, saved show project/mapping, and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
+Status: Required; current KDMX native authority is accepted `1.2.0-alpha.25` at source `566a7101b0d5c9307e8d0efa5ccf499aba3eb404` on `codex/syndocal-v1.2`; its StandardRelease runner rebind is accepted by dual `88/88` self-tests plus dual syntax passes, with no Apply/hardware run. Controlled rb-output checkout authority remains `1.1.9` at exact peer commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`, with release implementation provenance at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Historical alpha.24 native evidence must not be promoted; target-DJ-PC authoritative running state, saved show project/mapping, and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current KDMX alpha.25 native and DJ-PC execution authority — 2026-08-28
 
-The active product/file version is `1.2.0-alpha.25`. Alpha.25 source
-acceptance, native build, artifact identity, launch, and native UI acceptance
-are pending the supervisor build; no alpha.25 source commit, SHA-256, size, or
-PID is accepted. Historical alpha.24 evidence is preserved, not promoted:
-source build `5eb1888906613851c4c49e66717a270f13bbd7b5` with native-evidence
-descendant `e4c02f8e2c9013bdb735b2b785f6c75599c0a950` produced
+The active product/file version is `1.2.0-alpha.25`; accepted source/native
+evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404` on
+`codex/syndocal-v1.2`. Old/new/reason: alpha.24 remains immutable historical
+artifact evidence; alpha.25 is the distinct native UI checkpoint, so alpha.24
+was not overwritten. The exact MSVC 14.44 linker was first, and
+`pnpm --dir app tauri build --no-bundle` passed in `3m06s` with first-party
+warnings `0`. Vite transformed `297` modules, emitting `App-CUUI4pgY.js`
+(`498.21 kB`) and `gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The accepted
+artifact is `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.25`, `59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
+LastWrite `2026-08-28T06:20:27.6424691+09:00`. PID `83252`, handle
+`60826240`, title `Syndocal`, and responsive state were verified; Computer Use
+at `1920x1032` found the restore button, proving maximized state. Native I/O
+DMX full-width selector/workbench and native Setup Lighting/Profile rendering
+are accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is
+the StandardRelease authority for alpha.25 at the exact version, `59,807,744`-byte
+size, SHA-256, and source HEAD above; PowerShell 7 and Windows PowerShell 5.1
+self-tests both passed `88/88`, with syntax passing in both. No Apply or
+hardware acceptance was run. Historical alpha.24 evidence is preserved, not promoted: source build
+`5eb1888906613851c4c49e66717a270f13bbd7b5` with native-evidence descendant
+`e4c02f8e2c9013bdb735b2b785f6c75599c0a950` produced
 `target/release/syndocal.exe`, `59,803,136` bytes, Product/FileVersion
 `1.2.0-alpha.24`, SHA-256
 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`; PID
@@ -20,9 +36,10 @@ descendant `e4c02f8e2c9013bdb735b2b785f6c75599c0a950` produced
 
 The current read-only DJ-PC status reports Agent and Syndocal `connected`,
 `stateSync=sent`, generation `72`, while the Timeline snapshot is not ready due
-to `project_mapping_not_loaded` on `Untitled.sdc`. Do not treat this as
-authoritative `running` state or execute a show operation from it. HW-4 remains
-exactly `0/12`; the actual saved show project and mapping remain unverified.
+to `project_mapping_not_loaded` on `Untitled.sdc`. DJ TCP has re-established
+the `.50.2` peer. Do not treat this as authoritative `running` state or execute
+a show operation from it. HW-4 remains exactly `0/12`; the actual saved show
+project and mapping remain unverified.
 
 ## Historical KDMX alpha.21 I/O operator checkpoint — 2026-08-28
 
@@ -94,10 +111,12 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX product metadata
-is `1.2.0-alpha.25`; alpha.25 source acceptance, native build, artifact identity,
-launch, and native UI acceptance are pending the supervisor build. No alpha.25
-source commit, SHA-256, size, or PID is accepted. The alpha.24 artifact described
-above is historical and is not rebound to alpha.25; alpha.21 build/launch/layout
+is `1.2.0-alpha.25`; accepted source/native evidence is
+`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`, with the accepted artifact and
+native checks recorded above. The StandardRelease runner rebinding is accepted:
+PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, syntax
+passed in both, and no Apply or hardware acceptance was run. The alpha.24 artifact described above
+is historical and is not rebound to alpha.25; alpha.21 build/launch/layout
 evidence is historical as well. The immediately preceding
 DJ authority source is immutable alpha.19 commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; older alpha.18/alpha.17 artifact

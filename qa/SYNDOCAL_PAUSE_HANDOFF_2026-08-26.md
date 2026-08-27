@@ -1,10 +1,11 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.25 SOURCE/NATIVE ACCEPTANCE PENDING SUPERVISOR BUILD; ALPHA.24 TIMELINE FOLLOW REARM SOURCE/NATIVE CHECKPOINT IS HISTORICAL; ALPHA.23 AND ALPHA.21 ARE HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.25 SOURCE/NATIVE AND STANDARDRELEASE RUNNER REBIND/SELF-TEST CHECKPOINTS ACCEPTED; ALPHA.24 TIMELINE FOLLOW REARM SOURCE/NATIVE CHECKPOINT IS HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. Section
 34 preserves the historical alpha.24 rearm source/native checkpoint; alpha.25
-source/native acceptance is pending the supervisor build. Section 33 preserves the
+source/native and StandardRelease runner rebind/self-test acceptance are
+recorded below. Section 33 preserves the
 historical alpha.23 source checkpoint and
 section 31 preserves the historical alpha.21 native-artifact authority. Section
 32 is preserved as the historical alpha.22 Scene-authority source checkpoint,
@@ -61,7 +62,7 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.25 source/native acceptance | Product metadata is `1.2.0-alpha.25`; source acceptance, native build, artifact identity, launch, and native UI acceptance are pending the supervisor build. No alpha.25 source commit, binary size, SHA-256, or PID is accepted yet. |
+| Current alpha.25 source/native and runner acceptance | Product metadata is `1.2.0-alpha.25` on `codex/syndocal-v1.2`; accepted source/native evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: immutable alpha.24 evidence is preserved separately, while alpha.25 is the distinct native UI checkpoint and does not overwrite that artifact. Exact MSVC 14.44 was first; `pnpm --dir app tauri build --no-bundle` passed in `3m06s`, first-party warnings `0`; Vite `297` modules, `App-CUUI4pgY.js` `498.21 kB`, `gdtfProfileActions-54y__lyr.js` `3.91 kB`. `target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, responsive. Computer Use at `1920x1032` found the restore button, proving maximized state; native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering are accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is the StandardRelease authority at that exact alpha.25 version, size, SHA-256, and source HEAD; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No Apply or hardware acceptance was run. DJ TCP re-established `.50.2`, but `Untitled.sdc`/mapping is not authoritative; HW-4 remains `0/12`. |
 | Historical alpha.24 Timeline Follow source/native | Product metadata was `1.2.0-alpha.24`; committed/pushed, upstream-equal source was `5eb1888906613851c4c49e66717a270f13bbd7b5`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); `target/release/syndocal.exe` was `59,803,136` bytes, SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, PID `63016`, exactly one responsive maximized window; physical acceptance remained open |
 | Historical alpha.23 output-routing / Setup I/O / frontend source | Product metadata was `1.2.0-alpha.23`; committed/pushed, upstream-equal source is `5e7d27df7f5864449d4838782f6eca2f9b81d360`; no alpha.23 native artifact was built |
 | Historical alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact was built |
@@ -86,10 +87,11 @@ commit as the source identity of an already-built binary.
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
 Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.25`;
-alpha.25 source/native acceptance is pending the supervisor build, with no
-accepted source commit or native artifact identity. Section 34 preserves the
-historical alpha.24 source/native evidence at exact committed, pushed,
-upstream-equal commit `5eb1888906613851c4c49e66717a270f13bbd7b5`.
+accepted source/native evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`
+and its exact build/native evidence is the section 1 current-authority row.
+Section 34 preserves the historical alpha.24 source/native evidence at exact
+committed, pushed, upstream-equal commit
+`5eb1888906613851c4c49e66717a270f13bbd7b5`.
 The historical alpha.23 source authority is
 section 33 at exact commit `5e7d27df7f5864449d4838782f6eca2f9b81d360`. The
 preceding alpha.22 Scene-authority source remains section 32 at exact commit
@@ -1765,8 +1767,9 @@ PID `41912`, `58,778,112` bytes, SHA-256
 Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
 reconnect, and three-display evidence remain unverified; this checkpoint does
 not claim final completion. The historical alpha.24 native build and
-maximized-window gate are complete, but the alpha.25 native gate and remaining
-physical/show gates are open.
+maximized-window gate are complete; alpha.25 source/native and StandardRelease
+runner rebind/self-test acceptance are now complete, but Apply/hardware and
+remaining physical/show gates are open.
 
 ## 34. 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 

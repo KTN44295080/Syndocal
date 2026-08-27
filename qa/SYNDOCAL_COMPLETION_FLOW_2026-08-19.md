@@ -354,13 +354,30 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.25`. Alpha.25
-source acceptance, native build, artifact identity, launch, and native UI
-acceptance are pending the supervisor build; no alpha.25 source commit,
-SHA-256, size, or PID is accepted. The alpha.24 Timeline Follow rearm source
-and native evidence are historical only in section 57 and must not be rebound
-to alpha.25. The preceding alpha.23 source checkpoint remains historical at
-exact committed/pushed, upstream-equal source
+alpha checkpoints; current product metadata is `1.2.0-alpha.25` on
+`codex/syndocal-v1.2`, with accepted source/native evidence at
+`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: alpha.24 source
+and artifact evidence remain immutable historical evidence in section 57;
+alpha.25 is the distinct native UI checkpoint so alpha.24 was not overwritten.
+The exact MSVC 14.44 linker was first, and
+`pnpm --dir app tauri build --no-bundle` passed in `3m06s` with first-party
+warnings `0`. Vite transformed `297` modules, emitting `App-CUUI4pgY.js`
+(`498.21 kB`) and `gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The accepted
+artifact is `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.25`, `59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
+LastWrite `2026-08-28T06:20:27.6424691+09:00`. PID `83252`, handle
+`60826240`, title `Syndocal`, and responsive state were verified; Computer Use
+at `1920x1032` found the restore button, proving maximized state. Native I/O
+DMX full-width selector/workbench and native Setup Lighting/Profile rendering
+are accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is
+the StandardRelease authority for alpha.25 at the exact version, `59,807,744`-byte
+size, SHA-256, and source HEAD above; PowerShell 7 and Windows PowerShell 5.1
+self-tests both passed `88/88`, with syntax passing in both. No Apply or
+hardware acceptance was run. DJ TCP re-established the `.50.2` peer, but
+`Untitled.sdc`/its mapping is not authoritative and HW-4
+remains exactly `0/12`. The preceding alpha.23 source checkpoint remains
+historical at exact committed/pushed, upstream-equal source
 `5e7d27df7f5864449d4838782f6eca2f9b81d360`; alpha.22 authoritative Scene
 source evidence remains preserved in historical section 55. The historical
 alpha.21 Product/FileVersion was `1.2.0-alpha.21`, with its I/O/native source

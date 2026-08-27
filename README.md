@@ -9,12 +9,24 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
 Current product metadata is `1.2.0-alpha.25` on branch
-`codex/syndocal-v1.2`. Alpha.25 source acceptance, native build, artifact
-identity, launch, and native UI acceptance are pending the supervisor build;
-no alpha.25 source commit, SHA-256, size, or PID is accepted yet. The release
-metadata checker intentionally expects the alpha.25 product identity, including
-the canonical product and installer names below; that naming does not assert
-that an alpha.25 installer exists.
+`codex/syndocal-v1.2`, with accepted source/native evidence at
+`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: the accepted
+alpha.24 artifact remains immutable historical evidence, and alpha.25 was built
+as the distinct native UI checkpoint so it is not overwritten. The exact MSVC
+14.44 linker was first, then `pnpm --dir app tauri build --no-bundle` passed in
+`3m06s` with first-party warnings `0`. Vite transformed `297` modules and
+produced `App-CUUI4pgY.js` (`498.21 kB`) plus
+`gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The accepted artifact is
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.25`,
+`59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
+LastWrite `2026-08-28T06:20:27.6424691+09:00`. Exactly one responsive
+`Syndocal` process/window was observed (PID `83252`, handle `60826240`, title
+`Syndocal`). Computer Use at `1920x1032` verified the restore button, proving
+the target was maximized; native I/O DMX full-width selector/workbench and
+native Setup Lighting/Profile rendering are accepted. The release metadata
+checker expects alpha.25 product and installer naming below; that naming does
+not assert an alpha.25 installer exists.
 
 Historical alpha.24 evidence is preserved, not promoted to alpha.25: source
 build `5eb1888906613851c4c49e66717a270f13bbd7b5` with native-evidence descendant
@@ -26,7 +38,14 @@ Its exact-checkout PID `63016` was responsive and maximized. The historical
 alpha.24 Timeline Follow rearm and its deterministic three-display runner
 self-test remain evidence for that artifact only; physical three-display Apply
 was not run because the loaded project was `Untitled.sdc` with no real output
-IDs/labels.
+IDs/labels. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is now
+the StandardRelease authority for `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, source
+HEAD `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`; PowerShell 7 and Windows
+PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No
+Apply or hardware acceptance was run. DJ TCP has
+re-established the `.50.2` peer, but the loaded project remains `Untitled.sdc`
+and its mapping is not authoritative; HW-4 remains exactly `0/12`.
 The historical alpha.21 Setup-I/O native artifact had Product/FileVersion
 `1.2.0-alpha.21`, built from `536742db968b242164349c34dd6940fe3ced8e92`;
 its exact identity and remaining hardware boundary are recorded in
