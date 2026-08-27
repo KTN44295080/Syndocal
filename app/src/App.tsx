@@ -3092,6 +3092,8 @@ export default function App() {
   const [djLinkBindIp, setDjLinkBindIp] = createSignal<string | null>(null);
   const [djLinkWiredCandidates, setDjLinkWiredCandidates] = createSignal<DjLinkWiredCandidate[]>([]);
   const [djLinkWiredCandidateCount, setDjLinkWiredCandidateCount] = createSignal<number | null>(null);
+  const [djLinkWiredRefreshBusy, setDjLinkWiredRefreshBusy] = createSignal(false);
+  const [djLinkWiredRefreshError, setDjLinkWiredRefreshError] = createSignal<string | null>(null);
   const [djLinkSelectedBinding, setDjLinkSelectedBinding] = createSignal<string>("");
   const [djLinkMachineStatus, setDjLinkMachineStatus] = createSignal<DjLinkMachineStatus>({
     configured: false,
@@ -18794,6 +18796,7 @@ export default function App() {
   );
   let djLinkMachineRequestGeneration = 0;
   let djLinkCandidateRequestGeneration = 0;
+  let djLinkWiredRefreshGeneration = 0;
   let djLinkTokenOperationGeneration = 0;
   const [djLinkTokenOperationBusy, setDjLinkTokenOperationBusy] = createSignal(false);
   const refreshDjLinkMachineStatus = async () => {
@@ -18836,19 +18839,23 @@ export default function App() {
     }
   };
   const refreshDjLinkWiredCandidates = async () => {
+    if (djLinkWiredRefreshBusy()) return [];
     const requestGeneration = ++djLinkCandidateRequestGeneration;
-    setDjLinkWiredCandidates([]);
-    setDjLinkSelectedBinding("");
-    setDjLinkWiredCandidateCount(null);
-    if (!isTauriRuntime()) {
-      if (requestGeneration === djLinkCandidateRequestGeneration) {
-        setDjLinkWiredCandidates([]);
-        setDjLinkWiredCandidateCount(0);
-        setDjLinkSelectedBinding("");
-      }
-      return [];
-    }
+    const refreshGeneration = ++djLinkWiredRefreshGeneration;
+    setDjLinkWiredRefreshBusy(true);
+    setDjLinkWiredRefreshError(null);
     try {
+      setDjLinkWiredCandidates([]);
+      setDjLinkSelectedBinding("");
+      setDjLinkWiredCandidateCount(null);
+      if (!isTauriRuntime()) {
+        if (requestGeneration === djLinkCandidateRequestGeneration) {
+          setDjLinkWiredCandidates([]);
+          setDjLinkWiredCandidateCount(0);
+          setDjLinkSelectedBinding("");
+        }
+        return [];
+      }
       const candidates = await invoke<DjLinkWiredCandidate[]>("list_dj_link_wired_candidates");
       if (requestGeneration !== djLinkCandidateRequestGeneration) return candidates;
       setDjLinkWiredCandidates(candidates);
@@ -18864,8 +18871,12 @@ export default function App() {
       setDjLinkWiredCandidates([]);
       setDjLinkWiredCandidateCount(null);
       setDjLinkSelectedBinding("");
-      setMessage(`DJ Link wired discovery failed: ${String(error)}`);
+      const failureMessage = `DJ Link wired discovery failed: ${String(error)}`;
+      setDjLinkWiredRefreshError(failureMessage);
+      setMessage(failureMessage);
       return [];
+    } finally {
+      if (refreshGeneration === djLinkWiredRefreshGeneration) setDjLinkWiredRefreshBusy(false);
     }
   };
   const refreshDjLinkMachineStatusAndCandidates = async () => {
@@ -29189,6 +29200,8 @@ export default function App() {
             djLinkMachineStatus={djLinkMachineStatus()}
             djLinkWiredCandidates={djLinkWiredCandidates()}
             djLinkWiredCandidateCount={djLinkWiredCandidateCount()}
+            djLinkWiredRefreshBusy={djLinkWiredRefreshBusy()}
+            djLinkWiredRefreshError={djLinkWiredRefreshError()}
             djLinkSelectedBinding={djLinkSelectedBinding()}
             djLinkToken={djLinkToken()}
             djLinkTokenCopied={djLinkTokenCopied()}

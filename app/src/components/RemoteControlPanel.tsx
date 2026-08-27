@@ -23,6 +23,8 @@ interface RemoteControlPanelProps {
   djLinkMachineStatus: DjLinkMachineStatus;
   djLinkWiredCandidates: DjLinkWiredCandidate[];
   djLinkWiredCandidateCount: number | null;
+  djLinkWiredRefreshBusy: boolean;
+  djLinkWiredRefreshError: string | null;
   djLinkSelectedBinding: string;
   djLinkToken: string | null;
   djLinkTokenCopied: boolean;
@@ -367,9 +369,10 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <button
                   type="button"
                   data-io-control="dj-link-refresh-wired-candidates"
-                  disabled={props.djLinkTokenOperationBusy || !machineStatusKnown()}
+                  aria-busy={props.djLinkWiredRefreshBusy}
+                  disabled={props.djLinkTokenOperationBusy || props.djLinkWiredRefreshBusy || !machineStatusKnown()}
                   onClick={() => void props.onRefreshDjLinkWiredCandidates()}
-                >Refresh wired bindings</button>
+                >{props.djLinkWiredRefreshBusy ? "Refreshing…" : "Refresh wired bindings"}</button>
                 <Show when={hasDjLinkDisarmWork()} fallback={
                   <button
                     type="button"
@@ -403,12 +406,20 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   class={props.djLinkWiredCandidateCount! > 0 ? "inlineSuccess" : "inlineWarning"}
                   data-io-status="dj-link-wired-discovery"
                   data-dj-link-wired-candidate-count={props.djLinkWiredCandidateCount!}
+                  role="status"
+                  aria-live="polite"
                 >
                   <Show when={props.djLinkWiredCandidateCount! > 0} fallback="No eligible wired DJ Link bindings found.">
                     <span>Eligible wired DJ Link bindings: </span>
                     <strong class="tabularNums" data-no-localize>{props.djLinkWiredCandidateCount}</strong>
                   </Show>
                 </p>
+              </Show>
+              <Show when={props.djLinkWiredRefreshBusy}>
+                <p class="hint" data-io-status="dj-link-wired-refresh" role="status" aria-live="polite">Refreshing…</p>
+              </Show>
+              <Show when={props.djLinkWiredRefreshError}>
+                {(error) => <p class="inlineWarning" data-io-status="dj-link-wired-refresh-error" role="status" aria-live="polite">{error()}</p>}
               </Show>
               <Show when={props.djLinkMachineStatus.blockReason}>
                 {(reason) => <p class="inlineWarning">{djLinkMachineBlockReasonText(reason())}</p>}

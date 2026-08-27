@@ -82,9 +82,14 @@ const refreshButton = panel.match(
 assert.ok(refreshButton, "wired discovery refresh button is present");
 assert.match(
   refreshButton,
-  /disabled=\{props\.djLinkTokenOperationBusy \|\| !machineStatusKnown\(\)\}/,
+  /disabled=\{props\.djLinkTokenOperationBusy \|\| props\.djLinkWiredRefreshBusy \|\| !machineStatusKnown\(\)\}/,
   "wired discovery refresh must stay available while the read-only listener is running",
 );
+assert.match(refreshButton, /aria-busy=\{props\.djLinkWiredRefreshBusy\}/);
+assert.match(refreshButton, /props\.djLinkWiredRefreshBusy \? "Refreshing…" : "Refresh wired bindings"/);
+assert.match(panel, /data-io-status="dj-link-wired-refresh"[\s\S]*Refreshing…/);
+assert.match(panel, /data-io-status="dj-link-wired-refresh-error"[\s\S]*role="status"[\s\S]*aria-live="polite"/);
+assert.match(panel, /data-dj-link-wired-candidate-count[\s\S]*role="status"[\s\S]*aria-live="polite"/);
 assert.doesNotMatch(
   refreshButton,
   /listenerRunning/,
@@ -143,11 +148,23 @@ assert.equal(
 );
 assert.doesNotMatch(app, /candidates\[0\]\s*\?\s*djLinkBindingKey/);
 assert.match(app, /let djLinkCandidateRequestGeneration = 0/);
+assert.match(app, /const \[djLinkWiredRefreshBusy, setDjLinkWiredRefreshBusy\] = createSignal\(false\)/);
+assert.match(app, /const \[djLinkWiredRefreshError, setDjLinkWiredRefreshError\] = createSignal<string \| null>\(null\)/);
+assert.match(app, /let djLinkWiredRefreshGeneration = 0/);
 assert.match(
   app,
-  /const refreshDjLinkWiredCandidates = async \(\) => \{\s*const requestGeneration = \+\+djLinkCandidateRequestGeneration;\s*setDjLinkWiredCandidates\(\[\]\);\s*setDjLinkSelectedBinding\(""\);\s*setDjLinkWiredCandidateCount\(null\);/,
+  /const refreshDjLinkWiredCandidates = async \(\) => \{\s*if \(djLinkWiredRefreshBusy\(\)\) return \[\];\s*const requestGeneration = \+\+djLinkCandidateRequestGeneration;\s*const refreshGeneration = \+\+djLinkWiredRefreshGeneration;\s*setDjLinkWiredRefreshBusy\(true\);\s*setDjLinkWiredRefreshError\(null\);\s*try \{\s*setDjLinkWiredCandidates\(\[\]\);\s*setDjLinkSelectedBinding\(""\);\s*setDjLinkWiredCandidateCount\(null\);/,
   "wired refresh must clear stale candidates and selection before awaiting the read-only query",
 );
+assert.match(
+  app,
+  /finally \{\s*if \(refreshGeneration === djLinkWiredRefreshGeneration\) setDjLinkWiredRefreshBusy\(false\);\s*\}/,
+  "a stale wired refresh must not clear a newer request's busy state",
+);
+assert.match(app, /setDjLinkWiredRefreshError\(null\)/);
+assert.match(app, /if \(requestGeneration !== djLinkCandidateRequestGeneration\) return \[\];[\s\S]*?setDjLinkWiredRefreshError\(failureMessage\)/);
+assert.match(app, /djLinkWiredRefreshBusy=\{djLinkWiredRefreshBusy\(\)\}/);
+assert.match(app, /djLinkWiredRefreshError=\{djLinkWiredRefreshError\(\)\}/);
 assert.match(app, /setDjLinkWiredCandidateCount\(candidates\.length\)/);
 assert.match(app, /setDjLinkWiredCandidateCount\(null\)/);
 assert.match(app, /setDjLinkSelectedBinding\(""\)/);
@@ -300,6 +317,7 @@ for (const key of [
   "Disarm DJ Link",
   "Wired binding",
   "Refresh wired bindings",
+  "Refreshing…",
   "Eligible wired DJ Link bindings:",
   "No eligible wired DJ Link bindings found.",
   "Show-LAN bind IP",

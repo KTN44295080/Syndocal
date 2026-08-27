@@ -1204,3 +1204,32 @@ The next safe action is to land the requested deterministic
 `titleContains = 人生オーバー` owner selector separately, then advance the
 prerelease and run the required exact native build/launch/maximized-window and
 physical save/reload gates.
+
+## 24. 2026-08-27 DJ wired-refresh feedback / disclosure checkpoint
+
+This frontend-only checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `b1b8783`. It owns only the DJ wired-refresh state/feedback,
+Remote panel rendering, localization, and focused DJ Link/viewport assertions.
+It does not include the separately running `titleContains` implementation.
+
+The wired-binding refresh now exposes a busy state, disables and guards a
+duplicate click, and renders accessible live status for refresh-in-progress,
+candidate count, zero candidates, and a typed failure. An actual browser double
+click produced exactly one `list_dj_link_wired_candidates` invoke. Web Remote
+remains a peer in the same `ioDisclosureStack` as Security, Endpoints, DJ Link,
+and Standby; the stack owns scrolling and all actions remained reachable and
+hit-testable without shrinking typography, controls, spacing, or targets.
+
+`check:dj-link` and `check:localization` passed; localization is **3559/3559**
+with **0** unprotected user-data labels. The isolated `1280x720 --setup-io-only`
+browser gate passed with remote and stack scrolling present and no failed
+assertions. The frontend production build passed with App **499.51 kB** and no
+Vite chunk warning. `git diff --check` passed with only Git LF-to-CRLF notices;
+first-party warnings are **0**. Independent Terra xHigh review is **GO** with
+P0/P1/P2 all zero. Ox was unavailable, so this is the recorded narrow review
+exception.
+
+No native or physical click acceptance is claimed by this checkpoint. The next
+safe action is to finish and independently review the `人生オーバー` production
+owner policy, then advance the prerelease and run the exact native and hardware
+gates.
