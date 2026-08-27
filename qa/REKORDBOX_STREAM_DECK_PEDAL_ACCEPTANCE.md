@@ -59,9 +59,11 @@ reconnect/restart, three-display, and physical-output proof. HW-4 remains
 exactly `0/12`; real production `.sdc`/media, target-DJ-PC, LAN, and reconnect
 evidence remain unverified.
 
-Cleanup remains Plan-blocked after the latest post-`536742d` rerun:
-`Mode=Plan`, `Outcome=Blocked`, `Blocker=DirtyWorktree`, `Candidates=[]`,
-`PlannedLogicalBytes=0`, `ReclaimedLogicalBytes=0`; no deletion was performed.
+Cleanup remains Plan-blocked after the clean upstream-equal `1d8fc4f` rerun:
+`Mode=Plan`, `Outcome=Blocked`,
+`Blocker=WriterOwnershipTopologyUnverifiable` (writer PID `61616` has missing
+positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
+`ReclaimedLogicalBytes=0`; no deletion was performed.
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
