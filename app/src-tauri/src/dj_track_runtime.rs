@@ -20,7 +20,13 @@ pub(super) fn dispatch_active(
         Ok(position_ms) => position_ms,
         Err(code) => return dj_link_rejected(code, current_generation),
     };
-    let mapping = dj_link_find_track_mapping(&runtime.mappings, &payload);
+    let mapping = match dj_track_selector::resolve_track_mapping(&runtime.mappings, &payload) {
+        dj_track_selector::DjTrackMappingResolution::NoMapping => None,
+        dj_track_selector::DjTrackMappingResolution::Unique(mapping) => Some(mapping),
+        dj_track_selector::DjTrackMappingResolution::Ambiguous => {
+            return dj_link_rejected("track_mapping_ambiguous", current_generation)
+        }
+    };
     let released_same_owner = runtime.track_active
         && runtime.released
         && runtime.track_deck_number == Some(payload.deck)

@@ -135,6 +135,7 @@ mod dj_link_network;
 mod dj_link_persistence_runtime;
 mod dj_loop_range;
 mod dj_track_runtime;
+mod dj_track_selector;
 mod dvc_import;
 mod e3_native_acceptance;
 mod live_audio_ipc_v1;
@@ -1191,52 +1192,6 @@ fn dj_link_next_generation(runtime: &DjLinkRuntime) -> Result<u64, String> {
         .ok_or_else(|| "DJ Link state generation exhausted; restart Syndocal".to_string())
 }
 
-fn dj_link_find_track_mapping(
-    mappings: &[protocol::DjTrackTriggerMapping],
-    payload: &protocol::DjLinkTrackPayload,
-) -> Option<protocol::DjTrackTriggerMapping> {
-    if payload
-        .content_id
-        .as_deref()
-        .is_some_and(|content_id| !content_id.trim().is_empty())
-    {
-        let selector = protocol::DjTrackSelector {
-            content_id: payload.content_id.clone(),
-            title: None,
-            artist: None,
-        };
-        let key = selector.canonical_key().ok()?;
-        return mappings
-            .iter()
-            .find(|mapping| mapping.selector.canonical_key().ok().as_deref() == Some(key.as_str()))
-            .cloned();
-    }
-    let title = payload
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let artist = payload
-        .artist
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let fallback_key = protocol::DjTrackSelector {
-        content_id: None,
-        title: Some(title.to_string()),
-        artist: Some(artist.to_string()),
-    }
-    .canonical_key()
-    .ok()?;
-    mappings
-        .iter()
-        .find(|mapping| {
-            mapping.selector.content_id.is_none()
-                && mapping.selector.canonical_key().ok().as_deref() == Some(fallback_key.as_str())
-        })
-        .cloned()
-}
-
 fn dj_link_measured_loop_division(
     loop_state: &protocol::DjLinkMeasuredLoop,
 ) -> Result<Option<u8>, &'static str> {
@@ -1270,11 +1225,15 @@ fn dj_link_track_identity_matches_runtime(
         content_id: payload.content_id.clone(),
         title: payload.title.clone(),
         artist: payload.artist.clone(),
+        title_contains: None,
+        fallback_deck: None,
     };
     let admitted = protocol::DjTrackSelector {
         content_id: runtime.track_content_id.clone(),
         title: runtime.track_title.clone(),
         artist: runtime.track_artist.clone(),
+        title_contains: None,
+        fallback_deck: None,
     };
     incoming.canonical_key().ok() == admitted.canonical_key().ok()
 }
@@ -112874,6 +112833,8 @@ f 1 2 3
                     content_id: Some("cold-project-content".to_string()),
                     title: None,
                     artist: None,
+                    title_contains: None,
+                    fallback_deck: None,
                 },
             );
             mapping.timeline_id = timeline_id;
@@ -113215,6 +113176,8 @@ f 1 2 3
                     content_id: Some("production-stop-content".to_string()),
                     title: None,
                     artist: None,
+                    title_contains: None,
+                    fallback_deck: None,
                 },
             );
             mapping.timeline_id = production_timeline_id;
@@ -113453,6 +113416,8 @@ f 1 2 3
                     content_id: Some("content-1".to_string()),
                     title: None,
                     artist: None,
+                    title_contains: None,
+                    fallback_deck: None,
                 },
             ),
             dj_link_test_mapping(
@@ -113461,6 +113426,8 @@ f 1 2 3
                     content_id: None,
                     title: Some("Caf\u{e9}".to_string()),
                     artist: Some("Artist".to_string()),
+                    title_contains: None,
+                    fallback_deck: None,
                 },
             ),
         ];
@@ -113481,9 +113448,10 @@ f 1 2 3
             loop_state: None,
         };
         assert_eq!(
-            dj_link_find_track_mapping(&mappings, &content_payload,)
-                .unwrap()
-                .id,
+            match dj_track_selector::resolve_track_mapping(&mappings, &content_payload) {
+                dj_track_selector::DjTrackMappingResolution::Unique(mapping) => mapping.id,
+                resolution => panic!("expected exact content mapping, got {resolution:?}"),
+            },
             "content"
         );
         let title_payload = protocol::DjLinkTrackPayload {
@@ -113493,9 +113461,10 @@ f 1 2 3
             ..content_payload.clone()
         };
         assert_eq!(
-            dj_link_find_track_mapping(&mappings, &title_payload,)
-                .unwrap()
-                .id,
+            match dj_track_selector::resolve_track_mapping(&mappings, &title_payload) {
+                dj_track_selector::DjTrackMappingResolution::Unique(mapping) => mapping.id,
+                resolution => panic!("expected exact title mapping, got {resolution:?}"),
+            },
             "title-artist"
         );
         let unmatched_content = protocol::DjLinkTrackPayload {
@@ -113504,19 +113473,25 @@ f 1 2 3
             artist: None,
             ..content_payload.clone()
         };
-        assert!(dj_link_find_track_mapping(&mappings, &unmatched_content,).is_none());
+        assert_eq!(
+            dj_track_selector::resolve_track_mapping(&mappings, &unmatched_content),
+            dj_track_selector::DjTrackMappingResolution::NoMapping
+        );
         assert!(validate_dj_track_triggers(vec![dj_link_test_mapping(
             "title-only",
             protocol::DjTrackSelector {
                 content_id: None,
                 title: Some("Track".to_string()),
                 artist: None,
+                title_contains: None,
+                fallback_deck: None,
             },
         )])
         .is_err());
     }
 
     mod dj_track_runtime_tests;
+    mod dj_track_selector_tests;
 
     #[test]
     fn dj_link_dispatch_engine_errors_preserve_full_runtime_authority() {
@@ -113548,6 +113523,8 @@ f 1 2 3
                 content_id: Some("content-1".to_string()),
                 title: None,
                 artist: None,
+                title_contains: None,
+                fallback_deck: None,
             },
         );
         mapping.timeline_id = TimelineId(u64::MAX);
@@ -113612,6 +113589,8 @@ f 1 2 3
                 content_id: Some("content-1".to_string()),
                 title: None,
                 artist: None,
+                title_contains: None,
+                fallback_deck: None,
             },
         );
         mapping.timeline_id = initial_snapshot.timeline.id;
@@ -113803,9 +113782,13 @@ f 1 2 3
         let mapping = dj_link_test_mapping(
             "persisted",
             protocol::DjTrackSelector {
-                content_id: Some("content-1".to_string()),
+                content_id: None,
                 title: None,
                 artist: None,
+                title_contains: Some(
+                    "\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}".to_string(),
+                ),
+                fallback_deck: Some(1),
             },
         );
         let project = empty_project_file();
@@ -113820,8 +113803,17 @@ f 1 2 3
         )
         .unwrap();
         assert!(json.contains("dj_track_triggers"));
+        assert!(json.contains("titleContains"));
+        assert!(json.contains("fallbackDeck"));
         assert!(!json.contains("dj_transition"));
-        let mut legacy: Value = serde_json::from_str(&json).unwrap();
+        let persisted: Value = serde_json::from_str(&json).unwrap();
+        let mut nested_unknown = persisted.clone();
+        nested_unknown["dj_track_triggers"][0]["selector"]
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_string(), json!(true));
+        assert!(project_and_control_mappings_from_value(nested_unknown).is_err());
+        let mut legacy = persisted;
         legacy
             .as_object_mut()
             .unwrap()

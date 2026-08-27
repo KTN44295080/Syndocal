@@ -8410,6 +8410,14 @@ pub struct DjTrackSelector {
     pub title: Option<String>,
     #[serde(default)]
     pub artist: Option<String>,
+    /// Case-sensitive normalized title substring for a production DJ cue.
+    /// This selector is deliberately exclusive with the exact identities.
+    #[serde(default, rename = "titleContains")]
+    pub title_contains: Option<String>,
+    /// Explicit fallback deck if no primary exact/titleContains selector
+    /// matches. The show policy currently admits only deck 1.
+    #[serde(default, rename = "fallbackDeck")]
+    pub fallback_deck: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8425,6 +8433,33 @@ pub struct DjTrackTriggerMapping {
 
 impl DjTrackSelector {
     pub fn canonical_key(&self) -> Result<String, String> {
+        let title_contains = self
+            .title_contains
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(title_contains) = title_contains {
+            if self.content_id.is_some() || self.title.is_some() || self.artist.is_some() {
+                return Err(
+                    "DJ titleContains selector must not include contentId, title, or artist"
+                        .to_string(),
+                );
+            }
+            if let Some(fallback_deck) = self.fallback_deck {
+                if fallback_deck != 1 {
+                    return Err(
+                        "DJ titleContains fallbackDeck must be exactly deck 1 for this show"
+                            .to_string(),
+                    );
+                }
+            }
+            let title_contains = title_contains.nfc().collect::<String>();
+            validate_dj_link_string(&title_contains, "normalized titleContains")?;
+            return Ok(format!("title_contains:{title_contains}"));
+        }
+        if self.fallback_deck.is_some() {
+            return Err("DJ fallbackDeck requires titleContains".to_string());
+        }
         let content_id = self
             .content_id
             .as_deref()
@@ -18406,12 +18441,16 @@ mod tests {
             content_id: Some("  track-1 ".to_string()),
             title: Some("ignored".to_string()),
             artist: Some("ignored".to_string()),
+            title_contains: None,
+            fallback_deck: None,
         };
         assert_eq!(content.canonical_key().unwrap(), "content:track-1");
         let title_artist = super::DjTrackSelector {
             content_id: None,
             title: Some(" Track ".to_string()),
             artist: Some(" Artist ".to_string()),
+            title_contains: None,
+            fallback_deck: None,
         };
         assert!(title_artist.canonical_key().unwrap().contains("Track"));
         assert!(super::validate_dj_track_trigger_mappings(&[
@@ -18433,9 +18472,105 @@ mod tests {
             content_id: None,
             title: Some("only title".to_string()),
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         }
         .canonical_key()
         .is_err());
+
+        let title_contains = super::DjTrackSelector {
+            content_id: None,
+            title: None,
+            artist: None,
+            title_contains: Some(
+                "  \u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}  ".to_string(),
+            ),
+            fallback_deck: Some(1),
+        };
+        assert_eq!(
+            title_contains.canonical_key().unwrap(),
+            "title_contains:\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}"
+        );
+        for invalid in [
+            super::DjTrackSelector {
+                content_id: Some("content".to_string()),
+                title: None,
+                artist: None,
+                title_contains: Some("needle".to_string()),
+                fallback_deck: None,
+            },
+            super::DjTrackSelector {
+                content_id: None,
+                title: None,
+                artist: None,
+                title_contains: Some("needle".to_string()),
+                fallback_deck: Some(2),
+            },
+            super::DjTrackSelector {
+                content_id: None,
+                title: None,
+                artist: None,
+                title_contains: None,
+                fallback_deck: Some(1),
+            },
+        ] {
+            assert!(invalid.canonical_key().is_err());
+        }
+        assert!(super::validate_dj_track_trigger_mappings(&[
+            super::DjTrackTriggerMapping {
+                id: "contains-a".to_string(),
+                selector: super::DjTrackSelector {
+                    content_id: None,
+                    title: None,
+                    artist: None,
+                    title_contains: Some(
+                        "\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}".to_string()
+                    ),
+                    fallback_deck: None,
+                },
+                timeline_id: super::TimelineId(3),
+                retrigger: super::DjTrackRetriggerPolicy::OncePerPlaySession,
+            },
+            super::DjTrackTriggerMapping {
+                id: "contains-b".to_string(),
+                selector: super::DjTrackSelector {
+                    content_id: None,
+                    title: None,
+                    artist: None,
+                    title_contains: Some(
+                        "  \u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}  ".to_string()
+                    ),
+                    fallback_deck: None,
+                },
+                timeline_id: super::TimelineId(4),
+                retrigger: super::DjTrackRetriggerPolicy::OncePerPlaySession,
+            },
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn dj_link_title_contains_selector_round_trips_and_rejects_unknown_fields() {
+        let value = serde_json::json!({
+            "titleContains": "\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}",
+            "fallbackDeck": 1
+        });
+        let selector: super::DjTrackSelector = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            selector.title_contains.as_deref(),
+            Some("\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}")
+        );
+        assert_eq!(selector.fallback_deck, Some(1));
+        let round_trip: super::DjTrackSelector =
+            serde_json::from_value(serde_json::to_value(&selector).unwrap()).unwrap();
+        assert_eq!(round_trip, selector);
+        assert!(
+            serde_json::from_value::<super::DjTrackSelector>(serde_json::json!({
+                "titleContains": "\u{4eba}\u{751f}\u{30aa}\u{30fc}\u{30d0}\u{30fc}",
+                "unexpected": true
+            }))
+            .is_err()
+        );
     }
 
     #[test]

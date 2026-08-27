@@ -34,6 +34,8 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
             content_id: Some("any-deck-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     );
     mapping.timeline_id = engine.snapshot().timeline.id;
@@ -43,6 +45,8 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
             content_id: Some("any-deck-alternate-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     );
     alternate_mapping.timeline_id = mapping.timeline_id;
@@ -506,6 +510,8 @@ fn dj_link_any_deck_fallback_profile_saturates_and_rebases_after_measured_author
             content_id: Some("generic-fallback-profile-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     );
     mapping.timeline_id = engine.snapshot().timeline.id;
@@ -814,6 +820,8 @@ fn dj_link_generic_active_capacity_is_fail_closed_without_mutation() {
             content_id: Some("capacity-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     );
     mapping.timeline_id = engine.snapshot().timeline.id;
@@ -982,6 +990,8 @@ fn dj_link_generic_engine_rejection_preserves_runtime_authority_atomically() {
             content_id: Some("engine-rejection-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     )];
     coordinator.mappings.dj_track_triggers[0].timeline_id = TimelineId(u64::MAX);
@@ -1059,6 +1069,8 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             content_id: Some("stage2-content".to_string()),
             title: None,
             artist: None,
+            title_contains: None,
+            fallback_deck: None,
         },
     );
     mapping.timeline_id = engine.snapshot().timeline.id;

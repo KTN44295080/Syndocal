@@ -343,6 +343,10 @@ export interface DjTrackSelector {
   contentId?: string | null;
   title?: string | null;
   artist?: string | null;
+  /** Case-sensitive title substring; exclusive with the exact selectors. */
+  titleContains?: string | null;
+  /** Fallback deck if no primary exact/titleContains mapping matches. */
+  fallbackDeck?: number | null;
 }
 
 export type DjTrackRetriggerPolicy = "once_per_play_session";

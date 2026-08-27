@@ -1233,3 +1233,58 @@ No native or physical click acceptance is claimed by this checkpoint. The next
 safe action is to finish and independently review the `人生オーバー` production
 owner policy, then advance the prerelease and run the exact native and hardware
 gates.
+
+## 25. 2026-08-27 production title selector runtime checkpoint
+
+This source checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `45709e8154d707354dca7a96ea9ef12c6dc0a130`. It adds the
+runtime and persisted schema for the production selector
+`titleContains = 人生オーバー` with explicit `fallbackDeck = 1`. The selector
+uses trim plus NFC and a case-sensitive substring match; it is mutually
+exclusive with exact `contentId` or `title + artist` selectors. Exact and
+substring matches are collected rather than accepted by authored order, so an
+overlap fails closed as `track_mapping_ambiguous` without changing engine or DJ
+runtime state. Only a payload already selected as Deck 1 may use the fallback;
+Deck 2 cannot.
+
+The old app-local first-match finder has been removed. The new deterministic
+resolver is isolated in `app/src-tauri/src/dj_track_selector.rs`, keeping the
+selection policy out of the oversized `main.rs`. The protocol rejects
+`fallbackDeck` without `titleContains`, any fallback other than Deck 1, mixed
+selector forms, duplicate canonical selectors, and unknown nested selector
+fields. A real project JSON round trip preserves `titleContains` and
+`fallbackDeck`. Runtime proof covers a positive Remix title on any Deck, a
+known nonmatching Deck 1 fallback such as the temporary demo track, no Deck 2
+fallback, primary and fallback ambiguity, same-identity newer Sync, and
+different-identity Sync rejection with exact engine/runtime immutability.
+
+The bounded zero/multiple-positive Deck choice remains the responsibility of
+the external DJ Agent and is not inferred again by Syndocal. The intended
+external rule is: one positive selects that Deck; zero positives wait for and
+select only a fresh playing Deck 1; multiple positives prefer a fresh playing
+Deck 1 and otherwise use the lowest valid positive. The controlled external
+config and timer implementation are a separate uncommitted checkpoint at this
+point. The KDMX mapping editor also does not yet expose the two new selector
+fields, so no current native build can author this mapping through the UI.
+
+With the exact MSVC 14.44 Community linker pinned and first in `where.exe`,
+`cargo test -p protocol dj_link_ -- --nocapture` passed **14/14** and
+`cargo test -p syndocal dj_link_ -- --nocapture` passed **119**, failed **0**,
+and ignored the one intentional live-network test. Both configurations emitted
+**0 first-party warnings**. `cargo fmt --all -- --check` and
+`git diff --check` passed; the latter emitted only Git LF-to-CRLF notices.
+Independent Terra xHigh adversarial review is **GO** after its initial fallback
+interpretation was corrected against the user's explicit Deck 1 demo-track
+requirement. Ox was unavailable, so this is the recorded narrow review
+exception. No native build, deployed executable, final show project, or
+physical DJ/pedal result is claimed by this checkpoint.
+
+The operator also superseded the older fixed-eight-pass C-melody material in
+this session. Both the `人生オーバー` C-melody hold and the post-Follow
+`惑う星` hold must be indefinite one-measure loops with no repeat counter and no
+automatic release; the same F13 pedal releases either loop. Existing authored
+A-B loops are already indefinite, but current Timeline-control assigns F13 to
+`-4 bars`, Follow does not yet rebase DJ runtime authority to the destination,
+and the click/Guide exporter plus older completion-flow text still encode eight
+measure-98 passes. Those are explicit remaining implementation and clean-break
+items, not acceptance evidence.
