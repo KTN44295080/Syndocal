@@ -17,6 +17,8 @@ import {
 } from "../djTrackMappingPolicy";
 
 interface RemoteControlPanelProps {
+  /** Mount only the requested connection workbench when I/O owns the picker. */
+  surface?: "all" | "web" | "dj";
   backendAvailable: boolean;
   invokeCommand: FrontendTauriInvoke;
   bindIp: string;
@@ -191,6 +193,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
   return (
     <div class="remoteControl ioOperatorSurface">
       <div class="ioDisclosureStack">
+        <Show when={props.surface !== "dj"}>
         <details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">
           <summary>Web Remote</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
@@ -280,8 +283,9 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           </div>
         </details>
         <details class="ioDisclosure" data-io-disclosure="remote-security">
-          <summary>Security limits</summary>
+          <summary>Remote access limits</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
+            <p class="ioDisclosureDescription">Limit client count, message size, and request rate for trusted remote access.</p>
             <p class="hint">Share only the PIN-protected endpoint with trusted operators.</p>
             <div class="split remoteLimitGrid">
               <label>
@@ -323,8 +327,9 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
         </details>
 
         <details class="ioDisclosure" data-io-disclosure="remote-endpoints">
-          <summary>Endpoints and clients</summary>
+          <summary>Connection endpoints and clients</summary>
           <div class="ioDisclosureBody remoteEndpointGrid" data-io-disclosure-body>
+            <p class="ioDisclosureDescription">Copy or open a Web Remote URL and disconnect a specific client.</p>
             <section class="remoteEndpointDesk">
               <header class="ioDeskHeader">
                 <h2>Endpoints</h2>
@@ -369,7 +374,9 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
             </section>
           </div>
         </details>
+        </Show>
 
+        <Show when={props.surface !== "web"}>
         <details class="ioDisclosure" data-io-disclosure="dj-link">
           <summary>DJ Link</summary>
           <div class="ioDisclosureBody remoteEndpointGrid" data-io-disclosure-body>
@@ -577,12 +584,16 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           </div>
         </details>
 
+        </Show>
+
+        <Show when={props.surface !== "dj"}>
         <details class="ioDisclosure" data-io-disclosure="remote-standby">
           <summary>Active / Standby sync</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
             <StandbySyncPanel backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
           </div>
         </details>
+        </Show>
       </div>
     </div>
   );

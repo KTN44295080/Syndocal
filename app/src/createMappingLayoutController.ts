@@ -1,12 +1,11 @@
 import { createMemo, type Accessor, type Setter } from "solid-js";
 import type { MappingAxis } from "./mappingRuntime";
 import type { EngineSnapshot, PatchFixtureRequest, PatchedFixtureSummary, StageObjectSummary } from "./types";
+import { type FixtureTransformExpectation } from "./fixtureTransformConfirmation";
+import { applyMappingFixtureTransformBatch } from "./mappingFixtureTransformBatch";
 
 type FixtureLayoutMode = "line" | "grid" | "circle";
-type FixtureTransformUpdate = {
-  position?: PatchFixtureRequest["position"];
-  rotation?: PatchFixtureRequest["rotation"];
-};
+type FixtureTransformUpdate = FixtureTransformExpectation;
 
 interface MappingLayoutControllerOptions {
   snapshot: Accessor<EngineSnapshot>;
@@ -22,13 +21,13 @@ interface MappingLayoutControllerOptions {
     fixture: PatchedFixtureSummary,
     update: FixtureTransformUpdate,
     refresh?: boolean,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   snapStagePosition: (position: PatchFixtureRequest["position"]) => PatchFixtureRequest["position"];
   mappingWorldToStageObjectLocal: (
     point: { x: number; z: number },
     object: StageObjectSummary,
   ) => { x: number; z: number };
-  refreshSnapshot: () => Promise<unknown>;
+  refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
 }
 
@@ -38,6 +37,15 @@ export const mappingFixtureSelectionCenter = (fixtures: PatchedFixtureSummary[])
 });
 
 export function createMappingLayoutController(options: MappingLayoutControllerOptions) {
+  const applyFixtureTransforms = async (
+    transforms: Array<{ fixture: PatchedFixtureSummary; update: FixtureTransformUpdate }>,
+  ) => applyMappingFixtureTransformBatch({
+    transforms,
+    setFixtureTransform: options.setFixtureTransform,
+    refreshSnapshot: options.refreshSnapshot,
+    setMessage: options.setMessage,
+  });
+
   const layoutFixtures = async (
     fixtures: PatchedFixtureSummary[],
     mode: FixtureLayoutMode,
@@ -53,7 +61,7 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     const columns = Math.ceil(Math.sqrt(count));
     const rows = Math.ceil(count / columns);
 
-    await Promise.all(fixtures.map((fixture, index) => {
+    const transforms = fixtures.map((fixture, index) => {
       let x = fixture.position.x;
       let z = fixture.position.z;
       if (mode === "line") {
@@ -69,14 +77,11 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
         x = Math.cos(angle) * radius;
         z = Math.sin(angle) * radius;
       }
-      return options.setFixtureTransform(
-        fixture,
-        { position: options.snapStagePosition({ ...fixture.position, x, z }) },
-        false,
-      );
-    }));
-    options.setMessage(`Applied ${mode} layout to ${count} fixture${count === 1 ? "" : "s"} ${scopeLabel}.`);
-    await options.refreshSnapshot();
+      return { fixture, update: { position: options.snapStagePosition({ ...fixture.position, x, z }) } };
+    });
+    if (await applyFixtureTransforms(transforms)) {
+      options.setMessage(`Applied ${mode} layout to ${count} fixture${count === 1 ? "" : "s"} ${scopeLabel}.`);
+    }
   };
 
   const layoutFixturePositions = async (mode: FixtureLayoutMode) => {
@@ -120,23 +125,23 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     const usableDepth = Math.max(0.05, object.depth * 0.78);
 
     try {
-      await Promise.all(fixtures.map((fixture, index) => {
+      const transforms = fixtures.map((fixture, index) => {
         const column = mode === "line" ? index : index % columns;
         const row = mode === "line" ? 0 : Math.floor(index / columns);
         const localX = columns <= 1 ? 0 : -usableWidth / 2 + (usableWidth * column) / (columns - 1);
         const localZ = rows <= 1 ? 0 : -usableDepth / 2 + (usableDepth * row) / (rows - 1);
         const point = stageObjectLocalToWorld(object, localX, localZ);
-        return options.setFixtureTransform(
+        return {
           fixture,
-          {
+          update: {
             position: options.snapStagePosition({ ...fixture.position, x: point.x, z: point.z }),
             rotation: { ...fixture.rotation, yaw: Number(object.rotation_deg.toFixed(1)) },
           },
-          false,
-        );
-      }));
-      await options.refreshSnapshot();
-      options.setMessage(`Arranged ${count} fixture${count === 1 ? "" : "s"} on ${object.label}.`);
+        };
+      });
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Arranged ${count} fixture${count === 1 ? "" : "s"} on ${object.label}.`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -195,13 +200,13 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     const anchor = active && fixtures.some((fixture) => fixture.id === active.id) ? active : fixtures[0];
     const targetValue = anchor.position[axis];
     try {
-      await Promise.all(fixtures.map((fixture) => options.setFixtureTransform(
+      const transforms = fixtures.map((fixture) => ({
         fixture,
-        { position: options.snapStagePosition({ ...fixture.position, [axis]: targetValue }) },
-        false,
-      )));
-      await options.refreshSnapshot();
-      options.setMessage(`Aligned ${fixtures.length} selected fixture(s) on ${axis.toUpperCase()} ${targetValue.toFixed(2)}.`);
+        update: { position: options.snapStagePosition({ ...fixture.position, [axis]: targetValue }) },
+      }));
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Aligned ${fixtures.length} selected fixture(s) on ${axis.toUpperCase()} ${targetValue.toFixed(2)}.`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -223,13 +228,13 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     }
     const step = (last - first) / (fixtures.length - 1);
     try {
-      await Promise.all(fixtures.map((fixture, index) => options.setFixtureTransform(
+      const transforms = fixtures.map((fixture, index) => ({
         fixture,
-        { position: options.snapStagePosition({ ...fixture.position, [axis]: first + step * index }) },
-        false,
-      )));
-      await options.refreshSnapshot();
-      options.setMessage(`Distributed ${fixtures.length} selected fixture(s) along ${axis.toUpperCase()}.`);
+        update: { position: options.snapStagePosition({ ...fixture.position, [axis]: first + step * index }) },
+      }));
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Distributed ${fixtures.length} selected fixture(s) along ${axis.toUpperCase()}.`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -242,19 +247,19 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
       return;
     }
     try {
-      await Promise.all(fixtures.map((fixture) => options.setFixtureTransform(
+      const transforms = fixtures.map((fixture) => ({
         fixture,
-        {
+        update: {
           position: options.snapStagePosition({
             ...fixture.position,
             x: fixture.position.x + deltaX,
             z: fixture.position.z + deltaZ,
           }),
         },
-        false,
-      )));
-      await options.refreshSnapshot();
-      options.setMessage(`Nudged ${fixtures.length} selected fixture(s).`);
+      }));
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Nudged ${fixtures.length} selected fixture(s).`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -269,24 +274,24 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     }
     const center = mappingFixtureSelectionCenter(fixtures);
     try {
-      await Promise.all(fixtures.map((fixture) => {
+      const transforms = fixtures.map((fixture) => {
         const nextPosition = axis === "x"
           ? { ...fixture.position, x: center.x * 2 - fixture.position.x }
           : { ...fixture.position, z: center.z * 2 - fixture.position.z };
         const nextYaw = axis === "x"
           ? normalizeFixtureYaw(360 - fixture.rotation.yaw)
           : normalizeFixtureYaw(180 - fixture.rotation.yaw);
-        return options.setFixtureTransform(
+        return {
           fixture,
-          {
+          update: {
             position: options.snapStagePosition(nextPosition),
             rotation: { ...fixture.rotation, yaw: nextYaw },
           },
-          false,
-        );
-      }));
-      await options.refreshSnapshot();
-      options.setMessage(`Mirrored ${fixtures.length} selected fixture(s) across ${axis.toUpperCase()}.`);
+        };
+      });
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Mirrored ${fixtures.length} selected fixture(s) across ${axis.toUpperCase()}.`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -303,12 +308,12 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     const cos = Math.cos(radians);
     const sin = Math.sin(radians);
     try {
-      await Promise.all(fixtures.map((fixture) => {
+      const transforms = fixtures.map((fixture) => {
         const localX = fixture.position.x - center.x;
         const localZ = fixture.position.z - center.z;
-        return options.setFixtureTransform(
+        return {
           fixture,
-          {
+          update: {
             position: options.snapStagePosition({
               ...fixture.position,
               x: center.x + localX * cos - localZ * sin,
@@ -316,11 +321,11 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
             }),
             rotation: { ...fixture.rotation, yaw: normalizeFixtureYaw(fixture.rotation.yaw + degrees) },
           },
-          false,
-        );
-      }));
-      await options.refreshSnapshot();
-      options.setMessage(`Rotated ${fixtures.length} selected fixture(s) by ${degrees} deg.`);
+        };
+      });
+      if (await applyFixtureTransforms(transforms)) {
+        options.setMessage(`Rotated ${fixtures.length} selected fixture(s) by ${degrees} deg.`);
+      }
     } catch (error) {
       options.setMessage(String(error));
     }

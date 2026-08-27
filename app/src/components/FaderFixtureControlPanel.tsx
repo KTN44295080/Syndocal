@@ -37,7 +37,7 @@ interface FaderFixtureControlPanelProps {
       position?: PatchedFixtureSummary["position"];
       rotation?: PatchedFixtureSummary["rotation"];
     },
-  ) => void | Promise<void>;
+  ) => void | Promise<unknown>;
 }
 
 export function FaderFixtureControlPanel(props: FaderFixtureControlPanelProps) {

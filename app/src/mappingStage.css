@@ -1,0 +1,7 @@
+.mappingPersistentStage .stageGridMinorLayer {
+  fill: url("#stage-grid-minor");
+}
+
+.mappingPersistentStage .stageGridMajorLayer {
+  fill: url("#stage-grid");
+}

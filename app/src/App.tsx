@@ -54,6 +54,7 @@ import {
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
+import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
@@ -590,7 +591,7 @@ import {
 } from "./cueEffectRecall";
 import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
-import { createMappingViewportModel } from "./createMappingViewportModel";
+import { createMappingViewportModel, mappingViewportDimensions } from "./createMappingViewportModel";
 import { createDvcImportController } from "./dvcImportController";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
@@ -793,6 +794,7 @@ import {
   mappingFixtureStageSize,
   type MappingFixtureVisualKind,
 } from "./fixtureVisuals";
+import { fixtureTransformMatchesExpectation } from "./fixtureTransformConfirmation";
 import {
   commonFixtureTypeControls,
   fixtureControlForAttribute,
@@ -800,6 +802,7 @@ import {
 } from "./fixtureTypeLiveEdit";
 import {
   beamPoints,
+  mappingStageWorldToSvgPoint,
   stagePadding,
   stageViewBoxSize,
   stageWorldToSvgPoint,
@@ -2737,9 +2740,7 @@ export default function App() {
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
   const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
-  const [selectionsDrawerOpen, setSelectionsDrawerOpen] = createSignal(
-    initialWorkspaceLayout.selections_drawer_open,
-  );
+  const [activeIoConnection, setActiveIoConnection] = createSignal<IoConnectionId>("dmx");
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
@@ -5975,7 +5976,6 @@ export default function App() {
       control_category: controlCategory(),
       top_split_ratio: topSplitRatio(),
       lower_split_ratio: lowerSplitRatio(),
-      selections_drawer_open: selectionsDrawerOpen(),
     });
   });
   const projectTransactionOwnerRegistrationStatusKey = "project-owner-registration";
@@ -6190,7 +6190,6 @@ export default function App() {
     control_category: controlCategory(),
     top_split_ratio: topSplitRatio(),
     lower_split_ratio: lowerSplitRatio(),
-    selections_drawer_open: selectionsDrawerOpen(),
   });
   const applyWorkspaceLayout = (layout: WorkspaceLayout) => {
     setWorkspaceTab(layout.workspace_tab);
@@ -6204,7 +6203,6 @@ export default function App() {
     setControlCategory(layout.control_category);
     setTopSplitRatio(layout.top_split_ratio);
     setLowerSplitRatio(layout.lower_split_ratio);
-    setSelectionsDrawerOpen(layout.selections_drawer_open);
   };
 
   const operatorLockSessionStorageKey = "syndocal.operatorLockSession.v1";
@@ -10327,7 +10325,7 @@ export default function App() {
     }
     return autoStageWorldBounds();
   });
-  const stageOrigin2d = createMemo(() => stageWorldToSvgPoint(0, 0, stageWorldBounds()));
+  const stageOrigin2d = createMemo(() => mappingStageWorldToSvgPoint(0, 0, stageWorldBounds()));
   const cueCapturePreview = createMemo(() => {
     const current = snapshot();
     const scope = cueCaptureScope();
@@ -10372,7 +10370,7 @@ export default function App() {
           ? selectedGroupId ?? "No group selected"
           : scopeLabel;
     const previewFixtures = fixtures.map((fixture) => {
-      const point = stageWorldToSvgPoint(fixture.position.x, fixture.position.z, bounds);
+      const point = mappingStageWorldToSvgPoint(fixture.position.x, fixture.position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
       const red = readFixtureAttribute(fixture, currentValues, colorCandidates.red);
       const green = readFixtureAttribute(fixture, currentValues, colorCandidates.green);
@@ -10758,8 +10756,11 @@ export default function App() {
     }
     const width = Math.max(1, bounds.maxX - bounds.minX);
     const height = Math.max(1, bounds.maxZ - bounds.minZ);
-    const size = clampRange(Math.max(width, height) * 1.28, stageViewBoxSize / 4, stageViewBoxSize);
-    const zoom = stageViewBoxSize / size;
+    const baseViewport = mappingViewportDimensions(1, mappingStageViewportPixelSize());
+    const zoom = Math.min(
+      baseViewport.width / (width * 1.28),
+      baseViewport.height / (height * 1.28),
+    );
     setMappingViewport(zoom, (bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2);
     setMessage(`Fit 2D mapping viewport to ${label}.`);
   };
@@ -14502,7 +14503,7 @@ export default function App() {
       rotation?: PatchFixtureRequest["rotation"];
     },
     refresh = true,
-  ) => {
+  ): Promise<boolean> => {
     try {
       await invoke("set_fixture_transform", {
         fixtureId: fixture.id,
@@ -14510,10 +14511,17 @@ export default function App() {
         rotation: next.rotation ?? fixture.rotation,
       });
       if (refresh) {
-        await refreshSnapshot();
+        const refreshed = await refreshSnapshot();
+        const confirmed = refreshed?.fixtures.find((candidate) => candidate.id === fixture.id);
+        if (!fixtureTransformMatchesExpectation(confirmed, next)) {
+          setMessage(`Could not confirm fixture transform: ${fixture.label}.`);
+          return false;
+        }
       }
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
@@ -28080,11 +28088,9 @@ export default function App() {
           poppedPanes={poppedPanes()}
           lowerSplitRatio={lowerSplitRatio()}
           timelinePaneExpanded={timelinePaneExpanded()}
-          selectionsDrawerOpen={selectionsDrawerOpen()}
           onTogglePaneWindow={togglePaneWindow}
           paneOperationPending={paneWindowOperationPending}
           onLowerSplitRatio={setLowerSplitRatio}
-          onSelectionsDrawerOpen={setSelectionsDrawerOpen}
           onOpenMapping={() => {
             setWorkspaceTab("setup");
             selectSetupMode("patch");
@@ -28925,8 +28931,28 @@ export default function App() {
           class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["io"])}
           ref={registerSetupPanel(["io"])}
           tabIndex={-1}
+          data-io-layout="operator"
         >
-          <div class="ioUnifiedSurface" data-io-unified-surface>
+          <SetupIoConnectionDeck
+            activeId={activeIoConnection()}
+            onActiveId={setActiveIoConnection}
+            outputEnabled={output().enabled}
+            midiClockConnected={midiConnected()}
+            midiControlConnected={midiControlConnected()}
+            oscRunning={oscRunning()}
+            webRemoteRunning={genericRemoteRunning()}
+            djListenerRunning={djListenerRunning()}
+            djLinkEnabled={djLinkEnabled()}
+            onApplyOutput={applyOutput}
+            onConnectMidiClock={connectMidiClock}
+            onDisconnectMidiClock={disconnectMidiClock}
+            onStartOsc={startOscInput}
+            onStopOsc={stopOscInput}
+            onStartWebRemote={startRemoteControl}
+            onStopWebRemote={stopRemoteControl}
+            onArmDjLink={armDjLinkMachine}
+            onDisarmDjLink={disarmDjLinkMachine}
+            renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
@@ -28946,9 +28972,11 @@ export default function App() {
             onRemoveRoute={removeDmxRoute}
           />
           <div class="ioDisclosureStack">
-          <details class="ioDisclosure" data-io-disclosure="dmx-input">
-          <summary>DMX input and merge</summary>
-          <div class="ioDisclosureBody" data-io-disclosure-body>
+          <IoDisclosure
+            id="dmx-input"
+            summary="External DMX input"
+            description="Receive Art-Net or sACN, then choose raw merge or control mappings."
+          >
           <DmxInputPanel
             config={dmxInputConfig()}
             status={dmxInputStatus()}
@@ -28958,11 +28986,12 @@ export default function App() {
             onStop={stopDmxInput}
             onRemoveMapping={(index) => setDmxMappings((current) => current.filter((_, itemIndex) => itemIndex !== index))}
           />
-          </div>
-          </details>
-          <details class="ioDisclosure" data-io-disclosure="dmx-rdm">
-          <summary>RDM console</summary>
-          <div class="ioDisclosureBody" data-io-disclosure-body>
+          </IoDisclosure>
+          <IoDisclosure
+            id="dmx-rdm"
+            summary="RDM tools"
+            description="Discover, inspect, or send RDM through the selected gateway or USB interface."
+          >
           <ArtRdmPanel
             gatewayIp={output().target_ip}
             portAddress={output().universe}
@@ -28974,11 +29003,13 @@ export default function App() {
             onDiscover={discoverArtRdmDevices}
             onStartFullDiscovery={startArtRdmFullDiscovery}
           />
-          </div>
-          </details>
-          <details class="ioDisclosure" data-io-disclosure="dmx-diagnostics">
-          <summary>Test, monitor, telemetry, and runtime</summary>
-          <div class="ioDisclosureBody dmxDiagnosticsDisclosure" data-io-disclosure-body>
+          </IoDisclosure>
+          <IoDisclosure
+            id="dmx-diagnostics"
+            summary="Output diagnostics and runtime"
+            description="Test frames, raw monitor, telemetry, masters, and clock controls."
+            bodyClass="dmxDiagnosticsDisclosure"
+          >
           <DmxRawMonitor
             previews={dmxPreviewOptions()}
             activeUniverse={activeDmxPreviewUniverse()}
@@ -29043,12 +29074,11 @@ export default function App() {
             onSelectedMidiInput={setSelectedMidiInput}
             onConnectMidiClock={connectMidiClock}
           />
-          </div>
-          </details>
+          </IoDisclosure>
           </div>
           </div>
           </section>
-          <div class="ioCompactZoneGrid">
+            ) : connection === "midi" ? (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="midi">
           <MidiControlMappingPanel
             snapshot={snapshot()}
@@ -29122,6 +29152,7 @@ export default function App() {
             onUpdateMapping={updateMidiMapping}
           />
           </section>
+            ) : connection === "osc" ? (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="osc">
           <OscControlMappingPanel
             snapshot={snapshot()}
@@ -29174,8 +29205,10 @@ export default function App() {
             onRemoveMapping={removeOscMapping}
           />
           </section>
+            ) : (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">
           <RemoteControlPanel
+            surface={connection === "dj" ? "dj" : "web"}
             backendAvailable={isTauriRuntime()}
             invokeCommand={invoke}
             bindIp={remoteBindIp()}
@@ -29237,8 +29270,8 @@ export default function App() {
             onDisconnectClient={disconnectRemoteClient}
           />
           </section>
-          </div>
-          </div>
+            )}
+          />
         </aside>
         </Show>
       </section>

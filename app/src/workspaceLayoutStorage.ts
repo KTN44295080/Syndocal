@@ -18,7 +18,6 @@ export type WorkspaceLayout = {
   control_category: ControlCategory;
   top_split_ratio: number;
   lower_split_ratio: number;
-  selections_drawer_open: boolean;
 };
 
 export const defaultWorkspaceLayout: WorkspaceLayout = {
@@ -31,7 +30,6 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   control_category: "position",
   top_split_ratio: 0.58,
   lower_split_ratio: 0.44,
-  selections_drawer_open: false,
 };
 
 export const workspaceLayoutStorageKey = "syndocal.workspaceLayout.v1";
@@ -113,10 +111,6 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
     ),
     top_split_ratio: ratioValue(value.top_split_ratio, defaultWorkspaceLayout.top_split_ratio),
     lower_split_ratio: ratioValue(value.lower_split_ratio, defaultWorkspaceLayout.lower_split_ratio),
-    selections_drawer_open:
-      typeof value.selections_drawer_open === "boolean"
-        ? value.selections_drawer_open
-        : defaultWorkspaceLayout.selections_drawer_open,
   };
 };
 

@@ -8,7 +8,12 @@ import {
 import type { MappingMarqueeState, MappingSnapLine } from "./mappingRuntime";
 import type { MappingStageTool } from "./mappingViewPresets";
 import { clampRange } from "./numericHelpers";
-import { stageViewBoxSize, stageWorldToSvgPoint, type StageWorldBounds } from "./stageGeometry";
+import {
+  mappingStageSvgPointToWorld,
+  mappingStageWorldToSvgPoint,
+  stageViewBoxSize,
+  type StageWorldBounds,
+} from "./stageGeometry";
 import type { PatchFixtureRequest, PatchedFixtureSummary } from "./types";
 
 interface MappingViewportModelOptions {
@@ -61,10 +66,10 @@ export const mappingViewportDimensions = (
     : { width: shortSpan, height: shortSpan / aspect };
 };
 
-const clampViewportCenter = (center: number, span: number) =>
-  span >= stageViewBoxSize
-    ? stageViewBoxSize / 2
-    : clampRange(center, span / 2, stageViewBoxSize - span / 2);
+const clampViewportCenter = (center: number, span: number, baseMin: number, baseSpan: number) =>
+  span >= baseSpan
+    ? baseMin + baseSpan / 2
+    : clampRange(center, baseMin + span / 2, baseMin + baseSpan - span / 2);
 
 export const mappingViewportBoxFor = (
   zoom: number,
@@ -73,8 +78,11 @@ export const mappingViewportBoxFor = (
   viewportPixelSize: { width: number; height: number },
 ): MappingViewportBox => {
   const { width, height } = mappingViewportDimensions(zoom, viewportPixelSize);
-  const normalizedCenterX = clampViewportCenter(centerX, width);
-  const normalizedCenterZ = clampViewportCenter(centerZ, height);
+  const base = mappingViewportDimensions(1, viewportPixelSize);
+  const baseX = stageViewBoxSize / 2 - base.width / 2;
+  const baseZ = stageViewBoxSize / 2 - base.height / 2;
+  const normalizedCenterX = clampViewportCenter(centerX, width, baseX, base.width);
+  const normalizedCenterZ = clampViewportCenter(centerZ, height, baseZ, base.height);
   return {
     x: normalizedCenterX - width / 2,
     z: normalizedCenterZ - height / 2,
@@ -115,7 +123,7 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
   });
   const mappingStageCursorSvgPoint = createMemo(() => {
     const point = options.stageCursorWorld();
-    return point ? stageWorldToSvgPoint(point.x, point.z, options.stageWorldBounds()) : null;
+    return point ? mappingStageWorldToSvgPoint(point.x, point.z, options.stageWorldBounds()) : null;
   });
   const mappingStageCursorLabel = createMemo(() => {
     const point = options.stageCursorWorld();
@@ -155,9 +163,12 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
   ) => {
     const nextZoom = clampRange(zoom, 1, mappingViewportMaxZoom());
     const nextDimensions = mappingViewportDimensions(nextZoom, options.viewportPixelSize());
+    const baseDimensions = mappingViewportDimensions(1, options.viewportPixelSize());
+    const baseX = stageViewBoxSize / 2 - baseDimensions.width / 2;
+    const baseZ = stageViewBoxSize / 2 - baseDimensions.height / 2;
     options.setViewportZoom(nextZoom);
-    options.setViewportCenterX(clampViewportCenter(centerX, nextDimensions.width));
-    options.setViewportCenterZ(clampViewportCenter(centerZ, nextDimensions.height));
+    options.setViewportCenterX(clampViewportCenter(centerX, nextDimensions.width, baseX, baseDimensions.width));
+    options.setViewportCenterZ(clampViewportCenter(centerZ, nextDimensions.height, baseZ, baseDimensions.height));
   };
   const zoomMappingViewport = (direction: -1 | 1) => {
     const currentZoom = normalizedMappingViewportZoom();
@@ -215,10 +226,17 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     }
     const step = normalizedMappingSnapSize();
     const bounds = options.stageWorldBounds();
-    const firstX = Math.ceil(bounds.minX / step) * step;
-    const lastX = Math.floor(bounds.maxX / step) * step;
-    const firstZ = Math.ceil(bounds.minZ / step) * step;
-    const lastZ = Math.floor(bounds.maxZ / step) * step;
+    const viewport = mappingViewportBox();
+    const topLeft = mappingStageSvgPointToWorld(viewport.x, viewport.z, bounds);
+    const bottomRight = mappingStageSvgPointToWorld(
+      viewport.x + viewport.width,
+      viewport.z + viewport.height,
+      bounds,
+    );
+    const firstX = Math.ceil(Math.min(topLeft.x, bottomRight.x) / step) * step;
+    const lastX = Math.floor(Math.max(topLeft.x, bottomRight.x) / step) * step;
+    const firstZ = Math.ceil(Math.min(topLeft.z, bottomRight.z) / step) * step;
+    const lastZ = Math.floor(Math.max(topLeft.z, bottomRight.z) / step) * step;
     const xCount = Math.max(0, Math.floor((lastX - firstX) / step) + 1);
     const zCount = Math.max(0, Math.floor((lastZ - firstZ) / step) + 1);
     if (xCount + zCount > 180) {
@@ -227,11 +245,11 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     const lines: MappingSnapLine[] = [];
     for (let index = 0; index < xCount; index += 1) {
       const x = firstX + index * step;
-      lines.push({ axis: "x", svg: stageWorldToSvgPoint(x, 0, bounds).x });
+      lines.push({ axis: "x", svg: mappingStageWorldToSvgPoint(x, 0, bounds).x });
     }
     for (let index = 0; index < zCount; index += 1) {
       const z = firstZ + index * step;
-      lines.push({ axis: "z", svg: stageWorldToSvgPoint(0, z, bounds).z });
+      lines.push({ axis: "z", svg: mappingStageWorldToSvgPoint(0, z, bounds).z });
     }
     return lines;
   });

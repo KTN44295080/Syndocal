@@ -74,6 +74,12 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
             >
               Open Scene FX
             </button>
+            <button
+              data-mapping-selection-action="clear"
+              onClick={() => void props.onClearSelection()}
+            >
+              Clear selection
+            </button>
           </div>
           <div class="mappingNudgePanel">
             <span>Nudge {props.snapSize}m</span>
@@ -134,7 +140,6 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
             <button onClick={() => void props.onDuplicate()}>Duplicate</button>
             <button onClick={() => void props.onRemove()}>Remove</button>
             <button onClick={() => props.onControlActive()}>Control Active</button>
-            <button onClick={() => void props.onClearSelection()}>Clear</button>
           </div>
         </div>
       </Show>

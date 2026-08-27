@@ -3,6 +3,8 @@ import App from "./App";
 import { DesktopWindowModeController } from "./components/DesktopWindowModeController";
 import { shouldMountDesktopWindowModeController } from "./desktopWindowMode";
 import "./styles.css";
+import "./fixtureLimits.css";
+import "./mappingStage.css";
 
 const Root = () =>
   shouldMountDesktopWindowModeController(window.location.search) ? (

@@ -2,26 +2,24 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.19**
+- 製品名: **Syndocal 1.2.0-alpha.20**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current committed development checkpoint is `1.2.0-alpha.19` on branch
-`codex/syndocal-v1.2`, exact `HEAD`/upstream
-`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. Its Stage/Timeline source and the
-clean non-OneDrive release gate are accepted; its native artifact remains
-unaccepted until the alpha.19 build and launch gate recorded below completes. The preceding
-`1.2.0-alpha.18` remains the latest immutable native evidence checkpoint. It
-implements strict-v3 any-playing-deck DJ admission and position-preserving
-RELEASE: an already-running Timeline relinquishes DJ clock ownership and
-disables its loop without Play, Pause, or Seek. Its source gates passed at
-`1164` / `0` / `11` for pass/fail/intentional hardware-media ignores with zero
-first-party warnings, plus frontend build, DJ Link, `422` invokes, `3559`
-localization checks, viewport/setup harness, and exact-MSVC live discovery.
-The alpha.18 artifact is
-`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Current product metadata is `1.2.0-alpha.20` on branch
+`codex/syndocal-v1.2`. The commit containing this paragraph is the authoritative
+Stage/Setup-I/O alpha.20 source checkpoint; its exact gates, native artifact,
+known release blocker, and remaining hardware boundary are recorded in
+`qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md` section 29 and
+`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` section 52. The immediately
+preceding immutable source checkpoint is `1.2.0-alpha.19` at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; it implemented the current
+Follow-hold / Stage 2 DJ authority. The earlier `1.2.0-alpha.18` native evidence
+remains historical and is not rebound to alpha.20.
+At the alpha.18 checkpoint, the file later overwritten at
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` was
 Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
 `841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
 LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Its launch observed exactly
@@ -79,7 +77,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.19_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.19_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.20_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.20_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

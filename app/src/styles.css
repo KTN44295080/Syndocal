@@ -27585,85 +27585,6 @@ h3 {
   outline-offset: -2px;
 }
 
-.mappingSelectionsDrawer {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  z-index: 7;
-  width: min(300px, calc(100% - 46px));
-  max-height: calc(100% - 8px);
-  overflow: hidden;
-  border: 1px solid #514a43;
-  background: #1b1917;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.42);
-}
-
-.mappingSelectionsDrawer:not([open]) {
-  width: 156px;
-  box-shadow: none;
-}
-
-.mappingSelectionsDrawer[open] {
-  height: min(359px, calc(100% - 8px));
-}
-
-.mappingSelectionsDrawer > summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: 29px;
-  gap: 8px;
-  padding: 4px 7px;
-  color: #d7d0ca;
-  cursor: pointer;
-  font-size: 11px;
-  list-style: none;
-}
-
-.mappingSelectionsDrawer > summary::-webkit-details-marker {
-  display: none;
-}
-
-.mappingSelectionsDrawer > summary::before {
-  color: #9f948b;
-  content: "▸";
-}
-
-.mappingSelectionsDrawer[open] > summary::before {
-  content: "▾";
-}
-
-.mappingSelectionsDrawer > summary {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.mappingSelectionsDrawer > summary span,
-.mappingSelectionsDrawer > summary strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mappingSelectionsDrawer > summary strong {
-  color: #aaa098;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.mappingSelectionsDrawerBody {
-  position: absolute;
-  inset: 29px 0 0;
-  height: auto;
-  min-height: 0;
-  overflow: hidden;
-  border-top: 1px solid #3b3732;
-}
-
-.mappingSelectionsDrawerBody > .mappingSelectionsColumn {
-  height: 100%;
-  border-right: 0;
-}
-
 .mappingPersistentStage {
   display: grid;
   position: relative;
@@ -31292,8 +31213,7 @@ h3 {
 
 .app.paneWindow .panePopoutToggle,
 .app.paneWindow-timeline .contextModeTabs,
-.app.paneWindow-programmer .contextModeTabs,
-.app.paneWindow-stage .mappingSelectionsDrawer {
+.app.paneWindow-programmer .contextModeTabs {
   display: none;
 }
 

@@ -10,9 +10,8 @@ import type {
 } from "./mappingRuntime";
 import { clampRange } from "./numericHelpers";
 import {
-  stageViewBoxSize,
-  svgDeltaToStageWorld,
-  svgPointToStageWorld,
+  mappingStageSvgDeltaToWorld,
+  mappingStageSvgPointToWorld,
   type StageWorldBounds,
 } from "./stageGeometry";
 import type {
@@ -24,6 +23,7 @@ import type {
   VideoOutputSummary,
 } from "./types";
 import { mappingVideoOutputCorners, type MappingVideoOutputCornerKey } from "./videoOutputMapping";
+import { applyMappingFixtureTransformBatch } from "./mappingFixtureTransformBatch";
 
 type StagePoint = { x: number; z: number };
 type MappingOutputDrag = Extract<MappingDragState, { outputId: number }>;
@@ -46,7 +46,7 @@ interface MappingInteractionControllerOptions {
     fixture: PatchedFixtureSummary,
     update: FixtureTransformUpdate,
     refresh?: boolean,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   mappingStageTool: Accessor<MappingStageTool>;
   isAdditiveMappingSelectionEvent: (event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => boolean;
   selectMappingFixture: (
@@ -88,20 +88,21 @@ interface MappingInteractionControllerOptions {
 
 export function createMappingInteractionController(options: MappingInteractionControllerOptions) {
   const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
+    const viewBox = options.mappingViewportBox();
+    const clampToViewport = (point: { x: number; z: number }) => ({
+      x: clampRange(point.x, viewBox.x, viewBox.x + viewBox.width),
+      z: clampRange(point.z, viewBox.z, viewBox.z + viewBox.height),
+    });
     const screenMatrix = targetSvg.getScreenCTM();
     if (screenMatrix) {
       const point = new DOMPoint(clientX, clientY).matrixTransform(screenMatrix.inverse());
-      return {
-        x: clampRange(point.x, 0, stageViewBoxSize),
-        z: clampRange(point.y, 0, stageViewBoxSize),
-      };
+      return clampToViewport({ x: point.x, z: point.y });
     }
     const rect = targetSvg.getBoundingClientRect();
-    const viewBox = options.mappingViewportBox();
-    return {
-      x: clampRange(viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.width, 0, stageViewBoxSize),
-      z: clampRange(viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.height, 0, stageViewBoxSize),
-    };
+    return clampToViewport({
+      x: viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.width,
+      z: viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.height,
+    });
   };
 
   const stageSvgPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
@@ -111,7 +112,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const stageWorldPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
     const point = stageSvgPointFromPointer(event, svg);
-    return svgPointToStageWorld(point.x, point.z, options.stageWorldBounds());
+    return mappingStageSvgPointToWorld(point.x, point.z, options.stageWorldBounds());
   };
 
   const fixtureDragWorldPointFromPointer = (
@@ -122,10 +123,14 @@ export function createMappingInteractionController(options: MappingInteractionCo
     const startSvg = stageSvgPointFromClient(drag.startClient.x, drag.startClient.y, svg);
     const currentSvg = stageSvgPointFromClient(event.clientX, event.clientY, svg);
     const bounds = options.stageWorldBounds();
-    const delta = svgDeltaToStageWorld(currentSvg.x - startSvg.x, currentSvg.z - startSvg.z, bounds);
+    const delta = mappingStageSvgDeltaToWorld(
+      currentSvg.x - startSvg.x,
+      currentSvg.z - startSvg.z,
+      bounds,
+    );
     return {
-      x: clampRange(drag.startWorld.x + delta.x, bounds.minX, bounds.maxX),
-      z: clampRange(drag.startWorld.z + delta.z, bounds.minZ, bounds.maxZ),
+      x: drag.startWorld.x + delta.x,
+      z: drag.startWorld.z + delta.z,
     };
   };
 
@@ -492,8 +497,9 @@ export function createMappingInteractionController(options: MappingInteractionCo
         if (!fixture) return;
         const yaw = options.mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
         if (yaw === null) return;
-        await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } });
-        options.setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+        if (await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } })) {
+          options.setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+        }
         return;
       }
       const delta = options.dragWorldDelta(drag);
@@ -508,16 +514,23 @@ export function createMappingInteractionController(options: MappingInteractionCo
         options.setMappingDrag(null);
         const movedFixtures = options.snapshot().fixtures.filter((candidate) => drag.fixtureIds.includes(candidate.id));
         if (movedFixtures.length === 0) return;
-        await Promise.all(movedFixtures.map((fixture) => {
+        const transforms = movedFixtures.map((fixture) => {
           const startPosition = drag.startPositions[fixture.id] ?? fixture.position;
           const nextPosition = options.snapStagePosition({
             ...startPosition,
             x: startPosition.x + delta.x,
             z: startPosition.z + delta.z,
           });
-          return options.setFixtureTransform(fixture, { position: nextPosition }, false);
-        }));
-        await options.refreshSnapshot();
+          return { fixture, update: { position: nextPosition } };
+        });
+        if (!await applyMappingFixtureTransformBatch({
+          transforms,
+          setFixtureTransform: options.setFixtureTransform,
+          refreshSnapshot: options.refreshSnapshot,
+          setMessage: options.setMessage,
+        })) {
+          return;
+        }
         options.setMessage(
           movedFixtures.length === 1
             ? `Moved ${movedFixtures[0].label}`

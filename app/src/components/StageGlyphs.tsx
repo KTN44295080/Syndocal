@@ -49,10 +49,13 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   };
   const segmentPitchX = () => props.width / segmentColumns();
   const segmentPitchY = () => props.height / segmentRows();
-  const segmentGap = () => Math.min(
-    mappingFixtureCellGap,
-    Math.min(segmentPitchX(), segmentPitchY()) * 0.12,
-  );
+  // The gap is authored in stage-world units, so it must follow the same
+  // physical scale as the segment cell. Capping it at the raw 0.6 SVG value
+  // made bars look progressively denser than ordinary fixtures when the stage
+  // bounds changed or the viewport zoomed.
+  const segmentGap = () =>
+    Math.min(segmentPitchX(), segmentPitchY())
+    * (mappingFixtureCellGap / mappingFixtureGridUnit);
   const segmentCell = (index: number) => mappingFixtureSegmentCell(
     { columns: segmentColumns(), rows: segmentRows() },
     index,

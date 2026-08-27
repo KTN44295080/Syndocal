@@ -1,7 +1,7 @@
 export const stageOverlayHandleScreenSizePx = 22;
 export const stageOverlayHandleMinimumHitSizePx = 16;
 export const stageOverlayHandleGapScreenPx = 6;
-export const stageFixtureYawHandleScreenSizePx = 16;
+export const stageFixtureYawHandleScreenSizePx = 22;
 
 export const stageWorldPerCssPixel = (
   viewBox: { width: number; height: number },

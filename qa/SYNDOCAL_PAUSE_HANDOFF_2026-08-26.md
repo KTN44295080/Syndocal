@@ -1,10 +1,13 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.18 SOURCE/NATIVE CHECKPOINT VERIFIED; DIRECT REFRESH CLICK UNCONFIRMED; PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.20 STAGE/SETUP-I/O SOURCE/NATIVE CHECKPOINT VERIFIED; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
-This is the current resumption contract for the 2026-08-30 performance. The
-show-completion deadline is **2026-08-29**, not the performance day. The code is
-not accepted as fully show-ready: the alpha.17 standard native artifact and the
+This is the current resumption contract for the 2026-08-30 performance. Section
+29 is the only current alpha.20 source/native authority; every earlier
+alpha.18-or-earlier `current` label below is retained as dated historical
+evidence and must not be used for execution. The show-completion deadline is
+**2026-08-29**, not the performance day. The code is not accepted as fully
+show-ready: the alpha.20 local Stage/Setup-I/O native slice and the historical
 DSF native import/report/Save As/restart/reload software slice are complete,
 while physical DJ, three-output Apply/content/save/restart, representative-scene
 real output, and the remaining DSF show-program gates remain open. The DVC
@@ -16,7 +19,7 @@ state, and the compatibility fallback is unchanged. The separately licensed alph
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
-The current KDMX source checkpoint is `1.2.0-alpha.18` at branch
+The historical alpha.18 KDMX source checkpoint was at branch
 `codex/syndocal-v1.2`, exact `HEAD`/upstream
 `db4eefc348b01ee05dd2dc87945afa85de8803e`; its required native build, launch,
 and maximized-window layout are verified, while the direct wired-binding refresh
@@ -53,14 +56,16 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata is `1.2.0-alpha.18`; exact source `HEAD`/upstream is `db4eefc348b01ee05dd2dc87945afa85de8803e`; native artifact/process identity is recorded in section 21 |
+| Current alpha.20 Stage/Setup-I/O source/native | Product metadata is `1.2.0-alpha.20`; authoritative source is the commit containing section 29; local artifact SHA-256 is `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; public release and HW-4 remain open |
+| Current rb-output v1.1.9 controlled source | `beta-v1.1.2` clean/upstream-equal source authority at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; full suite `455` total / `453` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
+| Historical alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata was `1.2.0-alpha.18`; exact source `HEAD`/upstream was `db4eefc348b01ee05dd2dc87945afa85de8803e`; historical native artifact/process identity is recorded in section 21 |
 | Historical alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
 | Historical local alpha.15 native verification runtime/source/artifact | Pushed, upstream-equal source commit `c609b61c77e44ee028ed7322c29a0cfd04b8182c` (`refactor(scene): extract bank scene creation controller`); local artifact identity is in section 3 and is not a new distributable artifact |
 | Historical prior alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); prior standard artifact identity is retained in section 3 |
 | Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
-| Current rb-output v1.1.8 controlled source | `beta-v1.1.2` clean/upstream-equal at `0f3e8c6851857c8542c132a89a7d44289002b1f5`; stable suite `415` total / `413` pass / `0` fail / `2` intentional skips; latest non-Master Deck 2 router-to-real-MIDI seven-byte proof `12/12`; target-DJ-PC/HW-4 acceptance remains open |
+| Historical rb-output v1.1.8 controlled source | `beta-v1.1.2` was clean/upstream-equal at `0f3e8c6851857c8542c132a89a7d44289002b1f5`; stable suite `415` total / `413` pass / `0` fail / `2` intentional skips; superseded for execution by v1.1.9 |
 | Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
 | Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
@@ -70,7 +75,8 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.18 source checkpoint is
+Branch: `codex/syndocal-v1.2`. The current alpha.20 authority is section 29 and
+the commit containing it. The historical alpha.18 source checkpoint was
 `db4eefc348b01ee05dd2dc87945afa85de8803e` at exact `HEAD`/upstream; its native
 artifact/process identity is recorded in section 21, and the direct refresh
 click remains unconfirmed. The alpha.17 native runtime/source/artifact remains bound to pushed commit
@@ -1402,3 +1408,107 @@ passed at exact `41faefc`. Peer v1.1.9 is committed/pushed at
 is the prior alpha.18 artifact; the next safe action is the exact-path process
 termination followed by the required alpha.19 native build/launch gate. HW-4
 remains **0/12**.
+
+## 29. 2026-08-27 alpha.20 Stage and Setup I/O operator-layout native checkpoint
+
+This checkpoint began on `codex/syndocal-v1.2` at
+`7cda8c8fbf04bde6efc705ef59a65dd5816da551`. Product metadata is
+`1.2.0-alpha.20`; the commit containing this section is the authoritative
+Stage/Setup-I/O source checkpoint. The implementation diff is frozen after
+independent review. This is not a deployed or physical-hardware acceptance
+claim.
+
+The old Stage mapping surface mixed independent X/Z conversion with a
+square-only interaction frame while the rectangular viewport, glyph scale, and
+nested minor/major grid used different rules. At zoom this made segmented
+bars/strobes appear to change relative size, shifted visual grid phases, and
+could clamp a drag to the old square. The new contract uses one physical world
+scale for fixture position, footprint/segment pitch, grid, snap, and pointer
+conversion; its viewport is rectangular and keeps both grid layers on the same
+origin. The old absolute selections drawer overlaid the Stage and hid fixtures.
+It is replaced by normal workspace flow, retaining selection access without
+obscuring the mapped area. Fixture transforms now require an authoritative
+post-write confirmation; batch movement is serialized and a rejected or
+partially rejected batch reports failure without a false success message.
+
+The old Stage limits editor used a tall raw-value form that separated the
+movement map from its inputs. The new compact, local two-column Dimmer /
+Movement presentation keeps exact raw values and accessibility while adding
+human-readable percentage/degrees and a compact square movement map. It does
+not globally shrink controls or typography.
+
+The old Setup I/O split connection settings into fixed quadrants, leaving empty
+space below Control Mapping while an open DMX connection had too little room.
+The new operator surface uses five connection cards (DMX, MIDI, OSC, Web
+Remote, DJ Link) and one full-width workbench with its own body scroll. DMX
+Input and Merge live with DMX output; advanced Web security/endpoints stay
+separate from DJ Link authority and token controls. Inactive Web/DJ workbenches
+are not mounted, so neither path duplicates listener, authority, or token
+handling.
+
+Focused proof is complete. `check:mapping-stage-geometry`,
+`check:mapping-live-segments`, `check:bar-beams`,
+`check:control-stage-persistence-failure`, `check:control-stage-fixture-edit`,
+`check:mapping-live-snapshot`, and `check:stage-labels` passed.
+`check:mapping-viewport-conformance` passed `5/5`; the strongpoint proof kept
+the physical cell pitch at `18.1818` for both `4x1` and `4x10`; the Control
+fixture edit browser gate proved position move/Undo, yaw `30 -> 90`, a single
+`22 x 22` yaw target, and zero yaw handles after clear-pick. Workspace operator
+passed `28`; project storage passed; frontend invokes are `422` exact;
+localization is `3582/3582` with zero unprotected strings. The Tauri wrapper
+checker passed `231` assertions including `27` hostile cases. Workspace split,
+Setup I/O, and remote disclosure scroll each passed all five viewport cases.
+The production build completed without a Vite warning; the final App chunk is
+`499.67 kB`. The `frontend-typescript-vite-windows` warning ratchet is
+baseline/current `0/0`, with zero first-party and zero third-party warnings.
+`git diff --check` passed with only Git line-ending notices.
+
+The first native attempt failed before product linking because `FFMPEG_DIR` was
+not set; no artifact from that attempt is accepted. The full gate restarted
+from exact-path process inspection, `vcvars64.bat -vcvars_ver=14.44`, the pinned
+Community linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and exact `where.exe link.exe` first. With the pinned FFmpeg 8.1.2 shared root
+and `C:\Program Files\LLVM\bin`,
+`pnpm --dir app tauri build --no-bundle` completed in `2m11s` with zero
+first-party warning lines. The exact artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, `58,777,088`
+bytes, Product/FileVersion `1.2.0-alpha.20`, SHA-256
+`E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`,
+LastWriteTimeUtc `2026-08-27T14:02:29.3834470Z`. Launch observed exactly one
+responsive process, PID `18456`, title `Syndocal`, handle `19597984`. Computer
+Use confirmed a maximized `1920x1080` window by the native
+`元のサイズに戻す` title-bar action. Native visual QA confirmed the five-card
+connection deck, one full-width DMX workbench with internal scroll, rectangular
+Stage, and non-overlay context pane. Switching Web/DJ cards through native UI
+automation was not accepted because the accessibility element cache rejected
+the action; the five-viewport browser gate covers that behavior but is not
+promoted to native proof.
+
+Independent Terra xHigh final reviews are **GO** with P0/P1/P2 zero after the
+Control yaw browser assertion was strengthened. Ox callable capacity was
+unavailable, so the narrow recorded exception applies. The product-version
+surface is synchronized and the Show-ASIO metadata self-test passed `38`, but
+`pnpm --dir app run check:release` remains fail-closed before metadata
+validation because `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` has the external
+hard-link alias `C:\Users\kouty\Documents\.tmp.driveupload\867492`. Neither
+link was deleted or replaced. This blocks a public release/installer claim, not
+the accepted local source/native checkpoint.
+
+Checkpoint cleanup inventory was read-only. Logical file-length totals are
+repo `278,371,465,649` bytes (`259.25 GiB`), `.git` `217,408,416` bytes,
+`target` `277,042,280,989` bytes (`258.02 GiB`), `app/node_modules`
+`545,338,492` bytes, and `app/dist` `5,108,607` bytes. `target/debug` accounts
+for `242.23 GiB`, including `115.02 GiB` incremental and `112.06 GiB` deps.
+No deletion was performed. The tracked cleanup plan returned
+`Outcome=Blocked`, `Blocker=DirtyWorktree`; the only current allowlist candidate,
+`target/debug/incremental`, is about `0.12` days old, below the seven-day stale
+threshold, and has historical hard-link risk. The plan-only legacy harness is
+also not execution-qualified, and `tools/asio-bridge/target` is outside the
+reviewed allowlist. Preserve release, QA, ASIO, Show-ASIO, and debug dependency
+artifacts until a clean pushed checkpoint and a new exact-path safety review.
+
+Real fixture placement against the supplied Daslight project, DMX output and
+input/merge, MIDI, Rekordbox, DJ Link, pedal HW-4 (`0/12`), target-PC deployment,
+three-display operation, and the remaining ASIO matrix are still unverified.
+Those are the next show-critical boundaries.

@@ -312,7 +312,6 @@ assert.deepEqual(
     control_category: "color",
     top_split_ratio: workspaceLayout.defaultWorkspaceLayout.top_split_ratio,
     lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.lower_split_ratio,
-    selections_drawer_open: workspaceLayout.defaultWorkspaceLayout.selections_drawer_open,
   },
 );
 assert.deepEqual(
@@ -364,13 +363,11 @@ assert.deepEqual(
   workspaceLayout.workspaceLayoutFromUnknown({
     top_split_ratio: -4,
     lower_split_ratio: 3,
-    selections_drawer_open: true,
   }),
   {
     ...workspaceLayout.defaultWorkspaceLayout,
     top_split_ratio: 0.15,
     lower_split_ratio: 0.85,
-    selections_drawer_open: true,
   },
 );
 assert.deepEqual(

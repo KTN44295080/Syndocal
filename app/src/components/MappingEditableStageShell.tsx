@@ -112,7 +112,6 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
           height={majorGridSize()}
           patternUnits="userSpaceOnUse"
         >
-          <rect width={majorGridSize()} height={majorGridSize()} fill="url(#stage-grid-minor)" />
           <path
             class="stageGridMajor"
             d={`M ${majorGridSize()} 0 L 0 0 0 ${majorGridSize()}`}
@@ -127,7 +126,16 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
         height={props.viewport.height}
       />
       <rect
-        class="stageGrid"
+        class="stageGrid stageGridMinorLayer"
+        data-mapping-grid-layer="minor"
+        x={props.viewport.x}
+        y={props.viewport.z}
+        width={props.viewport.width}
+        height={props.viewport.height}
+      />
+      <rect
+        class="stageGrid stageGridMajorLayer"
+        data-mapping-grid-layer="major"
         x={props.viewport.x}
         y={props.viewport.z}
         width={props.viewport.width}

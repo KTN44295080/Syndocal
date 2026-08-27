@@ -29,21 +29,24 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. Never substitute an older source hash or an alpha.18-or-earlier
-process as the alpha.19 artifact identity.
+at execution time. Never substitute an older source hash or an alpha.19-or-earlier
+process as the alpha.20 artifact identity.
 
-### 1.1 Current Follow/Stage 2 execution gate — 2026-08-27
+### 1.1 Current alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
-KDMX `1.2.0-alpha.19` source acceptance is committed/pushed at
-`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; its checkpoint documents are
-committed/pushed through `04419ca650184f5afce01eceafd57378a94145b7`.
+KDMX `1.2.0-alpha.20` is the current source/native checkpoint; its authoritative
+source is the commit containing this runbook update. The immutable Follow /
+Stage 2 source authority remains alpha.19 commit
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` and is carried forward without a
+wire or policy change.
 The external peer is committed/pushed at
 `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, version `1.1.9`. Follow hold,
 Stage 2 F13 loop-off, reconnect fail-closed behavior, focused/full suites, and
-independent source review are complete. Native alpha.19 build/launch and physical
-DJ-PC observations are still required before any row is accepted. HW-4 remains
-**0/12** until those observations are recorded; source acceptance alone closes no
-hardware row.
+independent source review are complete. The local alpha.20 native build was
+launched as exactly one responsive maximized window, but target-DJ-PC identity,
+configuration, token, NIC, and physical observations are still required before
+any row is accepted. HW-4 remains **0/12** until those observations are recorded;
+source or local native acceptance alone closes no hardware row.
 
 ## 2. DJ-PC controlled source
 
@@ -86,21 +89,28 @@ Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
 release, or a historical v1.1.5/v1.1.6/v1.1.7/v1.1.8 configuration as current
 acceptance evidence.
 
-The current KDMX source checkpoint is `1.2.0-alpha.19` at branch
-`codex/syndocal-v1.2`, source commit
-`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. The exact MSVC 14.44 locked,
-single-thread full workspace gate passed `2622` / `0` failed / `15` intentional
-hardware-media ignores with zero first-party warnings. Frontend invokes `422`,
-localization `3568/3568`, five mapping viewport sizes, stage labels, stage-live
-segments, Timeline Follow UI, TypeScript, and frontend production build all
-passed. A clean detached non-OneDrive worktree at the same source checkpoint
-passed `pnpm --dir app run check:release` after staging the seven pinned runtime
-DLLs. This active OneDrive checkout's tracked runtime-inventory hard-link alias
-still fails the release check by design and was not deleted or replaced. The
-required alpha.19 `pnpm --dir app tauri build --no-bundle` artifact identity,
-launch, exactly-one-responsive-window check, and maximized native UI evidence
-must be recorded before HW-4 execution. Any alpha.18 artifact or PID is
-historical and must not be substituted for alpha.19 acceptance.
+The current KDMX source/native checkpoint is `1.2.0-alpha.20` at branch
+`codex/syndocal-v1.2`, in the commit containing this runbook update. The DJ
+authority it carries is alpha.19 source commit
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. At that alpha.19 checkpoint, the
+exact MSVC 14.44 locked single-thread full workspace gate passed `2622` / `0`
+failed / `15` intentional hardware-media ignores with zero first-party warnings,
+and a clean detached non-OneDrive worktree passed
+`pnpm --dir app run check:release` after staging the seven pinned runtime DLLs.
+Those are historical alpha.19 results, not an alpha.20 release pass.
+
+For alpha.20, frontend invokes are `422`, localization is `3582/3582`, and the
+five-view Stage/Setup-I/O, stage labels, stage-live segments, TypeScript,
+frontend production, and zero-warning gates passed. This active checkout's
+tracked runtime-inventory hard-link alias still fails `check:release` before
+metadata validation by design and was not deleted or replaced. The
+alpha.20 `pnpm --dir app tauri build --no-bundle` artifact is Product/FileVersion
+`1.2.0-alpha.20`, SHA-256
+`E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; it was
+launched as exactly one responsive maximized window. Recheck that identity after
+the checkpoint commit/push and immediately before HW-4 execution. Any
+alpha.19-or-earlier artifact or PID is historical and must not be substituted
+for alpha.20 acceptance.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
 the standard and dedicated Setup I/O browser contracts pass all five viewports,
@@ -110,7 +120,10 @@ the corrected candidate-only path now leaves the full draft and all `128` route
 signatures unchanged, invokes neither retired output command, and independently
 re-reviewed GO with P0/P1/P2 all zero. The earlier native visual capture belongs
 only to the historical alpha.18 artifact; its direct native refresh-button click
-also remains unconfirmed and neither observation accepts alpha.19.
+also remains unconfirmed and neither observation accepts alpha.20. The current
+alpha.20 native Stage/I/O visual proof is recorded in the main pause handoff;
+native Web/DJ card switching remains unaccepted because UI Automation could not
+act on the cached element.
 `app/dist` is freshly rebuilt (old stale
 marker `0`); the ignored peer `dist` remains stale but is outside this source
 acceptance checkpoint. These observations do not promote native or HW-4

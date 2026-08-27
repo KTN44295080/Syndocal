@@ -101,9 +101,9 @@ type MappingSelectionsColumnProps = MappingSelectionPanelProps & {
 
 export function MappingSelectionsColumn(props: MappingSelectionsColumnProps) {
   return (
-    <aside
-      class="mappingSelectionPanel mappingSelectionsColumn"
-      data-persistent-band-part="selections"
+    <section
+      class="mappingSelectionPanel mappingSelectionsColumn mappingSetupSelectionBrowser"
+      data-mapping-selection-browser
       aria-label="Fixture selections"
     >
       <MappingFixtureTypeStrip {...props.typeFilters} />
@@ -127,7 +127,7 @@ export function MappingSelectionsColumn(props: MappingSelectionsColumnProps) {
         selectedFixtureIds={props.selectedFixtureIds}
         onSelectFixture={props.onSelectFixture}
       />
-    </aside>
+    </section>
   );
 }
 
@@ -170,9 +170,14 @@ export function MappingControlSelections(props: Pick<
   );
 }
 
-export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
+type MappingSetupContextPanelProps = MappingSelectionPanelProps & {
+  typeFilters: ComponentProps<typeof MappingFixtureTypeStrip>;
+};
+
+export function MappingSetupContextPanel(props: MappingSetupContextPanelProps) {
   return (
     <div class="mappingSelectionPanel mappingSetupContextContent">
+      <MappingSelectionsColumn {...props} typeFilters={props.typeFilters} />
       <MappingStageObjectPanel
         stageObjects={props.stageObjects}
         stageObjectFixtureCounts={props.stageObjectFixtureCounts}

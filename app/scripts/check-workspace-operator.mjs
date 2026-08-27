@@ -34,7 +34,6 @@ const baseLayout = {
   control_category: "dimmer",
   top_split_ratio: 0.6,
   lower_split_ratio: 0.4,
-  selections_drawer_open: false,
 };
 const placement = { pane: "timeline", x: -1920, y: 0, width: 1280, height: 720, maximized: false };
 const parsed = workspace.namedWorkspacesFromUnknown([{

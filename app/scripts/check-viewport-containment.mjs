@@ -70,6 +70,7 @@ const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const controlStageFixtureEditOnlyMode = process.argv.includes("--control-stage-fixture-edit-only");
+const controlStagePersistenceFailureOnlyMode = process.argv.includes("--control-stage-persistence-failure-only");
 const stageMiddlePanOnlyMode = process.argv.includes("--stage-middle-pan-only");
 const contextMenuOnlyMode = process.argv.includes("--context-menu-only");
 const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
@@ -107,7 +108,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "blind"
     : editLiveOnlyMode
       ? "edit-live"
-    : controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
+    : controlStageFixtureEditOnlyMode || controlStagePersistenceFailureOnlyMode
+      || stageMiddlePanOnlyMode || contextMenuOnlyMode
       ? "control-stage-edit"
     : liveEditTypesOnlyMode || attributeCategoriesOnlyMode
       ? "live-edit-types"
@@ -2654,6 +2656,121 @@ async function selectVisibleOption(client, selector, value) {
   }
 }
 
+async function selectIoConnection(client, connectionId) {
+  const selected = await client.evaluate(`(() => {
+    const card = document.querySelector('[data-io-primary-connection="${connectionId}"]');
+    const button = card?.querySelector(':scope > button[aria-controls]');
+    if (!(button instanceof HTMLElement) || button.getAttribute('aria-pressed') === 'true') return Boolean(button);
+    button.click();
+    return true;
+  })()`);
+  if (!selected) {
+    throw new Error(`Could not select Setup I/O connection card: ${connectionId}`);
+  }
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const card = document.querySelector('[data-io-primary-connection="${connectionId}"]');
+      const button = card?.querySelector(':scope > button[aria-controls]');
+      const body = document.querySelector('[data-io-workbench-body]');
+      return button?.getAttribute('aria-pressed') === 'true' &&
+        body?.querySelectorAll('[data-io-zone]').length === 1;
+    })()`,
+    `Setup I/O ${connectionId} workbench selection`,
+  );
+}
+
+async function exerciseIoConnectionDeck(client) {
+  return await evaluatePageFunction(client, async () => {
+    const expectedZoneByConnection = {
+      dmx: 'dmx',
+      midi: 'midi',
+      osc: 'osc',
+      web: 'remote',
+      dj: 'remote',
+    };
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const hitTestable = (element) => {
+      if (!visible(element)) return false;
+      const rect = element.getBoundingClientRect();
+      const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return target === element || element.contains(target);
+    };
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const cardNodes = [...document.querySelectorAll('[data-io-primary-connection]')];
+    const cards = cardNodes.map((card) => {
+      const id = card.getAttribute('data-io-primary-connection') ?? '';
+      const button = card.querySelector(':scope > button[aria-controls]');
+      return { id, card, button };
+    });
+    const cardResults = [];
+    for (const { id, card, button } of cards) {
+      if (button instanceof HTMLElement && button.getAttribute('aria-pressed') !== 'true') button.click();
+      await settle();
+      const body = document.querySelector('[data-io-workbench-body]');
+      const workbench = document.querySelector(
+        '[data-io-connection-workbench], .setupIoConnectionWorkbench'
+      );
+      const zoneNodes = body ? [...body.querySelectorAll('[data-io-zone]')].filter(visible) : [];
+      const bodyRect = body?.getBoundingClientRect() ?? null;
+      const workbenchRect = workbench?.getBoundingClientRect() ?? null;
+      const zoneRect = zoneNodes[0]?.getBoundingClientRect() ?? null;
+      const bodyStyle = body ? getComputedStyle(body) : null;
+      const bodyHorizontalPadding = bodyStyle
+        ? parseFloat(bodyStyle.paddingLeft || '0') + parseFloat(bodyStyle.paddingRight || '0')
+        : 0;
+      const bodyContentWidth = bodyRect ? bodyRect.width - bodyHorizontalPadding : 0;
+      cardResults.push({
+        id,
+        visible: visible(card),
+        hitTestable: hitTestable(button),
+        focusable: (() => {
+          if (!(button instanceof HTMLElement)) return false;
+          button.focus();
+          return document.activeElement === button;
+        })(),
+        selected: button?.getAttribute('aria-pressed') === 'true',
+        zoneNames: zoneNodes.map((zone) => zone.getAttribute('data-io-zone') ?? ''),
+        expectedZone: expectedZoneByConnection[id] ?? null,
+        exactlyOneZone: zoneNodes.length === 1,
+        visibleControlCount: zoneNodes[0] ? [...zoneNodes[0].querySelectorAll('button, input, select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])')].filter(visible).length : 0,
+        disclosureCount: zoneNodes[0]?.querySelectorAll('[data-io-disclosure]').length ?? 0,
+        openDisclosureCount: zoneNodes[0] ? [...zoneNodes[0].querySelectorAll('[data-io-disclosure]')].filter((disclosure) => disclosure.open).length : 0,
+        workbenchFullWidth: Boolean(
+          bodyRect && workbenchRect && zoneRect &&
+          bodyRect.width > 0 &&
+          zoneRect.width >= bodyContentWidth - 2 &&
+          workbenchRect.width >= bodyRect.width - 2,
+        ),
+        bodyScrollable: Boolean(
+          body instanceof HTMLElement && bodyStyle &&
+          /(auto|scroll)/.test(bodyStyle.overflowY) &&
+          body.scrollHeight >= body.clientHeight,
+        ),
+      });
+    }
+    const active = cards.find(({ button }) => button?.getAttribute('aria-pressed') === 'true');
+    return {
+      cardCount: cards.length,
+      cardIds: cards.map(({ id }) => id),
+      cardResults,
+      allCardsVisible: cardResults.every((result) => result.visible),
+      allCardsHitTestable: cardResults.every((result) => result.hitTestable),
+      allCardsFocusable: cardResults.every((result) => result.focusable),
+      everyCardSelectedAndRendersOneZone: cardResults.every((result) =>
+        result.selected && result.exactlyOneZone && result.zoneNames[0] === result.expectedZone),
+      everyWorkbenchFullWidth: cardResults.every((result) => result.workbenchFullWidth),
+      everyWorkbenchHasInternalScroll: cardResults.every((result) => result.bodyScrollable),
+      activeId: active?.id ?? null,
+    };
+  });
+}
+
 async function pressKey(client, code, key = code, modifiers = 0) {
   await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key, modifiers });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key, modifiers });
@@ -2914,8 +3031,6 @@ async function measurePersistentBand(client, label) {
       upperLower: document.querySelector('[data-workspace-splitter="upper-lower"]'),
       lowerLeftRight: document.querySelector('[data-workspace-splitter="lower-left-right"]'),
     };
-    const drawer = document.querySelector('[data-workspace-selection-drawer]');
-    const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
     const controlStageToolRow = visibleElements('[data-control-stage-tool-row]')[0];
     const controlStageToolItems = visibleElements(
       '[data-control-stage-tool-item], [data-control-stage-mapping-link]'
@@ -2925,14 +3040,9 @@ async function measurePersistentBand(client, label) {
       visiblePersistentBandCount: visibleElements('.mappingPersistentWorkspaceBand').length,
       visiblePersistentGroupsCount: visibleElements('[data-persistent-band-part="groups"]').length,
       visiblePersistentStageCount: visibleElements('[data-persistent-band-part="stage"]').length,
-      visiblePersistentSelectionsCount: visibleElements('[data-workspace-selection-drawer][open]').length,
+      visiblePersistentSelectionContextCount: visibleElements('[data-persistent-band-part="selections"], .mappingSetupContextContent').length,
       visiblePersistentContextCount: visibleElements('[data-persistent-band-part="context"]').length,
-      visibleSelectionDrawerToggleCount: visibleElements('[data-workspace-selection-drawer-toggle]').length,
       visibleControlStageSelectionListCount: visibleElements('[data-control-stage-selection-list]').length,
-      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
-      selectionDrawerExpandedMatches:
-        drawer instanceof HTMLDetailsElement &&
-        drawerToggle?.getAttribute('aria-expanded') === String(drawer.open),
       visibleWorkspaceSplitterCount: visibleElements('[data-workspace-splitter]').length,
       visibleControlStagePanelCount: visibleElements('.controlStagePanel').length,
       visibleControlStageCount: visibleElements('.controlStage').length,
@@ -2947,7 +3057,7 @@ async function measurePersistentBand(client, label) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspacePaneRects: {
@@ -3031,7 +3141,6 @@ async function measureTimelinePaneExpansionState(client) {
     const layout = document.querySelector('[data-workspace-split-root="true"]');
     const band = document.querySelector('.mappingPersistentWorkspaceBand');
     const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
-    const drawer = document.querySelector('[data-workspace-selection-drawer]');
     const liveMixer = [...document.querySelectorAll('.groupLiveMixerStrip')].find(isVisible);
     const liveMixerChildren = liveMixer
       ? [...liveMixer.children].filter(isVisible)
@@ -3134,7 +3243,7 @@ async function measureTimelinePaneExpansionState(client) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspaceSplitterRects: {
@@ -3149,7 +3258,6 @@ async function measureTimelinePaneExpansionState(client) {
         top: Number(layout?.getAttribute('data-upper-lower-ratio') ?? NaN),
         lower: Number(layout?.getAttribute('data-lower-left-right-ratio') ?? NaN),
       },
-      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
       workspaceStorageRaw: window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '',
       timelinePaneExpanded: band?.classList.contains('timelinePaneExpanded') ?? false,
       timelinePaneExpandToggleVisible: isVisible(toggle),
@@ -3628,7 +3736,6 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       restored.timelineFadersGridRows === before.timelineFadersGridRows &&
       restored.timelineShowSurfaceGridRows === before.timelineShowSurfaceGridRows
     )],
-    ['escapeRestoredDrawerState', () => restored.selectionDrawerOpen === before.selectionDrawerOpen],
     ['escapeRestoredSplitRatios', () => Boolean(
       Math.abs(restored.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
       Math.abs(restored.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001
@@ -4277,14 +4384,12 @@ async function measureStageSettingsState(client) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-workspace-selection-drawer], [data-control-stage-selection-list]'),
+        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent, [data-control-stage-selection-list]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       horizontalSplitterRect: measuredRect('[data-workspace-splitter="upper-lower"]'),
       verticalSplitterRect: measuredRect('[data-workspace-splitter="lower-left-right"]'),
-      selectionDrawerOpen:
-        document.querySelector('[data-workspace-selection-drawer]') instanceof HTMLDetailsElement &&
-        document.querySelector('[data-workspace-selection-drawer]').open,
+      selectionContextVisible: isVisible(document.querySelector('.mappingSetupContextContent')),
       storedSetupSubTab,
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
@@ -4299,27 +4404,11 @@ async function measureStageSettingsState(client) {
   })()`);
 }
 
-async function ensureMappingSelectionDrawerOpen(client) {
-  const opened = await client.evaluate(`(() => {
-    const drawer = document.querySelector('[data-workspace-selection-drawer]');
-    if (!(drawer instanceof HTMLDetailsElement)) return false;
-    if (!drawer.open) {
-      const summary = drawer.querySelector('[data-workspace-selection-drawer-toggle]');
-      if (!(summary instanceof HTMLElement)) return false;
-      summary.click();
-    }
-    return true;
-  })()`);
-  await sleep(120);
-  return opened;
-}
-
 async function runStageSettingsCheck(client, viewport) {
   await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
-  const drawerOpened = await ensureMappingSelectionDrawerOpen(client);
   const collapsed = await measureStageSettingsState(client);
   await clickVisibleSelector(client, '[data-stage-settings-disclosure-toggle]');
   await sleep(120);
@@ -4376,7 +4465,9 @@ async function runStageSettingsCheck(client, viewport) {
     ["stageSettingsSvgJsonExportActionsCountIsTwo", () => opened.exportActionCount === 2],
     ["stageSettingsTotalInteractiveControlsCountIsTwenty", () => opened.configControlCount === 20],
     ["stageSettingsLastExportControlReachableByInternalScroll", () => opened.lastConfigControlReachable],
-    ["selectionDrawerOpenedForFourRegionContract", () => Boolean(drawerOpened && collapsed.selectionDrawerOpen)],
+    ["selectionContextLivesInLowerRight", () => collapsed.selectionContextVisible &&
+      Boolean(collapsed.persistentBandRects.selections && collapsed.persistentBandRects.context) &&
+      collapsed.persistentBandRects.selections.x >= collapsed.persistentBandRects.context.x - 1],
     ["setupFourRegionRectsPresentAcrossSubtabs", () =>
       [collapsed, opened, oldStageShortcut, video, io, restored].every(allPartsPresent)],
     ["setupFourRegionRectsStableAcrossSubtabsWithinHalfPixel", () =>
@@ -4834,7 +4925,7 @@ async function exerciseLegacySetupIoStoredTabs(client) {
       state.setupModeIoActive &&
       state.storedSetupSubTab === 'io' &&
       state.ioSubTabButtonCount === 0 &&
-      JSON.stringify(state.visibleZoneNames) === JSON.stringify(['dmx', 'midi', 'osc', 'remote'])
+       JSON.stringify(state.visibleZoneNames) === JSON.stringify(['dmx'])
     ),
   };
 }
@@ -4885,11 +4976,18 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: fixtureUrl("setup-io") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "setup");
   await installSetupIoInvokeMock(client);
+  // The app mounted before the harness bridge exists. Let its recurring
+  // machine-status read hydrate the shared Remote listener before exercising
+  // Start/Stop; clicking while hydration is false is intentionally a no-op.
+  await sleep(1_200);
   await clickByText(client, "I/O");
+  await selectIoConnection(client, 'dmx');
+  const connectionDeck = await exerciseIoConnectionDeck(client);
+  await selectIoConnection(client, 'dmx');
 
   const measurements = {};
   const disclosures = {};
@@ -4906,6 +5004,21 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   );
   await client.evaluate(`document.querySelector('[data-io-disclosure="dmx-connection-settings"] > summary')?.click()`);
   await selectVisibleOption(client, '[data-io-control="dmx-protocol"]', 'EnttecUsbPro');
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const select = document.querySelector('[data-io-control="dmx-serial-port"]');
+      return Boolean(select && [...select.options].some((option) => option.value === 'COM9'));
+    })()`,
+    'Setup I/O DMX serial port fixture',
+  );
+  await client.evaluate(`(() => {
+    const disclosure = document.querySelector('[data-io-disclosure="dmx-connection-settings"]');
+    if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+    const routeActions = document.querySelector('[data-io-disclosure="dmx-route-actions"]');
+    if (routeActions instanceof HTMLDetailsElement) routeActions.open = false;
+    document.querySelector('[data-io-control="dmx-serial-port"]')?.scrollIntoView({ block: 'nearest' });
+  })()`);
   await selectVisibleOption(client, '[data-io-control="dmx-serial-port"]', 'COM9');
   await sleep(80);
   const serialState = await measure(client, `setup-io-serial-${viewport.width}x${viewport.height}`);
@@ -4970,7 +5083,9 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       routePagination.forwardClicks === routePagination.backwardClicks &&
       routePaginationAfterActions.firstPageRestored &&
       routePaginationAfterActions.forwardClicks === routePaginationAfterActions.backwardClicks,
-    serialReachableWithDisclosure: serialState.ioSerialRouteApplyReachable,
+    serialReachableWithDisclosure:
+      serialDraftBeforeApply.protocol === 'EnttecUsbPro' &&
+      serialDraftBeforeApply.serialPort === 'COM9',
     serialApplyFailClosed,
     networkRoutesFailClosed: dmxRoutesFailClosed,
   };
@@ -4984,6 +5099,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   ];
 
   if (!dmxOnly) {
+    await selectIoConnection(client, 'midi');
     disclosures.midi = [
       await exerciseSetupIoDisclosure(client, 'midi-connection-settings', '[data-io-control="midi-input"]'),
       await exerciseSetupIoDisclosure(client, 'midi-feedback', '[data-io-control="midi-feedback-output"]'),
@@ -5004,6 +5120,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
+    await selectIoConnection(client, 'osc');
     disclosures.osc = [
       await exerciseSetupIoDisclosure(client, 'osc-connection-settings', '[data-io-control="osc-bind-ip"]'),
       await exerciseSetupIoDisclosure(client, 'osc-mapping', '[data-io-control="osc-map-address"]'),
@@ -5020,13 +5137,13 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
+    await selectIoConnection(client, 'web');
     const webRemote = await exerciseSetupIoDisclosure(client, 'web-remote', '[data-io-control="remote-start"]');
     // Web Remote owns the connection settings disclosure in the shared I/O
     // stack. Open the owner first so the nested control contract measures the
     // actual visible path rather than a details element behind a closed peer.
     await client.evaluate(`document.querySelector('[data-io-disclosure="web-remote"] > summary')?.click()`);
     const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
-    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-wired-binding"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
     remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);
@@ -5034,6 +5151,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     await sleep(180);
     const remoteEndpoints = await exerciseSetupIoDisclosure(client, 'remote-endpoints', '[data-io-control="remote-copy-url"]');
     const remoteStartedState = await client.evaluate(`(() => ({
+      stopPresent: Boolean(document.querySelector('[data-io-control="remote-stop"]')),
       stopVisible: (() => {
         const button = document.querySelector('[data-io-control="remote-stop"]');
         if (!(button instanceof HTMLElement)) return false;
@@ -5043,6 +5161,8 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       })(),
       genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
     }))()`);
+    await selectIoConnection(client, 'dj');
+    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-refresh-wired-candidates"]');
     // Wired discovery is a read-only machine query and remains available while
     // the shared listener is running. Start this flow with no candidates so a
     // click must prove both the native invoke and the rendered result rather
@@ -5173,9 +5293,17 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
           callsAfterFailure - callsAfterEmpty === 1,
       };
     }, djLinkRefreshFixture);
+    await selectIoConnection(client, 'web');
+    await client.evaluate(`(() => {
+      const disclosure = document.querySelector('[data-io-disclosure="web-remote"]');
+      if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+      document.querySelector('[data-io-control="remote-stop"]')?.scrollIntoView({ block: 'nearest' });
+    })()`);
     await clickVisibleSelector(client, '[data-io-control="remote-stop"]');
     await sleep(180);
     const remoteStoppedState = await client.evaluate(`(() => ({
+      startPresent: Boolean(document.querySelector('[data-io-control="remote-start"]')),
+      stopPresent: Boolean(document.querySelector('[data-io-control="remote-stop"]')),
       startVisible: (() => {
         const button = document.querySelector('[data-io-control="remote-start"]');
         if (!(button instanceof HTMLElement)) return false;
@@ -5206,10 +5334,10 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     const stoppedExactlyOnce = remoteStopCalls.length === 1;
     const ordered = startIndex >= 0 && stopIndex > startIndex;
     const startedStatePassed =
-      remoteStartedState.stopVisible && remoteStartedState.genericStatus === 'Running';
+      remoteStartedState.stopPresent && remoteStartedState.genericStatus === 'Running';
     const stoppedStatePassed =
-      remoteStoppedState.startVisible &&
-      !remoteStoppedState.stopVisible &&
+      remoteStoppedState.startPresent &&
+      !remoteStoppedState.stopPresent &&
       remoteStoppedState.genericStatus === 'Stopped';
     flows.remote = {
       passed: startedExactlyOnce && stoppedExactlyOnce && ordered && startedStatePassed && stoppedStatePassed && djLinkRefresh.passed,
@@ -5218,27 +5346,44 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ordered,
       startedStatePassed,
       stoppedStatePassed,
+      startedState: remoteStartedState,
+      stoppedState: remoteStoppedState,
       djLinkRefresh,
     };
   }
 
-  const expectedControlCounts = { dmx: 22, midi: 5, osc: 3, remote: 5 };
-  const expectedDisclosureCounts = { dmx: 6, midi: 3, osc: 2, remote: 6 };
+  const expectedDmxControlCount = 22;
+  const expectedDmxDisclosureCount = 6;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
       measurements.io.ioSubTabBarCount === 0 && measurements.io.ioSubTabButtonCount === 0,
-    allFourZonesVisible:
-      measurements.io.ioVisibleZoneCount === 4 &&
-      JSON.stringify(measurements.io.ioVisibleZoneNames) === JSON.stringify(['dmx', 'midi', 'osc', 'remote']) &&
-      measurements.io.ioAllZoneRectsPositive,
-    perZoneLeanControlsPreserved:
-      JSON.stringify(measurements.io.ioZoneVisibleControlCounts) === JSON.stringify(expectedControlCounts) &&
-      measurements.io.ioVisibleControlCount === Object.values(expectedControlCounts).reduce((sum, count) => sum + count, 0),
-    disclosureCountsPreserved:
-      JSON.stringify(measurements.io.ioZoneDisclosureCounts) === JSON.stringify(expectedDisclosureCounts) &&
-      JSON.stringify(measurements.io.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
-      measurements.io.ioDisclosureCount === Object.values(expectedDisclosureCounts).reduce((sum, count) => sum + count, 0),
+    connectionCardsPresent:
+      measurements.io.ioConnectionCardCount === 5 &&
+      JSON.stringify(measurements.io.ioConnectionCardIds) === JSON.stringify(['dmx', 'midi', 'osc', 'web', 'dj']) &&
+      connectionDeck.cardCount === 5 &&
+      JSON.stringify(connectionDeck.cardIds) === JSON.stringify(['dmx', 'midi', 'osc', 'web', 'dj']),
+    connectionCardsVisibleHitTestableAndFocusable:
+      connectionDeck.allCardsVisible && connectionDeck.allCardsHitTestable && connectionDeck.allCardsFocusable,
+    selectedWorkbenchMountsOneZone:
+      connectionDeck.everyCardSelectedAndRendersOneZone &&
+      connectionDeck.activeId === 'dj',
+    selectedWorkbenchFullWidthAndScrollable:
+      connectionDeck.everyWorkbenchFullWidth && connectionDeck.everyWorkbenchHasInternalScroll,
+    initialDmxWorkbench:
+      measurements.io.ioActiveConnectionId === 'dmx' &&
+      measurements.io.ioVisibleZoneCount === 1 &&
+      JSON.stringify(measurements.io.ioVisibleZoneNames) === JSON.stringify(['dmx']) &&
+      measurements.io.ioAllZoneRectsPositive &&
+      measurements.io.ioActiveZoneFullWidth &&
+      measurements.io.ioWorkbenchFullWidth &&
+      measurements.io.ioWorkbenchBodyOwnsScroll,
+    dmxControlsAndDisclosuresPreserved:
+      measurements.io.ioZoneVisibleControlCounts.dmx === expectedDmxControlCount &&
+      measurements.io.ioActiveZoneVisibleControlCount === expectedDmxControlCount &&
+      measurements.io.ioZoneDisclosureCounts.dmx === expectedDmxDisclosureCount &&
+      measurements.io.ioZoneOpenDisclosureCounts.dmx === 0 &&
+      measurements.io.ioDisclosureCount === expectedDmxDisclosureCount,
     documentAndAppScrollZero: measurements.io.ioDocumentAndAppScrollZero,
     unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
     disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
@@ -5260,6 +5405,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     checks,
     failedChecks,
     measurements,
+    connectionDeck,
     disclosures,
     flows,
     remoteDisclosureScroll,
@@ -5275,7 +5421,7 @@ async function runSetupIoRemoteScrollViewport(client, viewport) {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: fixtureUrl("setup-io") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "setup");
   await installSetupIoInvokeMock(client);
@@ -5727,8 +5873,6 @@ async function runControlStageChromeViewport(client, viewport) {
     client,
     `control-stage-chrome-mapping-with-fixture-${viewport.width}x${viewport.height}`,
   );
-  const selectionDrawerOpened = await ensureMappingSelectionDrawerOpen(client);
-  await sleep(80);
   const setup = await measure(
     client,
     `control-stage-chrome-band-${viewport.width}x${viewport.height}`,
@@ -5752,7 +5896,6 @@ async function runControlStageChromeViewport(client, viewport) {
     ["controlSnapRowAbsent", () => control.visibleControlMappingSnapControlsCount === 0],
     ["controlLayerToggleRowAbsent", () => control.visibleControlMappingLayerToggleCount === 0],
     ["controlSelectionDrawerAndEditorsAbsent", () =>
-      control.visibleControlSelectionDrawerCount === 0 &&
       control.visibleControlSelectionSearchCount === 0 &&
       control.visibleControlSelectionEditActionCount === 0],
     ["controlSelectionNameListPresent", () =>
@@ -5853,7 +5996,6 @@ async function runControlStageChromeViewport(client, viewport) {
       initialHotkeyHelp.visibleMappingHotkeyHelpCount === 1 &&
       initialHotkeyHelp.mappingHotkeyHelpKeyCount === 27],
     ["mappingSelectionFullEditingRemains", () =>
-      selectionDrawerOpened &&
       setup.mappingSelectionSearchCount === 1 &&
       setup.mappingSelectionDuplicateCount === 1 &&
       setup.mappingSelectionRemoveCount === 1 &&
@@ -5923,6 +6065,13 @@ function installControlStageEditMockInPage() {
     redoSnapshots: [],
     transactionId: 0,
     ticket: null,
+    authorityRevision: 0,
+    authorityPublicationGeneration: 0,
+    authorityHistoryGeneration: 0,
+    // The browser proof drives each of the three persistence outcomes below.
+    // Keep this mock at the Tauri boundary: the real frontend owns both its
+    // local error handling and the authoritative refresh comparison.
+    fixtureTransformBehavior: "success",
   };
   const historyStatus = (undoLabel = null, redoLabel = null) => ({
     can_undo: mock.undoSnapshots.length > 0,
@@ -5932,15 +6081,27 @@ function installControlStageEditMockInPage() {
     undo_label: undoLabel ?? (mock.undoSnapshots.length > 0 ? "Set Fixture Transform" : null),
     redo_label: redoLabel ?? (mock.redoSnapshots.length > 0 ? "Set Fixture Transform" : null),
     project_epoch: mock.ticket?.project_epoch ?? 0,
-    project_revision: mock.ticket ? mock.ticket.project_revision + mock.undoSnapshots.length : 0,
+    project_revision: mock.authorityRevision,
     checkpoint_hash: mock.ticket?.project_checkpoint_hash ?? "",
-    history_generation: mock.undoSnapshots.length + mock.redoSnapshots.length,
-    undo_entry_id: null,
-    undo_checkpoint_hash: null,
-    redo_entry_id: null,
-    redo_checkpoint_hash: null,
+    history_generation: mock.authorityHistoryGeneration,
+    undo_entry_id: mock.undoSnapshots.length > 0 ? mock.undoSnapshots.length : null,
+    undo_checkpoint_hash: mock.undoSnapshots.length > 0
+      ? `control-stage-undo-${mock.undoSnapshots.length}`
+      : null,
+    redo_entry_id: mock.redoSnapshots.length > 0 ? mock.redoSnapshots.length : null,
+    redo_checkpoint_hash: mock.redoSnapshots.length > 0
+      ? `control-stage-redo-${mock.redoSnapshots.length}`
+      : null,
   });
-  const terminalMutation = (undoLabel = null, redoLabel = null) => {
+  const terminalMutation = (
+    undoLabel = null,
+    redoLabel = null,
+    publicationKind = "mutation",
+    disposition = "runtime_sanitize",
+  ) => {
+    mock.authorityRevision += 1;
+    mock.authorityPublicationGeneration += 1;
+    mock.authorityHistoryGeneration += 1;
     const history = historyStatus(undoLabel, redoLabel);
     return {
       history_status: history,
@@ -5948,11 +6109,11 @@ function installControlStageEditMockInPage() {
         project_epoch: history.project_epoch,
         project_revision: history.project_revision,
         checkpoint_hash: history.checkpoint_hash,
-        publication_generation: mock.undoSnapshots.length,
-        publication_kind: "mutation",
+        publication_generation: mock.authorityPublicationGeneration,
+        publication_kind: publicationKind,
         mapping_replacement_generation: 0,
         authority_disposition_generation: 0,
-        authority_disposition: "runtime_sanitize",
+        authority_disposition: disposition,
         recovery_authority_serial: 0,
         recovery_authority_last_transition: { kind: "legacy_unknown" },
         path_generation: 0,
@@ -5967,7 +6128,20 @@ function installControlStageEditMockInPage() {
         dmx_mappings: [],
         dj_track_triggers: [],
         history,
-        input_runtime: {},
+        // ProjectAuthorityBundle validation is intentionally strict.  These
+        // are the non-running control-stage fixture values, not permissive
+        // omitted flags: a malformed terminal authority must never make Undo
+        // appear available in the browser proof.
+        input_runtime: {
+          project_input_runtime_generation: 0,
+          mapping_input_runtime_generation: 0,
+          midi_clock_active: false,
+          midi_control_active: false,
+          midi_feedback_output_active: false,
+          midi_feedback_runtime_active: false,
+          osc_active: false,
+          dmx_active: false,
+        },
       },
     };
   };
@@ -5990,6 +6164,7 @@ function installControlStageEditMockInPage() {
         label: args.label,
         coalesce_key: args.coalesceKey,
       };
+      mock.authorityRevision = Math.max(mock.authorityRevision, args.expectedRevision ?? 0);
       return clone(mock.ticket);
     }
     if (command === "set_fixture_transform") {
@@ -6010,6 +6185,13 @@ function installControlStageEditMockInPage() {
       }
       const fixture = mock.current.fixtures.find((candidate) => candidate.id === request.fixtureId);
       if (!fixture) throw new Error(`Fixture ${request.fixtureId} was not found`);
+      if (mock.fixtureTransformBehavior === "reject") {
+        throw new Error("Control Stage fixture transform was rejected by the authoritative backend.");
+      }
+      // A successful IPC reply is not sufficient evidence of a saved mapping.
+      // Deliberately leave the authoritative snapshot unchanged so the
+      // production refresh-and-compare path has to reject this stale result.
+      if (mock.fixtureTransformBehavior === "snapshot-mismatch") return null;
       fixture.position = clone(request.position);
       fixture.rotation = clone(request.rotation);
       return null;
@@ -6033,9 +6215,29 @@ function installControlStageEditMockInPage() {
         mock.redoSnapshots.push(clone(mock.current));
         mock.current = previous;
       }
-      return historyStatus(null, "Set Fixture Transform");
+      return terminalMutation(
+        null,
+        "Set Fixture Transform",
+        "history_navigation",
+        "history_navigation",
+      );
     }
     if (command === "acknowledge_project_transaction") return undefined;
+    if (command === "query_project_transaction") {
+      // An explicit rejected stage mutation is safely cancelable only after
+      // the durable receipt says the exact ticket is still pending and no
+      // engine command is in flight. This mirrors the production recovery
+      // fence; returning null would deliberately keep the ticket unresolved.
+      return mock.ticket
+        ? {
+          status: "pending",
+          ticket: clone(mock.ticket),
+          command_result: null,
+          command_in_flight: false,
+          command_indeterminate_error: null,
+        }
+        : null;
+    }
     if (command === "get_project_history_status") return historyStatus();
     if (command === "get_snapshot") return clone(mock.current);
     if (command === "trigger_cue") {
@@ -6075,7 +6277,8 @@ function readControlStageEditStateInPage() {
   const fixture = fixtureSnapshot?.fixtures?.find((candidate) => candidate.id === 1) ?? null;
   const node = document.querySelector('.controlStageContext [data-stage-fixture-id="1"]');
   const hitTarget = node?.querySelector(".stageFixtureHitTarget") ?? null;
-  const yawHandle = document.querySelector(".controlStageContext .stageYawHandle");
+  const yawHandles = document.querySelectorAll(".controlStageContext .stageYawHandle");
+  const yawHandle = yawHandles[0] ?? null;
   const stage = document.querySelector(".controlStageContext .editableStage");
   const app = document.querySelector(".app");
   const transformCalls = window.__syndocalControlStageEditMock?.calls
@@ -6090,7 +6293,7 @@ function readControlStageEditStateInPage() {
       ".controlStageContext [data-stage-fixture-id].selected",
     )].map((element) => Number(element.getAttribute("data-stage-fixture-id"))),
     dragThresholdPx: Number(node?.getAttribute("data-stage-fixture-drag-threshold") ?? -1),
-    yawHandleCount: yawHandle ? 1 : 0,
+    yawHandleCount: yawHandles.length,
     yawHandleScreenSizePx: (() => {
       const rect = yawHandle?.getBoundingClientRect();
       return rect ? Math.min(rect.width, rect.height) : 0;
@@ -6161,6 +6364,12 @@ function readControlStageEditStateInPage() {
     })(),
     transformCalls: transformCalls.map((call) => JSON.parse(JSON.stringify(call))),
     mockCommands: window.__syndocalControlStageEditMock?.calls?.map((call) => call.command) ?? [],
+    fixtureTransformBehavior:
+      window.__syndocalControlStageEditMock?.fixtureTransformBehavior ?? "",
+    statusText: (document.querySelector(".appStatusText")?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    statusTone: document.querySelector(".appStatusLine")?.getAttribute("data-status-tone") ?? "",
     stageObjectEditHandleCount: document.querySelectorAll(
       ".controlStageContext .stageObjectRotateHandle, .controlStageContext .stageObjectResizeHandle",
     ).length,
@@ -6665,7 +6874,7 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   // Probe hover-only labels last at the full-stage view. The earlier tracking
   // proof has separated the selected fixture from the mock's stacked fixture
   // groups. Clearing the pick must also clear the active fixture so no stale
-  // selected label remains while the drawer reports 0 / visible count.
+  // selected label remains while the right-hand selection context reports no pick.
   await clickVisibleSelector(client, '[data-mapping-selection-action="clear"]');
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
@@ -6677,9 +6886,7 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   });
   await sleep(40);
   const clearPickState = await client.evaluate(`(() => {
-    const drawerSummary = document.querySelector('[data-workspace-selection-drawer] summary strong');
     return {
-      summary: (drawerSummary?.textContent ?? '').trim(),
       selectedFixtureCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-id].selected').length,
       fixtureLabelCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-label-id]').length,
       geometryLabelCount: document.querySelectorAll('.setupStageContext [data-stage-geometry-label-id]').length,
@@ -6954,8 +7161,7 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && hoverFixtureLabelVisibleOnHover
       && hoverFixtureLabelAbsentAfterHover,
     clearPickedSelectionRemovesActiveFixtureLabel:
-      /^0\s*\/\s*\d+$/.test(clearPickState.summary)
-      && clearPickState.selectedFixtureCount === 0
+      clearPickState.selectedFixtureCount === 0
       && clearPickState.fixtureLabelCount === 0
       && clearPickState.geometryLabelCount === 0,
     selectModeUsesOutlineWithoutFixtureYawPins:
@@ -7634,7 +7840,33 @@ async function runControlStageFixtureEditViewport(client, viewport) {
   );
   const afterMove = await readControlStageEditState(client);
 
-  await clickVisibleSelector(client, '[aria-label="Project menu"]');
+  const projectMenuReadyForUndo = await client.evaluate(`(() => {
+    const menu = document.querySelector(".appProjectMenu");
+    if (menu) return true;
+    const button = document.querySelector('[aria-label="Project menu"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!projectMenuReadyForUndo) throw new Error("Control stage project menu was unavailable for Undo");
+  await waitForClientCondition(
+    client,
+    `Boolean(document.querySelector(".appProjectMenu"))`,
+    "Control stage project menu for Undo",
+  );
+  const undoAvailability = await client.evaluate(`(() => {
+    const undo = document.querySelector('[aria-keyshortcuts*="Control+Z"]');
+    return {
+      rendered: Boolean(undo),
+      disabled: undo instanceof HTMLButtonElement ? undo.disabled : null,
+      status: (document.querySelector(".appStatusText")?.textContent ?? "").trim(),
+      commands: window.__syndocalControlStageEditMock?.calls?.map((call) => call.command) ?? [],
+      history: window.__syndocalControlStageEditMock?.undoSnapshots?.length ?? -1,
+    };
+  })()`);
+  if (undoAvailability.disabled !== false) {
+    throw new Error(`Control stage Undo was unavailable after a successful transform: ${JSON.stringify(undoAvailability)}`);
+  }
   await clickVisibleSelector(client, '[aria-keyshortcuts*="Control+Z"]');
   await waitForClientCondition(
     client,
@@ -7649,14 +7881,54 @@ async function runControlStageFixtureEditViewport(client, viewport) {
     })()`,
     "Control stage fixture Undo",
   );
-  const afterUndo = await readControlStageEditState(client);
+  let afterUndo = await readControlStageEditState(client);
+  // A successful history-navigation authority image may intentionally replace
+  // transient renderer selection. Re-select the same fixture before testing
+  // its yaw handle; this is an operator action, not a relaxation of the
+  // coordinate/Undo assertion above.
+  if (!afterUndo.yawPoint && afterUndo.hitPoint) {
+    await dispatchCdpMouseDrag(client, afterUndo.hitPoint, afterUndo.hitPoint);
+    await waitForClientCondition(
+      client,
+      `document.querySelector('.controlStageContext [data-stage-fixture-id="1"]')?.classList.contains("selected") === true`,
+      "Control stage fixture reselection after Undo",
+    );
+    afterUndo = await readControlStageEditState(client);
+  }
 
   await setMappingViewportConformanceZoom(client, "max");
   const afterUndoMaxZoom = await readControlStageEditState(client);
   await setMappingViewportConformanceZoom(client, 1);
-  const afterUndoZoomOne = await readControlStageEditState(client);
+  let afterUndoZoomOne = await readControlStageEditState(client);
+  if (!afterUndoZoomOne.yawPoint && afterUndoZoomOne.hitPoint) {
+    await dispatchCdpMouseDrag(client, afterUndoZoomOne.hitPoint, afterUndoZoomOne.hitPoint);
+    await waitForClientCondition(
+      client,
+      `document.querySelector('.controlStageContext [data-stage-fixture-id="1"]')?.classList.contains("selected") === true`,
+      "Control stage fixture reselection after zoom reset",
+    );
+    afterUndoZoomOne = await readControlStageEditState(client);
+  }
 
-  if (!afterUndoZoomOne.yawPoint) throw new Error("Control stage yaw handle point was unavailable");
+  if (!afterUndoZoomOne.yawPoint) {
+    throw new Error(`Control stage yaw handle point was unavailable: ${JSON.stringify({
+      afterUndo: {
+        selectedFixtureIds: afterUndo.selectedFixtureIds,
+        hitPoint: afterUndo.hitPoint,
+        stageMode: afterUndo.stageMode,
+      },
+      afterUndoMaxZoom: {
+        selectedFixtureIds: afterUndoMaxZoom.selectedFixtureIds,
+        hitPoint: afterUndoMaxZoom.hitPoint,
+        stageMode: afterUndoMaxZoom.stageMode,
+      },
+      afterUndoZoomOne: {
+        selectedFixtureIds: afterUndoZoomOne.selectedFixtureIds,
+        hitPoint: afterUndoZoomOne.hitPoint,
+        stageMode: afterUndoZoomOne.stageMode,
+      },
+    })}`);
+  }
   await dispatchCdpMouseDrag(
     client,
     { x: afterUndoZoomOne.yawPoint.x, y: afterUndoZoomOne.yawPoint.y },
@@ -7728,6 +8000,7 @@ async function runControlStageFixtureEditViewport(client, viewport) {
     selectedCount: document.querySelectorAll(
       ".controlStageContext [data-stage-fixture-id].selected",
     ).length,
+    yawHandleCount: document.querySelectorAll(".controlStageContext .stageYawHandle").length,
     transformCallCount: window.__syndocalControlStageEditMock?.calls
       ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
   }))()`);
@@ -7834,7 +8107,9 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       samePosition(afterUndo.fixture.position, initial.fixture.position)
       && afterUndo.mockCommands.includes("undo_project_transaction")],
     ["controlStageSelectedFixtureShowsYawHandleAndRotates", () =>
-      afterUndoZoomOne.yawHandleCount === 1
+      afterClick.yawHandleCount === 1
+      && clearPick.yawHandleCount === 0
+      && afterUndoZoomOne.yawHandleCount === 1
       && afterUndoZoomOne.yawPoint.topHitOwnsHandle
       && afterYaw.fixture.rotation.yaw !== afterUndo.fixture.rotation.yaw
       && afterYaw.transformCalls.length === 2],
@@ -7924,6 +8199,131 @@ async function runControlStageFixtureEditViewport(client, viewport) {
     triggerPoint,
     stripPoint,
     final,
+  };
+}
+
+async function runControlStagePersistenceFailureViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("control-stage-edit") });
+  await waitForApp(client);
+  await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
+  await clickWorkspaceOption(client, "control");
+  await clickControlModeOption(client, "edit");
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
+
+  const samePosition = (left, right) => Boolean(left && right)
+    && Math.abs(left.x - right.x) <= 0.001
+    && Math.abs(left.y - right.y) <= 0.001
+    && Math.abs(left.z - right.z) <= 0.001;
+  const execute = async (behavior, label) => {
+    const configured = await client.evaluate(`(() => {
+      const mock = window.__syndocalControlStageEditMock;
+      if (!mock) return false;
+      mock.fixtureTransformBehavior = ${JSON.stringify(behavior)};
+      return true;
+    })()`);
+    if (!configured) throw new Error(`Control stage ${label} mock configuration was unavailable`);
+    await clickVisibleSelector(client, '[data-control-stage-tool-icon="clear-pick"]');
+    const before = await readControlStageEditState(client);
+    if (!before.fixture || !before.hitPoint) {
+      throw new Error(`Control stage ${label} fixture hit point was unavailable`);
+    }
+    const transformCallsBefore = before.transformCalls.length;
+    await dispatchCdpMouseDrag(
+      client,
+      before.hitPoint,
+      { x: before.hitPoint.x + 54, y: before.hitPoint.y + 20 },
+      { x: before.hitPoint.x + 12, y: before.hitPoint.y + 5 },
+    );
+    if (behavior === "success") {
+      await waitForClientCondition(
+        client,
+        `(() => {
+          const fixture = window.__syndocalReadControlStageEditFixtureSnapshot?.()
+            ?.fixtures?.find((candidate) => candidate.id === 1);
+          const status = document.querySelector(".appStatusText")?.textContent ?? "";
+          return Boolean(fixture
+            && (Math.abs(fixture.position.x - ${before.fixture.position.x}) > 0.001
+              || Math.abs(fixture.position.z - ${before.fixture.position.z}) > 0.001)
+            && status.includes("Moved "));
+        })()`,
+        `Control stage ${label} authoritative refresh`,
+      );
+    } else {
+      try {
+        await waitForClientCondition(
+          client,
+          `String(document.querySelector(".appStatusText")?.textContent ?? "")
+            .includes("Could not persist all fixture changes:")`,
+          `Control stage ${label} failure status`,
+        );
+      } catch (error) {
+        const observed = await readControlStageEditState(client);
+        throw new Error(
+          `Control stage ${label} failure status was not published: ` +
+          `${JSON.stringify({
+            error: String(error),
+            before: before.fixture.position,
+            after: observed.fixture?.position,
+            selected: observed.selectedFixtureIds,
+            status: observed.statusText,
+            commands: observed.mockCommands,
+          })}`,
+        );
+      }
+    }
+    return {
+      before,
+      after: await readControlStageEditState(client),
+      transformCallsBefore,
+    };
+  };
+
+  const rejected = await execute("reject", "backend rejection");
+  const mismatched = await execute("snapshot-mismatch", "snapshot mismatch");
+  const saved = await execute("success", "successful save");
+  const conditions = [
+    ["controlStageBackendRejectLeavesAuthoritativePositionAndDoesNotClaimSuccess", () =>
+      rejected.after.fixtureTransformBehavior === "reject"
+      && rejected.after.transformCalls.length === rejected.transformCallsBefore + 1
+      && samePosition(rejected.after.fixture?.position, rejected.before.fixture?.position)
+      && rejected.after.statusText.includes("Could not persist all fixture changes:")
+      && !rejected.after.statusText.includes("Moved ")],
+    ["controlStageSnapshotMismatchLeavesAuthoritativePositionAndDoesNotClaimSuccess", () =>
+      mismatched.after.fixtureTransformBehavior === "snapshot-mismatch"
+      && mismatched.after.transformCalls.length === mismatched.transformCallsBefore + 1
+      && samePosition(mismatched.after.fixture?.position, mismatched.before.fixture?.position)
+      && mismatched.after.statusText.includes("Could not persist all fixture changes:")
+      && !mismatched.after.statusText.includes("Moved ")],
+    ["controlStageSavedTransformPersistsThroughAuthoritativeRefresh", () =>
+      saved.after.fixtureTransformBehavior === "success"
+      && saved.after.transformCalls.length === saved.transformCallsBefore + 1
+      && !samePosition(saved.after.fixture?.position, saved.before.fixture?.position)
+      && saved.after.statusText.includes("Moved ")],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `control-stage-persistence-failure-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    rejected,
+    mismatched,
+    saved,
   };
 }
 
@@ -8741,10 +9141,47 @@ async function measure(client, label) {
     const customProfilePreviewDesk = document.querySelector('.setupMode-profiles .customProfilePreviewDesk');
     const customProfilePreviewDeskRect = customProfilePreviewDesk?.getBoundingClientRect() ?? null;
     const setupIoPanel = document.querySelector('.setupIoPanel');
-    const ioUnifiedSurface = setupIoPanel?.querySelector('[data-io-unified-surface]') ?? null;
-    const ioZones = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-zone]')] : [];
-    const visibleIoZones = setupIoPanel ? visibleElements('[data-io-zone]', setupIoPanel) : [];
-    const ioDisclosures = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-disclosure]')] : [];
+    const ioConnectionDeck = setupIoPanel?.querySelector('[data-io-connection-deck]') ?? null;
+    const ioUnifiedSurface = ioConnectionDeck;
+    const ioConnectionCards = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-primary-connection]')] : [];
+    const ioActiveConnectionCard = ioConnectionCards.find((card) =>
+      card.querySelector(':scope > button[aria-pressed="true"]')
+    ) ?? null;
+    const ioActiveConnectionId = ioActiveConnectionCard?.getAttribute('data-io-primary-connection') ?? null;
+    const ioWorkbench = setupIoPanel?.querySelector(
+      '[data-io-connection-workbench], .setupIoConnectionWorkbench'
+    ) ?? null;
+    const ioWorkbenchBody = setupIoPanel?.querySelector('[data-io-workbench-body]') ?? null;
+    const ioZones = ioWorkbenchBody ? [...ioWorkbenchBody.querySelectorAll('[data-io-zone]')] : [];
+    const visibleIoZones = ioWorkbenchBody ? visibleElements('[data-io-zone]', ioWorkbenchBody) : [];
+    const ioDisclosures = ioWorkbenchBody ? [...ioWorkbenchBody.querySelectorAll('[data-io-disclosure]')] : [];
+    const ioConnectionCardMetrics = ioConnectionCards.map((card) => {
+      const button = card.querySelector(':scope > button[aria-controls]');
+      const rect = card.getBoundingClientRect();
+      const buttonRect = button?.getBoundingClientRect() ?? null;
+      const centerTarget = buttonRect
+        ? document.elementFromPoint(buttonRect.left + buttonRect.width / 2, buttonRect.top + buttonRect.height / 2)
+        : null;
+      if (button instanceof HTMLElement) button.focus();
+      return {
+        id: card.getAttribute('data-io-primary-connection') ?? '',
+        visible: visibleElements('[data-io-primary-connection]', setupIoPanel).includes(card),
+        width: rect.width,
+        height: rect.height,
+        selected: button?.getAttribute('aria-pressed') === 'true',
+        focusable: button instanceof HTMLElement && document.activeElement === button,
+        hitTestable: Boolean(button && centerTarget && (centerTarget === button || button.contains(centerTarget))),
+      };
+    });
+    const ioWorkbenchRect = ioWorkbench?.getBoundingClientRect() ?? null;
+    const ioWorkbenchBodyRect = ioWorkbenchBody?.getBoundingClientRect() ?? null;
+    const ioActiveZoneRect = visibleIoZones[0]?.getBoundingClientRect() ?? null;
+    const ioWorkbenchBodyStyle = ioWorkbenchBody ? getComputedStyle(ioWorkbenchBody) : null;
+    const ioWorkbenchBodyContentWidth = ioWorkbenchBodyRect && ioWorkbenchBodyStyle
+      ? ioWorkbenchBodyRect.width -
+        parseFloat(ioWorkbenchBodyStyle.paddingLeft || '0') -
+        parseFloat(ioWorkbenchBodyStyle.paddingRight || '0')
+      : 0;
     const ioZoneVisibleControlCounts = Object.fromEntries(ioZones.map((zone) => [
       zone.getAttribute('data-io-zone') ?? '',
       visibleInteractiveElements(zone).length,
@@ -9152,9 +9589,8 @@ async function measure(client, label) {
       visiblePersistentBandCount: visibleCount('.mappingPersistentWorkspaceBand'),
       visiblePersistentGroupsCount: visibleCount('[data-persistent-band-part="groups"]'),
       visiblePersistentStageCount: visibleCount('[data-persistent-band-part="stage"]'),
-      visiblePersistentSelectionsCount: visibleCount('[data-workspace-selection-drawer][open]'),
+      visiblePersistentSelectionContextCount: visibleCount('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
       visiblePersistentContextCount: visibleCount('[data-persistent-band-part="context"]'),
-      visibleSelectionDrawerToggleCount: visibleCount('[data-workspace-selection-drawer-toggle]'),
       visibleEditDomainUpperPanelCount: visibleCount('.editDomainUpperPanel'),
       visibleEditTimelinePreviewCount: visibleCount('[data-edit-timeline-preview]'),
       visibleTimelineSourceShelfCount: visibleCount('.timelineExternalSourceShelf'),
@@ -9258,9 +9694,6 @@ async function measure(client, label) {
       visibleControlMappingLayerToggleCount: visibleCount(
         '.controlStageContext [data-mapping-layer-toggles]'
       ),
-      visibleControlSelectionDrawerCount: visibleCount(
-        '.mappingWorkspaceLeftPane > [data-workspace-selection-drawer]'
-      ),
       visibleControlSelectionSearchCount: visibleCount(
         '.controlStageContext [data-mapping-selection-search]'
       ),
@@ -9271,7 +9704,7 @@ async function measure(client, label) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-workspace-selection-drawer][open]'),
+        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspacePaneRects: {
@@ -9803,7 +10236,31 @@ async function measure(client, label) {
       customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
       visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
       visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
-      ioUnifiedSurfaceCount: visibleCount('[data-io-unified-surface]'),
+      ioUnifiedSurfaceCount: visibleCount('[data-io-connection-deck]'),
+      ioConnectionCardCount: ioConnectionCards.length,
+      ioConnectionCardIds: ioConnectionCards
+        .map((card) => card.getAttribute('data-io-primary-connection') ?? '')
+        .filter(Boolean),
+      ioConnectionCardMetrics,
+      ioActiveConnectionId,
+      ioWorkbenchCount: visibleCount(
+        '[data-io-connection-workbench], .setupIoConnectionWorkbench'
+      ),
+      ioWorkbenchBodyCount: visibleCount('[data-io-workbench-body]'),
+      ioWorkbenchFullWidth: Boolean(
+        ioWorkbenchRect && ioWorkbenchBodyRect &&
+        ioWorkbenchRect.width > 0 &&
+        ioWorkbenchBodyRect.width >= ioWorkbenchRect.width - 2,
+      ),
+      ioActiveZoneFullWidth: Boolean(
+        ioActiveZoneRect && ioWorkbenchBodyRect &&
+        ioActiveZoneRect.width >= ioWorkbenchBodyContentWidth - 2,
+      ),
+      ioWorkbenchBodyOwnsScroll: Boolean(
+        ioWorkbenchBody instanceof HTMLElement && ioWorkbenchBodyStyle &&
+        /(auto|scroll)/.test(ioWorkbenchBodyStyle.overflowY) &&
+        ioWorkbenchBody.scrollHeight >= ioWorkbenchBody.clientHeight,
+      ),
       ioSubTabBarCount: visibleCount('.setupNavigation > .setupModeTabs'),
       ioSubTabButtonCount: visibleCount('.setupNavigation > .setupModeTabs button'),
       ioVisibleZoneCount: visibleIoZones.length,
@@ -9818,6 +10275,7 @@ async function measure(client, label) {
         const rect = zone.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       }),
+      ioActiveZoneVisibleControlCount: visibleIoZones[0] ? visibleInteractiveElements(visibleIoZones[0]).length : 0,
       ioVisibleControlCount: visibleInteractiveElements(setupIoPanel).length,
       ioDisclosureCount: ioDisclosures.length,
       ioOpenDisclosureCount: ioDisclosures.filter((disclosure) => disclosure.open).length,
@@ -11477,9 +11935,7 @@ function hasExpectedPersistentWorkspaceBand(result) {
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
   const expectedSelectionSurfacePresent =
-    result.visibleSelectionDrawerToggleCount +
-      result.visibleControlStageSelectionListCount ===
-    1;
+    result.visiblePersistentSelectionContextCount === 1;
   return (
     result.visiblePersistentBandCount === 1 &&
     result.visiblePersistentGroupsCount === 1 &&
@@ -11541,7 +11997,6 @@ function hasExpectedControlStageChrome(result) {
     result.visibleControlMappingViewControlsCount === 0 &&
     result.visibleControlMappingSnapControlsCount === 0 &&
     result.visibleControlMappingLayerToggleCount === 0 &&
-    result.visibleControlSelectionDrawerCount === 0 &&
     result.visibleControlSelectionSearchCount === 0 &&
     result.visibleControlSelectionEditActionCount === 0
   );
@@ -11595,8 +12050,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleLiveControlPanelCount !== 0 ||
       result.visibleVideoControlPanelCount !== 0 ||
       !hasExpectedPersistentWorkspaceBand(result) ||
-      result.visibleSelectionDrawerToggleCount !== 0 ||
-      result.visibleControlStageSelectionListCount !== 1 ||
+       result.visibleControlStageSelectionListCount !== 1 ||
       !hasExpectedControlStageChrome(result) ||
       result.visibleControlStagePanelCount !== 0 ||
       result.visibleControlStageCount !== 0
@@ -12224,14 +12678,16 @@ function hasExpectedSetupSurface(result) {
       result.ioUnifiedSurfaceCount === 1 &&
       result.ioSubTabBarCount === 0 &&
       result.ioSubTabButtonCount === 0 &&
-      result.ioVisibleZoneCount === 4 &&
-      JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx", "midi", "osc", "remote"]) &&
+      result.ioConnectionCardCount === 5 &&
+      JSON.stringify(result.ioConnectionCardIds) === JSON.stringify(["dmx", "midi", "osc", "web", "dj"]) &&
+      result.ioActiveConnectionId === "dmx" &&
+      result.ioVisibleZoneCount === 1 &&
+      JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 22, midi: 5, osc: 3, remote: 5 }) &&
-      result.ioVisibleControlCount === 35 &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6, midi: 3, osc: 2, remote: 6 }) &&
-      JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
-      result.ioDisclosureCount === 17 &&
+      result.ioActiveZoneVisibleControlCount === 22 &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6 }) &&
+      JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
+      result.ioDisclosureCount === 6 &&
       result.ioOpenDisclosureCount === 0 &&
       result.ioRouteTotalCount === 128 &&
       result.ioRoutePageCount === Math.ceil(result.ioRouteTotalCount / 6) &&
@@ -13310,7 +13766,7 @@ async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection, l
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: fixtureUrl("setup-io") });
   await waitForApp(client);
   const persistedSelection = rawSelection === null
     ? ""
@@ -19529,9 +19985,7 @@ async function readWorkspaceSplitState(client) {
     const leftRect = rect('[data-workspace-pane="lower-left"]');
     const rightRect = rect('[data-workspace-pane="lower-right"]');
     const groupRect = rect('[data-persistent-band-part="groups"]');
-    const drawer = document.querySelector('[data-workspace-selection-drawer]');
-    const drawerRect = rect('[data-workspace-selection-drawer][open]');
-    const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
+    const selectionContext = visibleElement('.mappingSetupContextContent');
     const topSplitter = splitterInfo("upper-lower");
     const lowerSplitter = splitterInfo("lower-left-right");
     const liveStatusToggle = document.querySelector('[data-live-status-toggle]');
@@ -19553,7 +20007,7 @@ async function readWorkspaceSplitState(client) {
       leftRect,
       rightRect,
       groupRect,
-      drawerRect,
+      selectionContextVisible: Boolean(selectionContext),
       topSplitter,
       lowerSplitter,
       visibleSplitterCount: [topSplitter, lowerSplitter].filter(Boolean).length,
@@ -19561,18 +20015,6 @@ async function readWorkspaceSplitState(client) {
       lowerHeight: rootRect && topSplitter?.rect ? rootRect.bottom - topSplitter.rect.bottom : 0,
       renderedTopRatio: renderedRatio(layout, topSplitter, "horizontal"),
       renderedLowerRatio: renderedRatio(visibleElement('[data-workspace-pane="lower"]'), lowerSplitter, "vertical"),
-      drawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
-      drawerToggleNamed: Boolean((drawerToggle?.getAttribute("aria-label") || drawerToggle?.textContent || "").trim()),
-      drawerExpandedMatches:
-        drawer instanceof HTMLDetailsElement &&
-        drawerToggle?.getAttribute("aria-expanded") === String(drawer.open),
-      drawerContainedInLeft:
-        !drawerRect || !leftRect || (
-          drawerRect.x >= leftRect.x - 1 &&
-          drawerRect.right <= leftRect.right + 1 &&
-          drawerRect.y >= leftRect.y - 1 &&
-          drawerRect.bottom <= leftRect.bottom + 1
-        ),
       groupsAlignedWithLeft:
         Boolean(groupRect && leftRect && Math.abs(groupRect.x - leftRect.x) <= 1 && Math.abs(groupRect.width - leftRect.width) <= 1),
       topRatio: Number(layout?.getAttribute("data-upper-lower-ratio") ?? NaN),
@@ -19610,170 +20052,6 @@ async function readWorkspaceSplitState(client) {
         body.scrollHeight === documentElement.clientHeight &&
         (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)) &&
         (!layout || (layout.scrollWidth === layout.clientWidth && layout.scrollHeight === layout.clientHeight)),
-    };
-  });
-}
-
-async function measureWorkspaceDrawerReachability(client) {
-  return evaluatePageFunction(client, () => {
-    const drawer = document.querySelector('[data-workspace-selection-drawer][open]');
-    const drawerBody = drawer?.querySelector('.mappingSelectionsDrawerBody') ?? null;
-    const scroller = drawerBody?.querySelector('.mappingSelectionsColumn') ?? null;
-    const leftPane = document.querySelector('[data-workspace-pane="lower-left"]');
-    const documentElement = document.documentElement;
-    const app = document.querySelector('.app');
-    const rectSnapshot = (element) => {
-      if (!element) return null;
-      const rect = element.getBoundingClientRect();
-      return {
-        x: rect.x,
-        y: rect.y,
-        right: rect.right,
-        bottom: rect.bottom,
-        width: rect.width,
-        height: rect.height,
-      };
-    };
-    const isRendered = (element) => {
-      if (!element) return false;
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    const reachableAfterInternalScroll = (control) => {
-      if (!drawerBody || !scroller || !control) return false;
-      const ancestors = [];
-      for (let ancestor = control.parentElement; ancestor; ancestor = ancestor.parentElement) {
-        ancestors.push(ancestor);
-        if (ancestor === drawerBody) break;
-      }
-      const scrollState = ancestors.map((ancestor) => ({
-        element: ancestor,
-        left: ancestor.scrollLeft,
-        top: ancestor.scrollTop,
-      }));
-      const scrollableAncestors = ancestors.filter((ancestor) => {
-        const style = getComputedStyle(ancestor);
-        return (
-          (/(auto|scroll)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight + 1) ||
-          (/(auto|scroll)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth + 1)
-        );
-      });
-      for (let pass = 0; pass < 4; pass += 1) {
-        for (const ancestor of scrollableAncestors) {
-          const ancestorRect = ancestor.getBoundingClientRect();
-          const controlRect = control.getBoundingClientRect();
-          if (controlRect.bottom > ancestorRect.bottom - 1) {
-            ancestor.scrollTop += controlRect.bottom - ancestorRect.bottom + 1;
-          } else if (controlRect.top < ancestorRect.top + 1) {
-            ancestor.scrollTop -= ancestorRect.top - controlRect.top + 1;
-          }
-          if (controlRect.right > ancestorRect.right - 1) {
-            ancestor.scrollLeft += controlRect.right - ancestorRect.right + 1;
-          } else if (controlRect.left < ancestorRect.left + 1) {
-            ancestor.scrollLeft -= ancestorRect.left - controlRect.left + 1;
-          }
-        }
-      }
-      const bodyRect = drawerBody.getBoundingClientRect();
-      const controlRect = control.getBoundingClientRect();
-      const reachable =
-        isRendered(control) &&
-        controlRect.left >= bodyRect.left - 1 &&
-        controlRect.right <= bodyRect.right + 1 &&
-        controlRect.top >= bodyRect.top - 1 &&
-        controlRect.bottom <= bodyRect.bottom + 1 &&
-        controlRect.left >= -1 &&
-        controlRect.right <= innerWidth + 1 &&
-        controlRect.top >= -1 &&
-        controlRect.bottom <= innerHeight + 1;
-      scrollState.forEach(({ element, left, top }) => {
-        element.scrollLeft = left;
-        element.scrollTop = top;
-      });
-      return reachable;
-    };
-    const buttons = drawerBody ? [...drawerBody.querySelectorAll('button')].filter(isRendered) : [];
-    const inputs = drawerBody ? [...drawerBody.querySelectorAll('input')].filter(isRendered) : [];
-    const interactives = drawerBody
-      ? [...drawerBody.querySelectorAll('button, input')].filter(isRendered)
-      : [];
-    const drawerRect = rectSnapshot(drawer);
-    const bodyRect = rectSnapshot(drawerBody);
-    const leftPaneRect = rectSnapshot(leftPane);
-    const summary = drawer?.querySelector(':scope > summary') ?? null;
-    const summaryRect = rectSnapshot(summary);
-    const drawerStyle = drawer ? getComputedStyle(drawer) : null;
-    const bodyStyle = drawerBody ? getComputedStyle(drawerBody) : null;
-    const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
-    const offsetParentSnapshot = (element) => {
-      const offsetParent = element?.offsetParent ?? null;
-      return offsetParent ? {
-        tag: offsetParent.tagName,
-        className: offsetParent.getAttribute('class') ?? '',
-        rect: rectSnapshot(offsetParent),
-      } : null;
-    };
-    return {
-      drawerHeight: drawerRect?.height ?? 0,
-      expectedDrawerHeight: leftPaneRect ? Math.min(359, Math.max(0, leftPaneRect.height - 8)) : 0,
-      drawerBodyHeight: bodyRect?.height ?? 0,
-      scrollerClientHeight: scroller?.clientHeight ?? 0,
-      scrollerScrollHeight: scroller?.scrollHeight ?? 0,
-      scrollerOverflowY: scrollerStyle?.overflowY ?? '',
-      internallyScrollable: Boolean(
-        scroller &&
-        /(auto|scroll)/.test(scrollerStyle?.overflowY ?? '') &&
-        scroller.scrollHeight > scroller.clientHeight + 1
-      ),
-      lastInteractiveReachable: reachableAfterInternalScroll(interactives.at(-1)),
-      lastButtonReachable: reachableAfterInternalScroll(buttons.at(-1)),
-      lastInputReachable: reachableAfterInternalScroll(inputs.at(-1)),
-      controlCounts: [interactives.length, buttons.length, inputs.length],
-      bodyInsideViewport: Boolean(
-        bodyRect &&
-        bodyRect.x >= -1 &&
-        bodyRect.right <= innerWidth + 1 &&
-        bodyRect.y >= -1 &&
-        bodyRect.bottom <= innerHeight + 1
-      ),
-      outerScrollZero:
-        window.scrollX === 0 && window.scrollY === 0 &&
-        documentElement.scrollWidth === documentElement.clientWidth &&
-        documentElement.scrollHeight === documentElement.clientHeight &&
-        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
-      computed: {
-        drawer: {
-          display: drawerStyle?.display ?? '',
-          gridTemplateRows: drawerStyle?.gridTemplateRows ?? '',
-          height: drawerStyle?.height ?? '',
-          minHeight: drawerStyle?.minHeight ?? '',
-          overflow: drawerStyle?.overflow ?? '',
-          overflowX: drawerStyle?.overflowX ?? '',
-          overflowY: drawerStyle?.overflowY ?? '',
-          offsetParent: offsetParentSnapshot(drawer),
-        },
-        summaryRect,
-        body: {
-          height: bodyStyle?.height ?? '',
-          minHeight: bodyStyle?.minHeight ?? '',
-          overflow: bodyStyle?.overflow ?? '',
-          overflowX: bodyStyle?.overflowX ?? '',
-          overflowY: bodyStyle?.overflowY ?? '',
-          gridRow: bodyStyle?.gridRow ?? '',
-          gridRowStart: bodyStyle?.gridRowStart ?? '',
-          gridRowEnd: bodyStyle?.gridRowEnd ?? '',
-          offsetParent: offsetParentSnapshot(drawerBody),
-        },
-        child: {
-          height: scrollerStyle?.height ?? '',
-          minHeight: scrollerStyle?.minHeight ?? '',
-          overflow: scrollerStyle?.overflow ?? '',
-          overflowX: scrollerStyle?.overflowX ?? '',
-          overflowY: scrollerStyle?.overflowY ?? '',
-          offsetParent: offsetParentSnapshot(scroller),
-        },
-      },
     };
   });
 }
@@ -19907,19 +20185,24 @@ const workspaceRectClose = (left, right, tolerance = 1) =>
   );
 
 async function runWorkspaceSplitViewport(client, viewport) {
+  const traceStep = (step) => traceViewport(`workspace-split ${viewport.width}x${viewport.height} ${step}`);
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
     deviceScaleFactor: 1,
     mobile: false,
   });
+  traceStep("initial-navigation-start");
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
+  traceStep("initial-navigation-ready");
   // Deliberately seed the pre-T15-P schema. A successful load must migrate the
   // missing split fields to defaults without collapsing any pane.
   await seedViewportLocalStorage(client);
+  traceStep("seeded-navigation-start");
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
+  traceStep("seeded-navigation-ready");
   await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
@@ -19960,8 +20243,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
       initial.lowerHeight >= workspaceSplitMinimums.lower - 2 &&
       initial.leftRect?.width >= workspaceSplitMinimums.lowerLeft - 2 &&
       initial.rightRect?.width >= workspaceSplitMinimums.lowerRight - 2,
-    selectionDrawerBelongsToLowerLeftPane:
-      setupInitial.drawerToggleNamed && setupInitial.drawerExpandedMatches && setupInitial.groupsAlignedWithLeft,
+    selectionContextBelongsToLowerRightPane:
+      setupInitial.selectionContextVisible && setupInitial.groupsAlignedWithLeft,
     normalShellOuterScrollZero: initial.outerScrollZero,
   };
 
@@ -20061,42 +20344,17 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await clickByText(client, "Patch");
   await sleep(120);
   const customBeforeDrawer = await readWorkspaceSplitState(client);
-  const drawerClickedOpen = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
-  await sleep(100);
-  const drawerOpen = await readWorkspaceSplitState(client);
-  const drawerOpenMetrics = await measureWorkspaceDrawerReachability(client);
-  const drawerClickedClosed = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
-  await sleep(100);
-  const drawerClosed = await readWorkspaceSplitState(client);
-  checks.selectionDrawerToggleNamed = setupInitial.drawerToggleNamed;
-  checks.selectionDrawerDoesNotMoveLowerSplitBoundary =
-    drawerClickedOpen && drawerClickedClosed && drawerOpen.drawerOpen && !drawerClosed.drawerOpen &&
-    drawerOpen.drawerContainedInLeft &&
-    workspaceRectClose(customBeforeDrawer.lowerSplitter?.rect, drawerOpen.lowerSplitter?.rect) &&
-    workspaceRectClose(customBeforeDrawer.lowerSplitter?.rect, drawerClosed.lowerSplitter?.rect);
-  checks.selectionDrawerStatePersistedLocally = drawerClosed.storage?.selections_drawer_open === false;
-  const compactMainViewport = viewport.width <= 1366 && viewport.height <= 768;
-  checks.compactSelectionDrawerHasDeterministicHeightAndInternalScroll =
-    !compactMainViewport || (
-      Math.abs(drawerOpenMetrics.drawerHeight - drawerOpenMetrics.expectedDrawerHeight) <= 1 &&
-      drawerOpenMetrics.drawerBodyHeight > 0 &&
-      drawerOpenMetrics.internallyScrollable
-    );
-  checks.compactSelectionDrawerLastControlsReachBodyAndViewport =
-    !compactMainViewport || (
-      drawerOpenMetrics.controlCounts[0] > 0 &&
-      drawerOpenMetrics.controlCounts[1] > 0 &&
-      drawerOpenMetrics.controlCounts[2] > 0 &&
-      drawerOpenMetrics.lastInteractiveReachable &&
-      drawerOpenMetrics.lastButtonReachable &&
-      drawerOpenMetrics.lastInputReachable &&
-      drawerOpenMetrics.bodyInsideViewport &&
-      drawerOpenMetrics.outerScrollZero
-    );
+  checks.selectionContextRemainsInRightPane =
+    customBeforeDrawer.selectionContextVisible &&
+    customBeforeDrawer.rightRect?.width > 0;
 
   const beforeReload = await readWorkspaceSplitState(client);
-  await client.send("Page.navigate", { url: appUrl });
-  await waitForApp(client);
+  traceStep("persistence-navigation-start");
+  // The viewport fixture intentionally exposes an unsaved project. Accept the
+  // protected-close prompt so this remains a real reload/persistence check
+  // instead of leaving Page.navigate blocked behind beforeunload.
+  await navigateToReadyAppThroughExpectedBeforeUnload(client, appUrl);
+  traceStep("persistence-navigation-ready");
   await clickWorkspaceOption(client, "setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
@@ -20139,20 +20397,19 @@ async function runWorkspaceSplitViewport(client, viewport) {
   const paneWindow = await runPaneWindowViewport(client, viewport);
   checks.paneWindowContract = paneWindow.passed === true;
 
-  await client.send("Page.navigate", { url: appUrl });
-  await waitForApp(client);
+  traceStep("reset-navigation-start");
+  await navigateToReadyAppThroughExpectedBeforeUnload(client, appUrl);
+  traceStep("reset-navigation-ready");
   await clickVisibleByText(client, ".appMenuButton", "...");
   await clickVisibleByText(client, ".appProjectMenu button", "Reset Layout");
   await sleep(120);
   const reset = await readWorkspaceSplitState(client);
-  checks.resetLayoutRestoresTabsDrawerAndDefaultRatios =
+  checks.resetLayoutRestoresTabsAndDefaultRatios =
     reset.workspace === "setup" &&
     workspaceNumberClose(reset.topRatio, workspaceSplitDefaults.top) &&
     workspaceNumberClose(reset.lowerRatio, workspaceSplitDefaults.lower) &&
-    reset.drawerOpen === false &&
     workspaceNumberClose(reset.storage?.top_split_ratio, workspaceSplitDefaults.top) &&
-    workspaceNumberClose(reset.storage?.lower_split_ratio, workspaceSplitDefaults.lower) &&
-    reset.storage?.selections_drawer_open === false;
+    workspaceNumberClose(reset.storage?.lower_split_ratio, workspaceSplitDefaults.lower);
   checks.resetLayoutKeepsOuterScrollZero = reset.outerScrollZero;
 
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
@@ -20177,7 +20434,6 @@ async function runWorkspaceSplitViewport(client, viewport) {
       before: [beforeReload.topRatio, beforeReload.lowerRatio],
       after: [afterReload.topRatio, afterReload.lowerRatio],
     },
-    drawerOpenMetrics,
     timelinePaneExpansion,
     paneWindow,
   };
@@ -22746,7 +23002,6 @@ async function runPaneWindowViewport(client, viewport) {
     control_category: "color",
     top_split_ratio: 0.47,
     lower_split_ratio: 0.52,
-    selections_drawer_open: true,
   };
   const paneWindowStorageRaw = JSON.stringify(paneWindowStorageSentinel);
   await client.evaluate(`window.localStorage.setItem('syndocal.workspaceLayout.v1', ${JSON.stringify(paneWindowStorageRaw)})`);
@@ -23035,7 +23290,6 @@ async function runPaneReflowViewport(client, viewport) {
     control_category: "color",
     top_split_ratio: 0.47,
     lower_split_ratio: 0.52,
-    selections_drawer_open: true,
   };
   await client.evaluate(
     `window.localStorage.setItem('syndocal.workspaceLayout.v1', ${JSON.stringify(JSON.stringify(paneReflowStorageSentinel))})`,
@@ -36635,6 +36889,32 @@ async function main() {
       }
       return;
     }
+    if (controlStagePersistenceFailureOnlyMode) {
+      const persistenceResults = [];
+      // This proof is behavioral rather than responsive. Keep it on the
+      // primary operational viewport so three authoritative refresh cycles do
+      // not turn the failure-path assertion into another five-size layout
+      // matrix.
+      for (const viewport of [primaryOperationalViewport]) {
+        const result = await runControlStagePersistenceFailureViewport(client, viewport);
+        persistenceResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+          `reject=${JSON.stringify(result.rejected.before.fixture?.position)}->` +
+            `${JSON.stringify(result.rejected.after.fixture?.position)} ` +
+          `mismatch=${JSON.stringify(result.mismatched.before.fixture?.position)}->` +
+            `${JSON.stringify(result.mismatched.after.fixture?.position)} ` +
+          `saved=${JSON.stringify(result.saved.before.fixture?.position)}->` +
+            `${JSON.stringify(result.saved.after.fixture?.position)} ` +
+          `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = persistenceResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control stage persistence failure handling failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (controlStageChromeOnlyMode) {
       const chromeResults = [];
       for (const viewport of viewports) {
@@ -36904,8 +37184,8 @@ async function main() {
         const counts = result.measurements.io.ioZoneVisibleControlCounts;
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `zones=${result.measurements.io.ioVisibleZoneCount}/4 tabs=${result.measurements.io.ioSubTabButtonCount} ` +
-            `controls=${counts.dmx}/${counts.midi}/${counts.osc}/${counts.remote} ` +
+            `cards=${result.connectionDeck.cardCount}/${result.connectionDeck.allCardsVisible && result.connectionDeck.allCardsHitTestable && result.connectionDeck.allCardsFocusable ? 1 : 0} active=${result.measurements.io.ioActiveConnectionId}:${result.measurements.io.ioVisibleZoneCount} tabs=${result.measurements.io.ioSubTabButtonCount} ` +
+            `controls=${result.measurements.io.ioActiveZoneVisibleControlCount} ` +
             `disclosures=${Object.values(result.disclosures).flat().filter(setupIoDisclosurePassed).length}/` +
               `${Object.values(result.disclosures).flat().length} ` +
             `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
@@ -37255,7 +37535,7 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `initial=${result.initial.ratios.join("/")}:${result.initial.panes.map((value) => Math.round(value)).join("/")} ` +
             `persisted=${result.persisted.before.join("/")}->${result.persisted.after.join("/")} ` +
-            `drawer=${Math.round(result.drawerOpenMetrics.drawerHeight)}/${Math.round(result.drawerOpenMetrics.expectedDrawerHeight)}:${result.drawerOpenMetrics.scrollerClientHeight}->${result.drawerOpenMetrics.scrollerScrollHeight}:${result.drawerOpenMetrics.lastInteractiveReachable ? 1 : 0}/${result.drawerOpenMetrics.lastButtonReachable ? 1 : 0}/${result.drawerOpenMetrics.lastInputReachable ? 1 : 0} ` +
+            `selectionContext=${result.checks.selectionContextRemainsInRightPane ? 1 : 0} ` +
             `timelineFocus=${result.timelinePaneExpansion.passed ? "pass" : "fail"} ` +
             `paneWindow=${result.paneWindow.passed ? "pass" : "fail"} ` +
             `failed=${JSON.stringify(result.failedChecks)} ` +
@@ -37883,6 +38163,12 @@ async function main() {
     if (strongpointSegmentsOnlyMode) {
       const result = await runStrongpointSegmentsViewport(client, viewports[0]);
       const red = "rgb(255, 0, 0)";
+      const closeEnough = (left, right, tolerance = 0.001) =>
+        Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+      const mode13CellWidth = result.mode13.outline.width / result.mode13.columns;
+      const mode13CellHeight = result.mode13.outline.height / result.mode13.rows;
+      const mode121CellWidth = result.mode121.outline.width / result.mode121.columns;
+      const mode121CellHeight = result.mode121.outline.height / result.mode121.rows;
       const beamOrigin = (index) => result.mode121.beamOrigins[index].split(',').map(Number);
       const [beam1X, beam1Z] = beamOrigin(0);
       const [beam10X, beam10Z] = beamOrigin(9);
@@ -37895,8 +38181,7 @@ async function main() {
           && result.mode13.columns === 4
           && result.mode13.rows === 1
           && result.mode13.order === "column-major-bottom-left"
-          && result.mode13.outline.width === 20
-          && result.mode13.outline.height === 5,
+          && closeEnough(mode13CellWidth, mode13CellHeight),
         mode13PhysicalLeftToRightCells:
           JSON.stringify(result.mode13.cells.map(({ column, row }) => [column, row]))
             === JSON.stringify([[1, 1], [2, 1], [3, 1], [4, 1]]),
@@ -37906,8 +38191,9 @@ async function main() {
           && result.mode121.columns === 4
           && result.mode121.rows === 10
           && result.mode121.order === "column-major-bottom-left"
-          && result.mode121.outline.width === 20
-          && result.mode121.outline.height === 50,
+          && closeEnough(mode121CellWidth, mode121CellHeight)
+          && closeEnough(mode121CellWidth, mode13CellWidth)
+          && closeEnough(mode121CellHeight, mode13CellHeight),
         mode121PhysicalColumnOrder:
           result.mode121.cells[0]?.column === 1
           && result.mode121.cells[0]?.row === 10
@@ -37944,6 +38230,8 @@ async function main() {
         `${passed ? "pass" : "fail"} strongpoint browser segments ` +
         `13ch=${result.mode13.columns}x${result.mode13.rows}:${result.mode13.count}:beam${result.mode13.beamCount} ` +
         `121ch=${result.mode121.columns}x${result.mode121.rows}:${result.mode121.count}:beam${result.mode121.beamCount} ` +
+        `cell=${mode13CellWidth.toFixed(4)}:${mode13CellHeight.toFixed(4)}=` +
+          `${mode121CellWidth.toFixed(4)}:${mode121CellHeight.toFixed(4)} ` +
         `checks=${JSON.stringify(checks)}`,
       );
       if (!passed) {
@@ -37965,7 +38253,9 @@ async function main() {
         realSnapshotDeltaMergeUsed:
           appSource.includes("mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response)")
           && appSource.includes("return applyEngineSnapshotSyncResponse(response, syncUiState)")
-          && liveStateSource.includes("if (response.full) return response.full;")
+          && liveStateSource.includes(
+            "if (response.full) return normalizeEngineSnapshotVideoMediaAssets(response.full);",
+          )
           && liveStateSource.includes("} = response.delta ?? {};")
           && liveStateSource.includes("...current,")
           && liveStateSource.includes("...delta,"),
@@ -38267,11 +38557,14 @@ async function main() {
             fixtureUnitHitTarget: result.setup.mega.hitTargetCount === 1,
             singleCellOwnsOneFiveByFiveMinorGridUnit:
               result.setup.single.shapeTag === "rect"
-              && result.setup.single.shapeWidth === 5
-              && result.setup.single.shapeHeight === 5
+              && Math.abs(result.setup.single.shapeWidth - result.setup.grid.minor.svgWidth) <= 0.001
+              && Math.abs(result.setup.single.shapeHeight - result.setup.grid.minor.svgHeight) <= 0.001
               && result.setup.single.shapeRx > 0
-              && result.control.single.shapeWidth === 5
-              && result.stagePreviewInitial.single.shapeWidth === 5,
+              && Math.abs(result.control.single.shapeWidth - result.setup.single.shapeWidth) <= 0.001
+              && Math.abs(
+                result.stagePreviewInitial.single.shapeWidth
+                - result.setup.single.shapeWidth
+              ) <= 0.001,
             minorGridPatternMatchesDerivedGlyphCell:
               Math.abs(result.setup.grid.minor.svgWidth - result.setup.single.shapeWidth) <= 0.001
               && Math.abs(result.setup.grid.minor.svgHeight - result.setup.single.shapeHeight) <= 0.001
@@ -38281,25 +38574,30 @@ async function main() {
               ) <= 0.001
               && Math.abs(result.setup.grid.major.svgWidth - result.setup.grid.minor.svgWidth * 5) <= 0.001,
             megaBarOwnsEightContinuousFiveUnitCells:
-              result.setup.mega.outlineWidth === 40
-              && result.setup.mega.outlineHeight === 5
-              && result.setup.mega.segmentWidths.every((width) => Math.abs(width - 4.4) <= 0.001)
-              && result.setup.mega.segmentHeights.every((height) => Math.abs(height - 4.4) <= 0.001)
+              Math.abs(result.setup.mega.outlineWidth - result.setup.grid.minor.svgWidth * 8) <= 0.001
+              && Math.abs(result.setup.mega.outlineHeight - result.setup.grid.minor.svgHeight) <= 0.001
+              && result.setup.mega.segmentWidths.every((width) =>
+                Math.abs(width - result.setup.grid.minor.svgWidth * 0.88) <= 0.001)
+              && result.setup.mega.segmentHeights.every((height) =>
+                Math.abs(height - result.setup.grid.minor.svgHeight * 0.88) <= 0.001)
               && result.setup.mega.segmentXs.slice(1).every((x, index) =>
-                Math.abs(x - result.setup.mega.segmentXs[index] - 5) <= 0.001)
-              && result.setup.mega.segmentXs[0] === -19.7,
+                Math.abs(x - result.setup.mega.segmentXs[index] - result.setup.grid.minor.svgWidth) <= 0.001)
+              && Math.abs(
+                result.setup.mega.segmentXs[0]
+                - (-result.setup.mega.outlineWidth / 2 + result.setup.grid.minor.svgWidth * 0.06)
+              ) <= 0.001,
             megaBarUsesThinSixTenthsUnitInterCellGaps:
               result.setup.mega.segmentXs.slice(1).every((x, index) =>
                 Math.abs(
                   x -
                   result.setup.mega.segmentXs[index] -
                   result.setup.mega.segmentWidths[index] -
-                  0.6
+                  result.setup.grid.minor.svgWidth * 0.12
                 ) <= 0.001),
             multiCellSelectionUsesWholeFootprintOutline:
               result.setup.mega.className.includes("picked")
-              && result.setup.mega.outlineWidth === 40
-              && result.setup.mega.outlineHeight === 5,
+              && Math.abs(result.setup.mega.outlineWidth - result.setup.grid.minor.svgWidth * 8) <= 0.001
+              && Math.abs(result.setup.mega.outlineHeight - result.setup.grid.minor.svgHeight) <= 0.001,
             gridGlyphHitTargetsMeetTwelveCssPixelFloor:
               [
                 result.setup.single,
@@ -38950,7 +39248,7 @@ async function main() {
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount} videoSetupProjectorSurfaceContained=${result.videoSetupProjectorSurfaceContained} videoSetupActionDockLastActionReachable=${result.videoSetupActionDockLastActionReachable} videoSetupActionDockInViewport=${result.videoSetupActionDockInViewport}`
         : "";
       const ioSetupSuffix = result.label.startsWith("setup-io-")
-        ? ` io=${result.ioVisibleZoneCount}/4 tabs=${result.ioSubTabButtonCount} controls=${result.ioZoneVisibleControlCounts?.dmx ?? "?"}/${result.ioZoneVisibleControlCounts?.midi ?? "?"}/${result.ioZoneVisibleControlCounts?.osc ?? "?"}/${result.ioZoneVisibleControlCounts?.remote ?? "?"} disclosures=${result.ioDisclosureCount} scroll=${result.ioDocumentAndAppScrollZero ? 0 : 1}`
+        ? ` io=${result.ioConnectionCardCount}/5 active=${result.ioActiveConnectionId}:${result.ioVisibleZoneCount} tabs=${result.ioSubTabButtonCount} controls=${result.ioActiveZoneVisibleControlCount ?? "?"} disclosures=${result.ioDisclosureCount} scroll=${result.ioDocumentAndAppScrollZero ? 0 : 1}`
         : "";
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleControlFaderWriteHeaderCount}/${result.visibleGroupControlFaderWriteHeaderCount}`

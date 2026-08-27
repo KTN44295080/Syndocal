@@ -13,6 +13,48 @@ export interface StageWorldBounds {
 export const stageViewBoxSize = 100;
 export const stagePadding = 10;
 
+export interface MappingStageSvgFrame {
+  originX: number;
+  originZ: number;
+  worldToSvgScale: number;
+}
+
+// The editable Mapping surface must preserve one physical scale for both world
+// axes. The viewport may be rectangular, but a 5 m X step and a 5 m Z step must
+// occupy the same SVG distance so fixtures, grid cells, and drag deltas cannot
+// drift apart or change proportions as the viewport zooms.
+export const mappingStageSvgFrame = (bounds: StageWorldBounds): MappingStageSvgFrame => {
+  const drawableSize = stageViewBoxSize - stagePadding * 2;
+  const rangeX = Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
+  const rangeZ = Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
+  return {
+    originX: stageViewBoxSize / 2 - ((bounds.minX + bounds.maxX) / 2) * Math.min(drawableSize / rangeX, drawableSize / rangeZ),
+    originZ: stageViewBoxSize / 2 - ((bounds.minZ + bounds.maxZ) / 2) * Math.min(drawableSize / rangeX, drawableSize / rangeZ),
+    worldToSvgScale: Math.min(drawableSize / rangeX, drawableSize / rangeZ),
+  };
+};
+
+export const mappingStageWorldToSvgPoint = (x: number, z: number, bounds: StageWorldBounds) => {
+  const frame = mappingStageSvgFrame(bounds);
+  return {
+    x: frame.originX + x * frame.worldToSvgScale,
+    z: frame.originZ + z * frame.worldToSvgScale,
+  };
+};
+
+export const mappingStageSvgPointToWorld = (x: number, z: number, bounds: StageWorldBounds) => {
+  const frame = mappingStageSvgFrame(bounds);
+  return {
+    x: (x - frame.originX) / frame.worldToSvgScale,
+    z: (z - frame.originZ) / frame.worldToSvgScale,
+  };
+};
+
+export const mappingStageSvgDeltaToWorld = (x: number, z: number, bounds: StageWorldBounds) => {
+  const scale = mappingStageSvgFrame(bounds).worldToSvgScale;
+  return { x: x / scale, z: z / scale };
+};
+
 export const stageWorldToSvgPoint = (x: number, z: number, bounds: StageWorldBounds) => {
   const drawableSize = stageViewBoxSize - stagePadding * 2;
   const rangeX = Math.max(Number.EPSILON, bounds.maxX - bounds.minX);

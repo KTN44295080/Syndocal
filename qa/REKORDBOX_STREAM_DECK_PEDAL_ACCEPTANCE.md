@@ -2,30 +2,35 @@
 
 Date: 2026-08-21
 Updated: 2026-08-27
-Status: Required; strict DJ-Link v3 software gates are current on KDMX `1.2.0-alpha.18` at source commit `db4eefc348b01ee05dd2dc87945afa85de8803e` (native build/launch/layout verified; direct refresh click unconfirmed) and controlled rb-output `1.1.8` commit/full-suite evidence is accepted at the pinned peer identity; target-DJ-PC deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
+Status: Required; current execution authority is KDMX `1.2.0-alpha.20` at the source checkpoint containing this status and controlled rb-output `1.1.9` at exact peer commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; the local alpha.20 native build/launch/layout gate is accepted, but target-DJ-PC identity/deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## Current v3 authority — 2026-08-26
+## Current v3 execution authority — 2026-08-27
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
-and adapter names are retired and rejected without a shim. The new Agent HELLO
+and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
-`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`; the current KDMX source
-checkpoint is `1.2.0-alpha.18` at branch `codex/syndocal-v1.2`, exact
-`HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`, with native
-build/launch/layout verified and the direct refresh click unconfirmed. The
-alpha.17 source checkpoint is
-`fb5d18fdf898a1435bed173ddd17934a04a97897`; its native artifact/process
-evidence recorded below remains historical and is not re-bound to alpha.18.
-The controlled rb-output `1.1.8` source is pinned to
-  peer commit `0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed
-  `415` total / `413` pass / `0` fail / `2` intentional skips. Peer software gates
-  passed, but no alpha.18 native build, target-DJ-PC deployment, or physical row
-  is accepted.
-  The live target-DJ-PC evidence remains on source version `1.1.5`.
-Any later text that calls v2 current is retained only as dated history
-and is superseded by this section and the v3 restatement near the end.
+`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX product metadata
+is `1.2.0-alpha.20` on branch `codex/syndocal-v1.2`; the commit containing this
+section is its Stage/Setup-I/O source checkpoint. The accepted local native
+artifact is Product/FileVersion `1.2.0-alpha.20`, SHA-256
+`E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`, and was
+launched as one responsive maximized Syndocal window. The immediately preceding
+DJ authority source is immutable alpha.19 commit
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; older alpha.18/alpha.17 artifact
+evidence is historical and is not rebound to alpha.20.
+
+The only current controlled rb-output source is version `1.1.9` at exact peer
+commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Its full suite passed `455`
+total / `453` pass / `0` fail / `2` intentional skips. The required external
+configuration is `C:\SyndocalShow\dj-agent-v1.1.9.json` and the required mapping
+artifact is `server/public/setup/CustomMIDI1-Syndocal-v1.1.9.csv`. Target-DJ-PC
+checkout/config/token/NIC identity has not been re-captured for this checkpoint,
+so no physical row is accepted. Any later text that calls v2, alpha.18, or peer
+v1.1.8 current is dated historical evidence and is superseded by this section,
+the Follow-hold authority near the end, and
+`qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`.
 
 Stage 1 keeps two independent truths after a mapped `DJ_TRACK_ACTIVE` ACK admits
 one exact deck/deckId/playSessionId owner. A physical F14 intent arms its bounded

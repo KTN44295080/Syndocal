@@ -149,9 +149,14 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       <For each={props.fixtures}>
         {(fixture) => {
           const yawDragging = () => props.isYawDragging(fixture.id);
+          const controlSelectCanRotate = () =>
+            props.fixtureTransformsEditable === true && props.stageTool === "select";
           const showYawHandle = () =>
             (props.fixtureTransformsEditable ?? !props.readOnly) &&
-            (yawDragging() || (props.stageTool === "rotate" && props.selectedFixtureId === fixture.id));
+            (yawDragging() || (
+              props.selectedFixtureId === fixture.id &&
+              (props.stageTool === "rotate" || controlSelectCanRotate())
+            ));
           const yawHandlePoint = () => stageFixtureYawHandlePoint(fixture, props.worldPerCssPixel);
           const yawHandleRadius = () => stageFixtureYawHandleWorldRadius(props.worldPerCssPixel);
           return (

@@ -6,7 +6,6 @@ import { MappingGroupRibbon, type MappingFilterStripsProps } from "./MappingFilt
 import { MappingHotkeyHelp } from "./MappingHotkeyHelp";
 import {
   MappingControlSelections,
-  MappingSelectionsColumn,
   MappingSetupContextPanel,
   type MappingSelectionPanelProps,
 } from "./MappingSelectionSidebarPanel";
@@ -35,10 +34,8 @@ type MappingPersistentWorkspaceBandProps = {
   paneOperationPending: (pane: "stage" | "timeline") => boolean;
   lowerSplitRatio: number;
   timelinePaneExpanded: boolean;
-  selectionsDrawerOpen: boolean;
   onTogglePaneWindow: (pane: "stage" | "timeline") => void;
   onLowerSplitRatio: (ratio: number) => void;
-  onSelectionsDrawerOpen: (open: boolean) => void;
   onCloseHotkeyHelp: () => void;
   onOpenMapping: () => void;
   lowerLeftContent?: JSX.Element;
@@ -161,34 +158,6 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
               </Show>
             </Show>
           </section>
-          <Show when={props.workspace === "setup"}>
-            <details
-              class="mappingSelectionsDrawer"
-              data-workspace-selection-drawer
-              open={props.selectionsDrawerOpen}
-              onToggle={(event) => props.onSelectionsDrawerOpen(event.currentTarget.open)}
-            >
-              <summary
-                data-persistent-band-part="selections-drawer"
-                data-workspace-selection-drawer-toggle
-                aria-expanded={props.selectionsDrawerOpen}
-              >
-                <span>Selections</span>
-                <strong>{props.selection.selectedFixtureCount} / {props.filters.filteredFixtureCount}</strong>
-              </summary>
-              <div class="mappingSelectionsDrawerBody">
-                <MappingSelectionsColumn
-                  {...props.selection}
-                  typeFilters={{
-                    filteredFixtureCount: props.filters.filteredFixtureCount,
-                    selectedTypeKey: props.filters.selectedTypeKey,
-                    fixtureTypeRows: props.filters.fixtureTypeRows,
-                    onSelectType: props.filters.onSelectType,
-                  }}
-                />
-              </div>
-            </details>
-          </Show>
           </>}>
             {props.lowerLeftContent}
           </Show>
@@ -276,7 +245,15 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                 </div>
               </details>
               <div class="mappingSetupContextMain">
-                <MappingSetupContextPanel {...props.selection} />
+                <MappingSetupContextPanel
+                  {...props.selection}
+                  typeFilters={{
+                    filteredFixtureCount: props.filters.filteredFixtureCount,
+                    selectedTypeKey: props.filters.selectedTypeKey,
+                    fixtureTypeRows: props.filters.fixtureTypeRows,
+                    onSelectType: props.filters.onSelectType,
+                  }}
+                />
               </div>
             </div>
           </Show>

@@ -2178,9 +2178,10 @@ authenticated two-process behavior, Rekordbox/MIDI/pedal evidence, and HW-4
 remain **0/12**; the 2026-08-29 completion deadline and 2026-08-30 performance
 remain in force.
 
-## 49. 2026-08-27 current alpha.18 source/native/UI authority
+## 49. SUPERSEDED / HISTORICAL — 2026-08-27 alpha.18 source/native/UI authority
 
-The current KDMX source checkpoint is `1.2.0-alpha.18` at branch
+Section 52 supersedes this checkpoint for current execution. At this historical
+checkpoint, KDMX source was `1.2.0-alpha.18` at branch
 `codex/syndocal-v1.2`, exact `HEAD`/upstream
 `db4eefc348b01ee05dd2dc87945afa85de8803e`. The alpha.17 source, native
 artifact, process identity, and hash recorded in section 48 remain historical
@@ -2313,3 +2314,107 @@ frozen-lock dependency restoration and staging seven pinned FFmpeg DLLs. Peer
 v1.1.9 is committed/pushed at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`
 with `453` pass / `0` fail / `2` skips. PID `80264` remains the old alpha.18
 artifact; alpha.19 native/HW acceptance is pending and HW-4 stays **0/12**.
+
+## 52. 2026-08-27 alpha.20 Stage and Setup I/O operator-layout native checkpoint
+
+This checkpoint began on `codex/syndocal-v1.2` at
+`7cda8c8fbf04bde6efc705ef59a65dd5816da551`. Product metadata is
+`1.2.0-alpha.20`; the commit containing this section is the authoritative
+Stage/Setup-I/O source checkpoint. The implementation diff is frozen after
+independent review. This is not a deployed or physical-hardware acceptance
+claim.
+
+The old Stage mapping surface mixed independent X/Z conversion with a
+square-only interaction frame while the rectangular viewport, glyph scale, and
+nested minor/major grid used different rules. At zoom this made segmented
+bars/strobes appear to change relative size, shifted visual grid phases, and
+could clamp a drag to the old square. The new contract uses one physical world
+scale for fixture position, footprint/segment pitch, grid, snap, and pointer
+conversion; its viewport is rectangular and keeps both grid layers on the same
+origin. The old absolute selections drawer overlaid the Stage and hid fixtures.
+It is replaced by normal workspace flow, retaining selection access without
+obscuring the mapped area. Fixture transforms now require an authoritative
+post-write confirmation; batch movement is serialized and a rejected or
+partially rejected batch reports failure without a false success message.
+
+The old Stage limits editor used a tall raw-value form that separated the
+movement map from its inputs. The new compact, local two-column Dimmer /
+Movement presentation keeps exact raw values and accessibility while adding
+human-readable percentage/degrees and a compact square movement map. It does
+not globally shrink controls or typography.
+
+The old Setup I/O split connection settings into fixed quadrants, leaving empty
+space below Control Mapping while an open DMX connection had too little room.
+The new operator surface uses five connection cards (DMX, MIDI, OSC, Web
+Remote, DJ Link) and one full-width workbench with its own body scroll. DMX
+Input and Merge live with DMX output; advanced Web security/endpoints stay
+separate from DJ Link authority and token controls. Inactive Web/DJ workbenches
+are not mounted, so neither path duplicates listener, authority, or token
+handling.
+
+Focused proof is complete. `check:mapping-stage-geometry`,
+`check:mapping-live-segments`, `check:bar-beams`,
+`check:control-stage-persistence-failure`, `check:control-stage-fixture-edit`,
+`check:mapping-live-snapshot`, and `check:stage-labels` passed.
+`check:mapping-viewport-conformance` passed `5/5`; the strongpoint proof kept
+the physical cell pitch at `18.1818` for both `4x1` and `4x10`; the Control
+fixture edit browser gate proved position move/Undo, yaw `30 -> 90`, a single
+`22 x 22` yaw target, and zero yaw handles after clear-pick. Workspace operator
+passed `28`; project storage passed; frontend invokes are `422` exact;
+localization is `3582/3582` with zero unprotected strings. The Tauri wrapper
+checker passed `231` assertions including `27` hostile cases. Workspace split,
+Setup I/O, and remote disclosure scroll each passed all five viewport cases.
+The production build completed without a Vite warning; the final App chunk is
+`499.67 kB`. The `frontend-typescript-vite-windows` warning ratchet is
+baseline/current `0/0`, with zero first-party and zero third-party warnings.
+`git diff --check` passed with only Git line-ending notices.
+
+The first native attempt failed before product linking because `FFMPEG_DIR` was
+not set; no artifact from that attempt is accepted. The full gate restarted
+from exact-path process inspection, `vcvars64.bat -vcvars_ver=14.44`, the pinned
+Community linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and exact `where.exe link.exe` first. With the pinned FFmpeg 8.1.2 shared root
+and `C:\Program Files\LLVM\bin`,
+`pnpm --dir app tauri build --no-bundle` completed in `2m11s` with zero
+first-party warning lines. The exact artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, `58,777,088`
+bytes, Product/FileVersion `1.2.0-alpha.20`, SHA-256
+`E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`,
+LastWriteTimeUtc `2026-08-27T14:02:29.3834470Z`. Launch observed exactly one
+responsive process, PID `18456`, title `Syndocal`, handle `19597984`. Computer
+Use confirmed a maximized `1920x1080` window by the native
+`元のサイズに戻す` title-bar action. Native visual QA confirmed the five-card
+connection deck, one full-width DMX workbench with internal scroll, rectangular
+Stage, and non-overlay context pane. Switching Web/DJ cards through native UI
+automation was not accepted because the accessibility element cache rejected
+the action; the five-viewport browser gate covers that behavior but is not
+promoted to native proof.
+
+Independent Terra xHigh final reviews are **GO** with P0/P1/P2 zero after the
+Control yaw browser assertion was strengthened. Ox callable capacity was
+unavailable, so the narrow recorded exception applies. The product-version
+surface is synchronized and the Show-ASIO metadata self-test passed `38`, but
+`pnpm --dir app run check:release` remains fail-closed before metadata
+validation because `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` has the external
+hard-link alias `C:\Users\kouty\Documents\.tmp.driveupload\867492`. Neither
+link was deleted or replaced. This blocks a public release/installer claim, not
+the accepted local source/native checkpoint.
+
+Checkpoint cleanup inventory was read-only. Logical file-length totals are
+repo `278,371,465,649` bytes (`259.25 GiB`), `.git` `217,408,416` bytes,
+`target` `277,042,280,989` bytes (`258.02 GiB`), `app/node_modules`
+`545,338,492` bytes, and `app/dist` `5,108,607` bytes. `target/debug` accounts
+for `242.23 GiB`, including `115.02 GiB` incremental and `112.06 GiB` deps.
+No deletion was performed. The tracked cleanup plan returned
+`Outcome=Blocked`, `Blocker=DirtyWorktree`; the only current allowlist candidate,
+`target/debug/incremental`, is about `0.12` days old, below the seven-day stale
+threshold, and has historical hard-link risk. The plan-only legacy harness is
+also not execution-qualified, and `tools/asio-bridge/target` is outside the
+reviewed allowlist. Preserve release, QA, ASIO, Show-ASIO, and debug dependency
+artifacts until a clean pushed checkpoint and a new exact-path safety review.
+
+Real fixture placement against the supplied Daslight project, DMX output and
+input/merge, MIDI, Rekordbox, DJ Link, pedal HW-4 (`0/12`), target-PC deployment,
+three-display operation, and the remaining ASIO matrix are still unverified.
+Those are the next show-critical boundaries.

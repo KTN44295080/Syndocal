@@ -1,7 +1,7 @@
 // Fixture visual-kind classification and mapping-stage label/size helpers extracted from App.tsx.
 // Pure functions over PatchedFixtureSummary; no SolidJS/state deps.
 import type { PatchedFixtureSummary } from "./types";
-import { stagePadding, stageViewBoxSize, type StageWorldBounds } from "./stageGeometry";
+import { mappingStageSvgFrame, type StageWorldBounds } from "./stageGeometry";
 
 export type MappingFixtureVisualKind = "point" | "moving" | "bar" | "panel" | "laser" | "par";
 
@@ -55,10 +55,7 @@ export const mappingFixtureCellGap = 0.6;
 export const mappingFixtureCellInkSize = mappingFixtureGridUnit - mappingFixtureCellGap;
 
 export const mappingFixtureWorldToSvgScale = (bounds: StageWorldBounds) => {
-  const drawableSize = stageViewBoxSize - stagePadding * 2;
-  const scaleX = drawableSize / Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
-  const scaleZ = drawableSize / Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
-  return Math.min(1, scaleX, scaleZ);
+  return mappingStageSvgFrame(bounds).worldToSvgScale;
 };
 
 export const mappingFixtureGridStageSize = (bounds: StageWorldBounds) =>

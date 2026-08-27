@@ -1,0 +1,184 @@
+/*
+ * Setup I/O only. This is intentionally not a global density override: these
+ * rules give the operator a stable connection picker and one full-width local
+ * workbench while retaining the established controls and their hit targets.
+ */
+.setupIoPanel[data-io-layout="operator"] {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionDeck {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  border: 1px solid #3b4148;
+  border-radius: var(--ui-radius-control);
+  background: #191d21;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionCard.active {
+  border-color: #72d8b4;
+  background: #18251f;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionSelect {
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  align-content: center;
+  gap: 2px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionSelect:focus-visible {
+  outline: 2px solid #9ceccd;
+  outline-offset: -2px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionLabel {
+  overflow: hidden;
+  color: #f3f5f7;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionSummary {
+  overflow: hidden;
+  color: #aeb8c5;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionMeta {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: 4px;
+  padding: 6px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #aeb8c5;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.ok { color: #72d8b4; }
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.warning { color: #f0bd72; }
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.error { color: #ef8989; }
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionAction {
+  display: contents;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionAction > button {
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionWorkbench {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #3b4148;
+  border-radius: var(--ui-radius-control);
+  background: #171b1f;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #343a41;
+  padding: 8px 10px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader > div {
+  min-width: 0;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2,
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader p {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2 {
+  font-size: 14px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader p {
+  margin-top: 2px;
+  color: #aeb8c5;
+  font-size: 12px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.setupIoPanel[data-io-layout="operator"] .ioDisclosureDescription {
+  margin: 0 0 8px;
+  color: #aeb8c5;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
+    grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  }
+
+  .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setupIoPanel[data-io-layout="operator"] .setupIoConnectionMeta {
+    grid-auto-flow: column;
+    justify-content: space-between;
+    padding: 0 8px 7px;
+  }
+}

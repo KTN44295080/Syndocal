@@ -31,7 +31,12 @@ import {
   geometryMatrixTranslation,
   rotateStageOffsetYaw,
 } from "./numericHelpers";
-import { beamPoints, stagePadding, stageViewBoxSize, stageWorldToSvgPoint, type StageWorldBounds } from "./stageGeometry";
+import {
+  beamPoints,
+  mappingStageSvgFrame,
+  mappingStageWorldToSvgPoint,
+  type StageWorldBounds,
+} from "./stageGeometry";
 import { stageObjectDefaultColor } from "./stageObjects";
 import type {
   DmxUniversePreview,
@@ -262,8 +267,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       return [];
     }
     const bounds = options.stageWorldBounds();
-    const scaleX = (stageViewBoxSize - stagePadding * 2) / Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
-    const scaleZ = (stageViewBoxSize - stagePadding * 2) / Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
+    const worldToSvgScale = mappingStageSvgFrame(bounds).worldToSvgScale;
     const selectedIds = options.selectedMappingFixtureIdSet();
     const selectedGroupId = options.selectedFixtureGroupFilter();
     const dimensionOrZero = (value: number | null | undefined) =>
@@ -285,12 +289,16 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       return fixture.geometries.map((geometry) => {
         const local = geometryMatrixTranslation(cumulativeGeometryMatrix(geometry, geometryByName));
         const rotated = rotateStageOffsetYaw({ x: local.x, z: local.z }, fixtureYaw);
-        const point = stageWorldToSvgPoint(fixturePosition.x + rotated.x, fixturePosition.z + rotated.z, bounds);
+        const point = mappingStageWorldToSvgPoint(
+          fixturePosition.x + rotated.x,
+          fixturePosition.z + rotated.z,
+          bounds,
+        );
         const beamDiameter = dimensionOrZero(geometry.beam_radius) * 2;
         const widthWorld = Math.max(dimensionOrZero(geometry.model_dimensions?.x), beamDiameter, 0.28);
         const heightWorld = Math.max(dimensionOrZero(geometry.model_dimensions?.z), beamDiameter, 0.28);
-        const footprintWidth = clampRange(widthWorld * scaleX, 1.7, 8);
-        const footprintHeight = clampRange(heightWorld * scaleZ, 1.7, 8);
+        const footprintWidth = clampRange(widthWorld * worldToSvgScale, 1.7, 8);
+        const footprintHeight = clampRange(heightWorld * worldToSvgScale, 1.7, 8);
         const mappedChannelCount = mappedChannelCounts.get(geometry.name) ?? 0;
         return {
           key: `${fixture.id}:${geometry.name}`,
@@ -334,7 +342,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     const groupFilter = options.selectedFixtureGroupFilter();
     return fixtures.map((fixture) => {
       const position = mappingFixturePosition(fixture);
-      const point = stageWorldToSvgPoint(position.x, position.z, bounds);
+      const point = mappingStageWorldToSvgPoint(position.x, position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
       const pan = readFixtureAttribute(fixture, currentValues, ["Pan"]);
       const red = readFixtureAttribute(fixture, currentValues, colorCandidates.red);
@@ -472,10 +480,10 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     const bounds = options.stageWorldBounds();
     return options.snapshot().video.outputs.map((output) => {
       const mapping = mappingVideoOutputMapping(output);
-      const center = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z, bounds);
+      const center = mappingStageWorldToSvgPoint(mapping.stage_x, mapping.stage_z, bounds);
       const size = surfaceWorldHalfSize(output, mapping);
-      const xEdge = stageWorldToSvgPoint(mapping.stage_x + size.width, mapping.stage_z, bounds);
-      const zEdge = stageWorldToSvgPoint(mapping.stage_x, mapping.stage_z + size.height, bounds);
+      const xEdge = mappingStageWorldToSvgPoint(mapping.stage_x + size.width, mapping.stage_z, bounds);
+      const zEdge = mappingStageWorldToSvgPoint(mapping.stage_x, mapping.stage_z + size.height, bounds);
       return {
         id: output.id,
         label: output.label,
@@ -493,9 +501,9 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     const bounds = options.stageWorldBounds();
     return options.snapshot().stage_objects.map((object) => {
       const preview = mappingStageObjectPreview(object);
-      const center = stageWorldToSvgPoint(preview.x, preview.z, bounds);
-      const xEdge = stageWorldToSvgPoint(preview.x + preview.width / 2, preview.z, bounds);
-      const zEdge = stageWorldToSvgPoint(preview.x, preview.z + preview.depth / 2, bounds);
+      const center = mappingStageWorldToSvgPoint(preview.x, preview.z, bounds);
+      const xEdge = mappingStageWorldToSvgPoint(preview.x + preview.width / 2, preview.z, bounds);
+      const zEdge = mappingStageWorldToSvgPoint(preview.x, preview.z + preview.depth / 2, bounds);
       return {
         id: preview.id,
         label: preview.label,
