@@ -29,18 +29,21 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. Never substitute an older alpha.16 source hash or the
-previous alpha.15 process as the artifact identity.
+at execution time. Never substitute an older source hash or an alpha.18-or-earlier
+process as the alpha.19 artifact identity.
 
-### 1.1 Current Follow/Stage 2 execution stop — 2026-08-27
+### 1.1 Current Follow/Stage 2 execution gate — 2026-08-27
 
-Do **not** execute this runbook as accepted HW-4 evidence yet. KDMX is based at
-`e43edcf60dfa116d67bbb5ff096f4590df684964` with an uncommitted Follow-hold and
-`+4`-only source diff; the running alpha.18 PID `80264` is the older artifact.
-No new native build, launch, or hardware observation is claimed here. The external
-peer title checkpoint `262a484` is committed/pushed, but its Stage 2 F13 tranche
-is still pending. HW-4 therefore remains **0/12** and no preflight, launch, or
-pedal observation may be promoted from the current source state.
+KDMX `1.2.0-alpha.19` source acceptance is committed/pushed at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; its checkpoint documents are
+committed/pushed through `04419ca650184f5afce01eceafd57378a94145b7`.
+The external peer is committed/pushed at
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, version `1.1.9`. Follow hold,
+Stage 2 F13 loop-off, reconnect fail-closed behavior, focused/full suites, and
+independent source review are complete. Native alpha.19 build/launch and physical
+DJ-PC observations are still required before any row is accepted. HW-4 remains
+**0/12** until those observations are recorded; source acceptance alone closes no
+hardware row.
 
 ## 2. DJ-PC controlled source
 
@@ -54,8 +57,8 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PeerRoot)) {
 }
 Set-Location -LiteralPath $PeerRoot
 $ExpectedBranch = 'beta-v1.1.2'
-$ExpectedPeerHead = '0f3e8c6851857c8542c132a89a7d44289002b1f5'
-$ExpectedPeerVersion = '1.1.8'
+$ExpectedPeerHead = 'b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec'
+$ExpectedPeerVersion = '1.1.9'
 $branch = (git branch --show-current).Trim()
 $dirty = @(git status --porcelain=v1)
 $head = (git rev-parse HEAD).Trim()
@@ -73,52 +76,31 @@ if ($branch -ne $ExpectedBranch -or $dirty.Count -ne 0 -or
 ```
 
 The required identity is a clean, upstream-equal peer commit at source version
-`1.1.8`, exactly `0f3e8c6851857c8542c132a89a7d44289002b1f5` for both `HEAD` and
-`@{upstream}`, with strict adapter `syndocal-envelope-v3`; production remains
-on version `1.1.8`. The latest non-Master Deck 2 router-to-real-MIDI seven-byte
-proof passed focused `12/12`; the full peer suite passed `415` total / `413` pass
-/ `0` fail / `2` intentional skips. The commit is pushed, clean, and independently
-reviewed GO. This is source/full-suite evidence only and closes no HW-4 row.
+`1.1.9`, exactly `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec` for both `HEAD` and
+`@{upstream}`, with strict adapter `syndocal-envelope-v3`. The final focused
+envelope/smoke gate passed `115/115`; the full peer suite passed `455` total /
+`453` pass / `0` fail / `2` intentional skips. The commit is pushed, clean, and
+independently reviewed GO. This is source/full-suite evidence only and closes no
+HW-4 row.
 Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
-release, or a historical v1.1.5/v1.1.6/v1.1.7 configuration as current acceptance
-evidence.
+release, or a historical v1.1.5/v1.1.6/v1.1.7/v1.1.8 configuration as current
+acceptance evidence.
 
-The current KDMX source checkpoint is `1.2.0-alpha.18` at branch
-`codex/syndocal-v1.2`, exact `HEAD`/upstream
-`db4eefc348b01ee05dd2dc87945afa85de8803e`. The required
-`pnpm --dir app tauri build --no-bundle` passed with exact MSVC 14.44
-linker-first setup and zero first-party warnings. The resulting alpha.18
-artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
-Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
-`841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
-LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Launch observed exactly one
-responsive process, PID `80264`, title `Syndocal`, window handle `854080`,
-`IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`. The existing
-alpha.17 artifact recorded a live wired refresh failure
-`wired_candidate_discovery_failed`; its typed diagnostic exposed the old
-`Structural DuplicateIpv4Address` code. The source root cause was a typed
-`sin_addr` read against the `SOCKADDR_IN` `+8` padding; the fix also drops COM
-objects before `CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware
-enumeration checks passed and identify Ethernet4 `192.168.50.1` as eligible,
-and the native screenshot confirms Web Remote/Security/Endpoints/DJ Link/Standby
-in the same disclosure stack and two wired candidates. The native
-wired-binding refresh click itself remains unconfirmed because foreground PID
-retrieval failed. The five-viewport setup harness independently confirmed
-listener empty→count `0`→Ethernet4 `192.168.50.1`→count `1`, one invoke per
-phase, and disabled mutation controls. Focused root revalidation of
-the MASTER clean break passed protocol `7/7`, runtime `5/5`, I/O `37/37`,
-frontend/build, live, and static checks under the required single-thread standard
-gate; independent review is GO. The parallel I/O race is baseline-existing and
-is not acceptance evidence. The exact MSVC 14.44 / locked full-workspace rerun
-passed `1164` pass / `0` fail / `11` intentional hardware-media ignores in the
-Syndocal binary target with zero first-party warnings; the touched fixture
-repairs were independently reviewed GO with P0/P1/P2 all zero. Frontend
-invokes `422`, localization `3559`, and the viewport/setup harness also passed.
-The clean release gate `4fc443d` passed after staging seven pinned DLLs.
-Release metadata still requires a clean non-OneDrive source-image rerun because
-this checkout's pre-existing runtime-inventory hard-link alias to
-`C:\Users\kouty\Documents\.tmp.driveupload\867492` fails closed; the file is
-tracked and unchanged, and no alias deletion or replacement was performed.
+The current KDMX source checkpoint is `1.2.0-alpha.19` at branch
+`codex/syndocal-v1.2`, source commit
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. The exact MSVC 14.44 locked,
+single-thread full workspace gate passed `2622` / `0` failed / `15` intentional
+hardware-media ignores with zero first-party warnings. Frontend invokes `422`,
+localization `3568/3568`, five mapping viewport sizes, stage labels, stage-live
+segments, Timeline Follow UI, TypeScript, and frontend production build all
+passed. A clean detached non-OneDrive worktree at the same source checkpoint
+passed `pnpm --dir app run check:release` after staging the seven pinned runtime
+DLLs. This active OneDrive checkout's tracked runtime-inventory hard-link alias
+still fails the release check by design and was not deleted or replaced. The
+required alpha.19 `pnpm --dir app tauri build --no-bundle` artifact identity,
+launch, exactly-one-responsive-window check, and maximized native UI evidence
+must be recorded before HW-4 execution. Any alpha.18 artifact or PID is
+historical and must not be substituted for alpha.19 acceptance.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
 the standard and dedicated Setup I/O browser contracts pass all five viewports,
@@ -133,20 +115,20 @@ marker `0`); the ignored peer `dist` remains stale but is outside this source
 acceptance checkpoint. These observations do not promote native or HW-4
 acceptance.
 
-If and only if the v1.1.8 external configuration is absent:
+If and only if the v1.1.9 external configuration is absent:
 
 ```powershell
 .\start-all.bat --init-config
 ```
 
-Edit only `C:\SyndocalShow\dj-agent-v1.1.8.json`. Replace the one-time token
+Edit only `C:\SyndocalShow\dj-agent-v1.1.9.json`. Replace the one-time token
 placeholder. Before preflight, record the versioned Rekordbox mapping artifact
 from this exact target checkout; do not substitute a historical mapping:
 
 ```powershell
-$MidiMappingPath = Join-Path $PeerRoot 'server\public\setup\CustomMIDI1-Syndocal-v1.1.8.csv'
+$MidiMappingPath = Join-Path $PeerRoot 'server\public\setup\CustomMIDI1-Syndocal-v1.1.9.csv'
 if (-not (Test-Path -LiteralPath $MidiMappingPath -PathType Leaf)) {
-  throw 'Missing current v1.1.8 Rekordbox CustomMIDI mapping artifact.'
+  throw 'Missing current v1.1.9 Rekordbox CustomMIDI mapping artifact.'
 }
 $MidiMappingHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $MidiMappingPath).Hash
 [pscustomobject]@{ Path=$MidiMappingPath; SHA256=$MidiMappingHash }
@@ -176,7 +158,7 @@ $PresentOverrides = @(Get-ChildItem Env: | Where-Object {
 if ($PresentOverrides.Count -ne 0) {
   throw "Remove forbidden show overrides from this PowerShell first: $($PresentOverrides -join ', ')"
 }
-$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.8.json'
+$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.9.json'
 .\start-all.bat --preflight-only
 .\start-all.bat
 ```
@@ -242,7 +224,7 @@ the checkbox open and name the missing subcheck.
   repeated absolute measured `DJ_LOOP_STATE` down through `1/64`. Record MIDI
   monitor and payload timestamps. A true no-response prediction is separate and
   must never replace a stale/invalid/contradictory measurement.
-- [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.8 requires
+- [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.9 requires
   `releaseMacro.enabled=true`, exact sequence `filter-then-fade-then-stop`, and
   `releaseFade.enabled=true`. On the accepted F13 edge, prove that owner-channel
   HPF CC16 starts `64 -> 127` over `1000 ms` in `50 ms` updates and exactly one
