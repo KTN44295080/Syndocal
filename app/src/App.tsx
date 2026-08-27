@@ -1094,7 +1094,6 @@ const projectMutationCommands = new Set([
   "set_stage_map_config",
   "set_output_config",
   "set_dmx_outputs",
-  "create_cue_from_current",
   "create_reference_palette",
   "update_reference_palette",
   "remove_reference_palette",
@@ -1238,7 +1237,7 @@ const serverAuthoritativeProjectMutationCommands = new Set([
   "reset_video_layer_isf_effect",
   "set_video_layer_isf_control",
   "set_effect_enabled",
-  "create_empty_cue",
+  "create_scene_authoritative_v1",
   "create_cue_list",
   "rename_cue_list",
   "delete_cue_list",
@@ -1692,13 +1691,14 @@ const invoke = async <T,>(
     throw new DOMException("Project mutation was cancelled before dispatch.", "AbortError");
   }
   if (serverAuthoritativeMutation) {
-    const strictBankMutation = command === "create_cue_list"
+    const strictServerAuthoritativeMutation = command === "create_cue_list"
       || command === "rename_cue_list"
       || command === "reorder_cue_lists"
-      || command === "delete_cue_list";
+      || command === "delete_cue_list"
+      || command === "create_scene_authoritative_v1";
     const authoritativeCommandArgs = command === "set_effect_enabled"
       ? commandArgs
-      : strictBankMutation
+      : strictServerAuthoritativeMutation
         ? {
           request: {
             ...commandArgs,
@@ -19191,51 +19191,45 @@ export default function App() {
       setMessage(authoredBeatsError);
       return;
     }
-    if (viewportFixture === "scene-matrix") {
-      const template = snapshot().cues[0];
-      if (!template) {
-        setMessage("Create a Bank before creating a Scene.");
-        return;
-      }
-      const cueId = nextBankAuthorityId(snapshot().cues.map((cue) => cue.id));
-      if (cueId === null) {
-        setMessage("New Scene ID could not be allocated safely.");
-        return;
-      }
-      const cue = {
-        ...structuredClone(template),
-        id: cueId,
-        cue_list_id: cueList.id,
-        cue_number: String(snapshot().cues.length + 1),
-        label: cueLabel().trim() || `Cue ${cueId}`,
-        fade_ms: cueFadeMs(),
-        authored_beats: cueAuthoredBeats(),
-        group_id: null,
-        effect_targets: cueEffectCaptureTargets().map((target) => ({ ...target })),
-      };
-      setSnapshot((current) => ({ ...current, cues: [...current.cues, cue] }));
-      setCueLabel(`Cue ${cueId + 1}`);
-      setSelectedSceneCueId(cueId);
-      setSelectedSceneEffectId(null);
-      setSceneSettingsSurface("contents");
-      setMessage(`Created Scene ${cueId}`);
-      return;
-    }
     try {
-      const cueId = await invoke<number>("create_cue_from_current", {
+      const flushedEpoch = await flushProjectControlMappingsBeforeMutation();
+      const currentAuthority = projectMappingsAuthority();
+      if (flushedEpoch !== currentAuthority.project_epoch) {
+        setMessage("Project changed while creating the Scene; nothing was applied.");
+        return;
+      }
+      const result = await invoke<ProjectHistoryMutationResult & { cue_id: number }>("create_scene_authoritative_v1", {
+        mode: "captureCurrent",
         label: cueLabel(),
         fadeMs: cueFadeMs(),
         authoredBeats: cueAuthoredBeats(),
         captureScope,
         cueListId: cueList.id,
         effectTargets: cueEffectCaptureTargets(),
+        expectedEpoch: currentAuthority.project_epoch,
+        expectedRevision: currentAuthority.project_revision,
+        expectedCheckpointHash: currentAuthority.checkpoint_hash,
+        ownerId: projectTransactionOwnerId,
       });
+      if (!authoritativeApplicationIsCurrent(result)) {
+        setMessage("New Scene acknowledgement was stale; refresh before retrying.");
+        return;
+      }
+      const cueId = result.cue_id;
+      if (!Number.isSafeInteger(cueId) || cueId <= 0) {
+        setMessage("New Scene acknowledgement omitted its committed Scene ID; refresh before retrying.");
+        return;
+      }
+      await refreshSnapshot();
+      if (!snapshot().cues.some((cue) => cue.id === cueId && cue.cue_list_id === cueList.id)) {
+        setMessage("New Scene was acknowledged, but the refreshed project did not contain it.");
+        return;
+      }
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setSelectedSceneCueId(cueId);
       setSelectedSceneEffectId(null);
       setSceneSettingsSurface("contents");
       setMessage(`Created Scene ${cueId}`);
-      await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
@@ -19306,14 +19300,12 @@ export default function App() {
 
   const createSceneInCueList = createSceneBankSceneCreationController({
     snapshot,
-    setSnapshot,
     setSelectedCueListId,
     setCueLabel,
     setSelectedSceneCueId,
     setSelectedSceneEffectId,
     setSceneSettingsSurface,
     setMessage,
-    viewportFixture,
     requireAuthoritativeCueList,
     flushProjectControlMappingsBeforeMutation,
     projectMappingsAuthority,

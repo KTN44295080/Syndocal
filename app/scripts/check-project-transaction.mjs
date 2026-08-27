@@ -10,8 +10,9 @@ const readWorkspaceFile = (relativePath) => readFile(
   "utf8",
 );
 
-const [rust, app, transactionModule, recoveryModule, sceneBankSceneCreationController, manifestText, invokeCommands] = await Promise.all([
+const [rust, sceneCreationModule, app, transactionModule, recoveryModule, sceneBankSceneCreationController, manifestText, invokeCommands] = await Promise.all([
   readWorkspaceFile("app/src-tauri/src/main.rs"),
+  readWorkspaceFile("app/src-tauri/src/scene_creation.rs"),
   readWorkspaceFile("app/src/App.tsx"),
   readWorkspaceFile("app/src/types.ts"),
   readWorkspaceFile("app/src/projectTransactionRecovery.ts"),
@@ -171,6 +172,7 @@ for (const command of [
   "acknowledge_project_transaction",
   "adopt_project_transaction",
   "query_project_transaction",
+  "create_scene_authoritative_v1",
 ]) {
   assert.equal(manifest.filter((entry) => entry === command).length, 1, `${command} manifest entry`);
   assert.match(invokeCommands, new RegExp(`\\"${command}\\"`), `${command} invoke allowlist entry`);
@@ -196,6 +198,25 @@ assert.match(
   /invoke<ProjectHistoryMutationResult & \{ cue_list_id: number \}>\("create_cue_list"[\s\S]*?authoritativeApplicationIsCurrent\(result\)[\s\S]*?result\.cue_list_id/s,
   "Cue List create must consume the authoritative receipt and committed Bank ID",
 );
+const createCueHandler = sliceAppHandler(
+  "const createCue = async",
+  "const nextCueListLabel = () =>",
+);
+assert.match(
+  createCueHandler,
+  /const flushedEpoch = await flushProjectControlMappingsBeforeMutation\(\);[\s\S]*?invoke<ProjectHistoryMutationResult & \{ cue_id: number \}>\("create_scene_authoritative_v1", \{\s*mode: "captureCurrent",[\s\S]*?expectedEpoch: currentAuthority\.project_epoch,[\s\S]*?expectedRevision: currentAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: currentAuthority\.checkpoint_hash,[\s\S]*?ownerId: projectTransactionOwnerId,/s,
+  "Capture-current Scene create must use the same strict post-flush E/R/H/owner request",
+);
+assert.match(
+  createCueHandler,
+  /authoritativeApplicationIsCurrent\(result\)[\s\S]*?const cueId = result\.cue_id;[\s\S]*?await refreshSnapshot\(\);[\s\S]*?snapshot\(\)\.cues\.some\(\(cue\) => cue\.id === cueId && cue\.cue_list_id === cueList\.id\)/s,
+  "Capture-current Scene create must require the committed cue ID to appear in the refreshed authoritative snapshot",
+);
+assert.doesNotMatch(
+  createCueHandler,
+  /setSnapshot|viewportFixture|create_cue_from_current/,
+  "Capture-current Scene create must not retain a local fixture authority or retired IPC route",
+);
 const createSceneInCueListFactory = sliceAppHandler(
   "const createSceneInCueList = createSceneBankSceneCreationController({",
   "const renameCueList = async",
@@ -213,14 +234,12 @@ const createSceneInCueListFactory = sliceAppHandler(
     controllerOptionKeys,
     [
       "snapshot",
-      "setSnapshot",
       "setSelectedCueListId",
       "setCueLabel",
       "setSelectedSceneCueId",
       "setSelectedSceneEffectId",
       "setSceneSettingsSurface",
       "setMessage",
-      "viewportFixture",
       "requireAuthoritativeCueList",
       "flushProjectControlMappingsBeforeMutation",
       "projectMappingsAuthority",
@@ -246,18 +265,23 @@ const createSceneInCueListFactory = sliceAppHandler(
 }
 assert.match(
   sceneBankSceneCreationController,
-  /const flushedEpoch = await options\.flushProjectControlMappingsBeforeMutation\(\);[\s\S]*?options\.invoke<ProjectHistoryMutationResult>\("create_empty_cue", \{\s*cueListId,\s*expectedEpoch: currentAuthority\.project_epoch,\s*expectedRevision: currentAuthority\.project_revision,\s*expectedCheckpointHash: currentAuthority\.checkpoint_hash,\s*ownerId: options\.projectTransactionOwnerId,/s,
-  "extracted Scene create must flush first and send the exact post-flush E/R/H/owner fence to create_empty_cue",
+  /const flushedEpoch = await options\.flushProjectControlMappingsBeforeMutation\(\);[\s\S]*?options\.invoke<ProjectHistoryMutationResult & \{ cue_id: number \}>\("create_scene_authoritative_v1", \{\s*mode: "empty",\s*cueListId,\s*expectedEpoch: currentAuthority\.project_epoch,\s*expectedRevision: currentAuthority\.project_revision,\s*expectedCheckpointHash: currentAuthority\.checkpoint_hash,\s*ownerId: options\.projectTransactionOwnerId,/s,
+  "extracted Empty Scene create must flush first and send the exact strict post-flush E/R/H/owner request",
 );
 assert.match(
   sceneBankSceneCreationController,
-  /if \(!options\.authoritativeApplicationIsCurrent\(result\)\) \{\s*options\.setMessage\("New Scene acknowledgement was stale; refresh before retrying\."\);\s*return false;\s*\}\s*await options\.refreshSnapshot\(\);/s,
-  "extracted Scene create must reject a stale acknowledgement before refreshing the snapshot",
+  /if \(!options\.authoritativeApplicationIsCurrent\(result\)\) \{\s*options\.setMessage\("New Scene acknowledgement was stale; refresh before retrying\."\);\s*return false;\s*\}[\s\S]*?await options\.refreshSnapshot\(\);/s,
+  "extracted Scene create must reject a stale acknowledgement before accepting the receipt or refreshing the snapshot",
 );
 assert.match(
   sceneBankSceneCreationController,
-  /const createdCue = options\.snapshot\(\)\.cues\s*\.filter\(\(cue\) => cue\.cue_list_id === cueListId && !beforeCueIds\.has\(cue\.id\)\)[\s\S]*?if \(!createdCue\) \{\s*options\.setMessage\("New Scene was acknowledged, but the refreshed project did not contain it\."\);\s*return false;/s,
-  "extracted Scene create must verify the refreshed snapshot gained a new cue in the target Bank",
+  /const cueId = result\.cue_id;[\s\S]*?beforeCueIds\.has\(cueId\)[\s\S]*?await options\.refreshSnapshot\(\);[\s\S]*?\.find\(\(cue\) => cue\.id === cueId && cue\.cue_list_id === cueListId\)[\s\S]*?if \(!createdCue\) \{\s*options\.setMessage\("New Scene was acknowledged, but the refreshed project did not contain it\."\);\s*return false;/s,
+  "extracted Empty Scene create must verify the receipt's committed cue ID in the refreshed target Bank",
+);
+assert.doesNotMatch(
+  sceneBankSceneCreationController,
+  /setSnapshot|viewportFixture|create_cue_from_current|create_empty_cue/,
+  "extracted Empty Scene create must not retain a local fixture authority or retired IPC route",
 );
 const renameCueListHandler = sliceAppHandler(
   "const renameCueList = async",
@@ -305,8 +329,8 @@ for (const [label, handler, command] of [
 }
 assert.match(
   app,
-  /const strictBankMutation = command === "create_cue_list"[\s\S]*?command === "rename_cue_list"[\s\S]*?command === "reorder_cue_lists"[\s\S]*?command === "delete_cue_list";[\s\S]*?strictBankMutation[\s\S]*?request:\s*\{[\s\S]*?\.\.\.commandArgs,[\s\S]*?expectedEpoch,[\s\S]*?ownerId: projectTransactionOwnerId,[\s\S]*?\}/s,
-  "every authoritative Bank mutation must cross Tauri in one strict nested request object",
+  /const strictServerAuthoritativeMutation = command === "create_cue_list"[\s\S]*?command === "rename_cue_list"[\s\S]*?command === "reorder_cue_lists"[\s\S]*?command === "delete_cue_list"[\s\S]*?command === "create_scene_authoritative_v1";[\s\S]*?strictServerAuthoritativeMutation[\s\S]*?request:\s*\{[\s\S]*?\.\.\.commandArgs,[\s\S]*?expectedEpoch,[\s\S]*?ownerId: projectTransactionOwnerId,[\s\S]*?\}/s,
+  "every strict server-authoritative Bank or Scene mutation must cross Tauri in one nested request object",
 );
 assert.match(
   app,
@@ -329,6 +353,20 @@ for (const [requestType, handler] of [
     new RegExp(`#\\[serde\\(rename_all = "camelCase", deny_unknown_fields\\)\\]\\s*struct ${requestType}[\\s\\S]*?fn ${handler}\\([\\s\\S]*?request: ${requestType}`, "s"),
     `native ${handler} must reject flat, unknown, and legacy request fields`,
   );
+}
+assert.match(
+  sceneCreationModule,
+  /#\[serde\([\s\S]*?tag = "mode",[\s\S]*?rename_all = "camelCase",[\s\S]*?rename_all_fields = "camelCase",[\s\S]*?deny_unknown_fields[\s\S]*?\)\]\s*pub\(super\) enum AuthoritativeSceneCreateRequest/s,
+  "versioned Scene create must deserialize only tagged camelCase request variants with no unknown fields",
+);
+assert.match(
+  rust,
+  /fn create_scene_authoritative_v1\([\s\S]*?request: AuthoritativeSceneCreateRequest[\s\S]*?commit_authoritative_scene_create/s,
+  "one native Scene-create handler must accept the strict request and reach the shared authoritative commit core",
+);
+for (const retiredSceneRoute of ["create_cue_from_current", "create_empty_cue"]) {
+  assert.equal(manifest.includes(retiredSceneRoute), false, `${retiredSceneRoute} is absent from the frontend manifest`);
+  assert.doesNotMatch(invokeCommands, new RegExp(`"${retiredSceneRoute}"`), `${retiredSceneRoute} is absent from the frontend invoke inventory`);
 }
 assert.match(
   rust,

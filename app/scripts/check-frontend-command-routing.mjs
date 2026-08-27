@@ -304,6 +304,7 @@ for (const command of [...rendererMutations, ...serverMutations]) {
 const overlap = rendererMutations.filter((command) => new Set(serverMutations).has(command));
 assert.deepEqual(overlap, [], "renderer and server-authoritative mutation classifications must be disjoint");
 assert(serverMutations.includes("set_project_control_mappings"), "project mapping persistence must use the server-authoritative facade lane");
+assert(serverMutations.includes("create_scene_authoritative_v1"), "Scene create must use the server-authoritative facade lane");
 
 const controlPlaneSource = fs.readFileSync(controlPlanePath, "utf8");
 const rustClassification = (functionName, nextMarker) => {
@@ -323,12 +324,14 @@ const backendRendererMutations = rustClassification(
   "#[derive(Debug, Clone, PartialEq, Eq)]",
 );
 // The two correlated pane-window lifecycle routes and four DJ Link machine
-// authority routes intentionally advance the used-by-frontend manifest from
-// 417 to 422 after the retired address-only LAN picker route was removed. The existing project-mutation classifications remain the
-// control-plane's exact 130 renderer-ticketed and 31 backend-authoritative
+// authority routes intentionally advanced the used-by-frontend manifest from
+// 417 to 422 after the retired address-only LAN picker route was removed. The
+// Scene-create clean break then removes two obsolete commands and adds one
+// versioned replacement: 421 manifest routes, 129 renderer-ticketed and 31
+// backend-authoritative project mutations.
 // routes; the machine-local DJ authority routes are neither category.
-assert.equal(manifest.length, 422, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 130, "backend renderer-ticketed classification count drifted");
+assert.equal(manifest.length, 421, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 129, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),
@@ -380,6 +383,11 @@ for (const command of legacySingleCueCommands) {
 }
 for (const retiredCommand of ["set_cue_list", "remove_cue_list"]) {
   assert(!manifestSet.has(retiredCommand), `${retiredCommand} must remain absent after the Bank clean break`);
+}
+for (const retiredSceneRoute of ["create_cue_from_current", "create_empty_cue"]) {
+  assert(!manifestSet.has(retiredSceneRoute), `${retiredSceneRoute} must remain absent after the Scene-create clean break`);
+  assert(!rendererMutationSet.has(retiredSceneRoute), `${retiredSceneRoute} must not retain renderer mutation classification`);
+  assert(!serverMutations.includes(retiredSceneRoute), `${retiredSceneRoute} must not retain server mutation classification`);
 }
 
 const atomicBatchCommands = [

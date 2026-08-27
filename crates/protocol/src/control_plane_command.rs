@@ -20,7 +20,10 @@ pub const SET_EFFECT_ENABLED_OPERATION_ID: &str = "syndocal.effects.set_enabled.
 pub const CUE_LIST_REORDER_OPERATION_ID: &str = "syndocal.cue_lists.reorder.v1";
 pub const CUE_LIST_RENAME_OPERATION_ID: &str = "syndocal.cue_lists.rename.v1";
 pub const CUE_LIST_DELETE_OPERATION_ID: &str = "syndocal.cue_lists.delete.v1";
-pub const EMPTY_CUE_CREATE_OPERATION_ID: &str = "syndocal.cues.empty.create.v1";
+/// The one server-authoritative semantic identity for both Empty Scene and
+/// Capture-current Scene creation. They are request modes, not distinct
+/// operations, so a caller cannot bypass the same admission/receipt path.
+pub const SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID: &str = "syndocal.scenes.create.v1";
 pub const SET_EFFECT_ENABLED_SHAPE_DOMAIN_V1: &[u8] =
     b"syndocal.authored-control-plane.set-effect-enabled.shape.v1\0";
 

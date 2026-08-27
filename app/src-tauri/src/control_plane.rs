@@ -20,14 +20,14 @@ use protocol::control_plane::{
 };
 use protocol::control_plane_command::{
     CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_RENAME_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID,
-    EMPTY_CUE_CREATE_OPERATION_ID, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
-    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
-    OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
-    OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
-    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
-    OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-    OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+    OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
+    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
+    OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+    OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+    OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+    SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
     TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
     TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
@@ -37,6 +37,7 @@ use protocol::control_plane_registry_v2::{
     RatePolicy, ReceiptPolicy, SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole,
     TypedSchemaProjection,
 };
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -50,9 +51,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 482;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 481;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "5630d765246dd7a84e36b08700e803384b4780b6df7024d24c0d44af2300a352";
+    "b0d598db0a77f67b9035df336fbf4807ea045ec1b87babf7b6590fafa807afb2";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -514,7 +515,7 @@ fn is_backend_authoritative_project_mutation(command: &str) -> bool {
             | "reset_video_layer_isf_effect"
             | "set_video_layer_isf_control"
             | "set_effect_enabled"
-            | "create_empty_cue"
+            | "create_scene_authoritative_v1"
             | "create_cue_list"
             | "rename_cue_list"
             | "delete_cue_list"
@@ -551,7 +552,6 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "set_stage_map_config"
             | "set_output_config"
             | "set_dmx_outputs"
-            | "create_cue_from_current"
             | "create_reference_palette"
             | "update_reference_palette"
             | "remove_reference_palette"
@@ -1150,7 +1150,7 @@ enum ReviewedCanonicalOperation {
     ReorderCueLists,
     RenameCueList,
     DeleteCueList,
-    CreateEmptyCue,
+    CreateSceneAuthoritativeV1,
 }
 
 impl ReviewedCanonicalOperation {
@@ -1175,7 +1175,7 @@ impl ReviewedCanonicalOperation {
             Self::ReorderCueLists => CUE_LIST_REORDER_OPERATION_ID,
             Self::RenameCueList => CUE_LIST_RENAME_OPERATION_ID,
             Self::DeleteCueList => CUE_LIST_DELETE_OPERATION_ID,
-            Self::CreateEmptyCue => EMPTY_CUE_CREATE_OPERATION_ID,
+            Self::CreateSceneAuthoritativeV1 => SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID,
         }
     }
 }
@@ -1209,7 +1209,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "reorder_cue_lists" => Some(ReviewedCanonicalOperation::ReorderCueLists),
         "rename_cue_list" => Some(ReviewedCanonicalOperation::RenameCueList),
         "delete_cue_list" => Some(ReviewedCanonicalOperation::DeleteCueList),
-        "create_empty_cue" => Some(ReviewedCanonicalOperation::CreateEmptyCue),
+        "create_scene_authoritative_v1" => {
+            Some(ReviewedCanonicalOperation::CreateSceneAuthoritativeV1)
+        }
         _ => None,
     }
 }
@@ -1271,7 +1273,7 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowAuthoritativeMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::CreateEmptyCue => (
+        ReviewedCanonicalOperation::CreateSceneAuthoritativeV1 => (
             OperationClass::Mutation,
             vec![
                 OperationCapability::LocalWindowBound,
@@ -1569,7 +1571,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "reorder_cue_lists"
             | "rename_cue_list"
             | "delete_cue_list"
-            | "create_empty_cue"
+            | "create_scene_authoritative_v1"
     ) {
         let source_id = operation_id;
         let reviewed = reviewed_canonical_operation(source_id)
@@ -1914,6 +1916,10 @@ mod tests {
                 "rename_cue_list",
                 TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation,
             ),
+            (
+                "create_scene_authoritative_v1",
+                TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation,
+            ),
         ] {
             assert_eq!(classes.get(route).copied(), Some(expected), "{route}");
             assert_eq!(
@@ -1934,10 +1940,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 482);
+        assert_eq!(names.len(), 481);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            130
+            129
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
@@ -1978,7 +1984,7 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 482);
+        assert_eq!(names.len(), 481);
         const ENGINE_COMMAND_COUNT: usize = 264;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -2001,16 +2007,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 422;
+        const FRONTEND_INVOKE_COUNT: usize = 421;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            482 + ENGINE_COMMAND_COUNT
+            481 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1490);
+        assert_eq!(registry.operations.len(), 1488);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2020,7 +2026,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            468 + ENGINE_COMMAND_COUNT
+            467 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -2051,7 +2057,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 468);
+        assert_eq!(tauri_unavailable.clone().count(), 467);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2314,19 +2320,19 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 482;
+        const TAURI_COUNT: usize = 481;
         const ENGINE_COUNT: usize = 264;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 422;
+        const FRONTEND_COUNT: usize = 421;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1490);
-        assert_eq!(SOURCE_TOTAL, 1523);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1488);
+        assert_eq!(SOURCE_TOTAL, 1521);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 33);
 
@@ -2635,7 +2641,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1063);
+        assert_eq!(unclassified.len(), 1062);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2964,7 +2970,7 @@ mod tests {
                 CUE_LIST_DELETE_OPERATION_ID
                     | CUE_LIST_RENAME_OPERATION_ID
                     | CUE_LIST_REORDER_OPERATION_ID
-                    | EMPTY_CUE_CREATE_OPERATION_ID
+                    | SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID
             ) {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
@@ -3294,11 +3300,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1490);
+        assert_eq!(legacy.operations.len(), 1488);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1490);
+        assert_eq!(operations.len(), 1488);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

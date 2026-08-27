@@ -141,9 +141,15 @@ mod e3_native_acceptance;
 mod live_audio_ipc_v1;
 mod ndi_transport;
 mod output_lease;
+mod scene_creation;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
 pub mod timeline_cue_audio;
+
+use scene_creation::{
+    add_captured_scene_in_candidate, AuthoritativeSceneCreateKind, AuthoritativeSceneCreateRequest,
+    CapturedSceneCreate, PreparedAuthoritativeSceneCreateKind, SceneCreationMutationReceipt,
+};
 
 /// Tauri normally deserializes each command argument from a key named after
 /// the Rust parameter. This adapter deserializes the complete JSON argument
@@ -17152,7 +17158,12 @@ impl MediaAudioPlayback {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 #[derive(Default)]
 enum CueCaptureScope {
     #[default]
@@ -27090,13 +27101,112 @@ fn commit_authoritative_cue_list_delete(
     })
 }
 
-fn commit_authoritative_empty_cue(
+/// Prepare the exact captured Scene image before allocating its identity or
+/// opening publication. The programmer/video preview applies only to the
+/// capture input; it must not silently become a separately persisted project
+/// mutation.
+fn prepare_captured_scene_create(
+    before_snapshot: &EngineSnapshot,
+    label: String,
+    fade_ms: u64,
+    authored_beats: Option<f32>,
+    capture_scope: CueCaptureScope,
+    effect_targets: Vec<CueEffectTarget>,
+) -> Result<CapturedSceneCreate, String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("Cue label is required".to_string());
+    }
+    validate_cue_authored_beats(authored_beats)?;
+    let mut capture_snapshot = before_snapshot.clone();
+    use_authored_video_snapshot(&mut capture_snapshot);
+    apply_programmer_preview_to_snapshot(&mut capture_snapshot);
+    let (targets, video_targets, video_output_targets, node_graph_targets, _) =
+        cue_targets_from_snapshot_with_scope(&capture_snapshot, &capture_scope)?;
+    let effect_targets = copy_cue_effect_params_on_capture(&capture_snapshot, effect_targets)?;
+    let group_id = match &capture_scope {
+        CueCaptureScope::SelectedGroup { group_id } => Some(normalize_group_id(group_id)?),
+        _ => None,
+    };
+    validate_cue_effect_targets(&capture_snapshot, &effect_targets)?;
+    ensure_cue_targets_present(
+        &targets,
+        &video_targets,
+        &video_output_targets,
+        &node_graph_targets,
+        &effect_targets,
+        false,
+        "creating",
+    )?;
+    Ok(CapturedSceneCreate {
+        label,
+        group_id,
+        fade_ms,
+        authored_beats,
+        targets,
+        video_targets,
+        video_output_targets,
+        node_graph_targets,
+        effect_targets,
+    })
+}
+
+fn commit_authoritative_scene_create(
     state: &AppState,
     expected_epoch: u64,
     owner_id: &str,
     expected_authority: &MediaAssetPrepareAuthority,
     cue_list_id: protocol::CueListId,
-) -> Result<ProjectHistoryMutationResult, String> {
+    requested_create: AuthoritativeSceneCreateKind,
+) -> Result<SceneCreationMutationReceipt, String> {
+    commit_authoritative_scene_create_with_publication(
+        state,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+        cue_list_id,
+        requested_create,
+        |prepared_create, cue_id, cue_list_id| match prepared_create {
+            PreparedAuthoritativeSceneCreateKind::Empty => {
+                state.engine.create_empty_cue_published(cue_id, cue_list_id)
+            }
+            PreparedAuthoritativeSceneCreateKind::CaptureCurrent(captured) => {
+                state.engine.create_cue_published(
+                    cue_id,
+                    cue_list_id,
+                    captured.label,
+                    captured.group_id,
+                    RecallMode::Coexist,
+                    captured.fade_ms,
+                    captured.authored_beats,
+                    captured.targets,
+                    captured.video_targets,
+                    captured.video_output_targets,
+                    captured.node_graph_targets,
+                    captured.effect_targets,
+                )
+            }
+        },
+    )
+}
+
+/// Testable composition seam for the one authoritative Scene-create core.
+/// Production passes only the real engine publisher above; this private
+/// function exists so both classified terminal outcomes can be proven without
+/// manufacturing a second local snapshot authority.
+fn commit_authoritative_scene_create_with_publication(
+    state: &AppState,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    cue_list_id: protocol::CueListId,
+    requested_create: AuthoritativeSceneCreateKind,
+    publish: impl FnOnce(
+        PreparedAuthoritativeSceneCreateKind,
+        protocol::CueId,
+        protocol::CueListId,
+    ) -> Result<(), SnapshotPublicationFailure>,
+) -> Result<SceneCreationMutationReceipt, String> {
     let (_external_admission, mut coordinator) = (
         lock_project_external_command_admission(state)?,
         lock_project_coordinator(state)?,
@@ -27109,7 +27219,7 @@ fn commit_authoritative_empty_cue(
         expected_authority,
     )?;
     if state.project_transaction_active.load(Ordering::Acquire) {
-        return Err("Project transaction is active; retry the empty Cue create".to_string());
+        return Err("Project transaction is active; retry the Scene create".to_string());
     }
 
     let before_snapshot = state.engine.persistence_snapshot()?;
@@ -27122,9 +27232,33 @@ fn commit_authoritative_empty_cue(
         epoch: coordinator.epoch,
         revision: coordinator.revision,
     };
+    let prepared_create = match requested_create {
+        AuthoritativeSceneCreateKind::Empty => PreparedAuthoritativeSceneCreateKind::Empty,
+        AuthoritativeSceneCreateKind::CaptureCurrent {
+            label,
+            fade_ms,
+            authored_beats,
+            capture_scope,
+            effect_targets,
+        } => PreparedAuthoritativeSceneCreateKind::CaptureCurrent(prepare_captured_scene_create(
+            &before_snapshot,
+            label,
+            fade_ms,
+            authored_beats,
+            capture_scope,
+            effect_targets,
+        )?),
+    };
     let cue_id = state.engine.allocate_cue_id();
-    let candidate_snapshot = match add_empty_cue_in_candidate(before_snapshot, cue_id, cue_list_id)
-    {
+    let candidate_snapshot = match &prepared_create {
+        PreparedAuthoritativeSceneCreateKind::Empty => {
+            add_empty_cue_in_candidate(before_snapshot.clone(), cue_id, cue_list_id)
+        }
+        PreparedAuthoritativeSceneCreateKind::CaptureCurrent(captured) => {
+            add_captured_scene_in_candidate(before_snapshot.clone(), cue_id, cue_list_id, captured)
+        }
+    };
+    let candidate_snapshot = match candidate_snapshot {
         Ok(snapshot) => snapshot,
         Err(error) => {
             let _ = state.engine.release_cue_id_if_last(cue_id);
@@ -27142,7 +27276,10 @@ fn commit_authoritative_empty_cue(
     };
     let plan = match prepare_internal_media_asset_commit(
         &coordinator,
-        "Create Empty Scene",
+        match &prepared_create {
+            PreparedAuthoritativeSceneCreateKind::Empty => "Create Empty Scene",
+            PreparedAuthoritativeSceneCreateKind::CaptureCurrent(_) => "Create Scene from Current",
+        },
         "",
         before,
         after,
@@ -27154,18 +27291,30 @@ fn commit_authoritative_empty_cue(
             return Err(error);
         }
     };
-    if let Err(error) = run_admitted_internal_media_asset_transaction(
+    // Both Scene-create modes publish through the classified admitted
+    // snapshot protocol. A definitive rejection restores A and lets us
+    // reclaim the tail reservation. An admitted ACK loss is indeterminate:
+    // B may already be live, so the reservation stays consumed and the
+    // global project-mutation fence remains armed until restart.
+    let publication = run_admitted_internal_media_asset_transaction_with_publication_outcome(
+        &state.project_external_command_admission,
         &state.project_transaction_active,
         &mut coordinator,
         plan,
-        || state.engine.create_empty_cue_published(cue_id, cue_list_id),
-    ) {
-        let _ = state.engine.release_cue_id_if_last(cue_id);
-        return Err(error);
+        || publish(prepared_create, cue_id, cue_list_id),
+    );
+    if let Err(error) = publication {
+        if matches!(&error, AdmittedPublicationError::Definitive(_)) {
+            let _ = state.engine.release_cue_id_if_last(cue_id);
+        }
+        return Err(error.into_message());
     }
-    Ok(ProjectHistoryMutationResult {
-        history_status: project_history_status_for_coordinator(&coordinator),
-        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    Ok(SceneCreationMutationReceipt {
+        mutation: ProjectHistoryMutationResult {
+            history_status: project_history_status_for_coordinator(&coordinator),
+            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+        },
+        cue_id,
     })
 }
 
@@ -27369,15 +27518,59 @@ fn commit_authoritative_cue_list_rename(
 }
 
 #[tauri::command]
-fn create_empty_cue(
+fn create_scene_authoritative_v1(
     state: State<'_, AppState>,
     window: WebviewWindow,
-    cue_list_id: protocol::CueListId,
-    expected_epoch: u64,
-    expected_revision: u64,
-    expected_checkpoint_hash: String,
-    owner_id: String,
-) -> Result<ProjectHistoryMutationResult, String> {
+    request: AuthoritativeSceneCreateRequest,
+) -> Result<SceneCreationMutationReceipt, String> {
+    let (
+        cue_list_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        owner_id,
+        requested_create,
+    ) = match request {
+        AuthoritativeSceneCreateRequest::Empty {
+            cue_list_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        } => (
+            cue_list_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+            AuthoritativeSceneCreateKind::Empty,
+        ),
+        AuthoritativeSceneCreateRequest::CaptureCurrent {
+            cue_list_id,
+            label,
+            fade_ms,
+            authored_beats,
+            capture_scope,
+            effect_targets,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        } => (
+            cue_list_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+            AuthoritativeSceneCreateKind::CaptureCurrent {
+                label,
+                fade_ms,
+                authored_beats,
+                capture_scope,
+                effect_targets,
+            },
+        ),
+    };
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
     let expected_authority = MediaAssetPrepareAuthority {
@@ -27385,78 +27578,14 @@ fn create_empty_cue(
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_empty_cue(
+    commit_authoritative_scene_create(
         &state,
         expected_epoch,
         &owner_id,
         &expected_authority,
         cue_list_id,
+        requested_create,
     )
-}
-
-#[tauri::command]
-fn create_cue_from_current(
-    state: State<'_, AppState>,
-    label: String,
-    fade_ms: u64,
-    authored_beats: Option<f32>,
-    capture_scope: Option<CueCaptureScope>,
-    cue_list_id: Option<protocol::CueListId>,
-    effect_targets: Option<Vec<CueEffectTarget>>,
-) -> Result<CueId, String> {
-    let label = label.trim().to_string();
-    if label.is_empty() {
-        return Err("Cue label is required".to_string());
-    }
-    validate_cue_authored_beats(authored_beats)?;
-    let mut snapshot = state.engine.persistence_snapshot()?;
-    use_authored_video_snapshot(&mut snapshot);
-    apply_programmer_preview_to_snapshot(&mut snapshot);
-    let cue_list_id = cue_list_id.unwrap_or(protocol::DEFAULT_CUE_LIST_ID);
-    if !snapshot
-        .cue_lists
-        .iter()
-        .any(|cue_list| cue_list.id == cue_list_id)
-    {
-        return Err(format!("Bank {cue_list_id} was not found"));
-    }
-    let scope = capture_scope.unwrap_or_default();
-    let (targets, video_targets, video_output_targets, node_graph_targets, captured_effect_targets) =
-        cue_targets_from_snapshot_with_scope(&snapshot, &scope)?;
-    let effect_targets = match effect_targets {
-        Some(effect_targets) => copy_cue_effect_params_on_capture(&snapshot, effect_targets)?,
-        None => captured_effect_targets,
-    };
-    let group_id = match &scope {
-        CueCaptureScope::SelectedGroup { group_id } => Some(normalize_group_id(group_id)?),
-        _ => None,
-    };
-    validate_cue_effect_targets(&snapshot, &effect_targets)?;
-    ensure_cue_targets_present(
-        &targets,
-        &video_targets,
-        &video_output_targets,
-        &node_graph_targets,
-        &effect_targets,
-        false,
-        "creating",
-    )?;
-    let cue_id = state.engine.allocate_cue_id();
-    state.engine.create_cue_published(
-        cue_id,
-        cue_list_id,
-        label,
-        group_id,
-        RecallMode::Coexist,
-        fade_ms,
-        authored_beats,
-        targets,
-        video_targets,
-        video_output_targets,
-        node_graph_targets,
-        effect_targets,
-    )?;
-    Ok(cue_id)
 }
 
 #[tauri::command]
@@ -75156,6 +75285,7 @@ pub(crate) mod tests {
         // so raw dispatch with the current E/R/H/owner args reaches the
         // handlers without any renderer transaction ticket.
         for route in [
+            "create_scene_authoritative_v1",
             "create_cue_list",
             "rename_cue_list",
             "reorder_cue_lists",
@@ -75169,6 +75299,7 @@ pub(crate) mod tests {
         let registered =
             control_plane::registered_tauri_command_names_from_source(include_str!("main.rs"))
                 .unwrap();
+        assert!(registered.contains(&"create_scene_authoritative_v1".to_string()));
         assert!(registered.contains(&"create_cue_list".to_string()));
         assert!(registered.contains(&"rename_cue_list".to_string()));
         assert!(registered.contains(&"reorder_cue_lists".to_string()));
@@ -75177,6 +75308,7 @@ pub(crate) mod tests {
         // Every registered Bank handler takes one deny-unknown strict request
         // object and delegates to its authoritative commit core.
         let source = include_str!("main.rs");
+        let scene_creation_source = include_str!("scene_creation.rs");
         for (route, request_type, commit_core) in [
             (
                 "create_cue_list",
@@ -75231,6 +75363,30 @@ pub(crate) mod tests {
                 Some(control_plane::TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation)
             );
         }
+        let route = "create_scene_authoritative_v1";
+        let signature = format!("fn {route}(");
+        let start = source
+            .find(&signature)
+            .unwrap_or_else(|| panic!("missing {route} handler"));
+        let body_end = source[start..]
+            .find("\n}\n")
+            .map(|offset| start + offset)
+            .expect("terminated Scene create handler body");
+        let body = &source[start..body_end];
+        assert!(
+            body.contains("request: AuthoritativeSceneCreateRequest"),
+            "Scene create must accept only the tagged strict request"
+        );
+        assert!(
+            body.contains("commit_authoritative_scene_create"),
+            "Scene create modes must reach one authoritative commit core"
+        );
+        assert!(
+            scene_creation_source.contains(
+                "tag = \"mode\",\n    rename_all = \"camelCase\",\n    rename_all_fields = \"camelCase\",\n    deny_unknown_fields"
+            ),
+            "Scene create request must reject legacy, missing, or unknown fields"
+        );
     }
 
     fn assert_strict_camel_case_request<T: serde::de::DeserializeOwned>(valid: serde_json::Value) {
@@ -75289,6 +75445,42 @@ pub(crate) mod tests {
         delete["cueListId"] = serde_json::json!(2);
         assert_strict_camel_case_request::<AuthoritativeCueListDeleteRequest>(delete);
 
+        let scene_authority = serde_json::json!({
+            "mode": "captureCurrent",
+            "cueListId": 2,
+            "label": "Captured Scene",
+            "fadeMs": 250,
+            "authoredBeats": null,
+            "captureScope": { "kind": "all" },
+            "effectTargets": [],
+            "expectedEpoch": 7,
+            "expectedRevision": 11,
+            "expectedCheckpointHash": "a".repeat(64),
+            "ownerId": "main:bank-test"
+        });
+        assert_strict_camel_case_request::<AuthoritativeSceneCreateRequest>(
+            scene_authority.clone(),
+        );
+        let mut missing_capture_scope = scene_authority;
+        missing_capture_scope
+            .as_object_mut()
+            .expect("Scene create request object")
+            .remove("captureScope");
+        assert!(
+            serde_json::from_value::<AuthoritativeSceneCreateRequest>(missing_capture_scope)
+                .is_err(),
+            "Capture-current must reject a missing capture scope"
+        );
+
+        assert_strict_camel_case_request::<AuthoritativeSceneCreateRequest>(serde_json::json!({
+            "mode": "empty",
+            "cueListId": 2,
+            "expectedEpoch": 7,
+            "expectedRevision": 11,
+            "expectedCheckpointHash": "a".repeat(64),
+            "ownerId": "main:bank-test"
+        }));
+
         assert_strict_camel_case_request::<MoveCueBetweenSceneBanksBatchRequest>(
             serde_json::json!({
                 "cueId": 11,
@@ -75329,6 +75521,206 @@ pub(crate) mod tests {
             );
             assert_eq!(control_plane::tauri_route_admission_class(route), None);
         }
+    }
+
+    #[test]
+    fn retired_direct_scene_create_routes_are_removed_everywhere_callable() {
+        let source = include_str!("main.rs");
+        // Keep the exact names assembled so this negative proof cannot pass
+        // merely by matching its own test source.
+        let retired_routes = [
+            ["create", "cue", "from", "current"].join("_"),
+            ["create", "empty", "cue"].join("_"),
+        ];
+        let registered = control_plane::registered_tauri_command_names_from_source(source).unwrap();
+        for route in retired_routes {
+            assert!(
+                !source.contains(&format!("fn {route}(")),
+                "{route} handler must be deleted"
+            );
+            assert!(
+                !registered.contains(&route),
+                "{route} must not remain Tauri registered"
+            );
+            assert_eq!(control_plane::tauri_route_admission_class(&route), None);
+        }
+    }
+
+    #[test]
+    fn authoritative_empty_scene_receipt_matches_the_published_engine_bank() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let authority = harness.authority();
+        let receipt = commit_authoritative_scene_create(
+            &harness.state,
+            authority.epoch,
+            MEDIA_ASSET_A6_OWNER,
+            &authority,
+            protocol::DEFAULT_CUE_LIST_ID,
+            AuthoritativeSceneCreateKind::Empty,
+        )
+        .expect("Empty Scene create must publish one acknowledged receipt");
+        let engine_cue = harness
+            .state
+            .engine
+            .snapshot()
+            .cues
+            .into_iter()
+            .find(|cue| cue.id == receipt.cue_id)
+            .expect("the acknowledged Scene ID must exist in the engine snapshot");
+        assert_eq!(engine_cue.cue_list_id, protocol::DEFAULT_CUE_LIST_ID);
+        assert_eq!(engine_cue.label, "New Scene");
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert_eq!(coordinator.revision, authority.revision + 1);
+        assert_eq!(coordinator.history.undo.len(), 1);
+    }
+
+    #[test]
+    fn scene_create_outcome_runner_fences_indeterminate_ack_loss_for_both_modes() {
+        for history_label in ["Create Empty Scene", "Create Scene from Current"] {
+            let harness = MediaAssetA6CommandHarness::new();
+            let engine = &harness.state.engine;
+            let reserved = engine.allocate_cue_id();
+            let mut coordinator = ProjectCoordinator::default();
+            let mut current = EngineSnapshot::default();
+            let plan = bank_history_plan(
+                &coordinator,
+                &mut current,
+                "",
+                1,
+                history_label,
+                |snapshot| {
+                    snapshot.cues.push(protocol::CueSummary {
+                        id: reserved,
+                        cue_list_id: protocol::DEFAULT_CUE_LIST_ID,
+                        label: history_label.to_string(),
+                        ..protocol::CueSummary::default()
+                    });
+                },
+            );
+            let error = run_admitted_internal_media_asset_transaction_with_publication_outcome(
+                &harness.state.project_external_command_admission,
+                &harness.state.project_transaction_active,
+                &mut coordinator,
+                plan,
+                || {
+                    Err(SnapshotPublicationFailure::Indeterminate(
+                        "injected admitted ACK loss".to_string(),
+                    ))
+                },
+            )
+            .expect_err("an admitted Scene-create ACK loss must fence future work");
+            assert!(matches!(error, AdmittedPublicationError::Indeterminate(_)));
+            assert_eq!(coordinator.revision, 0, "{history_label}");
+            assert!(coordinator.history.undo.is_empty(), "{history_label}");
+            assert!(!harness
+                .state
+                .project_transaction_active
+                .load(Ordering::Acquire));
+            assert!(harness
+                .state
+                .project_external_command_admission
+                .project_transaction_publication_faulted
+                .load(Ordering::Acquire));
+            assert!(lock_project_external_command_admission(&harness.state).is_err());
+
+            // The outcome runner does not own allocator release; its caller
+            // must retain this reservation for an indeterminate B. The next
+            // allocation proves the running allocator remains monotonic.
+            assert!(engine.allocate_cue_id() > reserved, "{history_label}");
+        }
+    }
+
+    #[test]
+    fn authoritative_empty_scene_indeterminate_ack_loss_keeps_id_and_fences_mutations() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let engine = &harness.state.engine;
+        let authority = harness.authority();
+        let before_revision = harness.state.project_coordinator.lock().unwrap().revision;
+        let reserved_cue_id = Mutex::new(None);
+        let error = commit_authoritative_scene_create_with_publication(
+            &harness.state,
+            authority.epoch,
+            MEDIA_ASSET_A6_OWNER,
+            &authority,
+            protocol::DEFAULT_CUE_LIST_ID,
+            AuthoritativeSceneCreateKind::Empty,
+            |_, cue_id, _| {
+                *reserved_cue_id.lock().unwrap() = Some(cue_id);
+                Err(SnapshotPublicationFailure::Indeterminate(
+                    "injected admitted ACK loss".to_string(),
+                ))
+            },
+        )
+        .expect_err("an admitted Scene-create ACK loss must fail closed");
+        assert!(error.contains("fenced"));
+        assert!(!harness
+            .state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        assert!(harness
+            .state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+        assert!(lock_project_external_command_admission(&harness.state).is_err());
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert_eq!(coordinator.revision, before_revision);
+        assert!(coordinator.history.undo.is_empty());
+        drop(coordinator);
+        let reserved = reserved_cue_id
+            .lock()
+            .unwrap()
+            .expect("publisher receives the reserved Cue ID");
+        assert!(engine.allocate_cue_id() > reserved);
+    }
+
+    #[test]
+    fn scene_create_definitive_failure_restores_a_and_allows_tail_reuse() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let engine = &harness.state.engine;
+        let authority = harness.authority();
+        let before = engine.persistence_snapshot().unwrap();
+        let before_revision = harness.state.project_coordinator.lock().unwrap().revision;
+        let published_cue_id = Mutex::new(None);
+        let error = commit_authoritative_scene_create_with_publication(
+            &harness.state,
+            authority.epoch,
+            MEDIA_ASSET_A6_OWNER,
+            &authority,
+            protocol::DEFAULT_CUE_LIST_ID,
+            AuthoritativeSceneCreateKind::Empty,
+            |_, cue_id, _| {
+                *published_cue_id.lock().unwrap() = Some(cue_id);
+                Err(SnapshotPublicationFailure::Definitive(
+                    "injected publication rollback".to_string(),
+                ))
+            },
+        )
+        .expect_err("a definitive Scene-create rejection must restore A");
+        assert!(error.contains("injected publication rollback"));
+        let after = engine.persistence_snapshot().unwrap();
+        assert_eq!(after.cues, before.cues);
+        assert_eq!(after.cue_lists, before.cue_lists);
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        assert_eq!(coordinator.revision, before_revision);
+        assert!(coordinator.history.undo.is_empty());
+        drop(coordinator);
+        assert!(!harness
+            .state
+            .project_transaction_active
+            .load(Ordering::Acquire));
+        assert!(!harness
+            .state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+        assert_eq!(
+            engine.allocate_cue_id(),
+            published_cue_id
+                .lock()
+                .unwrap()
+                .expect("publisher receives the reserved Cue ID")
+        );
     }
 
     #[test]
@@ -125222,8 +125614,7 @@ fn main() {
             discover_art_rdm_devices,
             start_art_rdm_full_discovery,
             list_video_display_monitors,
-            create_cue_from_current,
-            create_empty_cue,
+            create_scene_authoritative_v1,
             create_cue_list,
             reorder_cue_lists,
             delete_cue_list,

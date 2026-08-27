@@ -3102,12 +3102,16 @@ impl std::fmt::Display for SnapshotPublicationFailure {
 /// Maximum accepted Bank label length in Unicode scalar values.
 pub const CUE_LIST_LABEL_MAX_SCALARS: usize = 64;
 
-/// Classified disconnect messages for the two authoritative Bank mutations.
+/// Classified disconnect messages for authoritative authored publications.
 /// They are shared verbatim by the handle submission paths and their tests so
 /// the indeterminate classification stays pinned to one exact string.
 const BANK_CREATE_ACK_DISCONNECTED_MESSAGE: &str = "Bank create acknowledgement disconnected after engine admission; the reserved Bank ID stays reserved because publication outcome is indeterminate";
 const BANK_RENAME_ACK_DISCONNECTED_MESSAGE: &str =
     "Bank rename acknowledgement disconnected after engine admission; publication outcome is indeterminate";
+const CUE_CREATE_ACK_DISCONNECTED_MESSAGE: &str =
+    "Scene capture acknowledgement disconnected after engine admission; the reserved Scene ID stays reserved because publication outcome is indeterminate";
+const EMPTY_CUE_CREATE_ACK_DISCONNECTED_MESSAGE: &str =
+    "Empty Scene acknowledgement disconnected after engine admission; the reserved Scene ID stays reserved because publication outcome is indeterminate";
 
 /// The single authoritative Bank label policy. The backend candidate staging
 /// and the engine mutation state both call this exact function with the exact
@@ -4086,6 +4090,7 @@ define_engine_command! {
         node_graph_targets: Vec<CueNodeGraphTarget>,
         effect_targets: Vec<CueEffectTarget>,
         expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// Dedicated empty-scene creation for the Bank UI. This is intentionally
@@ -4096,6 +4101,7 @@ define_engine_command! {
         cue_list_id: CueListId,
         label: String,
         expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     UpdateCue {
@@ -7447,9 +7453,8 @@ impl EngineHandle {
         video_output_targets: Vec<VideoOutputTarget>,
         node_graph_targets: Vec<CueNodeGraphTarget>,
         effect_targets: Vec<CueEffectTarget>,
-    ) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::CreateCuePublished {
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.create_cue_published_with_timeout(
             cue_id,
             cue_list_id,
             label,
@@ -7462,13 +7467,51 @@ impl EngineHandle {
             video_output_targets,
             node_graph_targets,
             effect_targets,
-            expires_at: Instant::now() + Duration::from_secs(2),
-            ack,
-        })
-        .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("Cue create acknowledgement failed: {error}"))?
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    /// Test seam for the classified Scene-capture publication boundary. A
+    /// queued timeout is definitive; an admitted ACK loss is indeterminate.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_cue_published_with_timeout(
+        &self,
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        label: String,
+        group_id: Option<String>,
+        recall_mode: RecallMode,
+        fade_ms: u64,
+        authored_beats: Option<f32>,
+        targets: Vec<CueFixtureTarget>,
+        video_targets: Vec<VideoLayerTarget>,
+        video_output_targets: Vec<VideoOutputTarget>,
+        node_graph_targets: Vec<CueNodeGraphTarget>,
+        effect_targets: Vec<CueEffectTarget>,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.submit_authoritative_snapshot_mutation(
+            CUE_CREATE_ACK_DISCONNECTED_MESSAGE,
+            timeout,
+            |expires_at, admission, ack| EngineCommand::CreateCuePublished {
+                cue_id,
+                cue_list_id,
+                label,
+                group_id,
+                recall_mode,
+                fade_ms,
+                authored_beats,
+                targets,
+                video_targets,
+                video_output_targets,
+                node_graph_targets,
+                effect_targets,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     /// Publish an intentionally empty Bank scene. The backend owns the
@@ -7478,19 +7521,35 @@ impl EngineHandle {
         &self,
         cue_id: CueId,
         cue_list_id: CueListId,
-    ) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::CreateEmptyCuePublished {
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.create_empty_cue_published_with_timeout(
             cue_id,
             cue_list_id,
-            label: "New Scene".to_string(),
-            expires_at: Instant::now() + Duration::from_secs(2),
-            ack,
-        })
-        .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| format!("Empty Cue create acknowledgement failed: {error}"))?
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    /// Test seam for the classified Empty Scene publication boundary. A
+    /// queued timeout is definitive; an admitted ACK loss is indeterminate.
+    #[doc(hidden)]
+    pub fn create_empty_cue_published_with_timeout(
+        &self,
+        cue_id: CueId,
+        cue_list_id: CueListId,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.submit_authoritative_snapshot_mutation(
+            EMPTY_CUE_CREATE_ACK_DISCONNECTED_MESSAGE,
+            timeout,
+            |expires_at, admission, ack| EngineCommand::CreateEmptyCuePublished {
+                cue_id,
+                cue_list_id,
+                label: "New Scene".to_string(),
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     pub fn reorder_cue_lists_published(&self, cue_list_ids: Vec<CueListId>) -> Result<(), String> {
@@ -7544,7 +7603,7 @@ impl EngineHandle {
         label: String,
         timeout: Duration,
     ) -> Result<(), SnapshotPublicationFailure> {
-        self.submit_cue_list_bank_mutation(
+        self.submit_authoritative_snapshot_mutation(
             BANK_CREATE_ACK_DISCONNECTED_MESSAGE,
             timeout,
             |expires_at, admission, ack| EngineCommand::CreateCueListPublished {
@@ -7580,7 +7639,7 @@ impl EngineHandle {
         label: String,
         timeout: Duration,
     ) -> Result<(), SnapshotPublicationFailure> {
-        self.submit_cue_list_bank_mutation(
+        self.submit_authoritative_snapshot_mutation(
             BANK_RENAME_ACK_DISCONNECTED_MESSAGE,
             timeout,
             |expires_at, admission, ack| EngineCommand::RenameCueListPublished {
@@ -7593,11 +7652,11 @@ impl EngineHandle {
         )
     }
 
-    /// Shared submission path for both authoritative Bank mutations. It uses
+    /// Shared submission path for authoritative authored mutations. It uses
     /// the classified snapshot ACK protocol so a queued cancellation before
     /// engine admission stays definitive while an admitted ACK disconnect is
     /// reported as indeterminate instead of a fabricated failure.
-    fn submit_cue_list_bank_mutation(
+    fn submit_authoritative_snapshot_mutation(
         &self,
         disconnected_message: &'static str,
         timeout: Duration,
@@ -23310,6 +23369,7 @@ impl EngineRuntime {
                 node_graph_targets,
                 effect_targets,
                 expires_at,
+                admission,
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
@@ -23332,9 +23392,7 @@ impl EngineRuntime {
                     timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
-                let result = if Instant::now() > expires_at {
-                    Err("Cue create expired before engine execution".to_string())
-                } else {
+                let result = if admission.try_admit_before(expires_at) {
                     self.create_cue_state(
                         CueCreateMetadata {
                             cue_id,
@@ -23354,6 +23412,11 @@ impl EngineRuntime {
                             effect_targets,
                         },
                     )
+                } else {
+                    Err(
+                        "Scene capture expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
                 };
                 self.last_error = if result.is_ok() {
                     None
@@ -23372,6 +23435,7 @@ impl EngineRuntime {
                 cue_list_id,
                 label,
                 expires_at,
+                admission,
                 ack,
             } => {
                 let previous_last_error = self.last_error.clone();
@@ -23394,8 +23458,11 @@ impl EngineRuntime {
                     timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
-                let result = if Instant::now() > expires_at {
-                    Err("Empty Cue create expired before engine execution".to_string())
+                let result = if !admission.try_admit_before(expires_at) {
+                    Err(
+                        "Empty Scene create expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
                 } else if label != "New Scene" {
                     Err("Empty Cue creation requires the New Scene label".to_string())
                 } else {
@@ -68953,6 +69020,7 @@ mod tests {
                     node_graph_targets: Vec::new(),
                     effect_targets: Vec::new(),
                     expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
                     ack: allocator_ack(),
                 }),
             ),
@@ -72653,6 +72721,7 @@ mod tests {
                 transition_ms: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
             ack: missing_list_ack,
         });
         let published = RwLock::new(runtime.build_snapshot(0));
@@ -72688,6 +72757,7 @@ mod tests {
                 transition_ms: None,
             }],
             expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
             ack: missing_effect_ack,
         });
         runtime.publish_pending_command_acks(0, &published);
@@ -72722,6 +72792,7 @@ mod tests {
                 transition_ms: None,
             }],
             expires_at: Instant::now() - Duration::from_millis(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
             ack: expired_ack,
         });
         runtime.publish_pending_command_acks(0, &published);
@@ -75924,6 +75995,81 @@ mod tests {
     }
 
     #[test]
+    fn scene_create_publication_classification_covers_capture_and_empty_modes() {
+        // Both request modes use the same admitted snapshot protocol. While
+        // still queued, an elapsed deadline is a definitive cancellation and
+        // the caller may restore A/release its tail reservation.
+        for message in [
+            CUE_CREATE_ACK_DISCONNECTED_MESSAGE,
+            EMPTY_CUE_CREATE_ACK_DISCONNECTED_MESSAGE,
+        ] {
+            let admission = ProjectSnapshotLoadAdmission::new();
+            let (_sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+            let error = receive_classified_snapshot_ack(
+                receiver,
+                &admission,
+                Instant::now(),
+                Duration::ZERO,
+                message.to_string(),
+            )
+            .unwrap_err();
+            assert!(error.allocator_rewind_safe, "queued timeout: {message}");
+
+            // Once the engine admitted the command, losing its ACK is never
+            // a definitive failure: B may already be live, so the Scene ID
+            // must remain reserved and the caller must fence future work.
+            let admission = ProjectSnapshotLoadAdmission::new();
+            assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+            let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+            drop(sender);
+            let error = receive_classified_snapshot_ack(
+                receiver,
+                &admission,
+                Instant::now() + Duration::from_secs(1),
+                Duration::from_secs(1),
+                message.to_string(),
+            )
+            .unwrap_err();
+            assert!(!error.allocator_rewind_safe, "admitted ACK loss: {message}");
+        }
+    }
+
+    #[test]
+    fn scene_create_handle_timeout_seams_cancel_both_modes_before_admission() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let capture = engine
+            .create_cue_published_with_timeout(
+                41,
+                DEFAULT_CUE_LIST_ID,
+                "Expired Capture".to_string(),
+                None,
+                RecallMode::Coexist,
+                0,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Duration::ZERO,
+            )
+            .expect_err("zero-timeout capture must cancel before admission");
+        assert!(!capture.is_indeterminate());
+        let empty = engine
+            .create_empty_cue_published_with_timeout(42, DEFAULT_CUE_LIST_ID, Duration::ZERO)
+            .expect_err("zero-timeout Empty Scene must cancel before admission");
+        assert!(!empty.is_indeterminate());
+        assert!(engine
+            .snapshot()
+            .cues
+            .iter()
+            .all(|cue| cue.id != 41 && cue.id != 42));
+    }
+
+    #[test]
     fn bank_apply_to_publish_window_stays_admitted_and_late_acks_never_unapply() {
         // The injected post-apply/pre-ACK delay: B is applied to the worker
         // image while the shared publication and the ACK are still pending.
@@ -76206,6 +76352,7 @@ mod tests {
             cue_list_id: DEFAULT_CUE_LIST_ID,
             label: "New Scene".to_string(),
             expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
             ack,
         });
         runtime.publish_pending_command_acks(0, &published);
@@ -76236,6 +76383,7 @@ mod tests {
                 cue_list_id,
                 label: label.to_string(),
                 expires_at: Instant::now() + Duration::from_secs(1),
+                admission: ProjectSnapshotLoadAdmission::new(),
                 ack,
             });
             runtime.publish_pending_command_acks(0, &published);
@@ -76251,6 +76399,59 @@ mod tests {
             runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
             before_cues
         );
+    }
+
+    #[test]
+    fn published_scene_create_modes_restore_a_on_definitive_snapshot_failure() {
+        for mode in ["capture", "empty"] {
+            let mut runtime = EngineRuntime::new(DmxOutputConfig {
+                enabled: false,
+                ..DmxOutputConfig::default()
+            });
+            let before = runtime.build_persistence_snapshot();
+            let published = RwLock::new(runtime.build_snapshot(0));
+            let admission = ProjectSnapshotLoadAdmission::new();
+            let (ack, receiver) = mpsc::sync_channel(1);
+            let command = if mode == "capture" {
+                EngineCommand::CreateCuePublished {
+                    cue_id: 41,
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    label: "Captured Scene".to_string(),
+                    group_id: None,
+                    recall_mode: RecallMode::Coexist,
+                    fade_ms: 0,
+                    authored_beats: None,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: admission.clone(),
+                    ack,
+                }
+            } else {
+                EngineCommand::CreateEmptyCuePublished {
+                    cue_id: 41,
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    label: "New Scene".to_string(),
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: admission.clone(),
+                    ack,
+                }
+            };
+            runtime.apply_command(command);
+            assert_eq!(
+                admission.current_state(),
+                ProjectSnapshotLoadAdmissionState::Admitted,
+                "{mode} must admit before applying B"
+            );
+            runtime.fail_next_pending_publication = true;
+            runtime.publish_pending_command_acks(0, &published);
+            assert!(receiver.recv().unwrap().is_err(), "{mode}");
+            assert_eq!(runtime.build_persistence_snapshot(), before, "{mode}");
+            assert_eq!(published.read().unwrap().cues, before.cues, "{mode}");
+        }
     }
 
     #[test]
