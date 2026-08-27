@@ -1,11 +1,13 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.25 SOURCE/NATIVE AND STANDARDRELEASE RUNNER REBIND/SELF-TEST CHECKPOINTS ACCEPTED; ALPHA.24 TIMELINE FOLLOW REARM SOURCE/NATIVE CHECKPOINT IS HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.26 SOURCE-ONLY CHECKPOINT; ALPHA.26 NATIVE BUILD UNBUILT; RUNNING ALPHA.25 DJ SESSION PRESERVED; ALPHA.25 NATIVE/STDRELEASE EVIDENCE HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
-This is the current resumption contract for the 2026-08-30 performance. Section
-34 preserves the historical alpha.24 rearm source/native checkpoint; alpha.25
-source/native and StandardRelease runner rebind/self-test acceptance are
-recorded below. Section 33 preserves the
+This is the current resumption contract for the 2026-08-30 performance. The
+current source-only product checkpoint is alpha.26; its native build, artifact
+identity, launch, and native UI acceptance are unbuilt/unverified. The running
+alpha.25 DJ session is preserved as an operational baseline only and is not
+alpha.26 evidence. The historical alpha.25 native and StandardRelease
+runner rebind/self-test acceptance are recorded below. Section 34 preserves the historical alpha.24 rearm source/native checkpoint; section 33 preserves the
 historical alpha.23 source checkpoint and
 section 31 preserves the historical alpha.21 native-artifact authority. Section
 32 is preserved as the historical alpha.22 Scene-authority source checkpoint,
@@ -62,7 +64,8 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.25 source/native and runner acceptance | Product metadata is `1.2.0-alpha.25` on `codex/syndocal-v1.2`; accepted source/native evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: immutable alpha.24 evidence is preserved separately, while alpha.25 is the distinct native UI checkpoint and does not overwrite that artifact. Exact MSVC 14.44 was first; `pnpm --dir app tauri build --no-bundle` passed in `3m06s`, first-party warnings `0`; Vite `297` modules, `App-CUUI4pgY.js` `498.21 kB`, `gdtfProfileActions-54y__lyr.js` `3.91 kB`. `target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, responsive. Computer Use at `1920x1032` found the restore button, proving maximized state; native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering are accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is the StandardRelease authority at that exact alpha.25 version, size, SHA-256, and source HEAD; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No Apply or hardware acceptance was run. DJ TCP re-established `.50.2`, but `Untitled.sdc`/mapping is not authoritative; HW-4 remains `0/12`. |
+| Current alpha.26 source-only App structural split | Product metadata is synchronized to `1.2.0-alpha.26` on `codex/syndocal-v1.2`; this source checkpoint has no alpha.26 native build, artifact identity, launch, or native UI acceptance. The running alpha.25 DJ session is preserved only as an operational baseline: Deck 1 showed `More One Night × 動く、動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID, position revision `149152`, BPM `140`, and `isPlaying=true`; `DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c` delivery was rejected, leaving FOH `owner— / playing No / track—`. The temporary track had no Timeline mapping; the Timeline Start dropdown remounted to its placeholder after Timeline 1 selection. This fail-closed diagnostic is not HW-4 acceptance; HW-4 remains `0/12`. Screenshot: `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`, `218629` bytes, SHA-256 `A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`, LastWrite `2026-08-28 07:10:32 JST`. |
+| Historical alpha.25 source/native and runner acceptance | Product metadata was `1.2.0-alpha.25` on `codex/syndocal-v1.2`; accepted source/native evidence was `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Immutable alpha.25 evidence remains separate from the current alpha.26 source checkpoint. Exact MSVC 14.44 was first; `pnpm --dir app tauri build --no-bundle` passed in `3m06s`, first-party warnings `0`; Vite `297` modules, `App-CUUI4pgY.js` `498.21 kB`, `gdtfProfileActions-54y__lyr.js` `3.91 kB`. `target/release/syndocal.exe` was Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, responsive. Computer Use at `1920x1032` found the restore button, proving maximized state; native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering were accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` remains the StandardRelease authority at that exact alpha.25 version, size, SHA-256, and source HEAD; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No Apply or hardware acceptance was run. DJ TCP re-established `.50.2`, but `Untitled.sdc`/mapping was not authoritative; HW-4 remained `0/12`. |
 | Historical alpha.24 Timeline Follow source/native | Product metadata was `1.2.0-alpha.24`; committed/pushed, upstream-equal source was `5eb1888906613851c4c49e66717a270f13bbd7b5`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); `target/release/syndocal.exe` was `59,803,136` bytes, SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, PID `63016`, exactly one responsive maximized window; physical acceptance remained open |
 | Historical alpha.23 output-routing / Setup I/O / frontend source | Product metadata was `1.2.0-alpha.23`; committed/pushed, upstream-equal source is `5e7d27df7f5864449d4838782f6eca2f9b81d360`; no alpha.23 native artifact was built |
 | Historical alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact was built |
@@ -86,9 +89,11 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.25`;
-accepted source/native evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`
-and its exact build/native evidence is the section 1 current-authority row.
+Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.26`;
+this is a source-only checkpoint with no accepted alpha.26 native artifact or
+source/native identity. The running alpha.25 DJ session is preserved as an
+operational baseline only; its historical source/native and runner evidence is
+the section 1 historical row.
 Section 34 preserves the historical alpha.24 source/native evidence at exact
 committed, pushed, upstream-equal commit
 `5eb1888906613851c4c49e66717a270f13bbd7b5`.
@@ -1785,9 +1790,9 @@ PID `41912`, `58,778,112` bytes, SHA-256
 Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
 reconnect, and three-display evidence remain unverified; this checkpoint does
 not claim final completion. The historical alpha.24 native build and
-maximized-window gate are complete; alpha.25 source/native and StandardRelease
-runner rebind/self-test acceptance are now complete, but Apply/hardware and
-remaining physical/show gates are open.
+maximized-window gate are complete; the historical alpha.25 source/native and
+StandardRelease runner rebind/self-test acceptance are complete, while the
+current alpha.26 native build and remaining Apply/hardware/show gates are open.
 
 ## 34. 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 
@@ -1838,22 +1843,24 @@ Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
 unverified. This is not a final-completion claim; the remaining physical/show
 gates are open.
 
-## 35. 2026-08-28 current pending checkpoint — v1.1.9 owner-selection recovery
+## 35. 2026-08-28 current alpha.26 source-only checkpoint — v1.1.9 owner-selection recovery
 
-This tranche started from a clean, upstream-equal source tree at
-`c77b68f0d30075e7aed7de3d4273cc479c8f5abc` on `codex/syndocal-v1.2`. The
-working tree is intentionally dirty while the stale Cue/Recall checker is
-being repaired to the current Undo-ticket, authoritative replacement, and
-load-replacement contract; the current HW-4 runbook is being rebound from the
-historical `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec` runtime ancestor to the
-checkout authority `c22acaa265cbbc4936ab3af5b092b59d5d543f63` and alpha.25
-artifact authority; and the exact v1.1.9 migration, including explicit UTF-8
-recovery for an existing target under Windows PowerShell 5.1, is being
-recorded. Near-show wording is being aligned with any-deck
-`titleContains: 人生オーバー`, the 1400 ms Deck 1-only zero-match fallback and
-multiple-match policy, F13 Release, the one-source-measure Follow, and the
-indefinite destination-first-measure hold. Historical sections above remain
-unchanged.
+This tranche carries the source-only `1.2.0-alpha.26` product checkpoint and
+current App structural split. Alpha.26 native build, artifact identity, launch,
+and native UI acceptance remain unbuilt/unverified; the running alpha.25 DJ
+session and its exact native artifact are preserved as historical operational
+evidence, not relabelled. The working tree is intentionally dirty while the
+stale Cue/Recall checker is being repaired to the current Undo-ticket,
+authoritative replacement, and load-replacement contract; the current HW-4
+runbook is being rebound from the historical
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec` runtime ancestor to the checkout
+authority `c22acaa265cbbc4936ab3af5b092b59d5d543f63`. The exact v1.1.9
+migration, including explicit UTF-8 recovery for an existing target under
+Windows PowerShell 5.1, is recorded. Near-show wording is aligned with
+any-deck `titleContains: 人生オーバー`, the 1400 ms Deck 1-only zero-match
+fallback and multiple-match policy, F13 Release, the one-source-measure
+Follow, and the indefinite destination-first-measure hold. Historical sections
+above remain unchanged.
 
 The DJ-PC operator created
 `C:\SyndocalShow\dj-agent-v1.1.9.json`, rotated a 43-character token, and
@@ -1900,6 +1907,21 @@ identity before the 1400 ms Deck 1 fallback timer may arm, plus a fresh
 position sample/revision. This is an identity-incomplete diagnostic, not
 HW-4.2 or HW-4.3 evidence. Use a Deck 1 track with visible Artist or capture the
 non-secret identity/freshness fields before changing transport.
+
+The latest 2026-08-28 DJ-PC observation supersedes that identity-incomplete
+detail for the preserved alpha.25 session: Deck 1 showed `More One Night × 動く、
+動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID, position
+revision `149152`, BPM `140`, and `isPlaying=true`. The DJ Agent emitted
+`DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was
+rejected; FOH remained `owner— / playing No / track—`. The temporary track had
+no Timeline mapping, so the result is fail-closed. Computer Use reproduced the
+Timeline Start dropdown returning to its placeholder immediately after
+selecting Timeline 1 (UI remount bug; a separate Luna fix is in progress).
+This is not HW-4 end-to-end acceptance; HW-4 remains exactly **0/12**.
+Screenshot evidence is `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`,
+`218629` bytes, SHA-256
+`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
+LastWrite `2026-08-28 07:10:32 JST`.
 
 The final independent current-diff review is GO with P0/P1/P2 all zero. It
 verified the exact helper extraction, executable behavioral assertions for all

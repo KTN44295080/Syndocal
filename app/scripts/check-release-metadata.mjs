@@ -28,7 +28,7 @@ import {
 } from "./windows-runtime-inventory.mjs";
 import { StrictJsonError, parseStrictJson } from "./strict-json.mjs";
 
-export const expectedVersion = "1.2.0-alpha.25";
+export const expectedVersion = "1.2.0-alpha.26";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");

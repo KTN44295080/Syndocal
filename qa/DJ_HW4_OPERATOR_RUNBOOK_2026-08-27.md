@@ -29,8 +29,10 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. Never substitute an older source hash or an alpha.24-or-earlier
-process as the current alpha.25 artifact identity.
+at execution time. The current checkpoint is alpha.26 source-only: native
+alpha.26 build, artifact identity, launch, and UI acceptance remain
+unverified. Never substitute an older source hash or an alpha.24-or-earlier
+process as the current alpha.26 artifact identity.
 
 ### 1.1 Historical alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
@@ -108,9 +110,9 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-### 1.3 Current alpha.25 source/native operator checkpoint — 2026-08-28
+### 1.3 Historical alpha.25 source/native operator checkpoint — 2026-08-28
 
-The current KDMX native artifact was built from the exact alpha.25 source
+The historical alpha.25 KDMX native artifact was built from the exact source
 checkpoint `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. The final documentation
 and evidence checkpoint carrying this binding is `c77b68f0d30075e7aed7de3d4273cc479c8f5abc`.
 Product/FileVersion is `1.2.0-alpha.25`; the artifact is
@@ -124,6 +126,28 @@ remain unaccepted; their browser contracts are not native proof. The show
 project/mapping, target-DJ-PC token and NIC, Rekordbox, pedal/MIDI, reconnect,
 three-display, physical output, and all HW-4 observations remain open. HW-4 is
 still exactly **0/12**.
+
+### 1.4 Current alpha.26 source-only operator checkpoint — 2026-08-28
+
+Product metadata is synchronized to `1.2.0-alpha.26` for the current App
+structural split. Alpha.26 native build, artifact identity, launch, and native
+UI acceptance are unbuilt/unverified; the historical alpha.25 artifact and
+three-display runner must not be relabelled. The running alpha.25 DJ session is
+preserved as an operational baseline only. Deck 1 showed `More One Night ×
+動く、動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID,
+position revision `149152`, BPM `140`, and `isPlaying=true`; DJ Agent sent
+`DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, delivery rejected,
+FOH `owner— / playing No / track—`. The temporary track had no Timeline
+mapping, so the result was fail-closed. Computer Use reproduced the Timeline
+Start dropdown remount bug: selecting Timeline 1 immediately returned to the
+placeholder; a separate Luna fix is in progress. This is not HW-4 end-to-end;
+HW-4 remains exactly **0/12**.
+
+Latest DJ-PC screenshot evidence is
+`C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`, `218629`
+bytes, SHA-256
+`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
+LastWriteTime `2026-08-28 07:10:32 JST`.
 
 ## 2. DJ-PC controlled source
 
@@ -187,8 +211,8 @@ alpha.20 `pnpm --dir app tauri build --no-bundle` artifact was Product/FileVersi
 `1.2.0-alpha.20`, SHA-256
 `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; it was
 launched as exactly one responsive maximized window. It must not be substituted
-for the current alpha.25 artifact. Immediately before HW-4 execution, recheck
-the alpha.25 identity recorded in section 1.3; every alpha.24-or-earlier artifact
+for the historical alpha.25 artifact. Immediately before HW-4 execution, recheck
+the historical alpha.25 identity recorded in section 1.3; every alpha.24-or-earlier artifact
 or PID is historical.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
@@ -201,7 +225,7 @@ re-reviewed GO with P0/P1/P2 all zero. The earlier native visual capture belongs
 only to the historical alpha.18 artifact; its direct native refresh-button click
 also remains unconfirmed and neither observation accepts alpha.20. The
 historical alpha.21 native Setup-I/O visual proof is recorded in section 1.2 and
-the main pause handoff; current alpha.25 native Web/DJ card switching remains
+the main pause handoff; historical alpha.25 native Web/DJ card switching remains
 unaccepted because UI
 Automation could not act on the cached element.
 `app/dist` was freshly rebuilt (old stale

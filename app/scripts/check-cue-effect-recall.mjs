@@ -89,13 +89,13 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const undoProject = async \(\) => \{[\s\S]*?refreshSnapshot\(true, true\)/,
-  "Undo must re-seed Cue and Recall editor state from the restored project snapshot",
+  /const undoProject = async \(\) => \{[\s\S]*?const undoAuthority = captureProjectAuthorityIdentity\(\);[\s\S]*?const undoHistory = projectHistoryStatus\(\);[\s\S]*?const undoEntryId = undoHistory\.undo_entry_id;[\s\S]*?const undoCheckpointHash = undoHistory\.undo_checkpoint_hash;[\s\S]*?typeof undoEntryId !== "number"[\s\S]*?typeof undoCheckpointHash !== "string"[\s\S]*?void refreshProjectHistoryStatus\(\);[\s\S]*?undo_project_transaction", \{[\s\S]*?ownerId: projectTransactionOwnerId,[\s\S]*?expectedEpoch: undoAuthority\.project_epoch,[\s\S]*?expectedEntryId: undoEntryId,[\s\S]*?expectedCheckpointHash: undoCheckpointHash,[\s\S]*?\}\);[\s\S]*?const applied = applyAuthorityBundleAsReplacement\(navigation\.authority\);[\s\S]*?if \(!projectAuthorityApplicationResultIsCurrent\(applied\)\) return;[\s\S]*?applyAuthoritativeProjectHistoryStatus\(navigation\.history_status\);[\s\S]*?\} catch \(error\) \{[\s\S]*?void pollProjectAuthorityBundle\(\);[\s\S]*?\n  \};\n\n  const redoProject = async/,
+  "Undo must validate its exact project ticket, apply the authoritative rollback bundle, and refresh authority on failure",
 );
 assert.match(
   appSource,
-  /const applyLoadedProjectResult = async[\s\S]*?refreshSnapshot\(true, true\)/,
-  "Project loads must not retain Cue or Recall drafts from the previous project",
+  /const applyLoadedProjectResult = async[\s\S]*?const inlineAuthority = result\.authority;[\s\S]*?const bundle = inlineAuthority \?\? await fetchProjectAuthorityBundle\(result\);[\s\S]*?const authorityIsCurrent = inlineAuthority[\s\S]*?projectAuthorityInlineReplacementIsCurrent\([\s\S]*?: projectAuthorityFallbackIsCurrent[\s\S]*?if \(!authorityIsCurrent\) \{[\s\S]*?if \(applyProjectAuthorityBundle\(bundle, started\.application, true\) !== "applied"\) \{[\s\S]*?\n  \};\n\n  const resetRetiredProjectControlInputUi/,
+  "Project loads must pass the exact authority guard and apply a replacement bundle that resets Cue and Recall drafts",
 );
 assert.match(
   appSource,
@@ -129,8 +129,13 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const cueOwnedEffectSummary[\s\S]*?if \("Lfo" in params\)[\s\S]*?lfo: request/,
-  "Cue-owned LFO summaries must retain their complete source request",
+  /import \{[\s\S]*?authoredBeatsForEffectClock,[\s\S]*?chaserTraversalStepCount,[\s\S]*?cueOwnedEffectSummary,[\s\S]*?inferredCueAuthoredBeats,[\s\S]*?\} from "\.\/cueEffectRecall";/,
+  "App must consume the extracted Cue timing and owned-summary helpers from the canonical module",
+);
+assert.match(
+  source,
+  /export const cueOwnedEffectSummary[\s\S]*?if \("Lfo" in params\)[\s\S]*?lfo: request/,
+  "The canonical Cue-owned LFO summary helper must retain its complete source request",
 );
 assert.match(
   appSource,
@@ -189,6 +194,110 @@ const chaserEffect = {
   },
   enabled: true,
 };
+
+assert.equal(helpers.chaserTraversalStepCount(chaserEffect), 2);
+assert.equal(
+  helpers.chaserTraversalStepCount({
+    ...chaserEffect,
+    chaser: { ...chaserEffect.chaser, direction: "Bounce", steps: [...chaserEffect.chaser.steps, chaserEffect.chaser.steps[0]] },
+  }),
+  4,
+);
+assert.equal(
+  helpers.chaserTraversalStepCount({
+    ...chaserEffect,
+    chaser: { ...chaserEffect.chaser, direction: "Random", random_cycle_count: 3, steps: [...chaserEffect.chaser.steps, chaserEffect.chaser.steps[0]] },
+  }),
+  9,
+);
+
+const effectClockCases = [
+  ["Color", "color"],
+  ["Chaser", "chaser"],
+  ["Move", "move_effect"],
+  ["Value", "value"],
+  ["Curve", "curve"],
+  ["Mapping", "mapping"],
+  ["ColorMapping", "color_mapping"],
+];
+for (const [effectType, field] of effectClockCases) {
+  assert.equal(
+    helpers.authoredBeatsForEffectClock({
+      effect_type: effectType,
+      clock_sync: { beats: 99 },
+      [field]: { clock_sync: { beats: 3 } },
+    }),
+    3,
+    `${effectType} must prefer its authored subtype clock`,
+  );
+}
+assert.equal(
+  helpers.authoredBeatsForEffectClock({ effect_type: "Lfo", clock_sync: { beats: 5 } }),
+  5,
+);
+
+const inferredChaser = {
+  ...chaserEffect,
+  chaser: { ...chaserEffect.chaser, direction: "Bounce", clock_sync: { beats: 2 } },
+};
+assert.equal(
+  helpers.inferredCueAuthoredBeats([inferredChaser], [{ effect_id: inferredChaser.id, enabled: true }]),
+  4,
+);
+assert.equal(
+  helpers.inferredCueAuthoredBeats([inferredChaser], [{ effect_id: inferredChaser.id, enabled: false }]),
+  null,
+);
+assert.equal(
+  helpers.inferredCueAuthoredBeats(
+    [
+      { id: 71, effect_type: "Lfo", clock_sync: { beats: 2 } },
+      { id: 72, effect_type: "Lfo", clock_sync: { beats: 4 } },
+    ],
+    [{ effect_id: 71, enabled: true }, { effect_id: 72, enabled: true }],
+  ),
+  null,
+  "conflicting authored beats must remain indeterminate",
+);
+
+const ownedLfoRequest = {
+  label: "Owned LFO",
+  fixture_ids: [1],
+  target_group_ids: ["Front"],
+  attribute: "Dimmer",
+  video_targets: [],
+  shape: "Sine",
+  period_ms: 750,
+  clock_sync: { beats: 2 },
+  low: 100,
+  high: 60_000,
+  phase: 0.25,
+  blend_mode: "Override",
+  fixture_spread: 0.5,
+};
+const ownedLfoTarget = {
+  effect_id: 73,
+  enabled: false,
+  params: { Lfo: ownedLfoRequest },
+};
+const ownedLfoSummary = helpers.cueOwnedEffectSummary(ownedLfoTarget, null);
+assert.deepEqual(
+  {
+    id: ownedLfoSummary.id,
+    type: ownedLfoSummary.effect_type,
+    enabled: ownedLfoSummary.enabled,
+    lfo: ownedLfoSummary.lfo,
+    params: ownedLfoSummary.params,
+  },
+  {
+    id: 73,
+    type: "Lfo",
+    enabled: false,
+    lfo: ownedLfoRequest,
+    params: ownedLfoTarget.params,
+  },
+  "Cue-owned LFO reconstruction must retain the exact source request",
+);
 
 assert.deepEqual(helpers.eligibleCueEffects([chaserEffect], "lighting", context).map((effect) => effect.id), [60]);
 assert.deepEqual(helpers.eligibleCueEffects([chaserEffect], "video", context), []);

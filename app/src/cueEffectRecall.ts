@@ -1,4 +1,10 @@
-import type { CueEffectTarget, EffectSummary, PatchedFixtureSummary } from "./types";
+import type {
+  CueEffectTarget,
+  EffectBlendMode,
+  EffectKind,
+  EffectSummary,
+  PatchedFixtureSummary,
+} from "./types";
 
 export type CueEffectCaptureScope = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
 
@@ -184,3 +190,289 @@ export const setCueEffectTargetTransition = (
     };
   }),
 );
+
+export const chaserTraversalStepCount = (effect: EffectSummary) => {
+  const chaser = effect.chaser;
+  if (!chaser) return 0;
+  const stepCount = chaser.steps.length;
+  if (stepCount <= 1) return Math.max(1, stepCount);
+  if (chaser.direction === "Bounce") return stepCount * 2 - 2;
+  if (chaser.direction === "Random") return stepCount * (chaser.random_cycle_count ?? 1);
+  return stepCount;
+};
+
+export const authoredBeatsForEffectClock = (effect: EffectSummary) => {
+  switch (effect.effect_type) {
+    case "Color":
+      return effect.color?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Chaser":
+      return effect.chaser?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Move":
+      return effect.move_effect?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Value":
+      return effect.value?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Curve":
+      return effect.curve?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Mapping":
+      return effect.mapping?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "ColorMapping":
+      return effect.color_mapping?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    default:
+      return effect.clock_sync?.beats ?? null;
+  }
+};
+
+export const inferredCueAuthoredBeats = (effects: EffectSummary[], targets: CueEffectTarget[]) => {
+  const effectsById = new Map(effects.map((effect) => [effect.id, effect]));
+  const candidates = targets.filter((target) => target.enabled).flatMap((target) => {
+    const effect = effectsById.get(target.effect_id);
+    if (!effect) return [];
+    if (effect.effect_type === "Chaser") {
+      const traversalSteps = chaserTraversalStepCount(effect);
+      if (traversalSteps <= 0) return [];
+      const syncBeats = authoredBeatsForEffectClock(effect);
+      return [(syncBeats ?? 1) * traversalSteps];
+    }
+    const syncBeats = authoredBeatsForEffectClock(effect);
+    return syncBeats === null ? [] : [syncBeats];
+  });
+  if (candidates.length === 0) return null;
+  if (candidates.some((candidate) => !Number.isFinite(candidate) || candidate < 0.25 || candidate > 1024)) {
+    return null;
+  }
+  const first = candidates[0];
+  return candidates.every((candidate) => Math.abs(candidate - first) <= 1e-6) ? first : null;
+};
+
+export const cueOwnedEffectSummary = (
+  target: CueEffectTarget,
+  source: EffectSummary | null,
+): EffectSummary | null => {
+  const params = target.params;
+  if (!params) return source;
+  const shell = (
+    effectType: EffectKind,
+    label: string,
+    fixtureIds: number[],
+    targetGroupIds: string[],
+    attribute: string,
+    periodMs: number | null,
+    clockSync: EffectSummary["clock_sync"],
+    low: number,
+    high: number,
+    phase: number,
+    blendMode: EffectBlendMode,
+  ): EffectSummary => ({
+    id: target.effect_id,
+    label,
+    effect_type: effectType,
+    fixture_ids: fixtureIds,
+    target_group_ids: targetGroupIds,
+    attribute,
+    video_targets: [],
+    shape: source?.shape ?? "Sine",
+    period_ms: periodMs,
+    clock_sync: clockSync,
+    low,
+    high,
+    phase,
+    fixture_spread: 0,
+    blend_mode: blendMode,
+    enabled: target.enabled,
+    params,
+    color: null,
+    chaser: null,
+    move_effect: null,
+    value: null,
+    curve: null,
+    mapping: null,
+    color_mapping: null,
+  });
+  if ("Lfo" in params) {
+    const request = params.Lfo;
+    return {
+      ...shell(
+        "Lfo",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      video_targets: request.video_targets,
+      shape: request.shape,
+      fixture_spread: request.fixture_spread ?? 0,
+      lfo: request,
+    };
+  }
+  if ("PositionWave" in params) {
+    const request = params.PositionWave;
+    return {
+      ...shell(
+        "PositionWave",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        source?.period_ms ?? null,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      video_targets: request.video_targets,
+      shape: request.shape,
+      origin: request.origin,
+      direction: request.direction,
+      speed: request.speed,
+      wavelength: request.wavelength,
+    };
+  }
+  if ("Color" in params) {
+    const request = params.Color;
+    return {
+      ...shell(
+        "Color",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        "",
+        request.period_ms,
+        request.clock_sync,
+        0,
+        65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      fixture_spread: request.fixture_spread,
+      color: request,
+    };
+  }
+  if ("Chaser" in params) {
+    const request = params.Chaser;
+    const fixtureIds = [...new Set(request.steps.flatMap((step) => step.fixture_ids))];
+    const groupIds = [...new Set(request.steps.flatMap((step) => step.target_group_ids))];
+    const feature = request.features[0];
+    return {
+      ...shell(
+        "Chaser",
+        request.label,
+        fixtureIds,
+        groupIds,
+        feature?.attribute ?? "",
+        request.step_duration_ms,
+        request.clock_sync,
+        feature?.low ?? 0,
+        feature?.high ?? 65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      fixture_spread: request.fixture_spread,
+      chaser: request,
+    };
+  }
+  if ("Move" in params) {
+    const request = params.Move;
+    return {
+      ...shell(
+        "Move",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        "Pan/Tilt",
+        request.period_ms,
+        request.clock_sync,
+        0,
+        65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      fixture_spread: request.fixture_spread,
+      move_effect: request,
+    };
+  }
+  if ("Value" in params) {
+    const request = params.Value;
+    return {
+      ...shell(
+        "Value",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      fixture_spread: request.fixture_spread,
+      value: request,
+    };
+  }
+  if ("Curve" in params) {
+    const request = params.Curve;
+    return {
+      ...shell(
+        "Curve",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      fixture_spread: request.fixture_spread,
+      curve: request,
+    };
+  }
+  if ("Mapping" in params) {
+    const request = params.Mapping;
+    return {
+      ...shell(
+        "Mapping",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      shape: request.shape,
+      fixture_spread: request.fixture_spread,
+      mapping: request,
+    };
+  }
+  const request = params.ColorMapping;
+  return {
+    ...shell(
+      "ColorMapping",
+      request.label,
+      request.fixture_ids,
+      request.target_group_ids,
+      "Colour Mapping",
+      request.period_ms,
+      request.clock_sync,
+      0,
+      65_535,
+      request.phase,
+      request.blend_mode,
+    ),
+    color_mapping: request,
+  };
+};

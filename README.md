@@ -2,31 +2,48 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.25**
+- 製品名: **Syndocal 1.2.0-alpha.26**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.25` on branch
-`codex/syndocal-v1.2`, with accepted source/native evidence at
-`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: the accepted
-alpha.24 artifact remains immutable historical evidence, and alpha.25 was built
-as the distinct native UI checkpoint so it is not overwritten. The exact MSVC
-14.44 linker was first, then `pnpm --dir app tauri build --no-bundle` passed in
-`3m06s` with first-party warnings `0`. Vite transformed `297` modules and
-produced `App-CUUI4pgY.js` (`498.21 kB`) plus
-`gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The accepted artifact is
+Current product metadata is `1.2.0-alpha.26` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint for the current App
+structural split and synchronized product metadata: the alpha.26 native build,
+artifact identity, launch, and native UI acceptance are not yet performed.
+The running alpha.25 DJ session is preserved as an operational baseline only;
+it is not alpha.26 acceptance. No alpha.26 artifact hash, size, source HEAD, or
+PID is accepted yet. The release metadata checker expects alpha.26 product and
+installer naming below; that naming does not assert an alpha.26 installer
+exists.
+
+The preserved running alpha.25 DJ session was observed on 2026-08-28 with
+Deck 1 playing `More One Night × 動く、動く (Agate Trance&Makina bootleg)`;
+Artist was empty, Content ID was present, position revision was `149152`, BPM
+was `140`, and `isPlaying=true`. The DJ Agent sent
+`DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was
+rejected; FOH remained `owner— / playing No / track—`. The temporary track had
+no Timeline mapping, so the result is fail-closed. Computer Use reproduced the
+Timeline Start dropdown returning to its placeholder immediately after
+selecting Timeline 1 (UI remount bug; a separate Luna fix is in progress).
+This is not HW-4 end-to-end acceptance; HW-4 remains exactly `0/12`. The DJ-PC
+screenshot evidence is
+`C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`,
+`218629` bytes, SHA-256
+`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
+LastWrite `2026-08-28 07:10:32 JST`.
+
+Historical alpha.25 native evidence remains immutable: source/native evidence
+was `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`, and the accepted artifact was
 `target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.25`,
 `59,807,744` bytes, SHA-256
 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
-LastWrite `2026-08-28T06:20:27.6424691+09:00`. Exactly one responsive
-`Syndocal` process/window was observed (PID `83252`, handle `60826240`, title
-`Syndocal`). Computer Use at `1920x1032` verified the restore button, proving
-the target was maximized; native I/O DMX full-width selector/workbench and
-native Setup Lighting/Profile rendering are accepted. The release metadata
-checker expects alpha.25 product and installer naming below; that naming does
-not assert an alpha.25 installer exists.
+LastWrite `2026-08-28T06:20:27.6424691+09:00`, with exactly one responsive
+maximized `Syndocal` window (PID `83252`, handle `60826240`). Its native I/O
+DMX and Setup Lighting/Profile rendering were accepted. The StandardRelease
+runner remains bound to that exact alpha.25 artifact and must not be relabelled
+until a fresh alpha.26 native build is accepted.
 
 Historical alpha.24 evidence is preserved, not promoted to alpha.25: source
 build `5eb1888906613851c4c49e66717a270f13bbd7b5` with native-evidence descendant
@@ -123,7 +140,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.25_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.25_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.26_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.26_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

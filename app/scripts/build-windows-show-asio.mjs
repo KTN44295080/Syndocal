@@ -491,8 +491,8 @@ async function runSelfTest() {
   rejects(() => validateGitState({ ...cleanGit, status: " M tracked.txt" }), /completely clean/, "tracked dirt is rejected");
   rejects(() => validateGitState({ ...cleanGit, status: "?? untracked.txt" }), /completely clean/, "untracked files are rejected");
   rejects(() => validateGitState({ ...cleanGit, upstream: "b".repeat(40) }), /must equal its upstream/, "HEAD/upstream drift is rejected");
-  pass(validateVersionSet({ workspaceVersion: "1.2.0-alpha.25", lockVersion: "1.2.0-alpha.25", packageVersion: "1.2.0-alpha.25", tauriVersion: "1.2.0-alpha.25" }) === "1.2.0-alpha.25", "synchronized version set is accepted");
-  rejects(() => validateVersionSet({ workspaceVersion: "1.2.0-alpha.25", lockVersion: "1.2.0-alpha.14", packageVersion: "1.2.0-alpha.25", tauriVersion: "1.2.0-alpha.25" }), /version drift/, "version drift is rejected");
+  pass(validateVersionSet({ workspaceVersion: "1.2.0-alpha.26", lockVersion: "1.2.0-alpha.26", packageVersion: "1.2.0-alpha.26", tauriVersion: "1.2.0-alpha.26" }) === "1.2.0-alpha.26", "synchronized version set is accepted");
+  rejects(() => validateVersionSet({ workspaceVersion: "1.2.0-alpha.26", lockVersion: "1.2.0-alpha.14", packageVersion: "1.2.0-alpha.26", tauriVersion: "1.2.0-alpha.26" }), /version drift/, "version drift is rejected");
   rejects(() => assertSourceAndGitStable(cleanGit, { ...cleanGit, head: "b".repeat(40) }, [], []), /Git identity/, "commit drift during build is rejected");
   rejects(() => assertSourceAndGitStable(cleanGit, cleanGit, [{ path: "x", sha256: "a" }], [{ path: "x", sha256: "b" }]), /source bytes changed/, "source mutation during build is rejected");
   const baseEnvironment = {

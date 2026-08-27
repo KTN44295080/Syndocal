@@ -2,12 +2,34 @@
 
 Date: 2026-08-21
 Updated: 2026-08-28
-Status: Required; current KDMX native authority is accepted `1.2.0-alpha.25` at source `566a7101b0d5c9307e8d0efa5ccf499aba3eb404` on `codex/syndocal-v1.2`; its StandardRelease runner rebind is accepted by dual `88/88` self-tests plus dual syntax passes, with no Apply/hardware run. Controlled rb-output checkout authority remains `1.1.9` at exact peer commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`, with release implementation provenance at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. Historical alpha.24 native evidence must not be promoted; target-DJ-PC authoritative running state, saved show project/mapping, and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
+Status: Required; current KDMX product checkpoint is source-only `1.2.0-alpha.26` on `codex/syndocal-v1.2`; alpha.26 native build, artifact identity, launch, and native UI acceptance are unbuilt/unverified. The running alpha.25 DJ session and its accepted native artifact/runner are preserved as historical operational evidence, not relabelled. Controlled rb-output checkout authority remains `1.1.9` at exact peer commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`, with release implementation provenance at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`. The physical matrix remains unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## Current KDMX alpha.25 native and DJ-PC execution authority — 2026-08-28
+## Current KDMX alpha.26 source-only and preserved alpha.25 DJ session — 2026-08-28
 
-The active product/file version is `1.2.0-alpha.25`; accepted source/native
+The active product metadata is `1.2.0-alpha.26`; this source-only checkpoint
+carries the current App structural split. Alpha.26 native build, artifact
+identity, launch, and native UI acceptance are unbuilt/unverified. The running
+alpha.25 DJ session is preserved as an operational baseline only and is not
+alpha.26 evidence. Deck 1 showed `More One Night × 動く、動く (Agate
+Trance&Makina bootleg)`, empty Artist, present Content ID, position revision
+`149152`, BPM `140`, and `isPlaying=true`. The DJ Agent sent `DJ_TRACK_ACTIVE`
+event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was rejected; FOH
+remained `owner— / playing No / track—`. The temporary track had no Timeline
+mapping, so this result is fail-closed. Computer Use reproduced the Timeline
+Start dropdown returning to its placeholder immediately after selecting
+Timeline 1 (UI remount bug; a separate Luna fix is in progress). This is not
+HW-4 end-to-end acceptance; HW-4 remains exactly `0/12`.
+
+DJ-PC screenshot evidence is
+`C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`, `218629`
+bytes, SHA-256
+`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
+LastWrite `2026-08-28 07:10:32 JST`.
+
+## Historical KDMX alpha.25 native and DJ-PC execution authority — 2026-08-28
+
+The historical product/file version was `1.2.0-alpha.25`; accepted source/native
 evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404` on
 `codex/syndocal-v1.2`. Old/new/reason: alpha.24 remains immutable historical
 artifact evidence; alpha.25 is the distinct native UI checkpoint, so alpha.24
@@ -111,16 +133,17 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX product metadata
-is `1.2.0-alpha.25`; accepted source/native evidence is
-`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`, with the accepted artifact and
-native checks recorded above. The StandardRelease runner rebinding is accepted:
+is source-only `1.2.0-alpha.26`; alpha.26 native build, artifact identity,
+launch, and native UI acceptance are unbuilt/unverified. The accepted alpha.25
+artifact and native checks are historical and recorded above. The StandardRelease
+runner remains bound to alpha.25 until a fresh alpha.26 artifact is accepted:
 PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, syntax
 passed in both, and no Apply or hardware acceptance was run. The alpha.24 artifact described above
-is historical and is not rebound to alpha.25; alpha.21 build/launch/layout
+is historical and is not rebound to alpha.26; alpha.21 build/launch/layout
 evidence is historical as well. The immediately preceding
 DJ authority source is immutable alpha.19 commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; older alpha.18/alpha.17 artifact
-evidence is historical and is not rebound to alpha.25.
+evidence is historical and is not rebound to alpha.26.
 
 The only current controlled rb-output checkout is version `1.1.9` at exact peer
 commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`; its release implementation
@@ -897,7 +920,7 @@ no hardware row.
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
 then-current alpha.17 source checkpoint superseded them. The later alpha.18
-authority below is also historical; current alpha.25 authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
+authority below is also historical; current alpha.26 source-only authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
 configured peer therefore cannot satisfy HW-4.11 restart/next-show reuse without
@@ -994,7 +1017,7 @@ claimed.
 This append-only section records the source checkpoint that superseded the two
 historical implementation gaps above. The alpha.17 checkpoint was current at
 that historical point; the later alpha.18 authority below is historical and the
-current alpha.25 authority is at the top. This section does not rewrite the dated hardware observations above and
+current alpha.26 source-only authority is at the top. This section does not rewrite the dated hardware observations above and
 checks no HW-4 row.
 
 - **Old path:** listener enable/bind/start state and the process-local token did

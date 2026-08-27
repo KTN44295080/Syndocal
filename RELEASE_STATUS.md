@@ -1,7 +1,51 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-28
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.25`. Accepted source/native evidence is `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Old/new/reason: alpha.24 remains immutable historical artifact evidence; alpha.25 is the distinct native UI checkpoint, so the accepted alpha.24 executable was not overwritten. The exact MSVC 14.44 linker was first, and `pnpm --dir app tauri build --no-bundle` passed in `3m06s` with first-party warnings `0`. Vite transformed `297` modules, emitting `App-CUUI4pgY.js` (`498.21 kB`) and `gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The accepted artifact is `target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, and responsive state were verified. Computer Use at `1920x1032` found the restore button, proving maximized state. Native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering are accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` is now the StandardRelease authority for alpha.25 at the exact version, byte size, SHA-256, and source HEAD above; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, with syntax passing in both. No Apply or hardware acceptance was run. DJ TCP re-established the `.50.2` peer, but `Untitled.sdc`/its mapping is not authoritative and HW-4 remains exactly `0/12`. Target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.26`. This is a source-only checkpoint for the current App structural split and synchronized metadata: the alpha.26 native build, artifact identity, launch, and native UI acceptance are unbuilt/unverified. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.26 evidence. Historical alpha.25 native and DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+
+## 2026-08-28 current alpha.26 source-only App structural split checkpoint
+
+Product metadata is synchronized to `1.2.0-alpha.26` on branch
+`codex/syndocal-v1.2`. This checkpoint records source and metadata only; no
+alpha.26 native build, artifact hash/size, launch, or native UI acceptance has
+been performed. The exact alpha.25 StandardRelease runner and native artifact
+remain historical until a fresh alpha.26 native build is accepted.
+
+The preserved running alpha.25 DJ session was observed on 2026-08-28 with
+Deck 1 playing `More One Night × 動く、動く (Agate Trance&Makina bootleg)`;
+Artist was empty, Content ID was present, position revision was `149152`, BPM
+was `140`, and `isPlaying=true`. The DJ Agent sent `DJ_TRACK_ACTIVE` event
+`22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was rejected; FOH remained
+`owner— / playing No / track—`. The temporary track had no Timeline mapping,
+so the result is fail-closed. Computer Use reproduced the Timeline Start
+dropdown returning to its placeholder immediately after selecting Timeline 1;
+this UI remount bug is assigned to a separate Luna lane. This is not HW-4
+end-to-end acceptance; HW-4 remains exactly `0/12`.
+
+DJ-PC screenshot evidence: `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`,
+`218629` bytes, SHA-256
+`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
+LastWrite `2026-08-28 07:10:32 JST`.
+
+## 2026-08-28 historical alpha.25 native and DJ execution checkpoint
+
+Product metadata at this historical checkpoint was `1.2.0-alpha.25`; accepted
+source/native evidence was `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. The exact
+MSVC 14.44 linker was first, and `pnpm --dir app tauri build --no-bundle` passed
+in `3m06s` with first-party warnings `0`. Vite transformed `297` modules,
+emitting `App-CUUI4pgY.js` (`498.21 kB`) and
+`gdtfProfileActions-54y__lyr.js` (`3.91 kB`). The historical artifact was
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.25`,
+`59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
+LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`,
+title `Syndocal`, and responsive/maximized state were verified. Native I/O DMX
+full-width selector/workbench and Setup Lighting/Profile rendering were
+accepted. The three-display runner remains bound to this exact historical
+alpha.25 version, byte size, SHA-256, and source HEAD; its PowerShell 7 and
+Windows PowerShell 5.1 self-tests both passed `88/88`, with syntax passing in
+both. No Apply or hardware acceptance was run. DJ TCP re-established the
+`.50.2` peer, but `Untitled.sdc`/its mapping was not authoritative.
 
 ## 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 
