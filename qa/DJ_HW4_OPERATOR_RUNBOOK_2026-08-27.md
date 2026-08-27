@@ -34,8 +34,8 @@ process as the alpha.20 artifact identity.
 
 ### 1.1 Current alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
-KDMX `1.2.0-alpha.20` is the current source/native checkpoint; its authoritative
-source is the commit containing this runbook update. The immutable Follow /
+KDMX `1.2.0-alpha.20` is the current source/native checkpoint at exact commit
+`03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The immutable Follow /
 Stage 2 source authority remains alpha.19 commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` and is carried forward without a
 wire or policy change.
@@ -90,7 +90,8 @@ release, or a historical v1.1.5/v1.1.6/v1.1.7/v1.1.8 configuration as current
 acceptance evidence.
 
 The current KDMX source/native checkpoint is `1.2.0-alpha.20` at branch
-`codex/syndocal-v1.2`, in the commit containing this runbook update. The DJ
+`codex/syndocal-v1.2`, exact commit
+`03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The DJ
 authority it carries is alpha.19 source commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. At that alpha.19 checkpoint, the
 exact MSVC 14.44 locked single-thread full workspace gate passed `2622` / `0`

@@ -55,8 +55,13 @@ assert.match(types, /interface RemoteControlConfig[\s\S]*dj_link_enabled/);
 assert.match(panel, /data-io-disclosure="dj-link"/);
 assert.match(
   panel,
-  /<div class="ioDisclosureStack">\s*<details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">/,
-  "Web Remote must be a peer connection disclosure, not a fixed top section",
+  /<div class="ioDisclosureStack">\s*<Show when=\{props\.surface !== "dj"\}>\s*<details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">/,
+  "Web Remote must be a lazy peer disclosure and remain unmounted on the DJ-only surface",
+);
+assert.match(
+  panel,
+  /<\/Show>\s*<Show when=\{props\.surface !== "web"\}>\s*<details class="ioDisclosure" data-io-disclosure="dj-link">/,
+  "DJ Link must be a lazy peer disclosure and remain unmounted on the Web-only surface",
 );
 assert.doesNotMatch(
   panel,

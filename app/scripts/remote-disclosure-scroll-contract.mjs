@@ -43,12 +43,23 @@ async function remoteDisclosureScrollInPage() {
     await settle();
     const body = document.querySelector('[data-io-workbench-body]');
     const zone = body?.querySelector('[data-io-zone]');
+    const disclosureStack = zone?.querySelector('.remoteControl > .ioDisclosureStack');
+    const disclosureMounted = (name) => Boolean(
+      disclosureStack?.querySelector(`:scope > [data-io-disclosure="${name}"]`),
+    );
     return {
       id,
       found: true,
       selected: button.getAttribute('aria-pressed') === 'true',
       zone: zone?.getAttribute('data-io-zone') ?? null,
       zoneMountedInWorkbench: Boolean(zone && body?.contains(zone)),
+      mountedDisclosures: {
+        webRemote: disclosureMounted('web-remote'),
+        remoteSecurity: disclosureMounted('remote-security'),
+        remoteEndpoints: disclosureMounted('remote-endpoints'),
+        remoteStandby: disclosureMounted('remote-standby'),
+        djLink: disclosureMounted('dj-link'),
+      },
     };
   };
   const resetScroll = (root) => {
@@ -257,8 +268,21 @@ async function remoteDisclosureScrollInPage() {
     djCardReachable: djSelection.found && djSelection.selected && djSelection.zone === 'remote',
     passed:
       webSelection.found && webSelection.selected && webSelection.zoneMountedInWorkbench &&
+      webSelection.mountedDisclosures.webRemote &&
+      webSelection.mountedDisclosures.remoteSecurity &&
+      webSelection.mountedDisclosures.remoteEndpoints &&
+      webSelection.mountedDisclosures.remoteStandby &&
+      !webSelection.mountedDisclosures.djLink &&
       djSelection.found && djSelection.selected && djSelection.zoneMountedInWorkbench &&
+      djSelection.mountedDisclosures.djLink &&
+      !djSelection.mountedDisclosures.webRemote &&
+      !djSelection.mountedDisclosures.remoteSecurity &&
+      !djSelection.mountedDisclosures.remoteEndpoints &&
+      !djSelection.mountedDisclosures.remoteStandby &&
       restoredWebSelection.found && restoredWebSelection.selected &&
+      restoredWebSelection.mountedDisclosures.webRemote &&
+      restoredWebSelection.mountedDisclosures.remoteStandby &&
+      !restoredWebSelection.mountedDisclosures.djLink &&
       web.passed && dj.passed,
   };
 }

@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 Updated: 2026-08-27
-Status: Required; current execution authority is KDMX `1.2.0-alpha.20` at the source checkpoint containing this status and controlled rb-output `1.1.9` at exact peer commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; the local alpha.20 native build/launch/layout gate is accepted, but target-DJ-PC identity/deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
+Status: Required; current execution authority is KDMX `1.2.0-alpha.20` at exact source checkpoint `03b70cd14a285a41c63cfd1d9b3bd89c025eec16` and controlled rb-output `1.1.9` at exact peer commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; the local alpha.20 native build/launch/layout gate is accepted, but target-DJ-PC identity/deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current v3 execution authority — 2026-08-27
@@ -12,8 +12,9 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX product metadata
-is `1.2.0-alpha.20` on branch `codex/syndocal-v1.2`; the commit containing this
-section is its Stage/Setup-I/O source checkpoint. The accepted local native
+is `1.2.0-alpha.20` on branch `codex/syndocal-v1.2`; exact commit
+`03b70cd14a285a41c63cfd1d9b3bd89c025eec16` is its Stage/Setup-I/O source
+checkpoint. The accepted local native
 artifact is Product/FileVersion `1.2.0-alpha.20`, SHA-256
 `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`, and was
 launched as one responsive maximized Syndocal window. The immediately preceding

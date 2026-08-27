@@ -56,7 +56,7 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.20 Stage/Setup-I/O source/native | Product metadata is `1.2.0-alpha.20`; authoritative source is the commit containing section 29; local artifact SHA-256 is `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; public release and HW-4 remain open |
+| Current alpha.20 Stage/Setup-I/O source/native | Product metadata is `1.2.0-alpha.20`; authoritative source is `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`; local artifact SHA-256 is `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; public release and HW-4 remain open |
 | Current rb-output v1.1.9 controlled source | `beta-v1.1.2` clean/upstream-equal source authority at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; full suite `455` total / `453` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
 | Historical alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata was `1.2.0-alpha.18`; exact source `HEAD`/upstream was `db4eefc348b01ee05dd2dc87945afa85de8803e`; historical native artifact/process identity is recorded in section 21 |
 | Historical alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
@@ -75,8 +75,9 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.20 authority is section 29 and
-the commit containing it. The historical alpha.18 source checkpoint was
+Branch: `codex/syndocal-v1.2`. The current alpha.20 source authority is section
+29 at exact commit `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The historical
+alpha.18 source checkpoint was
 `db4eefc348b01ee05dd2dc87945afa85de8803e` at exact `HEAD`/upstream; its native
 artifact/process identity is recorded in section 21, and the direct refresh
 click remains unconfirmed. The alpha.17 native runtime/source/artifact remains bound to pushed commit
@@ -1413,7 +1414,8 @@ remains **0/12**.
 
 This checkpoint began on `codex/syndocal-v1.2` at
 `7cda8c8fbf04bde6efc705ef59a65dd5816da551`. Product metadata is
-`1.2.0-alpha.20`; the commit containing this section is the authoritative
+`1.2.0-alpha.20`; exact commit
+`03b70cd14a285a41c63cfd1d9b3bd89c025eec16` is the authoritative
 Stage/Setup-I/O source checkpoint. The implementation diff is frozen after
 independent review. This is not a deployed or physical-hardware acceptance
 claim.
@@ -1463,6 +1465,21 @@ The production build completed without a Vite warning; the final App chunk is
 baseline/current `0/0`, with zero first-party and zero third-party warnings.
 `git diff --check` passed with only Git line-ending notices.
 
+After the source commit, the broad `check:dj-link` gate exposed a QA-only
+contract drift: its static assertion still required Web Remote `<details>` to
+be the direct child of `ioDisclosureStack`, while alpha.20 intentionally wraps
+Web and DJ disclosures in mutually exclusive Solid `<Show>` boundaries so the
+inactive authority surface is not mounted. The checker now requires both exact
+lazy wrappers (`surface !== "dj"` for Web and `surface !== "web"` for DJ), rather
+than accepting the retired direct-child layout. The live browser helper also
+requires Web selection to mount Web/Security/Endpoints/Standby with no DJ Link,
+and DJ selection to mount DJ Link with no Web disclosures; restored Web must
+again have no DJ Link. `node --check`, `pnpm --dir app run check:dj-link`, and
+all five `check:viewport -- --setup-io-only` cases pass; the DJ gate reports
+both mapping policy and frontend contract passed, and every viewport reports
+`remoteScroll=1`. This QA/docs follow-up does not change the alpha.20
+product/native source commit or close any HW-4 row.
+
 The first native attempt failed before product linking because `FFMPEG_DIR` was
 not set; no artifact from that attempt is accepted. The full gate restarted
 from exact-path process inspection, `vcvars64.bat -vcvars_ver=14.44`, the pinned
@@ -1500,13 +1517,19 @@ repo `278,371,465,649` bytes (`259.25 GiB`), `.git` `217,408,416` bytes,
 `target` `277,042,280,989` bytes (`258.02 GiB`), `app/node_modules`
 `545,338,492` bytes, and `app/dist` `5,108,607` bytes. `target/debug` accounts
 for `242.23 GiB`, including `115.02 GiB` incremental and `112.06 GiB` deps.
-No deletion was performed. The tracked cleanup plan returned
-`Outcome=Blocked`, `Blocker=DirtyWorktree`; the only current allowlist candidate,
-`target/debug/incremental`, is about `0.12` days old, below the seven-day stale
-threshold, and has historical hard-link risk. The plan-only legacy harness is
-also not execution-qualified, and `tools/asio-bridge/target` is outside the
-reviewed allowlist. Preserve release, QA, ASIO, Show-ASIO, and debug dependency
-artifacts until a clean pushed checkpoint and a new exact-path safety review.
+No deletion was performed. After `03b70cd` was clean, pushed, and
+upstream-equal, read-only command
+`& .\qa\harnesses\invoke-syndocal-build-cache-cleanup.ps1` returned `Mode=Plan`,
+`Outcome=Blocked`, `Blocker=WriterOwnershipTopologyUnverifiable`: Adobe Creative
+Cloud Libraries `node.exe` PID `61616` referred to a missing positive parent PID
+`49864`, so ownership could not be proved. The exact allowlist remained only
+`target/debug/incremental`; it contained `72,840` files / `123,505,799,091`
+logical bytes (`115.02 GiB`), was only `0.122` days old versus the seven-day
+minimum, and separately reproduced `HardlinkDetected` with link count `5`.
+`tools/asio-bridge/target` remains outside the reviewed allowlist, and the legacy
+harness remains plan-only. Preserve release, QA, ASIO, Show-ASIO, and debug
+dependency artifacts until writer topology, age, hard-link, and exact-path
+review gates all pass.
 
 Real fixture placement against the supplied Daslight project, DMX output and
 input/merge, MIDI, Rekordbox, DJ Link, pedal HW-4 (`0/12`), target-PC deployment,
