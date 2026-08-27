@@ -1,9 +1,49 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-27
-Branch: `codex/syndocal-v1.2`; current dirty development metadata is `1.2.0-alpha.18`. The exact MSVC 14.44 / locked full-workspace rerun passed with zero failed tests, the Syndocal binary target reported `1164` pass / `11` intentional hardware-media ignores, the frontend production build and zero-warning ratchet passed, and the touched full-gate fixtures received independent Terra xHigh review with P0/P1/P2 all zero. The release-metadata gate remains blocked in this OneDrive checkout by the pre-existing hard-link alias on `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json`; it must be rerun from a clean non-OneDrive source image after commit. The standard native rebuild and maximized UI verification are still pending. The existing standard alpha.17 native executable remains the latest locally verified artifact: one responsive maximized window with exact source and artifact identities recorded in the QA handoff. The current source keeps position-preserving DJ RELEASE, removes the retired Master-only ingress, places Web Remote in the shared connection disclosure stack, and repairs typed wired IPv4 discovery; none of those alpha.18 changes inherits alpha.17 native evidence. rb-output v1.1.8 is source/full-suite accepted at its pinned peer commit, but target-DJ-PC deployment and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed. Historical alpha.17 and earlier checkpoints remain immutable evidence, and later source or documentation commits do not redefine an already-built binary's source identity.
+Branch: `codex/syndocal-v1.2`; current source checkpoint is `1.2.0-alpha.18` at exact `HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`. The exact MSVC 14.44 / locked full-workspace rerun passed with `1164` pass / `0` fail / `11` intentional hardware-media ignores, zero first-party warnings, frontend build, DJ Link, `422` invokes, `3559` localization checks, and viewport/setup harness pass; exact-MSVC live discovery identifies Ethernet4 `192.168.50.1` as eligible. The clean release gate `4fc443d` passed after staging seven pinned DLLs. The active OneDrive checkout still requires a clean non-OneDrive rerun because `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` is hard-linked to `C:\Users\kouty\Documents\.tmp.driveupload\867492`; the tracked file is unchanged and no alias deletion or replacement was performed. The required `pnpm --dir app tauri build --no-bundle` passed with exact MSVC 14.44 linker-first setup and zero first-party warnings. The alpha.18 artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256 `841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`, LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`; its launch observed exactly one responsive process (PID `80264`, title `Syndocal`, window handle `854080`, `IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`). Native capture confirmed Web Remote/Security/Endpoints/DJ Link/Standby in the same disclosure stack and two wired candidates. The wired-binding refresh click remains unconfirmed because foreground PID retrieval failed; the five-viewport setup harness did confirm listener empty→count 0→Ethernet4 `192.168.50.1`→count 1, one invoke per phase, and disabled mutation controls. The current source keeps position-preserving DJ RELEASE, removes the retired Master-only ingress, places Web Remote in the shared connection disclosure stack, and repairs typed wired IPv4 discovery. rb-output v1.1.8 is source/full-suite accepted at its pinned peer commit, but target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed. Historical alpha.17 and earlier checkpoints remain immutable evidence, and later source or documentation commits do not redefine an already-built binary's source identity.
 
-The standard Setup I/O browser contract now passes at all five supported viewports, including `1280x720`: Web Remote is a normally collapsed peer of Endpoints and DJ Link in one contained disclosure scrollport, with no control-size reduction. Independent review also found and closed an adjacent fail-closed defect: the retired DMX route buttons reported `no state changed` while mutating the current protocol draft before rejection. The new candidate-only route path leaves the full rendered draft and all `128` route signatures unchanged, invokes neither retired output command, and the strengthened gate names that result `serialFailClosed` / `networkRoutesFailClosed`. Remote Start then Stop must each occur exactly once and in order. Independent re-review is GO with P0/P1/P2 all zero; native visual confirmation remains pending.
+## 2026-08-27 current alpha.18 checkpoint
+
+This is the current source/UI authority and alpha.18 native build/launch/layout
+record, but not a physical acceptance claim. The source identity is branch `codex/syndocal-v1.2`,
+`HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`, product version
+`1.2.0-alpha.18`. Focused MASTER clean-break gates passed protocol `7/7`,
+runtime `5/5`, single-thread I/O `37/37`, frontend/build, live, and static
+checks; the full locked source rerun passed `1164` / `0` / `11` for
+Syndocal pass/fail/intentional hardware-media ignores with zero first-party
+warnings. Frontend invokes are `422`, localization is `3559`, and the
+viewport/setup harness passes. Exact-MSVC live discovery passed and marks
+Ethernet4 `192.168.50.1` eligible. The clean release gate `4fc443d` passed
+after staging seven pinned DLLs.
+
+The alpha.18 native build and maximized-window launch gate are now verified with
+the required MSVC 14.44 linker-first setup. Keep this identity separate from
+the historical alpha.17 artifact:
+
+- native artifact path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- Product/FileVersion: `1.2.0-alpha.18`
+- size: `58,740,224` bytes
+- SHA-256: `841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`
+- LastWriteTimeUtc: `2026-08-27T05:38:40.1840641Z`
+- launch: exactly one responsive process, PID `80264`, title `Syndocal`, window handle `854080`, `IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`
+
+Native capture confirmed Web Remote/Security/Endpoints/DJ Link/Standby in the
+same disclosure stack and two wired candidates. Foreground PID retrieval failed
+for the attempted native wired-binding refresh click, so that click remains
+unconfirmed. The five-viewport setup harness independently confirmed listener
+empty→count 0→Ethernet4 `192.168.50.1`→count 1, one invoke per phase, and
+disabled mutation controls. Target-DJ-PC and HW-4 evidence remain open.
+
+The controlled rb-output peer remains v1.1.8 at commit
+`0f3e8c6851857c8542c132a89a7d44289002b1f5`; its non-Master Deck 2
+router-to-real-MIDI seven-byte proof is focused `12/12`, and its full suite is
+`415` total / `413` pass / `0` fail / `2` intentional skips. Target-DJ-PC
+deployment, token, LAN, reconnect, physical pedal, MIDI, and all HW-4 rows are
+unconfirmed; HW-4 remains **0/12**. The alpha.17 and alpha.16 artifacts and
+process identities below remain historical.
+
+The standard Setup I/O browser contract now passes at all five supported viewports, including `1280x720`: Web Remote is a normally collapsed peer of Endpoints and DJ Link in one contained disclosure scrollport, with no control-size reduction. Native capture confirms the same disclosure stack across Web Remote/Security/Endpoints/DJ Link/Standby and shows two wired candidates. The direct native wired-binding refresh click remains unconfirmed because foreground PID retrieval failed; the five-viewport setup harness did confirm listener empty→count 0→Ethernet4 `192.168.50.1`→count 1, one invoke per phase, and disabled mutation controls. Independent review also found and closed an adjacent fail-closed defect: the retired DMX route buttons reported `no state changed` while mutating the current protocol draft before rejection. The new candidate-only route path leaves the full rendered draft and all `128` route signatures unchanged, invokes neither retired output command, and the strengthened gate names that result `serialFailClosed` / `networkRoutesFailClosed`. Remote Start then Stop must each occur exactly once and in order. Independent re-review is GO with P0/P1/P2 all zero.
 Original completion commit: `6c3de12`
 Production-quality baseline commit: `edfc93c`
 Final cross-platform CI: [run 29179218727](https://github.com/Seraf0-org/Rayard/actions/runs/29179218727)

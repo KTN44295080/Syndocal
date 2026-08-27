@@ -346,8 +346,11 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.18` in the
-dirty working tree. Its native rebuild and UI retest are pending.
+alpha checkpoints; the current synchronized source checkpoint is
+`1.2.0-alpha.18` at branch `codex/syndocal-v1.2`, exact `HEAD`/upstream
+`db4eefc348b01ee05dd2dc87945afa85de8803e`. Its native rebuild and UI retest
+are now verified for build, launch, and maximized-window layout; the direct
+wired-binding refresh click remains unconfirmed.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -367,9 +370,25 @@ acceptance. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from it.
 
 The current `1.2.0-alpha.18` any-deck DJ-Link/source and synchronized metadata
-ordinal is present in the dirty working tree; no alpha.18 source commit or
-native artifact has been built. The last committed alpha.17 source checkpoint
-is the pushed, upstream-equal
+checkpoint is committed at the exact `HEAD`/upstream
+`db4eefc348b01ee05dd2dc87945afa85de8803e` on `codex/syndocal-v1.2`. Focused
+MASTER clean-break gates passed protocol `7/7`, runtime `5/5`, single-thread
+I/O `37/37`, frontend/build, live, and static checks; the locked full source
+rerun passed `1164` / `0` / `11` for Syndocal pass/fail/intentional
+hardware-media ignores with zero first-party warnings. Frontend invokes are
+`422`, localization is `3559`, and the viewport/setup harness passes. Exact
+MSVC live discovery passed and marks Ethernet4 `192.168.50.1` eligible. The
+clean release gate `4fc443d` passed after staging seven pinned DLLs.
+
+The alpha.18 native build and maximized-window launch gate are now verified with
+the required MSVC 14.44 linker-first setup. Its artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.18`, size `58,740,224` bytes, SHA-256
+`841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
+LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Launch observed exactly one
+responsive process, PID `80264`, title `Syndocal`, window handle `854080`,
+`IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`. The last
+committed alpha.17 source checkpoint is the pushed, upstream-equal
 `fb5d18fdf898a1435bed173ddd17934a04a97897`. Its engine `dj_link_` proof is
 `25/25`, Syndocal `dj_link_dispatch_` is `8/8`, the three-display harness is
 `80/80`, the frontend build passed, detached `check:release` passed including
@@ -377,13 +396,14 @@ is the pushed, upstream-equal
 native artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
 Product/FileVersion `1.2.0-alpha.17`, size `59,021,824` bytes, SHA-256
 `8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`, with
-  exactly one responsive maximized Syndocal window at PID `57640`. This alpha.17
-  artifact/process evidence is historical and is not re-bound to alpha.18. The external
-  rb-output v1.1.8 source is pushed and clean at exact commit
-  `0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed `415` total
-  / `413` pass / `0` fail / `2` intentional skips, including the focused
-  non-Master Deck 2 router-to-real-MIDI seven-byte proof at `12/12`. The verified alpha.16/alpha.15
-  artifacts remain immutable historical evidence and are not relabeled.
+exactly one responsive maximized Syndocal window at PID `57640`. This alpha.17
+artifact/process evidence is historical and is not re-bound to alpha.18. The
+external rb-output v1.1.8 source is pushed and clean at exact commit
+`0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed `415` total
+/ `413` pass / `0` fail / `2` intentional skips, including the focused
+non-Master Deck 2 router-to-real-MIDI seven-byte proof at `12/12`. The verified
+alpha.16/alpha.15 artifacts remain immutable historical evidence and are not
+relabeled.
 
 The synchronized product-version surfaces are:
 
@@ -2152,11 +2172,20 @@ remain in force.
 
 ## 49. 2026-08-27 current alpha.18 source/native/UI authority
 
-The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
-no alpha.18 source commit or native artifact is claimed. The alpha.17 source,
-native artifact, process identity, and hash recorded in section 48 remain
-historical and are not re-bound to alpha.18. A fresh alpha.18 native rebuild and
-maximized UI retest remain pending.
+The current KDMX source checkpoint is `1.2.0-alpha.18` at branch
+`codex/syndocal-v1.2`, exact `HEAD`/upstream
+`db4eefc348b01ee05dd2dc87945afa85de8803e`. The alpha.17 source, native
+artifact, process identity, and hash recorded in section 48 remain historical
+and are not re-bound to alpha.18. The required `pnpm --dir app tauri build
+--no-bundle` passed with exact MSVC 14.44 linker-first setup and zero first-party
+warnings. The resulting alpha.18 artifact is:
+
+- path: `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`
+- Product/FileVersion: `1.2.0-alpha.18`
+- size: `58,740,224` bytes
+- SHA-256: `841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`
+- LastWriteTimeUtc: `2026-08-27T05:38:40.1840641Z`
+- launch: exactly one responsive process, PID `80264`, title `Syndocal`, window handle `854080`, `IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`
 
 The existing alpha.17 native artifact returned
 `wired_candidate_discovery_failed` during wired refresh; its typed live
@@ -2164,12 +2193,18 @@ diagnostic exposed the old `Structural DuplicateIpv4Address` code. The root
 cause was a typed `sin_addr` read against the `SOCKADDR_IN` `+8` padding. The
 source fix corrects that layout handling and drops COM objects before
 `CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware-enumeration checks
-passed and identify `192.168.50.1` as eligible, but a fresh native rebuild and
-maximized UI retest remain pending.
+passed and identify Ethernet4 `192.168.50.1` as eligible. The native screenshot
+confirmed Web Remote/Security/Endpoints/DJ Link/Standby in the same disclosure
+stack and showed two wired candidates. The attempted native wired-binding
+refresh click remains unconfirmed because foreground PID retrieval failed. The
+five-viewport setup harness independently confirmed listener empty→count `0`→
+Ethernet4 `192.168.50.1`→count `1`, one invoke per phase, and disabled mutation
+controls; this does not promote the native click to accepted.
 
 The Web Remote source layout now uses the same connection disclosure stack as
-DJ Link and Endpoints without shrinking controls; native visual confirmation
-remains pending. The standard and dedicated Setup I/O browser contracts pass all
+DJ Link and Endpoints without shrinking controls; native visual confirmation is
+verified above, while the direct refresh-button click remains unconfirmed. The
+standard and dedicated Setup I/O browser contracts pass all
 five viewports, including `1280x720`. Independent review found and closed an
 adjacent fail-closed defect where rejected DMX network-route buttons mutated the
 protocol draft before reporting `no state changed`; the candidate-only path now
@@ -2179,13 +2214,17 @@ independent re-review is GO with P0/P1/P2 all zero. Focused root revalidation of
 protocol `7/7`, runtime `5/5`, I/O `37/37`, frontend/build, live, and static
 checks under the required single-thread standard gate; independent review is GO.
 A parallel I/O race is baseline-existing and is not acceptance evidence;
-the exact MSVC 14.44 / locked full-workspace rerun passed with zero failed tests,
-including `1164` pass / `11` intentional hardware-media ignores in the Syndocal
-binary target. The touched full-gate fixture repairs were independently reviewed
-GO with P0/P1/P2 all zero; frontend production build and its warning ratchet are
-green at zero warnings. Release metadata must still be rerun from a clean
-non-OneDrive source image because this checkout's pre-existing runtime-inventory
-hard-link alias fails closed. Native integration remains pending.
+the exact MSVC 14.44 / locked full-workspace rerun passed `1164` pass / `0` fail
+/ `11` intentional hardware-media ignores in the Syndocal binary target with
+zero first-party warnings. The touched full-gate fixture repairs were
+independently reviewed GO with P0/P1/P2 all zero; frontend invokes are `422`,
+localization is `3559`, and the frontend production, viewport/setup, and warning
+ratchets are green. The clean release gate `4fc443d` passed after staging seven
+pinned DLLs. Main-checkout `check:release` remains intentionally blocked by the
+tracked, unchanged runtime-inventory hard-link alias to
+`C:\Users\kouty\Documents\.tmp.driveupload\867492`; no alias deletion or file
+replacement was performed. Native build/launch/layout integration is verified;
+the direct refresh-button action remains unconfirmed.
 
 `app/dist` has already been freshly rebuilt and its old stale marker is `0`.
 The ignored peer `dist` remains stale at `277,382,202` bytes but is outside the

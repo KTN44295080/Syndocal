@@ -73,25 +73,42 @@ Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
 release, or a historical v1.1.5/v1.1.6/v1.1.7 configuration as current acceptance
 evidence.
 
-The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
-its native rebuild and maximized UI retest are pending. The existing alpha.17
-native artifact recorded a live wired refresh failure
+The current KDMX source checkpoint is `1.2.0-alpha.18` at branch
+`codex/syndocal-v1.2`, exact `HEAD`/upstream
+`db4eefc348b01ee05dd2dc87945afa85de8803e`. The required
+`pnpm --dir app tauri build --no-bundle` passed with exact MSVC 14.44
+linker-first setup and zero first-party warnings. The resulting alpha.18
+artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
+`841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
+LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Launch observed exactly one
+responsive process, PID `80264`, title `Syndocal`, window handle `854080`,
+`IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`. The existing
+alpha.17 artifact recorded a live wired refresh failure
 `wired_candidate_discovery_failed`; its typed diagnostic exposed the old
 `Structural DuplicateIpv4Address` code. The source root cause was a typed
 `sin_addr` read against the `SOCKADDR_IN` `+8` padding; the fix also drops COM
 objects before `CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware
-enumeration checks passed and identify `192.168.50.1` as eligible, but a fresh
-native rebuild and maximized UI retest remain pending. Focused root revalidation
-of the MASTER clean break passed protocol `7/7`, runtime `5/5`, I/O `37/37`,
+enumeration checks passed and identify Ethernet4 `192.168.50.1` as eligible,
+and the native screenshot confirms Web Remote/Security/Endpoints/DJ Link/Standby
+in the same disclosure stack and two wired candidates. The native
+wired-binding refresh click itself remains unconfirmed because foreground PID
+retrieval failed. The five-viewport setup harness independently confirmed
+listener empty→count `0`→Ethernet4 `192.168.50.1`→count `1`, one invoke per
+phase, and disabled mutation controls. Focused root revalidation of
+the MASTER clean break passed protocol `7/7`, runtime `5/5`, I/O `37/37`,
 frontend/build, live, and static checks under the required single-thread standard
 gate; independent review is GO. The parallel I/O race is baseline-existing and
 is not acceptance evidence. The exact MSVC 14.44 / locked full-workspace rerun
-passed with zero failed tests; the Syndocal binary target reported `1164` pass /
-`11` intentional hardware-media ignores, and the touched fixture repairs were
-independently reviewed GO with P0/P1/P2 all zero. The frontend production build
-and zero-warning ratchet also passed. Release metadata must still be rerun from
-a clean non-OneDrive source image because this checkout's pre-existing runtime
-inventory hard-link alias fails closed. Native integration remains pending.
+passed `1164` pass / `0` fail / `11` intentional hardware-media ignores in the
+Syndocal binary target with zero first-party warnings; the touched fixture
+repairs were independently reviewed GO with P0/P1/P2 all zero. Frontend
+invokes `422`, localization `3559`, and the viewport/setup harness also passed.
+The clean release gate `4fc443d` passed after staging seven pinned DLLs.
+Release metadata still requires a clean non-OneDrive source-image rerun because
+this checkout's pre-existing runtime-inventory hard-link alias to
+`C:\Users\kouty\Documents\.tmp.driveupload\867492` fails closed; the file is
+tracked and unchanged, and no alias deletion or replacement was performed.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
 the standard and dedicated Setup I/O browser contracts pass all five viewports,
@@ -99,7 +116,8 @@ including `1280x720`. An independent review found that rejected DMX network-rout
 buttons still changed the protocol draft before reporting `no state changed`;
 the corrected candidate-only path now leaves the full draft and all `128` route
 signatures unchanged, invokes neither retired output command, and independently
-re-reviewed GO with P0/P1/P2 all zero. Native visual retest remains pending.
+re-reviewed GO with P0/P1/P2 all zero. Native visual capture is verified above;
+only the direct native refresh-button click remains unconfirmed.
 `app/dist` is freshly rebuilt (old stale
 marker `0`); the ignored peer `dist` remains stale but is outside this source
 acceptance checkpoint. These observations do not promote native or HW-4

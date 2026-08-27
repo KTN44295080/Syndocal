@@ -8,12 +8,31 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current `1.2.0-alpha.18` implements strict-v3 any-playing-deck DJ admission and
-position-preserving RELEASE: an already-running Timeline relinquishes DJ clock
-ownership and disables its loop without Play, Pause, or Seek. The standard
-native artifact for this source checkpoint is pending rebuild and local
-verification; target-DJ-PC rb-output v1.1.8 deployment and the physical HW-4
-matrix remain unaccepted.
+Current `1.2.0-alpha.18` is the committed source checkpoint at branch
+`codex/syndocal-v1.2`, exact `HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`.
+It implements strict-v3 any-playing-deck DJ admission and position-preserving
+RELEASE: an already-running Timeline relinquishes DJ clock ownership and
+disables its loop without Play, Pause, or Seek. Source gates are green: the
+Syndocal target is `1164` pass / `0` fail / `11` intentional hardware-media
+ignores with zero first-party warnings, frontend build, DJ Link, `422` invokes,
+`3559` localization checks, viewport/setup harness, and exact-MSVC live discovery
+all pass; Ethernet4 identifies `192.168.50.1` as eligible. The clean release
+gate `4fc443d` passed after staging the seven pinned DLLs. The required
+`pnpm --dir app tauri build --no-bundle` then passed with exact MSVC 14.44
+linker-first setup and zero first-party warnings. The alpha.18 artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
+`841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
+LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Its launch observed exactly
+one responsive process (PID `80264`, title `Syndocal`, window handle `854080`,
+`IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`). Native visual
+capture confirmed Web Remote/Security/Endpoints/DJ Link/Standby in the same
+disclosure stack and two wired candidates. The wired-binding refresh button
+click itself remains unconfirmed because foreground PID retrieval failed;
+five-viewport setup harness evidence did confirm listener empty→count 0→
+Ethernet4 `192.168.50.1`→count 1, one invoke per phase, and disabled mutation
+controls. Target-DJ-PC deployment and the physical HW-4 matrix remain
+unaccepted.
 
 ## 主な機能
 
