@@ -1,9 +1,10 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.21 SETUP-I/O OPERATOR SOURCE/NATIVE CHECKPOINT VERIFIED; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.22 SCENE-AUTHORITY SOURCE CHECKPOINT VERIFIED; ALPHA.21 REMAINS THE CURRENT NATIVE ARTIFACT; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. Section
-31 is the only current alpha.21 source/native authority; every earlier
+32 is the current alpha.22 source authority and section 31 remains the current
+alpha.21 native-artifact authority; every earlier
 alpha.18-or-earlier `current` label below is retained as dated historical
 evidence and must not be used for execution. The show-completion deadline is
 **2026-08-29**, not the performance day. The code is not accepted as fully
@@ -56,9 +57,10 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.21 Setup-I/O operator source/native | Product metadata is `1.2.0-alpha.21`; authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
+| Current alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact has been built yet |
+| Current alpha.21 Setup-I/O native artifact | Authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
 | Current token-free show structural preflight | Read-only/authored-only source is committed and pushed at `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`; valid fixture exits `0`, invalid/legacy/usage paths exit `2`; this is not native or hardware evidence |
-| Current rb-output v1.1.9 controlled source | `beta-v1.1.2` clean/upstream-equal source authority at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; full suite `455` total / `453` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
+| Current rb-output v1.1.9 controlled checkout | `beta-v1.1.2` clean/upstream-equal at `c22acaa265cbbc4936ab3af5b092b59d5d543f63`; runtime authority remains the ancestor `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; post-tooling full suite `465` total / `463` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
 | Historical alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata was `1.2.0-alpha.18`; exact source `HEAD`/upstream was `db4eefc348b01ee05dd2dc87945afa85de8803e`; historical native artifact/process identity is recorded in section 21 |
 | Historical alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
 | Historical local alpha.15 native verification runtime/source/artifact | Pushed, upstream-equal source commit `c609b61c77e44ee028ed7322c29a0cfd04b8182c` (`refactor(scene): extract bank scene creation controller`); local artifact identity is in section 3 and is not a new distributable artifact |
@@ -76,8 +78,10 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.21 I/O/native source authority
-is section 31 at exact commit `536742db968b242164349c34dd6940fe3ced8e92`;
+Branch: `codex/syndocal-v1.2`. The current alpha.22 source authority is section
+32 at exact commit `cc201ad40927f0631236680392025f81e51c6130`.
+The current alpha.21 I/O/native artifact authority remains section 31 at exact
+source commit `536742db968b242164349c34dd6940fe3ced8e92`;
 the separate show structural preflight is committed and pushed at exact
 `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. The historical alpha.20 source
 authority is section 29 at `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The historical
@@ -1643,3 +1647,54 @@ PID `61616` has missing positive parent PID `49864`, `Candidates=[]`,
 `PlannedLogicalBytes=0`, and `ReclaimedLogicalBytes=0`; no deletion was
 performed. The exact 12-path hardlink remediation was content-preserving with
 no content diff.
+
+## 32. 2026-08-28 alpha.22 authoritative Scene-create source checkpoint
+
+The current source authority is branch `codex/syndocal-v1.2`, exact committed
+and pushed `cc201ad40927f0631236680392025f81e51c6130`
+(`feat(scene): unify authoritative scene creation`), with product metadata
+`1.2.0-alpha.22`. This is a source-only checkpoint. The running and currently
+verified native artifact remains alpha.21 from `536742d`, PID `41912`, exact
+checkout path, responsive and maximized; it was not stopped or relabelled.
+
+Old path: Empty Scene used backend `create_empty_cue`, Capture-current used the
+renderer-ticketed `create_cue_from_current`, and the browser fixture could
+synthesize a local Scene. New path: both modes use one strict tagged
+`create_scene_authoritative_v1` backend route and the shared admitted snapshot
+publication boundary. The exact `cue_id` is returned in the receipt and must be
+present in the requested Bank after authoritative refresh. Reason: remove the
+split authority, eliminate local fixture mutation, and make definitive versus
+indeterminate publication outcomes identical for both modes.
+
+Definitive pre-admission failure restores A and permits only the tail Scene ID
+reservation to be released. Once admitted, ACK loss is indeterminate: the ID
+remains consumed and the global project-mutation fence is armed until restart.
+Unknown fields, stale epoch/revision/checkpoint, wrong owner, missing or reused
+receipt ID, refreshed Bank mismatch, and both retired route names fail closed.
+No legacy or fallback path remains callable.
+
+Supervisor proof initialized exact MSVC 14.44, pinned the required Community
+`Hostx64\x64\link.exe`, and verified it first ahead of Git's linker. Results:
+engine Scene `3/3`; Syndocal Scene `3/3`; authoritative Empty Scene `2/2`;
+exact control-plane route/handler/inventory `3/3`; first-party warnings `0`.
+Focused project-transaction and frontend-routing checks passed; TypeScript/Vite
+build passed with `294` modules; release metadata, `cargo fmt --all -- --check`,
+and `git diff --check` passed. Independent Terra xHigh review was GO with P0/P1
+zero. Its P2 stale ignored `app/dist` observation was closed by the successful
+frontend rebuild plus a zero-match retired-route scan of regenerated dist.
+
+The current rb-output controlled checkout is clean and upstream-equal at
+`c22acaa265cbbc4936ab3af5b092b59d5d543f63`. The runtime authority remains its
+ancestor `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; the newer commits add bounded
+HW-4 evidence tooling and its split modules, not a new runtime version. The
+post-tooling full suite passed `465` total / `463` pass / `0` fail / `2`
+intentional skips, warning `0`. This does not advance physical HW-4 acceptance.
+
+Next safe action: implement and independently review the canonical
+composition-to-video-output assignment route discovered missing in Setup Video,
+advance the prerelease ordinal for that product change, then commit/push and
+perform one final exact native build/launch. Do not build alpha.22 merely to
+replace the still-working alpha.21 process immediately before another required
+native build. Projector keystone/mask editing, real `.sdc` authoring, target
+display assignment, media playback, and HW-4 remain externally or physically
+unverified.

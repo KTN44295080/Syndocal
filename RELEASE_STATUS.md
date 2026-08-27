@@ -1,7 +1,47 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-28
-Branch: `codex/syndocal-v1.2`; the current product/native checkpoint is `1.2.0-alpha.21` at exact source commit `536742db968b242164349c34dd6940fe3ced8e92`. Its immediate preceding alpha.20 source checkpoint was `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`; the earlier committed alpha.19 source checkpoint is `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. Their historical software gates remain recorded below. The current alpha.21 native artifact and focused I/O/browser evidence are recorded in the checkpoint immediately below. Target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed.
+Branch: `codex/syndocal-v1.2`; the current source checkpoint is `1.2.0-alpha.22` at exact pushed commit `cc201ad40927f0631236680392025f81e51c6130`. The current native artifact remains `1.2.0-alpha.21` from exact source commit `536742db968b242164349c34dd6940fe3ced8e92`; no alpha.22 native artifact has been built. Target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed.
+
+## 2026-08-28 current alpha.22 Scene-authority source checkpoint
+
+The committed and pushed source authority is
+`cc201ad40927f0631236680392025f81e51c6130`
+(`feat(scene): unify authoritative scene creation`). Empty Scene and
+Capture-current Scene now use one strict, tagged, backend-authoritative
+`create_scene_authoritative_v1` request/receipt path. The retired direct
+`create_empty_cue` and renderer-ticketed `create_cue_from_current` routes are
+absent from callable manifests and control-plane inventory. The receipt carries
+the exact committed `cue_id`, and the refreshed project must contain that exact
+Scene in the requested Bank.
+
+The publication boundary admits the engine mutation before B, restores A and
+releases the tail ID only for a definitive pre-admission failure, and retains
+the ID plus arms the global mutation fence when an admitted ACK is lost and the
+outcome is indeterminate. The old split paths were removed because they could
+diverge in authority, receipt, and failure classification. Unknown request
+fields, stale authority, mismatched receipt/project state, and retired routes
+remain fail-closed; there is no compatibility shim.
+
+Supervisor gates used exact `vcvars64.bat -vcvars_ver=14.44`, pinned
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and verified that exact linker first in `where.exe link.exe`. Engine Scene
+tests passed `3/3`; Syndocal Scene tests `3/3`; authoritative Empty Scene
+tests `2/2`; exact control-plane registry tests `3/3`; first-party warnings
+were `0`. The focused frontend routing/project-transaction checks, TypeScript/
+Vite build (`294` modules), release metadata gate, `cargo fmt --check`, and
+`git diff --check` passed. Independent Terra xHigh review was GO with P0/P1
+zero; its stale ignored `app/dist` P2 observation was closed by rebuilding the
+frontend and proving the retired route strings absent from the regenerated
+bundle.
+
+The still-running exact-checkout native process is the historical alpha.21
+artifact, PID `41912`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+It was deliberately not stopped for this source checkpoint. Build the next
+native artifact only after the composition-to-output assignment blocker is
+closed and its next prerelease ordinal is committed/pushed, so the show incurs
+one final controlled native replacement rather than two avoidable rebuilds.
 
 ## 2026-08-28 current alpha.21 operator I/O checkpoint
 

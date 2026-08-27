@@ -354,12 +354,14 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current product/native checkpoint is `1.2.0-alpha.21`
-at branch `codex/syndocal-v1.2`, with exact I/O/native source
-`536742db968b242164349c34dd6940fe3ced8e92`. Its native build, launch, and
-maximized-window I/O layout are verified within the native/browser boundary in
-section 54. The separate read-only show structural preflight is committed and
-pushed at `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
+alpha checkpoints; the current source checkpoint is `1.2.0-alpha.22` at exact
+committed/pushed source `cc201ad40927f0631236680392025f81e51c6130` on branch
+`codex/syndocal-v1.2`. The current native artifact remains
+`1.2.0-alpha.21`, built from exact I/O/native source
+`536742db968b242164349c34dd6940fe3ced8e92`; its launch and maximized-window
+I/O layout are verified within the native/browser boundary in section 54.
+The separate read-only show structural preflight is committed and pushed at
+`b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -2526,3 +2528,37 @@ clean upstream-equal `1d8fc4f` rerun reported `Mode=Plan`, `Outcome=Blocked`,
 missing positive parent PID `49864`, `Candidates=[]`, `PlannedLogicalBytes=0`,
 and `ReclaimedLogicalBytes=0`, so no deletion was performed. The exact 12-path
 hardlink remediation was content-preserving with no content diff.
+
+## 55. 2026-08-28 alpha.22 authoritative Scene-create source checkpoint
+
+Exact source authority is committed and pushed at
+`cc201ad40927f0631236680392025f81e51c6130` with synchronized
+`1.2.0-alpha.22` metadata. Empty and Capture-current Scene creation now share
+the strict tagged backend operation `syndocal.scenes.create.v1` through
+`create_scene_authoritative_v1`. The retired backend `create_empty_cue`, the
+renderer-ticketed `create_cue_from_current`, and fixture-local Scene synthesis
+are removed from callable manifests and inventory.
+
+The unified publication path uses the existing admitted snapshot protocol.
+Definitive pre-admission failure restores A and may release only the tail ID;
+admitted ACK loss is indeterminate, retains the Scene ID, and fences every
+subsequent project mutation. The terminal receipt carries the exact committed
+`cue_id`; the frontend refresh verifies the same ID in the requested Bank.
+Stale or malformed authority, unknown fields, receipt mismatch, Bank mismatch,
+and retired route use all fail closed without a compatibility branch.
+
+Exact MSVC 14.44 supervisor gates passed engine `3/3`, app Scene `3/3`, Empty
+Scene `2/2`, and exact control-plane route/handler/inventory `3/3`, with zero
+first-party warnings. Focused frontend routing/project transaction, TypeScript/
+Vite (`294` modules), release metadata, fmt, and diff gates passed. Independent
+Terra xHigh review was GO with P0/P1 zero; its ignored-dist P2 was closed by
+regeneration and a zero-match retired-route scan.
+
+This checkpoint deliberately has no alpha.22 native claim. The current
+responsive/maximized exact-checkout artifact remains alpha.21 from source
+`536742d`, PID `41912`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+The next native build is deferred until the missing canonical composition-to-
+video-output assignment path is closed under a new prerelease ordinal, avoiding
+an unnecessary second show-time process replacement. Physical outputs,
+projector mapping, authored `.sdc`, and HW-4 remain open gates.
