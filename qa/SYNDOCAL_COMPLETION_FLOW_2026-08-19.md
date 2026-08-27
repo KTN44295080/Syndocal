@@ -2684,3 +2684,22 @@ checkpoint was `1.2.0-alpha.21`, PID `41912`, `58,778,112` bytes, SHA-256
 Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
 unverified. This is not a final-completion claim; the remaining physical/show
 gates are open.
+
+## 58. 2026-08-28 CURRENT post-alpha.25 cleanup Plan
+
+After alpha.25, branch `codex/syndocal-v1.2` was clean and upstream-equal at
+exact `HEAD`/upstream `aaccd77e445e027544bbf57e46280bc10bd30cdf`. The read-only
+command
+`& .\qa\harnesses\invoke-syndocal-build-cache-cleanup.ps1` was attempted twice;
+both Plan attempts returned `Mode=Plan`, `Outcome=Blocked`, and
+`Blocker=WriterOwnershipTopologyUnverifiable`, with the exact message:
+`Writer ancestry is missing positive parent PID 49864 for writer PID 61616.`
+
+A read-only observation afterward showed PID `61616` is Adobe Creative Cloud
+Libraries `node.exe` under
+`C:\Program Files\Common Files\Adobe\Creative Cloud Libraries\libs\node.exe`,
+with current `ParentProcessId` `61456`. The prior ancestry could not be
+re-proven, so cleanup remains fail-closed. `Candidates=[]`,
+`PlannedLogicalBytes=0`, and `ReclaimedLogicalBytes=0`; Apply was not run and
+no deletion occurred. The older `HardlinkDetected` cleanup result remains
+historical and is intentionally unchanged.

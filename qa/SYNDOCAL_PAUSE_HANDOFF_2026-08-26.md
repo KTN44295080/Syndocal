@@ -394,6 +394,24 @@ Independent Ox results:
 - Current target inventory is `205,883,610,246` logical bytes, `135,967` files,
   `16,377` directories including root, and `0` reparse points.
 
+### Current post-alpha.25 cleanup Plan (2026-08-28)
+
+- After alpha.25, branch `codex/syndocal-v1.2` was clean and upstream-equal at
+  exact `HEAD`/upstream `aaccd77e445e027544bbf57e46280bc10bd30cdf`.
+- The read-only command
+  `& .\qa\harnesses\invoke-syndocal-build-cache-cleanup.ps1` was attempted twice;
+  both Plan attempts returned `Mode=Plan`, `Outcome=Blocked`, and
+  `Blocker=WriterOwnershipTopologyUnverifiable`, with the exact message:
+  `Writer ancestry is missing positive parent PID 49864 for writer PID 61616.`
+- A read-only observation afterward showed PID `61616` is Adobe Creative Cloud
+  Libraries `node.exe` at
+  `C:\Program Files\Common Files\Adobe\Creative Cloud Libraries\libs\node.exe`,
+  with current `ParentProcessId` `61456`. The prior ancestry could not be
+  re-proven, so cleanup remains fail-closed.
+- `Candidates=[]`; `PlannedLogicalBytes=0`; `ReclaimedLogicalBytes=0`; Apply was
+  not run; no deletion occurred. The older `HardlinkDetected` result above is
+  historical and remains unchanged.
+
 The following c40cfd8 inventory and Plan are retained as historical evidence;
 they are superseded by the directional-ownership checkpoint above:
 
