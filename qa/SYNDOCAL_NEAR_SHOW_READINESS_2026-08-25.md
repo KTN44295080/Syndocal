@@ -18,37 +18,46 @@ from the initial list.
 
 This section supersedes the older alpha and rb-output wording below for current
 execution only; the older entries remain historical provenance. The current
-KDMX branch checkpoint is `codex/syndocal-v1.2` at pushed, upstream-equal
-`2d848d40bb3f91f7715fe72a1a85d86e6b2b68ef`. The current native product
-checkpoint is `1.2.0-alpha.21` source commit
-`536742db968b242164349c34dd6940fe3ced8e92`; its exact artifact is
-`target/release/syndocal.exe`, `58,778,112` bytes, Product/FileVersion
-`1.2.0-alpha.21`, SHA-256
-`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
-Later current-branch commits add the token-free show preflight and QA/handoff
-records without redefining that native artifact's provenance.
+KDMX execution authority is `1.2.0-alpha.25`. Alpha.25 source acceptance,
+native build, artifact identity, launch, and native UI acceptance are pending
+the supervisor build; no alpha.25 source commit, SHA-256, size, or PID is
+accepted. Historical alpha.24 evidence is preserved, not promoted: source build
+commit `5eb1888906613851c4c49e66717a270f13bbd7b5`
+(`docs(show): record alpha.24 follow rearm checkpoint`) with native-evidence
+descendant `e4c02f8e2c9013bdb735b2b785f6c75599c0a950`
+(`chore(show): bind alpha.24 native acceptance evidence`) produced
+`target/release/syndocal.exe`, `59,803,136` bytes, Product/FileVersion
+`1.2.0-alpha.24`, SHA-256
+`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`; PID
+`63016` was responsive. It does not make the saved show project, its mappings,
+or any physical acceptance authoritative.
 
-The sole current DJ-PC peer is controlled source version `1.1.9` at pushed,
-upstream-equal commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, strict adapter
-`syndocal-envelope-v3`. The v1.1.6 and earlier peer entries below are historical
-only and must not be deployed for current acceptance.
+The sole current DJ-PC peer checkout is controlled source version `1.1.9` at
+pushed, upstream-equal commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`,
+strict adapter `syndocal-envelope-v3`. Its exact release implementation
+provenance is `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; `c22acaa` is the
+docs/evidence-recorder descendant checkout authority. The v1.1.6 and earlier
+peer entries below are historical only and must not be deployed for current
+acceptance.
 
-At `2026-08-28T02:22:13.3046110+09:00`, read-only FOH observation found exactly
-one responsive maximized alpha.21 process, PID `41912`, listening on
+The current read-only target-DJ-PC status is Agent and Syndocal `connected`,
+`stateSync=sent`, generation `72`, but the Timeline snapshot is not ready because
+`project_mapping_not_loaded` was reported for `Untitled.sdc`. This is not
+authoritative `running` state and authorizes no show operation. HW-4 remains
+exactly `0/12`; the actual saved show project and mapping remain unverified.
+
+Historical alpha.21 evidence is preserved, not promoted: at
+`2026-08-28T02:22:13.3046110+09:00`, a read-only FOH observation found one
+responsive maximized alpha.21 process, PID `41912`, listening on
 `192.168.50.1:9100` with one established `.50.2` peer. The native card displayed
 DJ Link `connected`, but the active project was `Untitled.sdc`; no HELLO/ACK,
 authoritative state snapshot, Rekordbox, MIDI, pedal, loop, Release, reconnect,
-restart, or shared-lighting evidence was captured. The redacted record is
-`qa/artifacts/dj-link-hw4/2026-08-28-foh-live-baseline.json`. It advances no
-HW-4 row; HW-4 remains exactly `0/12`.
-
-A later allowlisted GET projection from the DJ-PC status API reported Agent and
-Syndocal `connected`, `stateSync=sent`, generation `61`, but
-`timelineSnapshotReady=false`, with no play session, pedal owner, or owner Deck.
-The retained Timeline ID is therefore untrusted and authorizes no operation.
-This confirms that loading the authored show and obtaining a fresh authoritative
-Timeline snapshot, rather than reconnecting the TCP transport, is the next HW-4
-baseline action.
+restart, or shared-lighting evidence was captured. The later historical
+allowlisted GET projection reported Agent and Syndocal `connected`,
+`stateSync=sent`, generation `61`, and `timelineSnapshotReady=false`, with no
+play session, pedal owner, or owner Deck. The redacted record is
+`qa/artifacts/dj-link-hw4/2026-08-28-foh-live-baseline.json`; it advances no
+HW-4 row.
 
 The exact alpha.15 imported file
 `target/qa/dsf2026-native-alpha15/DSF2026-imported-alpha15.sdc` remains the
@@ -294,8 +303,8 @@ The objective is not complete if any of the following remains true:
 | SHOW-P0-2 | Timeline lower-right uses the same authoritative Bank/Scene representation as Lighting, with placement-only behavior | Committed source includes the compact shared Bank/Scene representation, required authoritative `cueLists`, fail-closed shared Bank authority, placement-only Timeline behavior, five-size Scene Matrix proof, source-shelf and external-DnD contracts, and previously approved independent review. The former eight-argument rename warning is obsolete: `rename_cue_list` now accepts a camelCase, `deny_unknown_fields` `AuthoritativeCueListRenameRequest`, the frontend sends `{ request: ... }`, and focused frontend/Rust schema assertions reject missing, snake-case, or unknown fields. This typed strict route is committed in `aed77a2626a0306fa466b3077f3fb7997919faf8`; the 2026-08-27 current-source audit found no remaining source implementation blocker in this row. Fresh exact-HEAD native proof remains open. | Same snapshot produces identical Bank ID/order/name/color and Scene ID/order/number/name/type in Lighting and Timeline; empty Banks remain; Timeline exposes no CRUD/play path; click and drag place the same Scene Block. | SOURCE FIXED + FOCUSED NON-NATIVE GATES PRESENT / FRESH NATIVE REPRESENTATION, PLACEMENT, AND RESTART PROOF OPEN |
 | SHOW-P0-3 | Detached Stage/Timeline panes never dual-render, disappear, or leave unused main-window space | Current source contains the fail-closed exact-label child census and the current static pane lifecycle gate passes. Historical alpha.11 native evidence covered both detachment/rejoin orders and integrated Stage restoration, but it is not fresh alpha.21 native evidence. | Browser state-machine proof plus a fresh exact-checkout native run covers both detachment orders, restart with detached records, child present/absent/unknown outcomes, Stage integrated rendering, Timeline source/timeline separation, no duplicate pane, and no unusable main-window void. | SOURCE FIXED + CURRENT STATIC GATE PASS / FRESH ALPHA.21 NATIVE DETACHMENT AND RESTART PROOF OPEN |
 | SHOW-P0-4 | `DSF2026.dvc` drives representative Lighting, LED, and projector content on the intended physical routes | The pinned 67,873-byte file and exact Rust importer evidence remain as recorded. The alpha.15 native UI now navigated `Setup > Patch` and displayed the exact report plus Save As/close/restart/reopen evidence recorded in the dated alpha.15 software checkpoint below. This closes only the software import/report/save/reload slice; physical output and representative-scene real-output acceptance remain open. | Exact/Skipped importer report, representative Lighting scenes, generated LED/projector assets, authored `人生オーバー`/`惑う星` Timelines, and fresh native three-display output complete, save, restart, and reload without substitution. | ALPHA.15 SOFTWARE IMPORT/REPORT/SAVE/RELOAD PASS / PHYSICAL OUTPUT AND SHOW FLOW OPEN |
-| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | Published v1.1.3 remains immutable but blocked by its `DJ_MASTER_CHANGED` mismatch. The sole current show route is target-DJ-PC branch `beta-v1.1.2`, controlled source version `1.1.9` at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, using only strict `syndocal-envelope-v3`; flat/v1/v2 and v1.1.8-or-earlier show configurations are retired. The checkout-external v1.1.9 JSON is selected only through `DJ_AGENT_CONFIG_PATH`; no-argument `start-all.bat` is the real launch and exact lowercase `--preflight-only` is the sole non-launch alternate. At the current partial baseline, alpha.21 PID `41912` listened on FOH `.50.1:9100` with one established `.50.2` peer and the native card displayed connected, but the project was `Untitled.sdc` and no authenticated frame/state or physical action evidence was retained. | Both PCs run the pinned controlled source/native artifact with the real token, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, measured loop, no-response fallback, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | CURRENT STRICT V3 SOFTWARE + PARTIAL TCP/UI BASELINE / AUTHENTICATED HARDWARE 0/12 OPEN |
-| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | The current native product checkpoint is alpha.21 source `536742db968b242164349c34dd6940fe3ced8e92`: `target/release/syndocal.exe`, 58,778,112 bytes, Product/FileVersion `1.2.0-alpha.21`, SHA-256 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`, with zero first-party build warnings and exactly one responsive maximized exact-path window. Current branch HEAD `2d848d40bb3f91f7715fe72a1a85d86e6b2b68ef` adds only the separate show-preflight and QA/handoff checkpoints after that native build. Historical alpha.15/alpha.14 and local-only Show-ASIO identities remain preserved separately below. | After the next product-source change, advance the prerelease, rebuild from the exact clean pushed HEAD, and bind native/hardware evidence to that exact artifact without substituting historical identities. | CURRENT ALPHA.21 PRODUCT ARTIFACT IDENTIFIED / NEXT PRODUCT DIFF REQUIRES NEW EXACT BUILD; PHYSICAL ACCEPTANCE OPEN |
+| SHOW-P0-5 | DJ-Link survives setup, authenticated wired operation, disconnect, and app restart | Published v1.1.3 remains immutable but blocked by its `DJ_MASTER_CHANGED` mismatch. The sole current show route is target-DJ-PC branch `beta-v1.1.2`, controlled source version `1.1.9` at checkout authority `c22acaa265cbbc4936ab3af5b092b59d5d543f63`, using only strict `syndocal-envelope-v3`; its exact release implementation provenance is `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, while `c22acaa` is its docs/evidence-recorder descendant. Flat/v1/v2 and v1.1.8-or-earlier show configurations are retired. The checkout-external v1.1.9 JSON is selected only through `DJ_AGENT_CONFIG_PATH`; no-argument `start-all.bat` is the real launch and exact lowercase `--preflight-only` is the sole non-launch alternate. At the current partial baseline, alpha.21 PID `41912` listened on FOH `.50.1:9100` with one established `.50.2` peer and the native card displayed connected, but the project was `Untitled.sdc` and no authenticated frame/state or physical action evidence was retained. | Both PCs run the pinned controlled source/native artifact with the real token, and HW-4.1 through HW-4.12 are recorded over wired LAN, including pedal, measured loop, no-response fallback, dedupe, reconnect, restart, and concurrent Art-Net/sACN. | CURRENT STRICT V3 SOFTWARE + PARTIAL TCP/UI BASELINE / AUTHENTICATED HARDWARE 0/12 OPEN |
+| SHOW-P0-6 | The distributed artifact exactly matches the accepted source | Current alpha.25 source acceptance, native build, artifact identity, launch, and native UI acceptance are pending the supervisor build; no alpha.25 source commit, binary size, SHA-256, or PID is accepted. Historical alpha.24 source build `5eb1888906613851c4c49e66717a270f13bbd7b5`, with native evidence at descendant `e4c02f8e2c9013bdb735b2b785f6c75599c0a950`, produced `target/release/syndocal.exe`, 59,803,136 bytes, Product/FileVersion `1.2.0-alpha.24`, SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and responsive exact-checkout PID `63016`. The alpha.21 `536742d` artifact and former branch HEAD `2d848d4` are historical only; they do not define current authority. Historical alpha.15/alpha.14 and local-only Show-ASIO identities remain preserved separately below. | After the supervisor accepts an alpha.25 product source, rebuild from the exact clean pushed HEAD and bind native/hardware evidence to that new exact artifact without substituting historical identities. | CURRENT ALPHA.25 SOURCE/NATIVE ACCEPTANCE PENDING / PHYSICAL ACCEPTANCE OPEN |
 | SHOW-P0-7 | ASIO is explicitly selected and remains truthful through start, live callback I/O, stop, fault, and restart | The isolated bridge and application loader source have clean-broken to ABI/schema v2 and one canonical `syndocal_asio_bridge.dll`; the old claim that the app loader remains ABI v1 is retired. The complete historical matrix and the alpha.14 Show-ASIO build recorded zero first-party warnings. The exact 44.1 kHz / 2-channel i32 / 128-frame HOTONE Ampero bridge-only run completed for `3,600,031 ms`. The alpha.14 local-only native app then completed a bounded Start/5-second/Stop/Close and restart/revalidation run against the same Ampero configuration: callback `128/128/128`, `OVR 0/0f`, `XRUN 0`, capture-to-worker `4.4/4.5 ms` then `4.4/4.7 ms`, and app/bridge process counts 0 after each Close. This is short native/operator evidence only. Occupied/reset/unplug/XRUN/no-callback recovery, TOPPING, long-duration, full matrix, formal matched 48 kHz ASIO/WASAPI, and measured latency acceptance remain open. | The actual show driver/rate/channels/native format/buffer are persisted and revalidated; Start/Stop/Close, callback continuity, occupied/unplug/XRUN/no-callback recovery, restart, formal matched 48 kHz soak, and measured latency pass without WASAPI or another-driver substitution; the local-only artifact passes its dedicated checker immediately before use. | ALPHA.14 BOUNDED AMPERO NATIVE PASS / RECOVERY, LONG-RUN, MATRIX, LATENCY, AND PHYSICAL ACCEPTANCE OPEN |
 | SHOW-P0-8 | `人生オーバー` follows DJ-Link position/loop/pedal handoff and auto-transitions to `惑う星` | Strict wire v3 now requires fresh position/effective BPM/session/deck identity, continuous revisioned Sync, exact measured loop state, atomic engine start/sync/release ownership, and late-event fencing. F14 arms a bounded response window before local MIDI; fresh Rekordbox measurement remains primary, only true no-response emits a distinct predicted fallback, invalid/stale/contradictory response suppresses prediction, and a later fresh measurement rebases it. F13 routes Release independently of Rekordbox Stop MIDI success. Focused software proof passes, but the real-token run and exact authored Timelines/full physical sequence remain unexecuted. | Wired authenticated Master-track trigger, position follow, measured absolute loop updates and no-response fallback across `8 → 4 → 2 → 1 → 1/2 → 1/4 → 1/8 → 1/16 → 1/32 → 1/64`, independent pedal Release/stop/band continuation, Timeline completion, and BPM-aware automatic `惑う星` transition pass end to end with duplicate/stale/disconnect/restart cases. | STRICT V3 SOFTWARE CONTRACT / NATIVE, REAL RUN, AUTHORING, AND HARDWARE OPEN |
 | SHOW-P0-9 | Scene Settings remains usable at show-editor size and an authored Scene may intentionally contain zero owned FX | The five-size contained-scroll proof remains green. Pushed commit `627e35b32008c4087bd344f6531ccd6a5707d13d` removes the backend and frontend last-target policy as a clean break: an effect-only Scene can publish and persist zero FX, invalid IDs remain fail-closed, Save Recall stays wired to the authoritative replacement command, an empty draft shows its destructive result beside the action row, and retired helper/copy/CSS paths are absent. Exact-linker Rust proof passed the two focused Syndocal tests plus the engine published-clear test with `0` first-party warnings; frontend recall, localization `3560/3560`, TypeScript/Vite build, formatting, and diff gates passed. Separate backend and frontend Terra xHigh reviews approved with no P0/P1/P2. | Exact-checkout native UI reproduces the internal scroll and zero-FX operation; acknowledged engine state, active runtime release, save/reload persistence, and publication-failure rollback all pass without browser-local authority. | SOURCE CLEAN BREAK + FOCUSED PROOF + REVIEW PASS / NATIVE UI AND PUBLICATION-FAILURE ACCEPTANCE OPEN |

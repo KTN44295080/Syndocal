@@ -1241,12 +1241,38 @@ assert.equal(
 );
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-assert.match(appSource, /invoke<FixtureProfileSummary>\("preview_custom_fixture_profile"/);
+const gdtfProfileActionsSource = readFileSync(new URL("../src/gdtfProfileActions.ts", import.meta.url), "utf8");
+assert.match(
+  gdtfProfileActionsSource,
+  /context\.invoke<FixtureProfileSummary>\("preview_custom_fixture_profile"/,
+  "custom-profile preview must remain in the extracted GDTF action owner",
+);
 assert.doesNotMatch(
   appSource.slice(appSource.indexOf("const projectMutationCommands"), appSource.indexOf("const projectMutationCommands") + 2_000),
   /create_custom_fixture_profile/,
 );
-assert.match(appSource, /captureProjectAuthorityIdentity\(\)[\s\S]*?preview_custom_fixture_profile[\s\S]*?isProjectAuthorityIdentityCurrent/);
+assert.match(
+  gdtfProfileActionsSource,
+  /context\.captureProjectAuthorityIdentity\(\)[\s\S]*?context\.invoke<FixtureProfileSummary>\("preview_custom_fixture_profile"[\s\S]*?context\.isProjectAuthorityIdentityCurrent\(authority\)/,
+  "custom-profile preview must retain the project-authority discard fence after extraction",
+);
+assert.match(
+  appSource,
+  /import \{ createGdtfProfileActions \} from "\.\/gdtfProfileActions";/,
+  "App must import the extracted GDTF action factory",
+);
+const gdtfProfileActionFactorySourceStart = appSource.indexOf("} = createGdtfProfileActions({");
+const gdtfProfileActionFactorySourceEnd = appSource.indexOf("});", gdtfProfileActionFactorySourceStart);
+assert.ok(gdtfProfileActionFactorySourceStart >= 0 && gdtfProfileActionFactorySourceEnd > gdtfProfileActionFactorySourceStart);
+const gdtfProfileActionFactorySource = appSource.slice(
+  gdtfProfileActionFactorySourceStart,
+  gdtfProfileActionFactorySourceEnd + 3,
+);
+assert.match(
+  gdtfProfileActionFactorySource,
+  /createGdtfProfileActions\([\s\S]*?captureProjectAuthorityIdentity,[\s\S]*?isProjectAuthorityIdentityCurrent,[\s\S]*?customManufacturer,[\s\S]*?selectedCustomAttributeIndexValue,/,
+  "App must construct the extracted GDTF actions with project authority and profile state context",
+);
 const loadedProjectApplicationSource = appSource.slice(
   appSource.indexOf("const applyLoadedProjectResult"),
   appSource.indexOf("const resetRetiredProjectControlInputUi"),

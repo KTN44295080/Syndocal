@@ -732,21 +732,70 @@ try {
   assert.equal((await organicRejections()).length, 1, "the declined split triggers exactly one typed terminal-result recovery read, itself rejected by the strict allowlist");
   assert.match(await statusText(client), /Timeline selection split failed.*declined/s, "declined split surfaces a visible fail-closed message");
 
+  const invalidDragTimelineProof = (state) => ({
+    mutations: state.calls
+      .filter((call) => call.operation === "split_items" || call.operation === "move_items_to_lanes")
+      .map((call) => ({ operation: call.operation, args: call.args })),
+    sideCommands: state.rejected
+      .filter((entry) => entry.command === "seek_timeline" || entry.command === "get_timeline_advanced_operation_terminal_result")
+      .map((entry) => ({ command: entry.command, args: entry.args })),
+  });
+  const isKnownAsyncBootRead = (entry) =>
+    (entry.command === "remote_control_status" || entry.command === "get_dj_link_machine_status")
+    && entry.args !== null
+    && typeof entry.args === "object"
+    && Object.getPrototypeOf(entry.args) === Object.prototype
+    && Object.keys(entry.args).length === 0;
+  const assertNoUnexpectedInvalidDragBridgeDelta = (before, after, label) => {
+    // The strict bridge records every invoke/rejection, not only Timeline
+    // mutations. The two status polls below can still finish asynchronously
+    // after the invalid drag starts; that known boot noise is the only
+    // rejection permitted in this interval. In particular, a new allowed
+    // operation or an unknown command must not be hidden by a scoped count.
+    assert.deepEqual(
+      after.calls.slice(0, before.calls.length),
+      before.calls,
+      `${label} does not rewrite prior bridge calls`,
+    );
+    assert.equal(after.calls.length, before.calls.length, `${label} emits no new bridge call`);
+    assert.deepEqual(
+      after.rejected.slice(0, before.rejected.length),
+      before.rejected,
+      `${label} does not rewrite prior bridge rejections`,
+    );
+    const newRejections = after.rejected.slice(before.rejected.length);
+    assert.ok(
+      newRejections.every(isKnownAsyncBootRead),
+      `${label} adds only the known asynchronous boot reads (remote_control_status {} / get_dj_link_machine_status {}); unexpected delta: ${JSON.stringify(newRejections)}`,
+    );
+  };
   const sceneSelector = '.timelineMarker[data-timeline-event-id]';
   const invalidTargets = [
-    { selector: sceneSelector, layer: 10, label: "Scene pointer drop on Audio Bed lane" },
-    { selector: '[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]', layer: 10, label: "wrong-kind Video automation drop on Audio lane" },
+    {
+      selector: sceneSelector,
+      layer: 10,
+      label: "Scene pointer drop on Audio Bed lane",
+      rejection: /Scene Blocks cannot be moved to Audio layers\. No changes were made\./,
+    },
+    {
+      selector: '[data-timeline-automation-kind="video"][data-timeline-automation-id="2"]',
+      layer: 10,
+      label: "wrong-kind Video automation drop on Audio lane",
+      rejection: /Automation can only move within its matching lane section\. No changes were made\./,
+    },
   ];
   for (const invalidCase of invalidTargets) {
     const before = await bridgeState(client);
     await dragTimelineItemToLane(client, invalidCase.selector, invalidCase.layer);
     await sleep(150);
     const after = await bridgeState(client);
+    assertNoUnexpectedInvalidDragBridgeDelta(before, after, invalidCase.label);
     assert.deepEqual(
-      { calls: after.calls.length, rejected: after.rejected.length },
-      { calls: before.calls.length, rejected: before.rejected.length },
-      `${invalidCase.label} emits no mutation request (fixture or native)`,
+      invalidDragTimelineProof(after),
+      invalidDragTimelineProof(before),
+      `${invalidCase.label} emits no Timeline mutation, seek, or terminal-result recovery read`,
     );
+    assert.match(await statusText(client), invalidCase.rejection, `${invalidCase.label} surfaces the matching lane rejection`);
   }
 
   const beforeMove = await bridgeState(client);

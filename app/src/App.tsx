@@ -240,13 +240,13 @@ import {
   customProfileAttributeDraftChannelLabel,
   customProfileAttributeDraftsFromText,
   customProfileAttributeTemplates,
-  customProfileAttributeTextFromDrafts,
   customProfilePreviewFromText,
   customAttributeGeometryName,
   profileGeometryRows,
   unresolvedGeometryReferences,
   type CustomProfileAttributeDraft,
 } from "./customFixtureProfile";
+import { createGdtfProfileActions } from "./gdtfProfileActions";
 import {
   addressRange,
   buildOccupiedDmxRanges,
@@ -337,7 +337,6 @@ import type {
   ColorMappingWrapMode,
   CurveEffectPoint,
   CurveEffectRequest,
-  CustomFixtureProfileRequest,
   CueEffectTarget,
   CueListSummary,
   CueLiveDirection,
@@ -13094,55 +13093,6 @@ export default function App() {
     }
   });
 
-  const selectGdtfFile = async () => {
-    try {
-      const path = await invoke<string | null>("select_gdtf_file");
-      if (path) {
-        setGdtfPath(path);
-        setMessage(`Selected ${path}`);
-      }
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const selectLoadedProfile = (
-    imported: FixtureProfileSummary,
-    loadedMessage: string,
-    preferredMode: string | null = null,
-    openPatch = false,
-  ) => {
-    const modeName = preferredMode && imported.dmx_modes.some((mode) => mode.name === preferredMode)
-      ? preferredMode
-      : imported.dmx_modes[0]?.name ?? "";
-    setProfile(imported);
-    setGdtfPath(imported.source_path);
-    setSelectedMode(modeName);
-    setMessage(profileLoadMessage(loadedMessage, imported));
-    if (openPatch) {
-      selectSetupMode("patch");
-      focusPatchFixtureForm();
-    }
-  };
-
-  const loadGdtfProfile = async (
-    path: string,
-    loadedMessage = "Loaded",
-    preferredMode: string | null = null,
-    openPatch = false,
-  ) => {
-    const imported = await invoke<FixtureProfileSummary>("import_gdtf", { path });
-    selectLoadedProfile(imported, loadedMessage, preferredMode, openPatch);
-  };
-
-  const importGdtf = async () => {
-    try {
-      await loadGdtfProfile(gdtfPath(), "Loaded", null, false);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
   const selectVideoSourceFile = async () => {
     const sourceKind = videoSourceKind();
     if (!videoSourceCanBrowseFile(sourceKind)) {
@@ -13184,146 +13134,48 @@ export default function App() {
     }
   };
 
-  const downloadGdtfFromUrl = async () => {
-    try {
-      const path = await invoke<string | null>("download_gdtf_from_url", { url: gdtfShareUrl() });
-      if (!path) {
-        setMessage("GDTF download canceled.");
-        return;
-      }
-      setGdtfPath(path);
-      await loadGdtfProfile(path, "Downloaded and loaded", null, false);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setCustomAttributesText = (value: string) => {
-    setCustomAttributes(value);
-    setCustomAttributeDrafts(customProfileAttributeDraftsFromText(value));
-    setSelectedCustomAttributeIndex(null);
-  };
-
-  const commitCustomAttributeDrafts = (drafts: CustomProfileAttributeDraft[], selectedIndex?: number | null) => {
-    setCustomAttributeDrafts(drafts);
-    setCustomAttributes(customProfileAttributeTextFromDrafts(drafts));
-    setSelectedCustomAttributeIndex(
-      selectedIndex !== undefined
-        ? selectedIndex
-        : selectedCustomAttributeIndexValue() !== null && selectedCustomAttributeIndexValue()! < drafts.length
-          ? selectedCustomAttributeIndexValue()
-          : drafts.length > 0
-            ? drafts.length - 1
-            : null,
-    );
-  };
-
-  const updateCustomAttributeDraft = (index: number, updates: Partial<CustomProfileAttributeDraft>) => {
-    const drafts = customAttributeDrafts();
-    if (index < 0 || index >= drafts.length) {
-      return;
-    }
-    commitCustomAttributeDrafts(
-      drafts.map((draft, draftIndex) => (draftIndex === index ? { ...draft, ...updates } : draft)),
-      index,
-    );
-  };
-
-  const addCustomAttributeDraft = () => {
-    const drafts = customAttributeDrafts();
-    commitCustomAttributeDrafts(
-      [...drafts, { attribute: `Attribute${drafts.length + 1}`, resolution: "EightBit", startOffset: "" }],
-      drafts.length,
-    );
-  };
-
-  const appendCustomAttributeTemplate = (rows: CustomProfileAttributeDraft[]) => {
-    const drafts = customAttributeDrafts();
-    const nextRows = rows.map((row) => ({ ...row }));
-    commitCustomAttributeDrafts([...drafts, ...nextRows], drafts.length);
-  };
-
-  const removeCustomAttributeDraft = (index: number) => {
-    const drafts = customAttributeDrafts();
-    if (index < 0 || index >= drafts.length) {
-      return;
-    }
-    const next = drafts.filter((_, draftIndex) => draftIndex !== index);
-    commitCustomAttributeDrafts(next, next.length === 0 ? null : Math.min(index, next.length - 1));
-  };
-
-  const moveCustomAttributeDraft = (index: number, delta: -1 | 1) => {
-    const drafts = [...customAttributeDrafts()];
-    const nextIndex = index + delta;
-    if (index < 0 || nextIndex < 0 || index >= drafts.length || nextIndex >= drafts.length) {
-      return;
-    }
-    const [draft] = drafts.splice(index, 1);
-    drafts.splice(nextIndex, 0, draft);
-    commitCustomAttributeDrafts(drafts, nextIndex);
-  };
-
-  const customProfileRequest = (): CustomFixtureProfileRequest => ({
-    manufacturer: customManufacturer(),
-    name: customProfileName(),
-    mode_name: customModeName(),
-    attributes: customAttributes()
-      .split(",")
-      .map((attribute) => attribute.trim())
-      .filter(Boolean),
+  const {
+    selectGdtfFile,
+    selectLoadedProfile,
+    loadGdtfProfile,
+    importGdtf,
+    downloadGdtfFromUrl,
+    setCustomAttributesText,
+    commitCustomAttributeDrafts,
+    updateCustomAttributeDraft,
+    addCustomAttributeDraft,
+    appendCustomAttributeTemplate,
+    removeCustomAttributeDraft,
+    moveCustomAttributeDraft,
+    createCustomProfile,
+    saveCustomProfile,
+    loadCustomProfile,
+  } = createGdtfProfileActions({
+    invoke,
+    gdtfPath,
+    setGdtfPath,
+    gdtfShareUrl,
+    setMessage,
+    profileLoadMessage,
+    setProfile,
+    setSelectedMode,
+    selectSetupMode,
+    focusPatchFixtureForm,
+    captureProjectAuthorityIdentity,
+    isProjectAuthorityIdentityCurrent,
+    customManufacturer,
+    setCustomManufacturer,
+    customProfileName,
+    setCustomProfileName,
+    customModeName,
+    setCustomModeName,
+    customAttributes,
+    setCustomAttributes,
+    customAttributeDrafts,
+    setCustomAttributeDrafts,
+    selectedCustomAttributeIndexValue,
+    setSelectedCustomAttributeIndex,
   });
-
-  const createCustomProfile = async () => {
-    const request = customProfileRequest();
-    const authority = captureProjectAuthorityIdentity();
-    try {
-      const created = await invoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
-      if (!isProjectAuthorityIdentityCurrent(authority)) {
-        setMessage("Project changed while previewing the custom fixture profile; the preview was discarded.");
-        return;
-      }
-      setProfile(created);
-      setGdtfPath(created.source_path);
-      setSelectedMode(created.dmx_modes[0]?.name ?? "");
-      setMessage(profileLoadMessage("Created custom profile", created));
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const saveCustomProfile = async () => {
-    const request = customProfileRequest();
-    try {
-      const path = await invoke<string | null>("save_custom_fixture_profile", { request });
-      setMessage(path ? `Saved custom profile ${path}` : "Custom profile save canceled.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadCustomProfile = async () => {
-    try {
-      const created = await invoke<FixtureProfileSummary | null>("load_custom_fixture_profile");
-      if (!created) {
-        setMessage("Custom profile load canceled.");
-        return;
-      }
-      setProfile(created);
-      setGdtfPath(created.source_path);
-      setSelectedMode(created.dmx_modes[0]?.name ?? "");
-      setCustomManufacturer(created.manufacturer);
-      setCustomProfileName(created.name);
-      setCustomModeName(created.dmx_modes[0]?.name ?? "Default");
-      setCustomAttributesText(
-        created.dmx_modes[0]?.controls
-          .map((control) => `${control.attribute}@${control.offsets[0] ?? 1}:${control.resolution === "SixteenBit" ? "16" : "8"}`)
-          .join(", ") ?? "",
-      );
-      setMessage(profileLoadMessage("Loaded custom profile", created));
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
 
   const invokePatchFixtures = async (
     requests: PatchFixtureRequest[],

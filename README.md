@@ -2,45 +2,31 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.24**
+- 製品名: **Syndocal 1.2.0-alpha.25**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.24` on branch
-`codex/syndocal-v1.2`. The current source checkpoint is exact committed,
-pushed, and upstream-equal `5eb1888906613851c4c49e66717a270f13bbd7b5`.
-The completed alpha.23 source-only checkpoint is historical at
-`5e7d27df7f5864449d4838782f6eca2f9b81d360`, following the alpha.22 Scene
-checkpoint at `cc201ad40927f0631236680392025f81e51c6130`. Alpha.24's Timeline
-Follow rearm performs the actual DjLink clock handoff only: it arms an
-enabled, unfenced, eligible Follow without seek/play/jump or authored-state
-mutation, and admits exactly one Follow transition at the next natural boundary.
-For an authored non-Cut first-measure hold, settlement uses one source measure
-and installs the destination's first meter-aware measure as a runtime-only hold;
-the 5/4 proof does not alter authored timeline state. The supervisor gate passed `29/29` engine
-`dj_link`, with warnings `0`; the exact MSVC 14.44 linker
-`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
-was pinned and first in `where.exe link.exe`. `check:release` and
-`check:release:self-test` passed, and independent Terra xHigh source review
-was GO. The required `pnpm --dir app tauri build --no-bundle` then passed in
-`2m35s` with Vite/Rust first-party warnings `0`. Product/FileVersion is
-`1.2.0-alpha.24`; it produced `target/release/syndocal.exe`, `59,803,136`
-bytes, SHA-256
-`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and
-LastWrite `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive
-`Syndocal` process/window was observed (PID `63016`, handle `66658934`, title
-`Syndocal`, responsive `true`); Computer Use verified the unique process and
-the accessibility system button `元のサイズに戻す`, proving maximized state.
-The frontend build transformed `296` modules, with `App-CNx-MFOg.js` at
-`499.68 kB` and the lazy `phase1Actions` chunk at `2.84 kB`.
-The StandardRelease three-display acceptance runner is pinned to this exact
-alpha.24 product/file version, size, SHA-256, and source commit. Its deterministic
-self-test passed `88/88` with warnings `0`, including clean equal-HEAD and valid
-clean descendant-HEAD cases while preserving the artifact source identity.
-No physical three-display Apply was run because the loaded project is
-`Untitled.sdc` and no real output IDs/labels are configured.
+Current product metadata is `1.2.0-alpha.25` on branch
+`codex/syndocal-v1.2`. Alpha.25 source acceptance, native build, artifact
+identity, launch, and native UI acceptance are pending the supervisor build;
+no alpha.25 source commit, SHA-256, size, or PID is accepted yet. The release
+metadata checker intentionally expects the alpha.25 product identity, including
+the canonical product and installer names below; that naming does not assert
+that an alpha.25 installer exists.
+
+Historical alpha.24 evidence is preserved, not promoted to alpha.25: source
+build `5eb1888906613851c4c49e66717a270f13bbd7b5` with native-evidence descendant
+`e4c02f8e2c9013bdb735b2b785f6c75599c0a950` produced
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.24`,
+`59,803,136` bytes, SHA-256
+`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`.
+Its exact-checkout PID `63016` was responsive and maximized. The historical
+alpha.24 Timeline Follow rearm and its deterministic three-display runner
+self-test remain evidence for that artifact only; physical three-display Apply
+was not run because the loaded project was `Untitled.sdc` with no real output
+IDs/labels.
 The historical alpha.21 Setup-I/O native artifact had Product/FileVersion
 `1.2.0-alpha.21`, built from `536742db968b242164349c34dd6940fe3ced8e92`;
 its exact identity and remaining hardware boundary are recorded in
@@ -118,7 +104,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.24_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.24_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.25_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.25_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

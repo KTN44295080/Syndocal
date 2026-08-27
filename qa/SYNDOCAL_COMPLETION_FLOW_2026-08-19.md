@@ -354,31 +354,17 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.24`. The current
-source checkpoint is exact committed, pushed, and upstream-equal
-`5eb1888906613851c4c49e66717a270f13bbd7b5` on branch `codex/syndocal-v1.2`.
-The completed alpha.23 source checkpoint remains historical at exact
-committed/pushed, upstream-equal source
-`5e7d27df7f5864449d4838782f6eca2f9b81d360`. Alpha.24's Timeline Follow rearm
-performs the actual DjLink clock handoff only, arms an enabled/unfenced eligible
-Follow, performs no seek/play/jump or authored-state mutation, and admits
-exactly one Follow transition at the next natural boundary. For an authored
-non-Cut first-measure hold, settlement uses one source measure and installs the
-destination's first meter-aware measure as a runtime-only hold; the 5/4 proof
-does not mutate authored state. The current running native process is the
-alpha.24 artifact from `target/release/syndocal.exe`, built from the exact
-source above. Its Product/FileVersion is `1.2.0-alpha.24`, size is
-`59,803,136` bytes, SHA-256 is
-`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and
-LastWrite is `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive
-`Syndocal` process/window was observed (PID `63016`, handle `66658934`), and
-Computer Use verified the unique process/window plus accessibility button
-`元のサイズに戻す`, proving maximized state. The historical alpha.21
-Product/FileVersion was `1.2.0-alpha.21`, with its I/O/native source retained
-in historical section 54.
-The preceding alpha.22 authoritative Scene source evidence remains preserved in
-historical section 55; alpha.23 has no native artifact claim, while alpha.24's
-native evidence is recorded in section 57.
+alpha checkpoints; current product metadata is `1.2.0-alpha.25`. Alpha.25
+source acceptance, native build, artifact identity, launch, and native UI
+acceptance are pending the supervisor build; no alpha.25 source commit,
+SHA-256, size, or PID is accepted. The alpha.24 Timeline Follow rearm source
+and native evidence are historical only in section 57 and must not be rebound
+to alpha.25. The preceding alpha.23 source checkpoint remains historical at
+exact committed/pushed, upstream-equal source
+`5e7d27df7f5864449d4838782f6eca2f9b81d360`; alpha.22 authoritative Scene
+source evidence remains preserved in historical section 55. The historical
+alpha.21 Product/FileVersion was `1.2.0-alpha.21`, with its I/O/native source
+retained in historical section 54.
 The separate read-only show structural preflight is committed and pushed at
 `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
@@ -2632,12 +2618,12 @@ alpha.21 artifact: PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
 reconnect, and three-display evidence remain unverified; this checkpoint does
-not claim final completion. Current alpha.24 native evidence is recorded in
+not claim final completion. Historical alpha.24 native evidence is recorded in
 section 57.
 
-## 57. 2026-08-28 current alpha.24 Timeline Follow rearm source/native checkpoint
+## 57. 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 
-Current product metadata is `1.2.0-alpha.24`. The current source authority is
+At this historical checkpoint, product metadata was `1.2.0-alpha.24`. Its source authority was
 exact committed, pushed, and upstream-equal
 `5eb1888906613851c4c49e66717a270f13bbd7b5`. Alpha.23 remains historical at
 exact pushed commit `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not
@@ -2647,7 +2633,7 @@ seek/play/jump or authored-state mutation, and admits exactly one Follow
 transition at the next natural boundary. For an authored non-Cut first-measure
 hold, settlement uses one source measure and installs the destination's first
 meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate
-authored state. The alpha.24 native build is complete; its evidence is recorded
+authored state. The alpha.24 native build was complete; its evidence is recorded
 below.
 
 The exact supervisor gate passed `29/29` engine `dj_link` with warnings `0`.

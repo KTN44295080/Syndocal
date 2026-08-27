@@ -52,16 +52,25 @@ assert.match(types, /ownerDeck\?: string \| null/);
 assert.doesNotMatch(types, /\bmaster\s*:/);
 assert.doesNotMatch(types, /masterDeck/);
 assert.match(types, /interface RemoteControlConfig[\s\S]*dj_link_enabled/);
-assert.match(panel, /data-io-disclosure="dj-link"/);
+const remoteWorkbenchStart = panel.indexOf("function RemoteWorkbenchSurface(props: RemoteWorkbenchSurfaceProps) {");
+const remoteWorkbenchEnd = panel.indexOf("export function RemoteControlPanel", remoteWorkbenchStart);
+assert.ok(remoteWorkbenchStart >= 0, "the shared remote workbench helper must exist");
+assert.ok(remoteWorkbenchEnd > remoteWorkbenchStart, "the shared remote workbench helper must have a bounded body");
+const remoteWorkbenchSurface = panel.slice(remoteWorkbenchStart, remoteWorkbenchEnd);
 assert.match(
-  panel,
-  /<div class="ioDisclosureStack">\s*<Show when=\{props\.surface !== "dj"\}>\s*<details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">/,
-  "Web Remote must be a lazy peer disclosure and remain unmounted on the DJ-only surface",
+  remoteWorkbenchSurface,
+  /<Show\s+when=\{props\.immediate\}\s+fallback=\{\(\s*<details class="ioDisclosure" data-io-disclosure=\{props\.disclosureId\} data-io-default-surface=\{props\.defaultSurface\}>[\s\S]*?\{props\.children\}[\s\S]*?<\/details>\s*\)\}\s*>\s*<div class=\{`ioDirectSurface\$\{bodyClass\(\)\}`\} data-io-default-surface=\{props\.defaultSurface\}>\s*\{props\.children\}\s*<\/div>\s*<\/Show>/,
+  "the shared workbench must bind immediate=true to direct content and immediate=false to the exact legacy disclosure",
 );
 assert.match(
   panel,
-  /<\/Show>\s*<Show when=\{props\.surface !== "web"\}>\s*<details class="ioDisclosure" data-io-disclosure="dj-link">/,
-  "DJ Link must be a lazy peer disclosure and remain unmounted on the Web-only surface",
+  /<div class="ioDisclosureStack">\s*<Show when=\{surface\(\) !== "dj"\}>\s*<RemoteWorkbenchSurface\s+immediate=\{surface\(\) !== "all"\}\s+disclosureId="web-remote"\s+summary="Web Remote"\s+defaultSurface="remote"/,
+  "Web Remote must be a lazy peer and become direct only when its I/O workbench is selected",
+);
+assert.match(
+  panel,
+  /<\/Show>\s*<Show when=\{surface\(\) !== "web"\}>\s*<RemoteWorkbenchSurface\s+immediate=\{surface\(\) !== "all"\}\s+disclosureId="dj-link"\s+summary="DJ Link"/,
+  "DJ Link must be a lazy peer and become direct only when its I/O workbench is selected",
 );
 assert.doesNotMatch(
   panel,

@@ -1,11 +1,11 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-28
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.24`. The current source checkpoint is exact committed, pushed, and upstream-equal commit `5eb1888906613851c4c49e66717a270f13bbd7b5`. It preserves alpha.23 as the historical source checkpoint at `5e7d27df7f5864449d4838782f6eca2f9b81d360`; alpha.24 adds the Timeline Follow rearm. The rearm performs the actual DjLink clock handoff only, arms an enabled/unfenced eligible Follow, performs no seek/play/jump or authored-state mutation, and admits exactly one Follow transition at the next natural boundary. For an authored non-Cut first-measure hold, settlement uses one source measure and installs the destination's first meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate authored state. Supervisor gate `29/29` engine `dj_link` and warnings `0` passed; exact MSVC 14.44 path was pinned and first in `where.exe link.exe`; `check:release` and `check:release:self-test` passed; independent Terra xHigh source review was GO. The required `pnpm --dir app tauri build --no-bundle` passed in `2m35s` with Vite/Rust first-party warnings `0`. Product/FileVersion is `1.2.0-alpha.24`; `target/release/syndocal.exe` is `59,803,136` bytes with SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D` and LastWrite `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive `Syndocal` process/window was verified (PID `63016`, handle `66658934`, title `Syndocal`, responsive `true`), and Computer Use verified the unique process/window plus accessibility button `元のサイズに戻す` proving maximized state. Frontend output was `296` modules, `App-CNx-MFOg.js` `499.68 kB`, and lazy `phase1Actions` `2.84 kB`. The current native artifact is alpha.24; alpha.21 remains historical at exact source commit `536742db968b242164349c34dd6940fe3ced8e92` with Product/FileVersion `1.2.0-alpha.21`. Target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.25`. Alpha.25 source acceptance, native build, artifact identity, launch, and native UI acceptance are pending the supervisor build; no alpha.25 source commit, SHA-256, size, or PID is accepted. The alpha.24 source/native checkpoint below is historical evidence only and must not be relabelled or overwritten. Target-DJ-PC deployment, token, LAN, reconnect, physical pedal, MIDI, and the physical HW-4 matrix remain pending, so no physical show acceptance is claimed.
 
-## 2026-08-28 current alpha.24 Timeline Follow rearm source/native checkpoint
+## 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 
-The current source authority is exact committed, pushed, and upstream-equal
+This historical source authority is exact committed, pushed, and upstream-equal
 `5eb1888906613851c4c49e66717a270f13bbd7b5` on `codex/syndocal-v1.2`, with
 product metadata `1.2.0-alpha.24`. Alpha.23 remains historical at
 `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not relabelled. Old path:
@@ -91,7 +91,7 @@ alpha.21 artifact; Product/FileVersion at that checkpoint was
 `1.2.0-alpha.21`: PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 No alpha.23 native build, launch, native UI proof, physical DJ/MIDI/pedal or
-HW-4 acceptance, or real-output acceptance is claimed. Current alpha.24
+HW-4 acceptance, or real-output acceptance is claimed. Historical alpha.24
 native evidence is recorded in the source/native checkpoint above.
 
 ## 2026-08-28 historical alpha.22 Scene-authority source checkpoint
