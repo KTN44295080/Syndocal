@@ -338,7 +338,6 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
 
     let timeline_id = {
         let runtime = runtime.lock().unwrap();
-        assert!(!runtime.master);
         assert_eq!(runtime.track_deck_id.as_deref(), Some("rekordbox-deck-2"));
         assert_eq!(runtime.track_deck_number, Some(2));
         assert_eq!(runtime.loop_revision, Some(2));
@@ -791,4 +790,226 @@ fn dj_link_any_deck_fallback_profile_saturates_and_rebases_after_measured_author
         );
         assert_eq!(runtime.last_loop_fallback_intent_id, Some(12));
     }
+}
+
+#[test]
+fn dj_link_generic_active_capacity_is_fail_closed_without_mutation() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut mapping = dj_link_test_mapping(
+        "capacity-generic",
+        protocol::DjTrackSelector {
+            content_id: Some("capacity-content".to_string()),
+            title: None,
+            artist: None,
+        },
+    );
+    mapping.timeline_id = engine.snapshot().timeline.id;
+    coordinator.mappings.dj_track_triggers = vec![mapping];
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+    let coordinator = Mutex::new(coordinator);
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    {
+        let mut runtime = runtime.lock().unwrap();
+        for index in 0..DJ_LINK_DEDUPE_LIMIT {
+            runtime
+                .seen_play_sessions
+                .insert(format!("retained-{index}"), Instant::now());
+        }
+    }
+    let engine_before = engine.snapshot();
+    let runtime_before = runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::TrackActive,
+                1,
+                "generic-capacity-full",
+                json!({
+                    "deck": 2,
+                    "deckId": "rekordbox-deck-2",
+                    "contentId": "capacity-content",
+                    "positionAtSendSec": 0.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 1,
+                    "sampleAgeMs": 0,
+                    "isPlaying": true,
+                    "startedAt": "2026-08-27T00:00:00Z",
+                    "playSessionId": "capacity-session",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "play_session_capacity"
+    ));
+    assert_eq!(engine.snapshot(), engine_before);
+    assert_eq!(*runtime.lock().unwrap(), runtime_before);
+}
+
+#[test]
+fn dj_link_generic_unmapped_active_latches_all_mutating_followups() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let coordinator = Mutex::new(project_coordinator_for_initial_snapshot(engine.snapshot()));
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(
+        &coordinator.lock().unwrap(),
+    ));
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    let unmapped_active = json!({
+        "deck": 2,
+        "deckId": "rekordbox-deck-2",
+        "contentId": "unmapped-content",
+        "positionAtSendSec": 0.0,
+        "effectiveBpm": 120.0,
+        "positionRevision": 1,
+        "sampleAgeMs": 0,
+        "isPlaying": true,
+        "startedAt": "2026-08-27T00:00:00Z",
+        "playSessionId": "unmapped-session",
+        "loop": null
+    });
+    assert!(matches!(
+        dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::TrackActive,
+                1,
+                "generic-unmapped-active",
+                unmapped_active,
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ),
+        DjLinkDispatchOutcome::NoMapping { .. }
+    ));
+    assert!(runtime.lock().unwrap().unmapped_active_blocked);
+    let engine_before = engine.snapshot();
+    let runtime_before = runtime.lock().unwrap().clone();
+    let cases = [
+        (
+            protocol::DjLinkMessageType::StateSync,
+            "generic-unmapped-state-sync",
+            json!({ "released": false }),
+        ),
+        (
+            protocol::DjLinkMessageType::TrackSync,
+            "generic-unmapped-sync",
+            json!({
+                "deck": 2, "deckId": "rekordbox-deck-2", "contentId": "unmapped-content",
+                "positionAtSendSec": 1.0, "effectiveBpm": 120.0, "positionRevision": 2,
+                "sampleAgeMs": 0, "isPlaying": true, "startedAt": "2026-08-27T00:00:01Z",
+                "playSessionId": "unmapped-session", "loop": null
+            }),
+        ),
+        (
+            protocol::DjLinkMessageType::LoopState,
+            "generic-unmapped-loop",
+            json!({
+                "deck": 2, "deckId": "rekordbox-deck-2", "playSessionId": "unmapped-session",
+                "loop": { "active": false, "startBeat": null, "endBeat": null,
+                    "lengthBeats": null, "revision": 1, "sampleAgeMs": 0,
+                    "source": "rekordbox-hook-measured" }
+            }),
+        ),
+        (
+            protocol::DjLinkMessageType::LoopFallback,
+            "generic-unmapped-fallback",
+            json!({
+                "deck": 2, "deckId": "rekordbox-deck-2", "playSessionId": "unmapped-session",
+                "pedalIntentId": 1, "baseMeasuredLoopRevision": null, "baseLoopDivision": null,
+                "targetLengthBeats": 8.0, "responseWindowMs": 50,
+                "source": "pedal-no-response-predicted"
+            }),
+        ),
+        (
+            protocol::DjLinkMessageType::Release,
+            "generic-unmapped-release",
+            json!({
+                "state": "released", "timelineId": "1", "playSessionId": "unmapped-session"
+            }),
+        ),
+    ];
+    for (offset, (message_type, event_id, payload)) in cases.into_iter().enumerate() {
+        assert!(matches!(
+            dispatch_dj_link_event(
+                dj_link_test_envelope(message_type, u64::try_from(offset + 2).unwrap(), event_id, payload),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            ),
+            DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "dj_link_unmapped_active"
+        ));
+        assert_eq!(engine.snapshot(), engine_before);
+        assert_eq!(*runtime.lock().unwrap(), runtime_before);
+    }
+}
+
+#[test]
+fn dj_link_generic_engine_rejection_preserves_runtime_authority_atomically() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    coordinator.mappings.dj_track_triggers = vec![dj_link_test_mapping(
+        "engine-rejection-generic",
+        protocol::DjTrackSelector {
+            content_id: Some("engine-rejection-content".to_string()),
+            title: None,
+            artist: None,
+        },
+    )];
+    coordinator.mappings.dj_track_triggers[0].timeline_id = TimelineId(u64::MAX);
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+    let coordinator = Mutex::new(coordinator);
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    let engine_before = engine.snapshot();
+    let runtime_before = runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch_dj_link_event(
+            dj_link_test_envelope(
+                protocol::DjLinkMessageType::TrackActive,
+                1,
+                "generic-engine-rejection",
+                json!({
+                    "deck": 2,
+                    "deckId": "rekordbox-deck-2",
+                    "contentId": "engine-rejection-content",
+                    "positionAtSendSec": 0.0,
+                    "effectiveBpm": 120.0,
+                    "positionRevision": 1,
+                    "sampleAgeMs": 0,
+                    "isPlaying": true,
+                    "startedAt": "2026-08-27T00:00:00Z",
+                    "playSessionId": "engine-rejection-session",
+                    "loop": null
+                }),
+            ),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "engine_publication_rejected"
+    ));
+    assert_eq!(engine.snapshot(), engine_before);
+    assert_eq!(*runtime.lock().unwrap(), runtime_before);
 }

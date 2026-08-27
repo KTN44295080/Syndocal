@@ -4518,14 +4518,14 @@ function installSetupIoInvokeMockInPage() {
       dj_link_enabled: false,
     };
     const djLinkMachineStatus = {
-      configured: true,
-      credentialReady: true,
-      autoStartArmed: true,
-      bindIp: "192.0.2.10",
-      bindPort: 9100,
-      adapterGuid: "11111111-1111-1111-1111-111111111111",
-      networkGuid: "22222222-2222-2222-2222-222222222222",
-      credentialGeneration: 7,
+      configured: false,
+      credentialReady: false,
+      autoStartArmed: false,
+      bindIp: null,
+      bindPort: null,
+      adapterGuid: null,
+      networkGuid: null,
+      credentialGeneration: null,
       credentialCleanupPending: false,
       blockReason: null,
     };
@@ -4555,9 +4555,23 @@ function installSetupIoInvokeMockInPage() {
         if (command === "cancel_project_transaction") return undefined;
         if (command === "get_snapshot") throw new Error("Setup I/O viewport snapshot refresh intentionally omitted");
         if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
-        if (command === "remote_control_status") return remoteStatus;
+        if (command === "remote_control_status") return clone(remoteStatus);
         if (command === "get_dj_link_machine_status") return djLinkMachineStatus;
         if (command === "list_dj_link_wired_candidates") return djLinkWiredCandidates;
+        if (command === "start_remote_control") {
+          remoteStatus.running = true;
+          remoteStatus.web_remote_enabled = true;
+          remoteStatus.dj_link_enabled = false;
+          return undefined;
+        }
+        if (command === "stop_remote_control") {
+          remoteStatus.running = false;
+          remoteStatus.web_remote_enabled = false;
+          remoteStatus.dj_link_enabled = false;
+          remoteStatus.active_connections = 0;
+          remoteStatus.clients = [];
+          return undefined;
+        }
         if (command === "standby_sync_status") return standbyStatus;
         if (command === "get_output_ownership_status") return ownershipStatus;
         if (command === "set_output_ownership_role") return ownershipStatus;
@@ -4681,13 +4695,23 @@ async function exerciseDmxRoutePagination(client) {
     const totalRouteCount = Number(routeList?.getAttribute('data-io-route-total') ?? 0);
     const pageCount = Number(routeList?.getAttribute('data-io-route-page-count') ?? 0);
     const visitedRouteIndexes = new Set();
+    const visitedRouteSignatures = new Map();
     let allVisitedRowsComplete = true;
 
     const readCurrentPage = () => {
       const rows = routeList ? [...routeList.querySelectorAll('[data-io-route-row]')] : [];
       for (const row of rows) {
         const routeIndex = Number(row.getAttribute('data-route-index'));
-        if (Number.isInteger(routeIndex)) visitedRouteIndexes.add(routeIndex);
+        if (Number.isInteger(routeIndex)) {
+          visitedRouteIndexes.add(routeIndex);
+          visitedRouteSignatures.set(routeIndex, {
+            index: routeIndex,
+            protocol: row.querySelector('strong')?.textContent?.trim() ?? '',
+            target: row.querySelector('[data-io-route-target]')?.textContent?.trim() ?? '',
+            universe: row.querySelector('[data-io-route-universe]')?.textContent?.trim() ?? '',
+            enabled: Boolean(row.querySelector('[data-io-control="dmx-route-enabled"]')?.checked),
+          });
+        }
         allVisitedRowsComplete = allVisitedRowsComplete && Boolean(
           row.querySelector('.ioStatusDot') &&
           row.querySelector('strong') &&
@@ -4736,8 +4760,21 @@ async function exerciseDmxRoutePagination(client) {
       reachedLastPage,
       firstPageRestored,
       allVisitedRowsComplete,
+      routeSignatures: [...visitedRouteSignatures.values()].sort((left, right) => left.index - right.index),
     };
   });
+}
+
+async function readSetupIoDmxDraft(client) {
+  return await client.evaluate(`(() => ({
+    enabled: Boolean(document.querySelector('[data-io-control="dmx-output-enabled"]')?.checked),
+    protocol: document.querySelector('[data-io-control="dmx-protocol"]')?.value ?? '',
+    targetIp: document.querySelector('[data-io-control="dmx-target"]')?.value ?? '',
+    port: document.querySelector('[data-io-control="dmx-port"]')?.value ?? '',
+    universe: document.querySelector('[data-io-control="dmx-universe"]')?.value ?? '',
+    serialPort: document.querySelector('[data-io-control="dmx-serial-port"]')?.value ?? '',
+    serialBaudRate: document.querySelector('[data-io-control="dmx-baud-rate"]')?.value ?? '',
+  }))()`);
 }
 
 async function exerciseLegacySetupIoStoredTabs(client) {
@@ -4865,8 +4902,13 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   await selectVisibleOption(client, '[data-io-control="dmx-serial-port"]', 'COM9');
   await sleep(80);
   const serialState = await measure(client, `setup-io-serial-${viewport.width}x${viewport.height}`);
+  const serialDraftBeforeApply = await readSetupIoDmxDraft(client);
   await clickVisibleSelector(client, '[data-io-control="dmx-apply-output"]');
   await sleep(140);
+  const serialDraftAfterApply = await readSetupIoDmxDraft(client);
+  const serialApplyStatus = await client.evaluate(
+    `document.querySelector('.appStatusLine .appStatusText')?.textContent?.trim() ?? ''`,
+  );
   const dmxOutputOptions = await exerciseSetupIoDisclosure(
     client,
     'dmx-output-options',
@@ -4878,17 +4920,33 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     '[data-io-control="dmx-add-artnet"]',
   );
   await client.evaluate(`document.querySelector('[data-io-disclosure="dmx-route-actions"] > summary')?.click()`);
+  const dmxDraftBeforeRouteActions = await readSetupIoDmxDraft(client);
   await clickVisibleSelector(client, '[data-io-control="dmx-add-artnet"]');
   await sleep(140);
   await clickVisibleSelector(client, '[data-io-control="dmx-add-sacn"]');
   await sleep(180);
-  const dmxCalls = await readSetupIoMockCalls(client);
-  const serialApply = dmxCalls.find((call) =>
-    call.command === 'set_output_config' &&
-    call.args?.config?.protocol === 'EnttecUsbPro' &&
-    call.args?.config?.serial_port === 'COM9'
+  const dmxDraftAfterRouteActions = await readSetupIoDmxDraft(client);
+  const routePaginationAfterActions = await exerciseDmxRoutePagination(client);
+  const dmxRouteStatus = await client.evaluate(
+    `document.querySelector('.appStatusLine .appStatusText')?.textContent?.trim() ?? ''`,
   );
+  const dmxCalls = await readSetupIoMockCalls(client);
+  const serialApplyCalls = dmxCalls.filter((call) => call.command === 'set_output_config');
   const routeCalls = dmxCalls.filter((call) => call.command === 'set_dmx_outputs');
+  // The legacy DMX Tauri commands are intentionally rejected by production
+  // until the authenticated local OutputControl R4 lane is available. The
+  // current controller therefore reports the refusal and leaves both the
+  // draft and route list untouched; a synthetic successful invoke here would
+  // hide that fail-closed boundary.
+  const serialApplyFailClosed =
+    serialApplyCalls.length === 0 &&
+    serialApplyStatus === 'DMX output configuration is unavailable until a lease-bound OutputControl action is reviewed; no state changed.' &&
+    JSON.stringify(serialDraftAfterApply) === JSON.stringify(serialDraftBeforeApply);
+  const dmxRoutesFailClosed =
+    routeCalls.length === 0 &&
+    dmxRouteStatus === 'DMX output routes are unavailable until a lease-bound OutputControl action is reviewed; no state changed.' &&
+    JSON.stringify(dmxDraftAfterRouteActions) === JSON.stringify(dmxDraftBeforeRouteActions) &&
+    JSON.stringify(routePaginationAfterActions.routeSignatures) === JSON.stringify(routePagination.routeSignatures);
   flows.dmx = {
     routeTotalCountPreserved:
       measurements.io.ioRouteTotalCount === 128 &&
@@ -4902,11 +4960,12 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     allRouteRowsComplete: routePagination.allVisitedRowsComplete,
     routePaginationRestored:
       routePagination.firstPageRestored &&
-      routePagination.forwardClicks === routePagination.backwardClicks,
+      routePagination.forwardClicks === routePagination.backwardClicks &&
+      routePaginationAfterActions.firstPageRestored &&
+      routePaginationAfterActions.forwardClicks === routePaginationAfterActions.backwardClicks,
     serialReachableWithDisclosure: serialState.ioSerialRouteApplyReachable,
-    serialApplyCommand: Boolean(serialApply),
-    artNetRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'ArtNet')),
-    sacnRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'Sacn')),
+    serialApplyFailClosed,
+    networkRoutesFailClosed: dmxRoutesFailClosed,
   };
   disclosures.dmx = [
     dmxConnection,
@@ -4954,6 +5013,11 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
+    const webRemote = await exerciseSetupIoDisclosure(client, 'web-remote', '[data-io-control="remote-start"]');
+    // Web Remote owns the connection settings disclosure in the shared I/O
+    // stack. Open the owner first so the nested control contract measures the
+    // actual visible path rather than a details element behind a closed peer.
+    await client.evaluate(`document.querySelector('[data-io-disclosure="web-remote"] > summary')?.click()`);
     const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
     const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-wired-binding"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
@@ -4962,20 +5026,66 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     await clickVisibleSelector(client, '[data-io-control="remote-start"]');
     await sleep(180);
     const remoteEndpoints = await exerciseSetupIoDisclosure(client, 'remote-endpoints', '[data-io-control="remote-copy-url"]');
-    disclosures.remote = [remoteConnection, remoteSecurity, remoteEndpoints, remoteDjLink, remoteStandby];
+    const remoteStartedState = await client.evaluate(`(() => ({
+      stopVisible: (() => {
+        const button = document.querySelector('[data-io-control="remote-stop"]');
+        if (!(button instanceof HTMLElement)) return false;
+        const rect = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      })(),
+      genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
+    }))()`);
+    await clickVisibleSelector(client, '[data-io-control="remote-stop"]');
+    await sleep(180);
+    const remoteStoppedState = await client.evaluate(`(() => ({
+      startVisible: (() => {
+        const button = document.querySelector('[data-io-control="remote-start"]');
+        if (!(button instanceof HTMLElement)) return false;
+        const rect = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      })(),
+      stopVisible: (() => {
+        const button = document.querySelector('[data-io-control="remote-stop"]');
+        if (!(button instanceof HTMLElement)) return false;
+        const rect = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      })(),
+      genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
+    }))()`);
+    disclosures.remote = [webRemote, remoteConnection, remoteSecurity, remoteEndpoints, remoteDjLink, remoteStandby];
     const remoteCalls = await readSetupIoMockCalls(client);
+    const remoteStartCalls = remoteCalls.filter((call) => call.command === 'start_remote_control');
+    const remoteStopCalls = remoteCalls.filter((call) => call.command === 'stop_remote_control');
+    const startIndex = remoteCalls.findIndex((call) => call.command === 'start_remote_control');
+    const stopIndex = remoteCalls.findIndex((call) => call.command === 'stop_remote_control');
+    const startedExactlyOnce =
+      remoteStartCalls.length === 1 &&
+      remoteStartCalls[0].args?.config?.bind_ip === '127.0.0.1' &&
+      remoteStartCalls[0].args?.config?.port === 9100 &&
+      remoteStartCalls[0].args?.config?.pairing_pin?.length === 6;
+    const stoppedExactlyOnce = remoteStopCalls.length === 1;
+    const ordered = startIndex >= 0 && stopIndex > startIndex;
+    const startedStatePassed =
+      remoteStartedState.stopVisible && remoteStartedState.genericStatus === 'Running';
+    const stoppedStatePassed =
+      remoteStoppedState.startVisible &&
+      !remoteStoppedState.stopVisible &&
+      remoteStoppedState.genericStatus === 'Stopped';
     flows.remote = {
-      started: remoteCalls.some((call) =>
-        call.command === 'start_remote_control' &&
-        call.args?.config?.bind_ip === '127.0.0.1' &&
-        call.args?.config?.port === 9100 &&
-        call.args?.config?.pairing_pin?.length === 6
-      ),
+      passed: startedExactlyOnce && stoppedExactlyOnce && ordered && startedStatePassed && stoppedStatePassed,
+      startedExactlyOnce,
+      stoppedExactlyOnce,
+      ordered,
+      startedStatePassed,
+      stoppedStatePassed,
     };
   }
 
-  const expectedControlCounts = { dmx: 22, midi: 5, osc: 3, remote: 6 };
-  const expectedDisclosureCounts = { dmx: 6, midi: 3, osc: 2, remote: 5 };
+  const expectedControlCounts = { dmx: 22, midi: 5, osc: 3, remote: 5 };
+  const expectedDisclosureCounts = { dmx: 6, midi: 3, osc: 2, remote: 6 };
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
@@ -4995,11 +5105,11 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
     disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
     dmxRoutePagination: flows.dmx.routeTotalCountPreserved && flows.dmx.allRoutePagesReachable && flows.dmx.allRouteRowsComplete && flows.dmx.routePaginationRestored,
-    serialApplyFlow: flows.dmx.serialReachableWithDisclosure && flows.dmx.serialApplyCommand,
-    dmxRouteCreationFlows: flows.dmx.artNetRouteCreated && flows.dmx.sacnRouteCreated,
+    serialApplyFailClosed: flows.dmx.serialReachableWithDisclosure && flows.dmx.serialApplyFailClosed,
+    dmxNetworkRoutesFailClosed: flows.dmx.networkRoutesFailClosed,
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
-    remoteStartFlow: dmxOnly || Object.values(flows.remote).every(Boolean),
+    remoteStartFlow: dmxOnly || flows.remote.passed,
     remoteDisclosureScrollReachability: dmxOnly || remoteDisclosureScroll.passed,
     legacyStoredIoTabsNormalize: legacyStoredTabs.passed,
     fixedFrameContained: isContained(measurements.io),
@@ -11725,11 +11835,11 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 4 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx", "midi", "osc", "remote"]) &&
       result.ioAllZoneRectsPositive &&
-      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 22, midi: 5, osc: 3, remote: 6 }) &&
-      result.ioVisibleControlCount === 36 &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6, midi: 3, osc: 2, remote: 5 }) &&
+      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 22, midi: 5, osc: 3, remote: 5 }) &&
+      result.ioVisibleControlCount === 35 &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6, midi: 3, osc: 2, remote: 6 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
-      result.ioDisclosureCount === 16 &&
+      result.ioDisclosureCount === 17 &&
       result.ioOpenDisclosureCount === 0 &&
       result.ioRouteTotalCount === 128 &&
       result.ioRoutePageCount === Math.ceil(result.ioRouteTotalCount / 6) &&
@@ -11743,7 +11853,7 @@ function hasExpectedSetupSurface(result) {
       result.midiMappingListDeskWidth === 0 &&
       result.oscMappingEditorDeskWidth === 0 &&
       result.oscMappingListDeskWidth === 0 &&
-      result.remoteServerDeskWidth > 0 &&
+      result.remoteServerDeskWidth === 0 &&
       result.remoteEndpointDeskWidth === 0 &&
       result.visibleStandbySyncDeskCount === 0 &&
       result.ioDocumentAndAppScrollZero
@@ -36405,15 +36515,14 @@ async function main() {
               `${Object.values(result.disclosures).flat().length} ` +
             `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
             `legacy=${result.legacyStoredTabs.states.filter((state) => state.storedSetupSubTab === 'io').length}/4 ` +
-            `serial=${Number(result.flows.dmx.serialReachableWithDisclosure)}/` +
-              `${Number(result.flows.dmx.serialApplyCommand)} ` +
-            `routes=${Number(result.flows.dmx.artNetRouteCreated)}/` +
-              `${Number(result.flows.dmx.sacnRouteCreated)} ` +
+            `serialFailClosed=${Number(result.flows.dmx.serialReachableWithDisclosure)}/` +
+              `${Number(result.flows.dmx.serialApplyFailClosed)} ` +
+            `networkRoutesFailClosed=${Number(result.flows.dmx.networkRoutesFailClosed)} ` +
             `routePages=${result.routePagination.visitedRouteCount}/` +
               `${result.routePagination.totalRouteCount}:${result.routePagination.pageCount} ` +
             `midi=${result.flows.midi ? `${Number(result.flows.midi.clockConnected)}/${Number(result.flows.midi.controlConnected)}` : "-"} ` +
             `osc=${result.flows.osc ? Number(result.flows.osc.listening) : "-"} ` +
-            `remote=${result.flows.remote ? Number(result.flows.remote.started) : "-"} ` +
+            `remote=${result.flows.remote ? Number(result.flows.remote.passed) : "-"} ` +
             `remoteScroll=${result.remoteDisclosureScroll ? Number(result.remoteDisclosureScroll.passed) : "-"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );

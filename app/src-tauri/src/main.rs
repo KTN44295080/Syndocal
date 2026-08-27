@@ -935,7 +935,6 @@ struct DjLinkRuntime {
     /// into a second START or clear its release ownership.
     active_dedupe_key: Option<String>,
     state_generation: u64,
-    master: bool,
     track_active: bool,
     playing: bool,
     released: bool,
@@ -954,9 +953,6 @@ struct DjLinkRuntime {
     /// unique older intents without retaining an unbounded history.
     last_loop_fallback_intent_id: Option<u64>,
     last_event_id: Option<String>,
-    master_deck: Option<String>,
-    master_deck_number: Option<u8>,
-    master_deck_revision: Option<u64>,
     track_content_id: Option<String>,
     track_title: Option<String>,
     track_artist: Option<String>,
@@ -989,7 +985,6 @@ impl DjLinkRuntime {
             seen_play_sessions: BTreeMap::new(),
             active_dedupe_key: None,
             state_generation: 0,
-            master: false,
             track_active: false,
             playing: false,
             released: false,
@@ -998,9 +993,6 @@ impl DjLinkRuntime {
             loop_revision: None,
             last_loop_fallback_intent_id: None,
             last_event_id: None,
-            master_deck: None,
-            master_deck_number: None,
-            master_deck_revision: None,
             track_content_id: None,
             track_title: None,
             track_artist: None,
@@ -1029,7 +1021,6 @@ impl DjLinkRuntime {
             self.mappings = mappings.clone();
             self.seen_play_sessions.clear();
             self.active_dedupe_key = None;
-            self.master = false;
             self.track_active = false;
             self.playing = false;
             self.released = false;
@@ -1038,9 +1029,6 @@ impl DjLinkRuntime {
             self.loop_revision = None;
             self.last_loop_fallback_intent_id = None;
             self.last_event_id = None;
-            self.master_deck = None;
-            self.master_deck_number = None;
-            self.master_deck_revision = None;
             self.track_content_id = None;
             self.track_title = None;
             self.track_artist = None;
@@ -1246,27 +1234,6 @@ fn dj_link_find_track_mapping(
         .cloned()
 }
 
-fn dj_link_track_payload_from_master(
-    payload: &protocol::DjLinkMasterTrackPayload,
-) -> protocol::DjLinkTrackPayload {
-    protocol::DjLinkTrackPayload {
-        deck: payload.deck,
-        deck_id: payload.deck_id.clone(),
-        content_id: payload.content_id.clone(),
-        title: payload.title.clone(),
-        artist: payload.artist.clone(),
-        track_bpm: payload.track_bpm,
-        position_at_send_sec: payload.position_at_send_sec,
-        effective_bpm: payload.effective_bpm,
-        position_revision: payload.position_revision,
-        sample_age_ms: payload.sample_age_ms,
-        is_playing: payload.is_playing,
-        started_at: payload.started_at.clone(),
-        play_session_id: payload.play_session_id.clone(),
-        loop_state: payload.loop_state.clone(),
-    }
-}
-
 fn dj_link_measured_loop_division(
     loop_state: &protocol::DjLinkMeasuredLoop,
 ) -> Result<Option<u8>, &'static str> {
@@ -1283,21 +1250,6 @@ fn dj_link_measured_loop_division(
         return Err("active_loop_length_missing");
     };
     dj_loop_range::division_for_profile_length(length_beats).map(Some)
-}
-
-fn dj_link_payload_matches_runtime(
-    runtime: &DjLinkRuntime,
-    deck: u8,
-    deck_id: &str,
-    master_deck_revision: u64,
-    play_session_id: &str,
-) -> bool {
-    runtime.master
-        && runtime.track_active
-        && runtime.master_deck_number == Some(deck)
-        && runtime.master_deck.as_deref() == Some(deck_id)
-        && runtime.master_deck_revision == Some(master_deck_revision)
-        && runtime.play_session_id.as_deref() == Some(play_session_id)
 }
 
 fn dj_link_track_payload_is_current(payload: &protocol::DjLinkTrackPayload) -> bool {
@@ -1332,15 +1284,15 @@ fn dj_link_estimated_position_ms(
             .contains(&payload.position_at_send_sec)
         || payload.sample_age_ms > protocol::DJ_LINK_MAX_SAMPLE_AGE_MS
     {
-        return Err("invalid_master_track_position");
+        return Err("invalid_track_position");
     }
     let base_ms = (payload.position_at_send_sec * 1_000.0).round();
     if !base_ms.is_finite() || base_ms < 0.0 || base_ms > u64::MAX as f64 {
-        return Err("invalid_master_track_position");
+        return Err("invalid_track_position");
     }
     (base_ms as u64)
         .checked_add(payload.sample_age_ms)
-        .ok_or("invalid_master_track_position")
+        .ok_or("invalid_track_position")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1462,480 +1414,42 @@ fn dispatch_dj_link_event(
                 sequence,
             )
         }
-        protocol::DjLinkMessageType::MasterTrackActive => {
-            let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
+        protocol::DjLinkMessageType::LoopState => {
+            let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopStatePayload>(
                 envelope.payload,
             ) {
                 Ok(payload) => payload,
                 Err(_) => {
-                    return dj_link_rejected("invalid_master_track_payload", current_generation)
+                    return dj_link_rejected("invalid_track_loop_state_payload", current_generation)
                 }
             };
-            let track_payload = dj_link_track_payload_from_master(&payload);
-            if !payload.master || !dj_link_track_payload_is_current(&track_payload) {
-                return dj_link_rejected("not_current_playing_master", current_generation);
-            }
-            if runtime.master_deck_revision.is_some()
-                && payload.master_deck_revision < runtime.master_deck_revision.unwrap_or_default()
-            {
-                return dj_link_rejected("stale_master_deck_revision", current_generation);
-            }
-            let same_master_deck_revision =
-                runtime.master_deck_revision == Some(payload.master_deck_revision);
-            if same_master_deck_revision && runtime.master_deck_number != Some(payload.deck) {
-                return dj_link_rejected("play_session_revision_mismatch", current_generation);
-            }
-            let position_ms = match dj_link_estimated_position_ms(&track_payload) {
-                Ok(position_ms) => position_ms,
-                Err(code) => return dj_link_rejected(code, current_generation),
-            };
-            let Some(mapping) = dj_link_find_track_mapping(&runtime.mappings, &track_payload)
-            else {
-                // An unmapped ACTIVE is diagnostic input only.  It never
-                // replaces admitted track/session metadata and never inherits
-                // or releases another session's Timeline authority.
-                if runtime.track_active
-                    && runtime.play_session_id.is_some()
-                    && runtime.timeline_id.is_some()
-                {
-                    // A mapped play session owns this Timeline.  Reject the
-                    // foreign session in place without mutating or blocking
-                    // the owner, so its correlated SYNC and canonical RELEASE
-                    // keep converging.  The foreign session's own controls
-                    // still fail closed on correlation below.
-                    return DjLinkDispatchOutcome::NoMapping {
-                        state_generation: current_generation,
-                    };
-                }
-                // With no admitted session authority, retire all DJ mutation
-                // controls until a mapped ACTIVE receives a canonical START
-                // ACK; this is distinct from the RELEASE latch.
-                runtime.unmapped_active_blocked = true;
-                return DjLinkDispatchOutcome::NoMapping {
-                    state_generation: current_generation,
-                };
-            };
-            let dedupe_key = format!(
-                "{}:{}:{}",
-                runtime.project_epoch, mapping.id, payload.play_session_id
-            );
-            let different_play_session_at_same_master_revision = same_master_deck_revision
-                && runtime.play_session_id.is_some()
-                && runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str());
-            if different_play_session_at_same_master_revision
-                && (runtime.seen_play_sessions.contains_key(&dedupe_key) || !runtime.released)
-            {
-                // The DJ peer does not increment masterDeckRevision for every
-                // new play session. A distinct session can therefore replace
-                // a released owner at the same revision, but only once: an
-                // already-admitted old session, or an un-released owner,
-                // remains an explicit fail-closed replay/mismatch.
-                return dj_link_rejected("play_session_revision_mismatch", current_generation);
-            }
-            // An exact duplicate and a position conflict must be complete
-            // runtime no-ops, including the once-per-session ledger.
-            match dj_link_position_revision_disposition(
-                &runtime,
-                &track_payload.play_session_id,
-                track_payload.position_revision,
-                position_ms,
-            ) {
-                Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
-                    return dj_link_accepted(current_generation)
-                }
-                Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
-                Err(code) => return dj_link_rejected(code, current_generation),
-            }
-            // ACTIVE is self-contained authority in v3.  It is deliberately
-            // not gated by a retired DJ_MASTER_CHANGED preamble.
-            let mut next_runtime = runtime.clone();
-            // Expiry is only a candidate for the next committed runtime. A
-            // capacity or engine failure below must not silently delete a
-            // receipt from the authoritative current runtime.
-            next_runtime.purge_dedupe(Instant::now());
-            next_runtime.master = true;
-            next_runtime.track_active = true;
-            next_runtime.playing = true;
-            next_runtime.master_deck = Some(payload.deck_id.clone());
-            next_runtime.master_deck_number = Some(payload.deck);
-            next_runtime.master_deck_revision = Some(payload.master_deck_revision);
-            next_runtime.track_content_id = payload.content_id.clone();
-            next_runtime.track_title = payload.title.clone();
-            next_runtime.track_artist = payload.artist.clone();
-            next_runtime.track_deck_id = Some(payload.deck_id.clone());
-            next_runtime.track_started_at = Some(payload.started_at.clone());
-            next_runtime.track_playing = payload.is_playing;
-            next_runtime.track_bpm = payload.track_bpm;
-            next_runtime.position_sec = Some(payload.position_at_send_sec);
-            next_runtime.source_position_ms = Some(position_ms);
-            next_runtime.position_revision = Some(payload.position_revision);
-            next_runtime.play_session_id = Some(payload.play_session_id.clone());
-            if next_runtime.seen_play_sessions.contains_key(&dedupe_key) {
-                if !runtime.released
-                    && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str())
-                    && payload.master_deck_revision
-                        > runtime.master_deck_revision.unwrap_or_default()
-                    && runtime.master_deck_number == Some(payload.deck)
-                    && runtime.master_deck.as_deref() == Some(payload.deck_id.as_str())
-                {
-                    // Rekordbox can briefly report this admitted session as
-                    // non-master and then restore it with a newer master
-                    // context revision. This is not a new track START. Keep
-                    // all engine/release/pedal/position authority intact and
-                    // refresh only the context needed by later SYNC/LOOP.
-                    runtime.master_deck_revision = Some(payload.master_deck_revision);
-                    runtime.last_event_id = Some(envelope.event_id);
-                }
-                // A released owner never receives the refresh above. After
-                // the canonical RELEASE ACK the session holds no Timeline
-                // authority, so its ACTIVE packets — including higher master
-                // context revisions — are exact full-state no-ops, exactly
-                // like any other dedupe hit below.
-                // Aside from the narrow master-context refresh above, a
-                // once-per-session dedupe hit is a complete runtime no-op
-                // even when the replay carries a newer wire position.
-                // Advancing `source_position_ms`/`position_revision` here has
-                // no acknowledged engine convergence behind it and would
-                // suppress the identical SYNC that must converge the Timeline
-                // next.  Leaving position identity untouched lets that SYNC
-                // dispatch and commit atomically with its engine ACK.
-                return dj_link_accepted(current_generation);
-            }
-            if next_runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT {
-                return dj_link_rejected("play_session_capacity", current_generation);
-            }
-            let next = match dj_link_next_generation(&next_runtime) {
-                Ok(next) => next,
-                Err(_) => {
-                    return dj_link_rejected("state_generation_exhausted", current_generation)
-                }
-            };
-            let snapshot = match engine
-                .dj_link_start_timeline_at_with_canonical_snapshot(mapping.timeline_id, position_ms)
-            {
-                Ok(snapshot) => snapshot,
-                Err(_) => {
-                    return dj_link_rejected("engine_publication_rejected", current_generation)
-                }
-            };
-            next_runtime
-                .seen_play_sessions
-                .insert(dedupe_key.clone(), Instant::now());
-            next_runtime.active_dedupe_key = Some(dedupe_key);
-            next_runtime.master = true;
-            next_runtime.track_active = true;
-            next_runtime.playing = true;
-            // Only a newly mapped ACTIVE whose canonical START has ACKed may
-            // re-arm a timeline released to local/band operation.  Unmapped
-            // packets and same-session dedupe replays keep the latch intact.
-            next_runtime.released = false;
-            next_runtime.unmapped_active_blocked = false;
-            next_runtime.pedal_owner = Some("dj".to_string());
-            next_runtime.release_event_id = None;
-            next_runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
-            next_runtime.timeline_id = Some(mapping.timeline_id.0.to_string());
-            next_runtime.position_bars = dj_link_engine_position_bars(&snapshot);
-            next_runtime.loop_division = None;
-            next_runtime.loop_revision = None;
-            next_runtime.last_loop_fallback_intent_id = None;
-            next_runtime.loop_active = false;
-            next_runtime.last_event_id = Some(envelope.event_id);
-            next_runtime.state_generation = next;
-            *runtime = next_runtime;
-            DjLinkDispatchOutcome::TimelineState {
-                state_generation: next,
-                state: dj_link_timeline_state_from_snapshot(
-                    &runtime, &snapshot, &event_id, sequence,
-                ),
-            }
+            dj_track_runtime::dispatch_loop_state(
+                payload,
+                engine,
+                &mut runtime,
+                current_generation,
+                &event_id,
+            )
         }
-        protocol::DjLinkMessageType::MasterTrackSync => {
-            let payload = match serde_json::from_value::<protocol::DjLinkMasterTrackPayload>(
+        protocol::DjLinkMessageType::LoopFallback => {
+            let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopFallbackPayload>(
                 envelope.payload,
             ) {
                 Ok(payload) => payload,
                 Err(_) => {
                     return dj_link_rejected(
-                        "invalid_master_track_sync_payload",
+                        "invalid_track_loop_fallback_payload",
                         current_generation,
                     )
                 }
             };
-            let track_payload = dj_link_track_payload_from_master(&payload);
-            if runtime.unmapped_active_blocked {
-                return dj_link_rejected("dj_link_unmapped_active", current_generation);
-            }
-            if !payload.master || !dj_link_track_payload_is_current(&track_payload) {
-                return dj_link_rejected("not_current_playing_master", current_generation);
-            }
-            if runtime.released {
-                return dj_link_rejected("dj_link_released", current_generation);
-            }
-            if !dj_link_payload_matches_runtime(
-                &runtime,
-                payload.deck,
-                &payload.deck_id,
-                payload.master_deck_revision,
-                &payload.play_session_id,
-            ) {
-                return dj_link_rejected("track_sync_context_mismatch", current_generation);
-            }
-            let position_ms = match dj_link_estimated_position_ms(&track_payload) {
-                Ok(position_ms) => position_ms,
-                Err(code) => return dj_link_rejected(code, current_generation),
-            };
-            match dj_link_position_revision_disposition(
-                &runtime,
-                &track_payload.play_session_id,
-                track_payload.position_revision,
-                position_ms,
-            ) {
-                Ok(DjLinkPositionRevisionDisposition::NewerOrNewSession) => {}
-                Ok(DjLinkPositionRevisionDisposition::ExactDuplicate) => {
-                    return dj_link_accepted(current_generation)
-                }
-                Err(code) => return dj_link_rejected(code, current_generation),
-            }
-            let Some(timeline_id) = runtime
-                .timeline_id
-                .as_deref()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(TimelineId)
-            else {
-                return dj_link_rejected("invalid_timeline_id", current_generation);
-            };
-            let snapshot = match engine
-                .dj_link_sync_timeline_position_with_canonical_snapshot(timeline_id, position_ms)
-            {
-                Ok(snapshot) => snapshot,
-                Err(_) => {
-                    return dj_link_rejected("engine_publication_rejected", current_generation)
-                }
-            };
-            // SYNC converges only the already-admitted v3 Timeline identity.
-            // It never performs another mapping lookup or retriggers START.
-            runtime.track_content_id = payload.content_id.clone();
-            runtime.track_title = payload.title.clone();
-            runtime.track_artist = payload.artist.clone();
-            runtime.track_bpm = payload.track_bpm;
-            runtime.track_playing = payload.is_playing;
-            runtime.position_sec = Some(payload.position_at_send_sec);
-            runtime.source_position_ms = Some(position_ms);
-            runtime.position_revision = Some(payload.position_revision);
-            runtime.track_started_at = Some(payload.started_at.clone());
-            runtime.position_bars = dj_link_engine_position_bars(&snapshot);
-            runtime.last_event_id = Some(event_id.clone());
-            DjLinkDispatchOutcome::TimelineState {
-                state_generation: current_generation,
-                state: dj_link_timeline_state_from_snapshot(
-                    &runtime, &snapshot, &event_id, sequence,
-                ),
-            }
-        }
-        protocol::DjLinkMessageType::LoopState => {
-            if envelope.payload.get("masterDeckRevision").is_none() {
-                let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopStatePayload>(
-                    envelope.payload,
-                ) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        return dj_link_rejected(
-                            "invalid_track_loop_state_payload",
-                            current_generation,
-                        )
-                    }
-                };
-                return dj_track_runtime::dispatch_loop_state(
-                    payload,
-                    engine,
-                    &mut runtime,
-                    current_generation,
-                    &event_id,
-                );
-            }
-            let payload = match serde_json::from_value::<protocol::DjLinkLoopStatePayload>(
-                envelope.payload,
-            ) {
-                Ok(payload) => payload,
-                Err(_) => {
-                    return dj_link_rejected("invalid_loop_state_payload", current_generation)
-                }
-            };
-            if runtime.unmapped_active_blocked {
-                return dj_link_rejected("dj_link_unmapped_active", current_generation);
-            }
-            if runtime.released {
-                return dj_link_rejected("dj_link_released", current_generation);
-            }
-            if payload.loop_state.validate().is_err() {
-                return dj_link_rejected("invalid_measured_loop", current_generation);
-            }
-            if !dj_link_payload_matches_runtime(
-                &runtime,
-                payload.deck,
-                &payload.deck_id,
-                payload.master_deck_revision,
-                &payload.play_session_id,
-            ) {
-                return dj_link_rejected("loop_context_mismatch", current_generation);
-            }
-            let division = match dj_link_measured_loop_division(&payload.loop_state) {
-                Ok(Some(division)) => division,
-                Ok(None) => match runtime.loop_division {
-                    Some(division) => division,
-                    None => {
-                        return dj_link_rejected(
-                            "inactive_loop_without_active_context",
-                            current_generation,
-                        )
-                    }
-                },
-                Err(code) => return dj_link_rejected(code, current_generation),
-            };
-            if let Some(current_revision) = runtime.loop_revision {
-                if payload.loop_state.revision < current_revision {
-                    return dj_link_rejected("stale_loop_revision", current_generation);
-                }
-                if payload.loop_state.revision == current_revision {
-                    let exact_duplicate = runtime.loop_active == payload.loop_state.active
-                        && (!payload.loop_state.active || runtime.loop_division == Some(division));
-                    return if exact_duplicate {
-                        dj_link_accepted(current_generation)
-                    } else {
-                        dj_link_rejected("loop_revision_conflict", current_generation)
-                    };
-                }
-            }
-            let next = match dj_link_next_generation(&runtime) {
-                Ok(next) => next,
-                Err(_) => {
-                    return dj_link_rejected("state_generation_exhausted", current_generation)
-                }
-            };
-            if engine
-                .dj_link_set_timeline_loop_absolute(division, payload.loop_state.active)
-                .is_err()
-            {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
-            runtime.loop_division = Some(division);
-            runtime.loop_revision = Some(payload.loop_state.revision);
-            runtime.loop_active = payload.loop_state.active;
-            runtime.last_event_id = Some(envelope.event_id);
-            runtime.state_generation = next;
-            dj_link_accepted(next)
-        }
-        protocol::DjLinkMessageType::LoopFallback => {
-            if envelope.payload.get("masterDeckRevision").is_none() {
-                let payload = match serde_json::from_value::<protocol::DjLinkTrackLoopFallbackPayload>(
-                    envelope.payload,
-                ) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        return dj_link_rejected(
-                            "invalid_track_loop_fallback_payload",
-                            current_generation,
-                        )
-                    }
-                };
-                return dj_track_runtime::dispatch_loop_fallback(
-                    payload,
-                    engine,
-                    &mut runtime,
-                    current_generation,
-                    &event_id,
-                );
-            }
-            let payload = match serde_json::from_value::<protocol::DjLinkLoopFallbackPayload>(
-                envelope.payload,
-            ) {
-                Ok(payload) => payload,
-                Err(_) => {
-                    return dj_link_rejected("invalid_loop_fallback_payload", current_generation)
-                }
-            };
-            if runtime.unmapped_active_blocked {
-                return dj_link_rejected("dj_link_unmapped_active", current_generation);
-            }
-            if runtime.released {
-                return dj_link_rejected("dj_link_released", current_generation);
-            }
-            if payload.validate().is_err() {
-                return dj_link_rejected("invalid_loop_fallback", current_generation);
-            }
-            if !dj_link_payload_matches_runtime(
-                &runtime,
-                payload.deck,
-                &payload.deck_id,
-                payload.master_deck_revision,
-                &payload.play_session_id,
-            ) {
-                return dj_link_rejected("loop_fallback_context_mismatch", current_generation);
-            }
-            if runtime
-                .last_loop_fallback_intent_id
-                .is_some_and(|last| payload.pedal_intent_id <= last)
-            {
-                return dj_link_rejected("loop_fallback_intent_not_new", current_generation);
-            }
-            if runtime.loop_revision != payload.base_measured_loop_revision {
-                return dj_link_rejected(
-                    "loop_fallback_base_revision_mismatch",
-                    current_generation,
-                );
-            }
-            let effective_base_loop_division = runtime
-                .loop_active
-                .then_some(runtime.loop_division)
-                .flatten();
-            if effective_base_loop_division != payload.base_loop_division {
-                return dj_link_rejected(
-                    "loop_fallback_base_division_mismatch",
-                    current_generation,
-                );
-            }
-            let division =
-                match dj_loop_range::division_for_profile_length(payload.target_length_beats) {
-                    Ok(division) => division,
-                    Err(code) => return dj_link_rejected(code, current_generation),
-                };
-            let expected_division = payload
-                .base_loop_division
-                .map(|base| {
-                    base.saturating_add(1)
-                        .min((protocol::DJ_LINK_LOOP_PROFILE_LENGTH_BEATS.len() - 1) as u8)
-                })
-                .unwrap_or(0);
-            if division != expected_division {
-                return dj_link_rejected("loop_fallback_target_not_next", current_generation);
-            }
-            let next = match dj_link_next_generation(&runtime) {
-                Ok(next) => next,
-                Err(_) => {
-                    return dj_link_rejected("state_generation_exhausted", current_generation)
-                }
-            };
-            if runtime.loop_active && runtime.loop_division == Some(division) {
-                // The published Stage-1 profile saturates at 1/64. A further
-                // same-target F14 is an exact no-op, but its intent is still
-                // consumed so a replay cannot later gain authority.
-                runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
-                runtime.last_event_id = Some(envelope.event_id);
-                runtime.state_generation = next;
-                return dj_link_accepted(next);
-            }
-            if engine
-                .dj_link_set_timeline_loop_absolute(division, true)
-                .is_err()
-            {
-                return dj_link_rejected("engine_publication_rejected", current_generation);
-            }
-            runtime.loop_division = Some(division);
-            runtime.loop_active = true;
-            runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
-            runtime.last_event_id = Some(envelope.event_id);
-            runtime.state_generation = next;
-            dj_link_accepted(next)
+            dj_track_runtime::dispatch_loop_fallback(
+                payload,
+                engine,
+                &mut runtime,
+                current_generation,
+                &event_id,
+            )
         }
         protocol::DjLinkMessageType::Release => {
             let payload =
@@ -2000,78 +1514,33 @@ fn dispatch_dj_link_event(
             }
         }
         protocol::DjLinkMessageType::StateSync => {
-            if envelope.payload.get("masterDeck").is_none() {
-                let payload = match serde_json::from_value::<protocol::DjLinkTrackStateSyncPayload>(
-                    envelope.payload,
-                ) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        return dj_link_rejected(
-                            "invalid_track_state_sync_payload",
-                            current_generation,
-                        )
-                    }
-                };
-                if payload.validate().is_err() {
-                    return dj_link_rejected(
-                        "invalid_track_state_sync_payload",
-                        current_generation,
-                    );
-                }
-                if runtime.unmapped_active_blocked {
-                    return dj_link_rejected("dj_link_unmapped_active", current_generation);
-                }
-                if let (Some(deck), Some(deck_id), Some(play_session_id)) = (
-                    payload.owner_deck,
-                    payload.owner_deck_id.as_deref(),
-                    payload.active_play_session_id.as_deref(),
-                ) {
-                    let runtime_has_owner = runtime.track_active
-                        || runtime.timeline_id.is_some()
-                        || runtime.play_session_id.is_some();
-                    if runtime_has_owner
-                        && !dj_track_runtime::owner_matches(
-                            &runtime,
-                            deck,
-                            deck_id,
-                            play_session_id,
-                        )
-                    {
-                        return dj_link_rejected(
-                            "state_sync_owner_context_mismatch",
-                            current_generation,
-                        );
-                    }
-                }
-                runtime.last_event_id = Some(envelope.event_id);
-                return dj_link_accepted(current_generation);
-            }
-            let payload = match serde_json::from_value::<protocol::DjLinkStateSyncPayload>(
+            let payload = match serde_json::from_value::<protocol::DjLinkTrackStateSyncPayload>(
                 envelope.payload,
             ) {
                 Ok(payload) => payload,
                 Err(_) => {
-                    return dj_link_rejected("invalid_state_sync_payload", current_generation)
+                    return dj_link_rejected("invalid_track_state_sync_payload", current_generation)
                 }
             };
+            if payload.validate().is_err() {
+                return dj_link_rejected("invalid_track_state_sync_payload", current_generation);
+            }
             if runtime.unmapped_active_blocked {
                 return dj_link_rejected("dj_link_unmapped_active", current_generation);
             }
-            // StateSync is intentionally diagnostic-only.  It may prove that
-            // the peer's view differs, but it never starts, releases, or
-            // modifies an engine loop and cannot replace an ACTIVE authority.
-            if let Some(master_deck) = payload.master_deck {
-                if runtime.master_deck_number != Some(master_deck) {
+            if let (Some(deck), Some(deck_id), Some(play_session_id)) = (
+                payload.owner_deck,
+                payload.owner_deck_id.as_deref(),
+                payload.active_play_session_id.as_deref(),
+            ) {
+                let runtime_has_owner = runtime.track_active
+                    || runtime.timeline_id.is_some()
+                    || runtime.play_session_id.is_some();
+                if runtime_has_owner
+                    && !dj_track_runtime::owner_matches(&runtime, deck, deck_id, play_session_id)
+                {
                     return dj_link_rejected(
-                        "state_sync_master_context_mismatch",
-                        current_generation,
-                    );
-                }
-            }
-            if let Some(play_session_id) = payload.active_play_session_id.as_deref() {
-                if runtime.play_session_id.as_deref() != Some(play_session_id) {
-                    return dj_link_rejected(
-                        "state_sync_play_session_mismatch",
+                        "state_sync_owner_context_mismatch",
                         current_generation,
                     );
                 }
@@ -19465,6 +18934,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "add_still_image_layer",
     "add_video_file_layer",
     "analyze_timeline_audio_clip_path",
+    "arm_dj_link_machine",
     "arm_output_control_v2",
     "begin_media_asset_preview",
     "bootstrap_vj_show",
@@ -19477,6 +18947,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "connect_midi_control",
     "connect_midi_feedback",
     "create_custom_fixture_profile",
+    "disarm_dj_link_machine",
     "disconnect_midi_clock",
     "disconnect_midi_control",
     "disconnect_midi_feedback",
@@ -19517,10 +18988,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "relink_media_asset",
     "relinquish_output_lease_v2",
     "renew_output_lease_v2",
-    "arm_dj_link_machine",
-    "disarm_dj_link_machine",
-    "get_dj_link_machine_status",
-    "list_dj_link_wired_candidates",
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
     "send_art_rdm_request",
@@ -26566,13 +26033,11 @@ async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlSta
             generation: runtime.state_generation.max(transport.generation),
             agent_id: transport.agent_id,
             session_id: transport.session_id,
-            master: runtime.master,
             track_active: runtime.track_active,
             loop_division: runtime.loop_division,
             released: runtime.released,
             last_event_id: runtime.last_event_id.clone().or(transport.last_event_id),
             age_ms: transport.age_ms,
-            master_deck: runtime.master_deck.clone(),
             owner_deck: runtime.track_deck_id.clone(),
             track_content_id: runtime.track_content_id.clone(),
             track_title: runtime.track_title.clone(),
@@ -80196,7 +79661,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 143);
+        assert_eq!(runtime_routes.len(), 145);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -113225,7 +112690,7 @@ f 1 2 3
             "payload": {
                 "authToken": token,
                 "version": protocol::DJ_LINK_PROTOCOL_VERSION,
-                "capabilities": protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES
+                "capabilities": protocol::DJ_LINK_REQUIRED_CAPABILITIES
             }
         })
     }
@@ -113256,7 +112721,8 @@ f 1 2 3
             "eventId": format!("production-stop-sync-{session_id}"),
             "payload": {
                 "released": false,
-                "masterDeck": 1,
+                "ownerDeck": 1,
+                "ownerDeckId": "rekordbox-deck-1",
                 "activePlaySessionId": "production-stop-play"
             }
         }));
@@ -113303,7 +112769,6 @@ f 1 2 3
             json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
                 "contentId": "cold-project-content",
                 "trackBpm": 120.0,
                 "positionAtSendSec": 0.0,
@@ -113311,7 +112776,6 @@ f 1 2 3
                 "positionRevision": 1,
                 "sampleAgeMs": 0,
                 "isPlaying": true,
-                "master": true,
                 "startedAt": "2026-08-26T00:00:00Z",
                 "playSessionId": "cold-project-play",
                 "loop": null
@@ -113341,6 +112805,28 @@ f 1 2 3
             mappings_before
         );
 
+        // The cold project has no authored Timeline phase yet, so it is not a
+        // valid target for a v3 TrackActive start. Model the project-load
+        // boundary before asserting that the now-admitted mapping reaches the
+        // engine.
+        let mut loaded_timeline = state.engine.snapshot().timeline;
+        loaded_timeline.phases = vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "Cold project loaded DJ Link phase".to_string(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        loaded_timeline.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 16_000,
+            enabled: false,
+            musical_length_beats: None,
+        });
+        state
+            .engine
+            .apply_timeline_bank_published(vec![loaded_timeline.clone()], loaded_timeline.id, false)
+            .unwrap();
         let timeline_id = state.engine.snapshot().timeline.id;
         {
             let mut coordinator = state.project_coordinator.lock().unwrap();
@@ -113409,10 +112895,7 @@ f 1 2 3
 
         let error = start_remote_control_for_state(&state, generic.clone())
             .expect_err("must not replace DJ-only");
-        assert!(
-            error.contains("already active"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("armed"), "unexpected error: {error}");
         let status = state
             .remote_control
             .lock()
@@ -113706,13 +113189,12 @@ f 1 2 3
         }
         let production_active_outcome = dispatch_dj_link_event(
             dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
+                protocol::DjLinkMessageType::TrackActive,
                 1,
                 "production-stop-active",
                 json!({
                     "deck": 1,
                     "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 1,
                     "contentId": "production-stop-content",
                     "trackBpm": 120.0,
                     "positionAtSendSec": 0.0,
@@ -113720,7 +113202,6 @@ f 1 2 3
                     "positionRevision": 1,
                     "sampleAgeMs": 0,
                     "isPlaying": true,
-                    "master": true,
                     "startedAt": "2026-08-26T00:00:00Z",
                     "playSessionId": "production-stop-play",
                     "loop": null
@@ -113945,10 +113426,9 @@ f 1 2 3
                 },
             ),
         ];
-        let content_payload = protocol::DjLinkMasterTrackPayload {
+        let content_payload = protocol::DjLinkTrackPayload {
             deck: 1,
             deck_id: "rekordbox-deck-1".to_string(),
-            master_deck_revision: 1,
             content_id: Some("content-1".to_string()),
             title: None,
             artist: None,
@@ -113960,44 +113440,33 @@ f 1 2 3
             is_playing: true,
             started_at: "2026-08-25T00:00:00Z".to_string(),
             play_session_id: "play-1".to_string(),
-            master: true,
             loop_state: None,
         };
         assert_eq!(
-            dj_link_find_track_mapping(
-                &mappings,
-                &dj_link_track_payload_from_master(&content_payload),
-            )
-            .unwrap()
-            .id,
+            dj_link_find_track_mapping(&mappings, &content_payload,)
+                .unwrap()
+                .id,
             "content"
         );
-        let title_payload = protocol::DjLinkMasterTrackPayload {
+        let title_payload = protocol::DjLinkTrackPayload {
             content_id: None,
             title: Some("Cafe\u{301}".to_string()),
             artist: Some("Artist".to_string()),
             ..content_payload.clone()
         };
         assert_eq!(
-            dj_link_find_track_mapping(
-                &mappings,
-                &dj_link_track_payload_from_master(&title_payload),
-            )
-            .unwrap()
-            .id,
+            dj_link_find_track_mapping(&mappings, &title_payload,)
+                .unwrap()
+                .id,
             "title-artist"
         );
-        let unmatched_content = protocol::DjLinkMasterTrackPayload {
+        let unmatched_content = protocol::DjLinkTrackPayload {
             content_id: Some("unknown".to_string()),
             title: None,
             artist: None,
             ..content_payload.clone()
         };
-        assert!(dj_link_find_track_mapping(
-            &mappings,
-            &dj_link_track_payload_from_master(&unmatched_content),
-        )
-        .is_none());
+        assert!(dj_link_find_track_mapping(&mappings, &unmatched_content,).is_none());
         assert!(validate_dj_track_triggers(vec![dj_link_test_mapping(
             "title-only",
             protocol::DjTrackSelector {
@@ -114012,2870 +113481,10 @@ f 1 2 3
     mod dj_track_runtime_tests;
 
     #[test]
-    fn dj_link_dispatch_dedupe_nonmaster_no_mapping_and_state_sync_nontrigger() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "content",
-            protocol::DjTrackSelector {
-                content_id: Some("content-1".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        let mapping_timeline_id = mapping.timeline_id.0;
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-        let active = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            1,
-            "active-1",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 2.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 1,
-                "sampleAgeMs": 25,
-                "playSessionId": "play-1",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        let active_outcome = dispatch_dj_link_event(
-            active.clone(),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        );
-        match active_outcome {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => {
-                assert_eq!(
-                    state.state,
-                    protocol::DjLinkTimelineStateValue::Running,
-                    "mapped active track publishes authoritative running state"
-                );
-                assert_eq!(state.timeline_id, mapping_timeline_id.to_string());
-                assert_eq!(state.pedal_owner.as_deref(), Some("dj"));
-                assert_eq!(state.release_event_id, None);
-                assert_eq!(engine.snapshot().timeline.position_ms, 2_025);
-            }
-            other => panic!("mapped active track must publish timeline state: {other:?}"),
-        }
-        let replay_with_new_event = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            2,
-            "active-2",
-            active.payload.clone(),
-        );
-        let first_generation = runtime.lock().unwrap().state_generation;
-        let engine_before_replay = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                replay_with_new_event,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot().timeline.transport_generation,
-            engine_before_replay.timeline.transport_generation,
-            "play-session dedupe must not re-dispatch the engine"
-        );
-        assert_eq!(runtime.lock().unwrap().state_generation, first_generation);
-        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
-        assert_eq!(runtime.lock().unwrap().release_event_id, None);
-
-        // Even after the once-per-session ledger has aged past its TTL, an
-        // equal position revision with the equal canonical source millisecond
-        // is an identity-level no-op, not a fresh START.
-        {
-            let mut runtime = runtime.lock().unwrap();
-            for observed in runtime.seen_play_sessions.values_mut() {
-                *observed = Instant::now() - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1);
-            }
-        }
-        let runtime_before_ttl_retry = runtime.lock().unwrap().clone();
-        let engine_before_ttl_retry = engine.snapshot();
-        let ttl_retry = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            21,
-            "active-after-dedupe-ttl",
-            active.payload.clone(),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                ttl_retry,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(engine.snapshot(), engine_before_ttl_retry);
-        assert_eq!(*runtime.lock().unwrap(), runtime_before_ttl_retry);
-
-        let position_sync = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackSync,
-            3,
-            "track-sync",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 4.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 2,
-                "sampleAgeMs": 50,
-                "playSessionId": "play-1",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                position_sync.clone(),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert_eq!(
-            engine.snapshot().timeline.position_ms,
-            4_050,
-            "MASTER_TRACK_SYNC must converge the existing Timeline without another START"
-        );
-
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-        let engine_before_position_revision_retries = engine.snapshot();
-        let runtime_before_position_revision_retries = {
-            let runtime = runtime.lock().unwrap();
-            (
-                runtime.state_generation,
-                runtime.position_revision,
-                runtime.source_position_ms,
-                runtime.position_sec,
-                runtime.track_content_id.clone(),
-                runtime.loop_active,
-                runtime.loop_division,
-                runtime.released,
-            )
-        };
-        let exact_position_retry = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackSync,
-            31,
-            "track-sync-exact-retry",
-            position_sync.payload.clone(),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                exact_position_retry,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_position_revision_retries,
-            "an exact position-revision replay must not re-dispatch the engine"
-        );
-        let conflicting_position_sync = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackSync,
-            32,
-            "track-sync-position-conflict",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 4.1,
-                "effectiveBpm": 60.0,
-                "positionRevision": 2,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-1",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                conflicting_position_sync,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "position_revision_conflict"
-        ));
-        let conflicting_active = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            33,
-            "active-position-conflict",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 4.1,
-                "effectiveBpm": 60.0,
-                "positionRevision": 2,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-1",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                conflicting_active,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "position_revision_conflict"
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_position_revision_retries,
-            "a conflicting position revision must not reach the engine"
-        );
-        let runtime_after_position_revision_conflicts = {
-            let runtime = runtime.lock().unwrap();
-            (
-                runtime.state_generation,
-                runtime.position_revision,
-                runtime.source_position_ms,
-                runtime.position_sec,
-                runtime.track_content_id.clone(),
-                runtime.loop_active,
-                runtime.loop_division,
-                runtime.released,
-            )
-        };
-        assert_eq!(
-            runtime_after_position_revision_conflicts, runtime_before_position_revision_retries,
-            "a conflicting position revision must leave all DJ runtime authority unchanged"
-        );
-
-        // A same-session dedupe hit carrying a NEWER wire position must stay
-        // a complete runtime no-op: advancing position identity without an
-        // acknowledged engine convergence would suppress the identical SYNC
-        // that is supposed to converge the Timeline next.
-        {
-            // The TTL probe above deliberately aged the once-per-session
-            // ledger without refreshing it; restore a live observation so
-            // this replay is a true dedupe hit.
-            let mut runtime = runtime.lock().unwrap();
-            for observed in runtime.seen_play_sessions.values_mut() {
-                *observed = Instant::now();
-            }
-        }
-        let runtime_before_advanced_replay = {
-            let runtime = runtime.lock().unwrap();
-            (
-                runtime.state_generation,
-                runtime.position_revision,
-                runtime.source_position_ms,
-                runtime.position_sec,
-                runtime.last_event_id.clone(),
-            )
-        };
-        let engine_before_advanced_replay = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    41,
-                    "active-dedupe-advanced-position",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "contentId": "content-1",
-                        "trackBpm": 60.0,
-                        "positionAtSendSec": 4.0,
-                        "effectiveBpm": 60.0,
-                        "positionRevision": 3,
-                        "sampleAgeMs": 100,
-                        "playSessionId": "play-1",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-25T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_advanced_replay,
-            "a same-session dedupe hit must not touch the engine"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(
-                (
-                    runtime.state_generation,
-                    runtime.position_revision,
-                    runtime.source_position_ms,
-                    runtime.position_sec,
-                    runtime.last_event_id.clone(),
-                ),
-                runtime_before_advanced_replay,
-                "a same-session dedupe hit must not advance wire position identity"
-            );
-        }
-
-        // The identical SYNC at that advanced revision must therefore still
-        // dispatch and commit atomically with its engine ACK.  A canonical
-        // SYNC requires a playing Timeline, so resume exactly as a live
-        // session would run.
-        engine
-            .send(EngineCommand::SetTimelinePlaying(true))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-        match dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackSync,
-                42,
-                "sync-advanced-position-converge",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 1,
-                    "contentId": "content-1",
-                    "trackBpm": 60.0,
-                    "positionAtSendSec": 4.0,
-                    "effectiveBpm": 60.0,
-                    "positionRevision": 3,
-                    "sampleAgeMs": 100,
-                    "playSessionId": "play-1",
-                    "isPlaying": true,
-                    "master": true,
-                    "startedAt": "2026-08-25T00:00:00Z",
-                    "loop": null
-                }),
-            ),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { .. } => {}
-            other => panic!(
-                "the identical SYNC after a no-op dedupe hit must not be suppressed: {other:?}"
-            ),
-        }
-        // DJ Link owns the external clock, so the playhead is already frozen
-        // between correlated SYNC frames without pausing the Timeline.
-        let converged_position = engine.snapshot().timeline.position_ms;
-        assert!(
-            (4_100..4_300).contains(&converged_position),
-            "the converging SYNC must drive the engine to the advanced canonical position, got {converged_position}"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(runtime.position_revision, Some(3));
-            assert_eq!(runtime.source_position_ms, Some(4_100));
-            assert_eq!(runtime.position_sec, Some(4.0));
-        }
-
-        // Suppression resumes only after convergence: the now-exact replay is
-        // provably an identity-level no-op against the frozen clock.
-        let engine_after_convergence = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackSync,
-                    43,
-                    "sync-advanced-position-repeat",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "contentId": "content-1",
-                        "trackBpm": 60.0,
-                        "positionAtSendSec": 4.0,
-                        "effectiveBpm": 60.0,
-                        "positionRevision": 3,
-                        "sampleAgeMs": 100,
-                        "playSessionId": "play-1",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-25T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_after_convergence,
-            "a post-convergence exact replay must stay suppressed without engine effects"
-        );
-
-        let nonmaster = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            3,
-            "nonmaster",
-            json!({
-                "deck": 2,
-                "deckId": "rekordbox-deck-2",
-                "masterDeckRevision": 2,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 0.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 1,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-2",
-                "isPlaying": true,
-                "master": false,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        let engine_before_nonmaster = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                nonmaster,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_nonmaster,
-            "non-master track input must not reach the engine"
-        );
-
-        let sync_loop = dj_link_test_envelope(
-            protocol::DjLinkMessageType::StateSync,
-            4,
-            "sync-loop",
-            json!({
-                "released": false,
-                "masterDeck": 1,
-                "activePlaySessionId": "play-1"
-            }),
-        );
-        let engine_before_sync_loop = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                sync_loop,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot().timeline.loop_runtime,
-            engine_before_sync_loop.timeline.loop_runtime,
-            "StateSync is diagnostic-only and must not alter the engine loop"
-        );
-        let generation_after_sync_loop = runtime.lock().unwrap().state_generation;
-        let loop_generation_before_retry = engine.snapshot().timeline.loop_runtime.generation;
-        let loop_retry = dj_link_test_envelope(
-            protocol::DjLinkMessageType::LoopState,
-            5,
-            "loop-retry",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "playSessionId": "play-1",
-                "loop": {
-                    "active": true,
-                    "startBeat": 0.0,
-                    "endBeat": 8.0,
-                    "lengthBeats": 8.0,
-                    "revision": 1,
-                    "sampleAgeMs": 0,
-                    "source": "rekordbox-hook-measured"
-                }
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                loop_retry,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert!(
-            engine.snapshot().timeline.loop_runtime.generation > loop_generation_before_retry,
-            "measured 8-beat loop must reach the canonical engine API"
-        );
-        assert_eq!(
-            runtime.lock().unwrap().state_generation,
-            generation_after_sync_loop + 1,
-            "measured LoopState increments only after a canonical engine ACK"
-        );
-        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
-        assert_eq!(runtime.lock().unwrap().release_event_id, None);
-
-        let fallback_generation_before = engine.snapshot().timeline.loop_runtime.generation;
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    53,
-                    "loop-fallback-4",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "playSessionId": "play-1",
-                        "pedalIntentId": 2,
-                        "baseMeasuredLoopRevision": 1,
-                        "baseLoopDivision": 0,
-                        "targetLengthBeats": 4.0,
-                        "responseWindowMs": 250,
-                        "source": "pedal-no-response-predicted"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(runtime.loop_division, Some(1));
-            assert_eq!(
-                runtime.loop_revision,
-                Some(1),
-                "predicted fallback must not advance measured revision authority"
-            );
-        }
-        assert!(
-            engine.snapshot().timeline.loop_runtime.generation > fallback_generation_before,
-            "bounded no-response fallback must reach the canonical absolute-loop API"
-        );
-
-        let engine_after_fallback = engine.snapshot();
-        let runtime_after_fallback = runtime.lock().unwrap().clone();
-        let replayed_fallback = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "pedalIntentId": 2,
-            "baseMeasuredLoopRevision": 1,
-            "baseLoopDivision": 0,
-            "targetLengthBeats": 4.0,
-            "responseWindowMs": 250,
-            "source": "pedal-no-response-predicted"
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    531,
-                    "loop-fallback-replayed-intent",
-                    replayed_fallback,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_intent_not_new"
-        ));
-        let skipped_fallback = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "pedalIntentId": 3,
-            "baseMeasuredLoopRevision": 1,
-            "baseLoopDivision": 1,
-            "targetLengthBeats": 1.0,
-            "responseWindowMs": 250,
-            "source": "pedal-no-response-predicted"
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    532,
-                    "loop-fallback-skipped-target",
-                    skipped_fallback,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "invalid_loop_fallback"
-        ));
-        let delayed_unique_older_fallback = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "pedalIntentId": 1,
-            "baseMeasuredLoopRevision": 1,
-            "baseLoopDivision": 1,
-            "targetLengthBeats": 2.0,
-            "responseWindowMs": 250,
-            "source": "pedal-no-response-predicted"
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    533,
-                    "loop-fallback-delayed-unique-intent",
-                    delayed_unique_older_fallback,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_intent_not_new"
-        ));
-        assert_eq!(engine.snapshot(), engine_after_fallback);
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_after_fallback,
-            "replayed or skipped fallback candidates must not mutate runtime authority"
-        );
-
-        let late_measured_payload = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "loop": {
-                "active": true,
-                "startBeat": 0.0,
-                "endBeat": 2.0,
-                "lengthBeats": 2.0,
-                "revision": 2,
-                "sampleAgeMs": 0,
-                "source": "rekordbox-hook-measured"
-            }
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    54,
-                    "late-measured-2",
-                    late_measured_payload.clone(),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(
-                (runtime.loop_division, runtime.loop_revision),
-                (Some(2), Some(2)),
-                "fresh measured Rekordbox state must override and rebase fallback"
-            );
-        }
-
-        let engine_after_fresh_measurement = engine.snapshot();
-        let runtime_after_fresh_measurement = runtime.lock().unwrap().clone();
-        let old_fallback_after_measurement = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "pedalIntentId": 4,
-            "baseMeasuredLoopRevision": 1,
-            "baseLoopDivision": 1,
-            "targetLengthBeats": 2.0,
-            "responseWindowMs": 250,
-            "source": "pedal-no-response-predicted"
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    541,
-                    "late-old-loop-fallback",
-                    old_fallback_after_measurement,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_fallback_base_revision_mismatch"
-        ));
-        assert_eq!(engine.snapshot(), engine_after_fresh_measurement);
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_after_fresh_measurement,
-            "a late fallback based before fresh measured authority must not overwrite it"
-        );
-        let mut stale_payload = late_measured_payload.clone();
-        stale_payload["loop"]["lengthBeats"] = json!(4.0);
-        stale_payload["loop"]["endBeat"] = json!(4.0);
-        stale_payload["loop"]["revision"] = json!(1);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    55,
-                    "stale-measured-4",
-                    stale_payload,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "stale_loop_revision"
-        ));
-        let mut conflicting_payload = late_measured_payload.clone();
-        conflicting_payload["loop"]["lengthBeats"] = json!(1.0);
-        conflicting_payload["loop"]["endBeat"] = json!(1.0);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    56,
-                    "conflicting-measured-1",
-                    conflicting_payload,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "loop_revision_conflict"
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    57,
-                    "duplicate-measured-2",
-                    late_measured_payload,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_after_fresh_measurement,
-            "stale, conflicting, and exact-duplicate measured reports must not rerun the engine"
-        );
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_after_fresh_measurement,
-            "rejected or duplicate measurements must preserve all runtime authority"
-        );
-
-        let inactive_measured_payload = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "loop": {
-                "active": false,
-                "startBeat": null,
-                "endBeat": null,
-                "lengthBeats": null,
-                "revision": 3,
-                "sampleAgeMs": 0,
-                "source": "rekordbox-hook-measured"
-            }
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    58,
-                    "measured-loop-off",
-                    inactive_measured_payload,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        let loop_off_runtime = runtime.lock().unwrap().clone();
-        assert_eq!(
-            (loop_off_runtime.loop_revision, loop_off_runtime.loop_active),
-            (Some(3), false)
-        );
-        let loop_off_generation = engine.snapshot().timeline.loop_runtime.generation;
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    59,
-                    "fallback-after-measured-loop-off",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "playSessionId": "play-1",
-                        "pedalIntentId": 4,
-                        "baseMeasuredLoopRevision": 3,
-                        "baseLoopDivision": null,
-                        "targetLengthBeats": 8.0,
-                        "responseWindowMs": 250,
-                        "source": "pedal-no-response-predicted"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert!(
-            engine.snapshot().timeline.loop_runtime.generation > loop_off_generation,
-            "an inactive measured base must permit the next standalone 8-beat fallback"
-        );
-
-        let floor_measured_payload = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "playSessionId": "play-1",
-            "loop": {
-                "active": true,
-                "startBeat": 0.0,
-                "endBeat": 0.015625,
-                "lengthBeats": 0.015625,
-                "revision": 4,
-                "sampleAgeMs": 0,
-                "source": "rekordbox-hook-measured"
-            }
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    60,
-                    "measured-loop-floor",
-                    floor_measured_payload,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        let engine_at_floor = engine.snapshot();
-        let runtime_at_floor = runtime.lock().unwrap().clone();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopFallback,
-                    61,
-                    "fallback-floor-noop",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "playSessionId": "play-1",
-                        "pedalIntentId": 5,
-                        "baseMeasuredLoopRevision": 4,
-                        "baseLoopDivision": 9,
-                        "targetLengthBeats": 0.015625,
-                        "responseWindowMs": 250,
-                        "source": "pedal-no-response-predicted"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { state_generation }
-                if state_generation == runtime_at_floor.state_generation + 1
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_at_floor,
-            "the saturated 1/64 fallback must not rerun the engine"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(runtime.last_loop_fallback_intent_id, Some(5));
-            assert_eq!(
-                runtime.last_event_id.as_deref(),
-                Some("fallback-floor-noop")
-            );
-            assert_eq!(
-                runtime.state_generation,
-                runtime_at_floor.state_generation + 1
-            );
-        }
-
-        let engine_before_released_sync = engine.snapshot();
-        let sync_released = dj_link_test_envelope(
-            protocol::DjLinkMessageType::StateSync,
-            6,
-            "sync-released",
-            json!({
-                "released": true,
-                "masterDeck": 1,
-                "activePlaySessionId": "play-1"
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                sync_released,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(engine.snapshot(), engine_before_released_sync);
-        assert!(!runtime.lock().unwrap().released);
-
-        let release_position_before = engine.snapshot().timeline.position_ms;
-        let transport_before_release = engine.snapshot().timeline.transport_generation;
-        let release = dj_link_test_envelope(
-            protocol::DjLinkMessageType::Release,
-            7,
-            "release-after-sync",
-            json!({
-                "state": "released",
-                "timelineId": mapping_timeline_id.to_string(),
-                "playSessionId": "play-1"
-            }),
-        );
-        match dispatch_dj_link_event(
-            release,
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => {
-                assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
-                assert!(!state.loop_active);
-                assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
-                assert_eq!(
-                    state.release_event_id.as_deref(),
-                    Some("release-after-sync")
-                );
-            }
-            other => panic!("canonical release must publish timeline ownership: {other:?}"),
-        }
-        assert!(
-            engine.snapshot().timeline.transport_generation > transport_before_release,
-            "StateSync(released=true) must not consume the later canonical RELEASE"
-        );
-        assert_eq!(
-            engine.snapshot().timeline.position_ms,
-            release_position_before,
-            "canonical RELEASE must disable the loop without seeking the playhead"
-        );
-        assert!(matches!(
-            engine.snapshot().timeline.loop_runtime.status,
-            protocol::TimelineLoopRuntimeStatus::Disabled
-        ));
-        assert!(
-            runtime.lock().unwrap().released,
-            "the release latch changes only after the canonical engine RELEASE ACK"
-        );
-        let engine_after_release = engine.snapshot();
-        let runtime_after_release = {
-            let runtime = runtime.lock().unwrap();
-            (
-                runtime.state_generation,
-                runtime.released,
-                runtime.position_revision,
-                runtime.source_position_ms,
-                runtime.loop_active,
-                runtime.loop_division,
-                runtime.pedal_owner.clone(),
-                runtime.release_event_id.clone(),
-                runtime.last_event_id.clone(),
-            )
-        };
-        // Release fencing: the first canonical correlated RELEASE owns the
-        // immutable receipt.  An exact replay and a distinct later RELEASE
-        // both observe truthful already-released ownership without rerunning
-        // the engine release side effect or replacing the receipt identity.
-        for (sequence, event_id) in [
-            (51u64, "release-after-sync"),
-            (52, "release-second-distinct-id"),
-        ] {
-            match dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::Release,
-                    sequence,
-                    event_id,
-                    json!({
-                        "state": "released",
-                        "timelineId": mapping_timeline_id.to_string(),
-                        "playSessionId": "play-1"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ) {
-                DjLinkDispatchOutcome::TimelineState { state, .. } => {
-                    assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
-                    assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
-                    assert_eq!(
-                        state.release_event_id.as_deref(),
-                        Some("release-after-sync"),
-                        "{event_id} must observe the first immutable release receipt"
-                    );
-                }
-                other => panic!(
-                    "a fenced RELEASE must return truthful already-released state: {other:?}"
-                ),
-            }
-        }
-        assert_eq!(
-            engine.snapshot(),
-            engine_after_release,
-            "fenced RELEASE replays must not rerun the engine release side effect"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(
-                (
-                    runtime.state_generation,
-                    runtime.released,
-                    runtime.position_revision,
-                    runtime.source_position_ms,
-                    runtime.loop_active,
-                    runtime.loop_division,
-                    runtime.pedal_owner.clone(),
-                    runtime.release_event_id.clone(),
-                    runtime.last_event_id.clone(),
-                ),
-                runtime_after_release,
-                "a fenced RELEASE must not replace any runtime authority field"
-            );
-        }
-        let released_sync = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackSync,
-            34,
-            "sync-after-release",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 5.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 3,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-1",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                released_sync,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
-        ));
-        let released_loop = dj_link_test_envelope(
-            protocol::DjLinkMessageType::LoopState,
-            35,
-            "loop-after-release",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "playSessionId": "play-1",
-                "loop": {
-                    "active": false,
-                    "startBeat": 0.0,
-                    "endBeat": 8.0,
-                    "lengthBeats": 8.0,
-                    "revision": 2,
-                    "sampleAgeMs": 0,
-                    "source": "rekordbox-hook-measured"
-                }
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                released_loop,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
-        ));
-        let released_fallback = dj_link_test_envelope(
-            protocol::DjLinkMessageType::LoopFallback,
-            58,
-            "fallback-after-release",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
-                "playSessionId": "play-1",
-                "pedalIntentId": 2,
-                "baseMeasuredLoopRevision": 1,
-                "baseLoopDivision": 0,
-                "targetLengthBeats": 1.0,
-                "responseWindowMs": 250,
-                "source": "pedal-no-response-predicted"
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                released_fallback,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
-        ));
-        let released_beat = dj_link_test_envelope(
-            protocol::DjLinkMessageType::TimelineBeatJump,
-            36,
-            "beat-after-release",
-            json!({
-                "timelineId": mapping_timeline_id.to_string(),
-                "playSessionId": "play-1",
-                "bars": 4
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                released_beat,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
-        ));
-        let released_timeline_loop = dj_link_test_envelope(
-            protocol::DjLinkMessageType::TimelineLoopSet,
-            37,
-            "timeline-loop-after-release",
-            json!({
-                "timelineId": mapping_timeline_id.to_string(),
-                "playSessionId": "play-1",
-                "active": false
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                released_timeline_loop,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_released"
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_after_release,
-            "a released DJ session must not mutate the engine through sync, loop, or beat controls"
-        );
-        let runtime_after_rejected_controls = {
-            let runtime = runtime.lock().unwrap();
-            (
-                runtime.state_generation,
-                runtime.released,
-                runtime.position_revision,
-                runtime.source_position_ms,
-                runtime.loop_active,
-                runtime.loop_division,
-                runtime.pedal_owner.clone(),
-                runtime.release_event_id.clone(),
-                runtime.last_event_id.clone(),
-            )
-        };
-        assert_eq!(
-            runtime_after_rejected_controls, runtime_after_release,
-            "a released DJ session must reject controls before mutating runtime authority"
-        );
-
-        let rearmed_active = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            38,
-            "active-rearm-after-release",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 2,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 0.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 1,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-2",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:01:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                rearmed_active,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(
-            !runtime.lock().unwrap().released,
-            "only a newly mapped ACTIVE after its canonical START ACK may clear the release latch"
-        );
-        assert_eq!(runtime.lock().unwrap().pedal_owner.as_deref(), Some("dj"));
-        assert_eq!(runtime.lock().unwrap().release_event_id, None);
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        engine.send(EngineCommand::SeekTimeline(0)).unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-
-        let beat_forward = dj_link_test_envelope(
-            protocol::DjLinkMessageType::TimelineBeatJump,
-            8,
-            "beat-forward",
-            json!({
-                "timelineId": mapping_timeline_id.to_string(),
-                "playSessionId": "play-2",
-                "bars": 4
-            }),
-        );
-        let forward = match dispatch_dj_link_event(
-            beat_forward,
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => state,
-            other => panic!("beat jump must return canonical timeline state: {other:?}"),
-        };
-        assert_eq!(forward.position_bars, 4);
-        assert_eq!(forward.timeline_id, mapping_timeline_id.to_string());
-        let beat_backward = dj_link_test_envelope(
-            protocol::DjLinkMessageType::TimelineBeatJump,
-            9,
-            "beat-backward",
-            json!({
-                "timelineId": mapping_timeline_id.to_string(),
-                "playSessionId": "play-2",
-                "bars": -4
-            }),
-        );
-        let backward = match dispatch_dj_link_event(
-            beat_backward,
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => state,
-            other => panic!("reverse beat jump must return canonical timeline state: {other:?}"),
-        };
-        assert_eq!(backward.position_bars, 0);
-        assert_eq!(
-            engine.snapshot().timeline.position_ms,
-            0,
-            "the reverse jump returns to the engine-authored grid origin"
-        );
-        engine
-            .dj_link_start_timeline_at_with_canonical_snapshot(
-                TimelineId(mapping_timeline_id),
-                engine.snapshot().timeline.position_ms,
-            )
-            .unwrap();
-
-        let missing = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            10,
-            "missing",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 3,
-                "contentId": "unknown",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 0.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 1,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-3",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:00:00Z",
-                "loop": null
-            }),
-        );
-        // DJ Link still owns the external clock, so the zero-mutation proofs
-        // compare stable images without pausing the Timeline.
-        let runtime_before_missing = runtime.lock().unwrap().clone();
-        let engine_before_missing = engine.snapshot();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                missing,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::NoMapping { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_missing,
-            "unmapped track input must not reach the engine"
-        );
-        // A foreign unmapped ACTIVE beside the owning mapped session must
-        // neither mutate nor block it: rejection happens in place so the
-        // owner's correlated controls and canonical RELEASE keep converging,
-        // while the foreign session still fails closed on every correlation.
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_before_missing,
-            "NoMapping beside an owning mapped session must leave every runtime field unchanged"
-        );
-
-        let assert_rejected_without_mutation =
-            |event: protocol::DjLinkEnvelope, expected_code: &str| {
-                let engine_before = engine.snapshot();
-                let runtime_before = runtime.lock().unwrap().clone();
-                assert!(matches!(
-                    dispatch_dj_link_event(
-                        event,
-                        &engine,
-                        &coordinator,
-                        &runtime,
-                        &admission,
-                        &transaction_active,
-                    ),
-                    DjLinkDispatchOutcome::Rejected { code, .. } if code == expected_code
-                ));
-                assert_eq!(
-                    engine.snapshot(),
-                    engine_before,
-                    "a rejected control must not reach the engine"
-                );
-                assert_eq!(
-                    *runtime.lock().unwrap(),
-                    runtime_before,
-                    "a rejected control must not mutate runtime"
-                );
-            };
-        assert_rejected_without_mutation(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackSync,
-                11,
-                "sync-after-unmapped",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 3,
-                    "contentId": "unknown",
-                    "trackBpm": 60.0,
-                    "positionAtSendSec": 1.0,
-                    "effectiveBpm": 60.0,
-                    "positionRevision": 2,
-                    "sampleAgeMs": 0,
-                    "playSessionId": "play-3",
-                    "isPlaying": true,
-                    "master": true,
-                    "startedAt": "2026-08-25T00:02:00Z",
-                    "loop": null
-                }),
-            ),
-            "track_sync_context_mismatch",
-        );
-        assert_rejected_without_mutation(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::Release,
-                12,
-                "release-after-unmapped",
-                json!({
-                    "state": "released",
-                    "timelineId": mapping_timeline_id.to_string(),
-                    "playSessionId": "play-3"
-                }),
-            ),
-            "release_context_mismatch",
-        );
-        assert_rejected_without_mutation(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::LoopState,
-                13,
-                "loop-after-unmapped",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 3,
-                    "playSessionId": "play-3",
-                    "loop": {
-                        "active": true,
-                        "startBeat": 0.0,
-                        "endBeat": 8.0,
-                        "lengthBeats": 8.0,
-                        "revision": 1,
-                        "sampleAgeMs": 0,
-                        "source": "rekordbox-hook-measured"
-                    }
-                }),
-            ),
-            "loop_context_mismatch",
-        );
-        assert_rejected_without_mutation(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::StateSync,
-                16,
-                "state-sync-after-unmapped",
-                json!({
-                    "released": false,
-                    "masterDeck": 1,
-                    "activePlaySessionId": "play-3"
-                }),
-            ),
-            "state_sync_play_session_mismatch",
-        );
-
-        // The owning mapped session keeps full authority across the foreign
-        // rejections: its canonical correlated RELEASE must succeed even
-        // while an unmapped peer is present, proving no residual control
-        // block latches onto the Timeline.
-        let owner_release_position = engine.snapshot().timeline.position_ms;
-        let owner_transport_before_release = engine.snapshot().timeline.transport_generation;
-        match dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::Release,
-                18,
-                "release-owner-after-foreign-active",
-                json!({
-                    "state": "released",
-                    "timelineId": mapping_timeline_id.to_string(),
-                    "playSessionId": "play-2"
-                }),
-            ),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => {
-                assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
-                assert!(!state.loop_active);
-                assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
-                assert_eq!(
-                    state.release_event_id.as_deref(),
-                    Some("release-owner-after-foreign-active")
-                );
-            }
-            other => panic!(
-                "the owning mapped session's RELEASE must succeed beside a foreign unmapped ACTIVE: {other:?}"
-            ),
-        }
-        assert!(
-            engine.snapshot().timeline.transport_generation > owner_transport_before_release,
-            "the owner's canonical RELEASE must still reach the engine after a foreign NoMapping"
-        );
-        assert_eq!(
-            engine.snapshot().timeline.position_ms,
-            owner_release_position,
-            "the owner's canonical RELEASE must not seek beside a foreign NoMapping"
-        );
-        assert!(
-            runtime.lock().unwrap().released,
-            "the owner's release latch changes only after its canonical engine RELEASE ACK"
-        );
-        // The foreign session can neither release before nor after the owner:
-        // its attempts keep failing closed on correlation without touching
-        // the immutable receipt.
-        assert_rejected_without_mutation(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::Release,
-                19,
-                "release-after-unmapped-post-owner-release",
-                json!({
-                    "state": "released",
-                    "timelineId": mapping_timeline_id.to_string(),
-                    "playSessionId": "play-3"
-                }),
-            ),
-            "release_context_mismatch",
-        );
-
-        let mapped_after_unmapped = dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackActive,
-            17,
-            "active-after-unmapped",
-            json!({
-                "deck": 1,
-                "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 4,
-                "contentId": "content-1",
-                "trackBpm": 60.0,
-                "positionAtSendSec": 0.0,
-                "effectiveBpm": 60.0,
-                "positionRevision": 1,
-                "sampleAgeMs": 0,
-                "playSessionId": "play-4",
-                "isPlaying": true,
-                "master": true,
-                "startedAt": "2026-08-25T00:03:00Z",
-                "loop": null
-            }),
-        );
-        assert!(matches!(
-            dispatch_dj_link_event(
-                mapped_after_unmapped,
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(
-            !runtime.lock().unwrap().unmapped_active_blocked,
-            "only an acknowledged mapped ACTIVE may clear the NoMapping block"
-        );
-    }
-
-    #[test]
-    fn dj_link_dispatch_current_session_active_dedupe_survives_ttl_after_release() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link TTL test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "ttl-current-session",
-            protocol::DjTrackSelector {
-                content_id: Some("ttl-content".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        let timeline_id = mapping.timeline_id.0.to_string();
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-        let active_payload = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 2,
-            "contentId": "ttl-content",
-            "trackBpm": 120.0,
-            "positionAtSendSec": 2.0,
-            "effectiveBpm": 120.0,
-            "positionRevision": 1,
-            "sampleAgeMs": 0,
-            "playSessionId": "ttl-current-session",
-            "isPlaying": true,
-            "master": true,
-            "startedAt": "2026-08-26T00:00:00Z",
-            "loop": null
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    1,
-                    "ttl-active",
-                    active_payload.clone(),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::Release,
-                    2,
-                    "ttl-first-release",
-                    json!({
-                        "state": "released",
-                        "timelineId": timeline_id,
-                        "playSessionId": "ttl-current-session"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        {
-            let mut runtime = runtime.lock().unwrap();
-            for observed in runtime.seen_play_sessions.values_mut() {
-                *observed = Instant::now() - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1);
-            }
-        }
-        let engine_before_ttl_replay = engine.snapshot();
-        let runtime_before_ttl_replay = runtime.lock().unwrap().clone();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    3,
-                    "ttl-active-higher-position-revision",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 2,
-                        "contentId": "ttl-content",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 4.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 2,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "ttl-current-session",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_ttl_replay,
-            "a TTL-expired replay of the current session must not issue START again"
-        );
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_before_ttl_replay,
-            "a TTL-expired higher-revision ACTIVE must preserve release, pedal, receipt, and every runtime field"
-        );
-
-        let transport_before_same_revision_new_session =
-            engine.snapshot().timeline.transport_generation;
-        match dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                4,
-                "ttl-new-session-same-master-revision",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 2,
-                    "contentId": "ttl-content",
-                    "trackBpm": 120.0,
-                    "positionAtSendSec": 0.0,
-                    "effectiveBpm": 120.0,
-                    "positionRevision": 1,
-                    "sampleAgeMs": 0,
-                    "playSessionId": "ttl-new-session",
-                    "isPlaying": true,
-                    "master": true,
-                    "startedAt": "2026-08-26T00:02:00Z",
-                    "loop": null
-                }),
-            ),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::TimelineState { state, .. } => {
-                assert_eq!(state.play_session_id.as_deref(), Some("ttl-new-session"));
-                assert_eq!(state.pedal_owner.as_deref(), Some("dj"));
-                assert_eq!(state.release_event_id, None);
-            }
-            other => panic!(
-                "a released owner must accept a new play session at the same master revision: {other:?}"
-            ),
-        }
-        assert!(
-            engine.snapshot().timeline.transport_generation
-                > transport_before_same_revision_new_session,
-            "the same-revision new session must issue one canonical START"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert!(!runtime.released);
-            assert_eq!(runtime.pedal_owner.as_deref(), Some("dj"));
-            assert_eq!(runtime.release_event_id, None);
-            assert_eq!(runtime.play_session_id.as_deref(), Some("ttl-new-session"));
-        }
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-
-        // Once the new same-timeline session is acknowledged, only that
-        // canonical session may issue transport controls.  Exercise both
-        // protocol commands before proving that the preceding session cannot
-        // mutate the engine or runtime through either boundary.
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::TimelineBeatJump,
-                    5,
-                    "ttl-current-session-beat-jump",
-                    json!({
-                        "timelineId": timeline_id.clone(),
-                        "playSessionId": "ttl-new-session",
-                        "bars": 4
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { state, .. }
-                if state.play_session_id.as_deref() == Some("ttl-new-session")
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::TimelineLoopSet,
-                    6,
-                    "ttl-current-session-loop-set",
-                    json!({
-                        "timelineId": timeline_id.clone(),
-                        "playSessionId": "ttl-new-session",
-                        "active": true
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { state, .. }
-                if state.play_session_id.as_deref() == Some("ttl-new-session")
-        ));
-
-        let assert_old_session_transport_rejected =
-            |message_type: protocol::DjLinkMessageType,
-             sequence: u64,
-             event_id: &str,
-             payload: Value| {
-                let engine_before = engine.snapshot();
-                let runtime_before = runtime.lock().unwrap().clone();
-                assert!(matches!(
-                    dispatch_dj_link_event(
-                        dj_link_test_envelope(message_type, sequence, event_id, payload),
-                        &engine,
-                        &coordinator,
-                        &runtime,
-                        &admission,
-                        &transaction_active,
-                    ),
-                    DjLinkDispatchOutcome::Rejected { code, .. }
-                        if code == "timeline_play_session_mismatch"
-                ));
-                assert_eq!(engine.snapshot(), engine_before);
-                assert_eq!(*runtime.lock().unwrap(), runtime_before);
-            };
-        assert_old_session_transport_rejected(
-            protocol::DjLinkMessageType::TimelineBeatJump,
-            7,
-            "ttl-old-session-beat-jump",
-            json!({
-                "timelineId": timeline_id.clone(),
-                "playSessionId": "ttl-current-session",
-                "bars": -4
-            }),
-        );
-        assert_old_session_transport_rejected(
-            protocol::DjLinkMessageType::TimelineLoopSet,
-            8,
-            "ttl-old-session-loop-set",
-            json!({
-                "timelineId": timeline_id.clone(),
-                "playSessionId": "ttl-current-session",
-                "active": false
-            }),
-        );
-
-        let engine_before_old_session_replay = engine.snapshot();
-        let runtime_before_old_session_replay = runtime.lock().unwrap().clone();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    9,
-                    "ttl-old-session-replay",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 2,
-                        "contentId": "ttl-content",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 5.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 3,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "ttl-current-session",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "play_session_revision_mismatch"
-        ));
-        assert_eq!(engine.snapshot(), engine_before_old_session_replay);
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_before_old_session_replay,
-            "an old session replay after a same-revision re-arm must not mutate runtime authority"
-        );
-    }
-
-    #[test]
-    fn dj_link_dispatch_released_owner_higher_revision_active_refresh_is_exact_noop() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link released refresh test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "released-refresh",
-            protocol::DjTrackSelector {
-                content_id: Some("released-refresh-content".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        let timeline_id = mapping.timeline_id.0.to_string();
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    1,
-                    "released-refresh-initial-active",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "contentId": "released-refresh-content",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 1.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 1,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "released-refresh-session",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::Release,
-                    2,
-                    "released-refresh-release",
-                    json!({
-                        "state": "released",
-                        "timelineId": timeline_id,
-                        "playSessionId": "released-refresh-session"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(runtime.lock().unwrap().released);
-        let engine_before_refresh = engine.snapshot();
-        let generation_before_refresh = runtime.lock().unwrap().state_generation;
-        let runtime_before_refresh = runtime.lock().unwrap().clone();
-        match dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                3,
-                "released-refresh-higher-revision",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 3,
-                    "contentId": "released-refresh-content",
-                    "trackBpm": 120.0,
-                    "positionAtSendSec": 5.0,
-                    "effectiveBpm": 120.0,
-                    "positionRevision": 2,
-                    "sampleAgeMs": 0,
-                    "playSessionId": "released-refresh-session",
-                    "isPlaying": true,
-                    "master": true,
-                    "startedAt": "2026-08-26T00:00:00Z",
-                    "loop": null
-                }),
-            ),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::Accepted { state_generation } => {
-                assert_eq!(
-                    state_generation, generation_before_refresh,
-                    "the released owner's ACTIVE refresh must not commit a new generation"
-                );
-            }
-            other => panic!(
-                "a released owner's dedupe-hit ACTIVE must stay an accepted no-op, not a new error surface: {other:?}"
-            ),
-        }
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_refresh,
-            "the released owner's higher-revision refresh must not reach the engine"
-        );
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_before_refresh,
-            "a released owner's higher-revision ACTIVE refresh must be an exact full-state no-op"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert!(runtime.released);
-            assert_eq!(runtime.master_deck_revision, Some(1));
-            assert_eq!(
-                runtime.last_event_id.as_deref(),
-                Some("released-refresh-release")
-            );
-        }
-    }
-
-    #[test]
-    fn dj_link_dispatch_play_session_capacity_rejects_new_admission_without_state_mutation() {
-        const FRESH_FILLERS: usize = DJ_LINK_DEDUPE_LIMIT - 1;
-        const EXPIRED_FILLERS: usize = 64;
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link ledger capacity test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "capacity-ledger",
-            protocol::DjTrackSelector {
-                content_id: Some("capacity-ledger-content".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        let timeline_id = mapping.timeline_id.0.to_string();
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    1,
-                    "capacity-ledger-initial-active",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 2,
-                        "contentId": "capacity-ledger-content",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 2.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 1,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "capacity-owner",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::Release,
-                    2,
-                    "capacity-ledger-release",
-                    json!({
-                        "state": "released",
-                        "timelineId": timeline_id,
-                        "playSessionId": "capacity-owner"
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        // Fill the authoritative ledger to exactly the capacity boundary:
-        // DJ_LINK_DEDUPE_LIMIT live receipts (owner + fresh fillers) plus a
-        // bounded set of expired TTL purge candidates. The candidate purge
-        // runs only on the cloned next runtime, so the post-purge working set
-        // reaches exactly DJ_LINK_DEDUPE_LIMIT while the authoritative ledger
-        // additionally retains its expired candidates.
-        {
-            let mut runtime = runtime.lock().unwrap();
-            let now = Instant::now();
-            for index in 0..(FRESH_FILLERS + EXPIRED_FILLERS) {
-                let key = format!(
-                    "{}:capacity-ledger:capacity-filler-{index:04}",
-                    runtime.project_epoch
-                );
-                let observed = if index < EXPIRED_FILLERS {
-                    now - DJ_LINK_DEDUPE_TTL - Duration::from_secs(1)
-                } else {
-                    now
-                };
-                assert!(runtime.seen_play_sessions.insert(key, observed).is_none());
-            }
-            assert_eq!(
-                runtime.seen_play_sessions.len(),
-                DJ_LINK_DEDUPE_LIMIT + EXPIRED_FILLERS
-            );
-        }
-        let engine_before_capacity = engine.snapshot();
-        let generation_before_capacity = runtime.lock().unwrap().state_generation;
-        let runtime_before_capacity = runtime.lock().unwrap().clone();
-        match dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                3,
-                "capacity-ledger-newcomer",
-                json!({
-                    "deck": 1,
-                    "deckId": "rekordbox-deck-1",
-                    "masterDeckRevision": 2,
-                    "contentId": "capacity-ledger-content",
-                    "trackBpm": 120.0,
-                    "positionAtSendSec": 0.0,
-                    "effectiveBpm": 120.0,
-                    "positionRevision": 1,
-                    "sampleAgeMs": 0,
-                    "playSessionId": "capacity-newcomer",
-                    "isPlaying": true,
-                    "master": true,
-                    "startedAt": "2026-08-26T00:04:00Z",
-                    "loop": null
-                }),
-            ),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        ) {
-            DjLinkDispatchOutcome::Rejected {
-                code,
-                state_generation,
-            } => {
-                assert_eq!(code, "play_session_capacity");
-                assert_eq!(
-                    state_generation, generation_before_capacity,
-                    "the capacity rejection must not commit a new generation"
-                );
-            }
-            other => panic!(
-                "an otherwise valid admission at exact ledger capacity must fail closed with play_session_capacity: {other:?}"
-            ),
-        }
-        assert_eq!(
-            engine.snapshot(),
-            engine_before_capacity,
-            "the capacity rejection must not reach the engine"
-        );
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            runtime_before_capacity,
-            "the capacity rejection must be a whole-runtime no-op"
-        );
-        {
-            let runtime = runtime.lock().unwrap();
-            assert_eq!(
-                runtime.seen_play_sessions.len(),
-                DJ_LINK_DEDUPE_LIMIT + EXPIRED_FILLERS,
-                "no receipt may be evicted or purged by a capacity-rejected admission"
-            );
-            for index in 0..EXPIRED_FILLERS {
-                let key = format!(
-                    "{}:capacity-ledger:capacity-filler-{index:04}",
-                    runtime.project_epoch
-                );
-                assert!(
-                    runtime.seen_play_sessions.contains_key(&key),
-                    "TTL purge candidate {key} must survive a capacity-rejected admission"
-                );
-            }
-            assert!(
-                runtime
-                    .active_dedupe_key
-                    .as_deref()
-                    .is_some_and(|key| key.ends_with(":capacity-owner")),
-                "the released owner's live receipt identity must be intact"
-            );
-            assert!(runtime.released);
-        }
-    }
-
-    #[test]
-    fn dj_link_dispatch_ownerless_unmapped_latch_and_revision_rejections_preserve_state() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link latch test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "mapped-after-latch",
-            protocol::DjTrackSelector {
-                content_id: Some("mapped-after-latch".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        let timeline_id = mapping.timeline_id.0.to_string();
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    1,
-                    "ownerless-unmapped-active",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 1,
-                        "contentId": "not-authored",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 0.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 1,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "unmapped-ownerless",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::NoMapping { .. }
-        ));
-        assert!(runtime.lock().unwrap().unmapped_active_blocked);
-
-        let assert_latched_rejection = |message_type: protocol::DjLinkMessageType,
-                                        sequence: u64,
-                                        event_id: &str,
-                                        payload: Value| {
-            let engine_before = engine.snapshot();
-            let runtime_before = runtime.lock().unwrap().clone();
-            assert!(matches!(
-                dispatch_dj_link_event(
-                    dj_link_test_envelope(message_type, sequence, event_id, payload),
-                    &engine,
-                    &coordinator,
-                    &runtime,
-                    &admission,
-                    &transaction_active,
-                ),
-                DjLinkDispatchOutcome::Rejected { code, .. } if code == "dj_link_unmapped_active"
-            ));
-            assert_eq!(engine.snapshot(), engine_before);
-            assert_eq!(*runtime.lock().unwrap(), runtime_before);
-        };
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::MasterTrackSync,
-            2,
-            "latched-sync",
-            json!({
-                "deck": 1, "deckId": "rekordbox-deck-1", "masterDeckRevision": 1,
-                "contentId": "not-authored", "trackBpm": 120.0, "positionAtSendSec": 0.0,
-                "effectiveBpm": 120.0, "positionRevision": 1, "sampleAgeMs": 0,
-                "playSessionId": "unmapped-ownerless", "isPlaying": true, "master": true,
-                "startedAt": "2026-08-26T00:00:00Z", "loop": null
-            }),
-        );
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::LoopState,
-            3,
-            "latched-loop",
-            json!({
-                "deck": 1, "deckId": "rekordbox-deck-1", "masterDeckRevision": 1,
-                "playSessionId": "unmapped-ownerless",
-                "loop": { "active": true, "startBeat": 0.0, "endBeat": 8.0,
-                    "lengthBeats": 8.0, "revision": 1, "sampleAgeMs": 0,
-                    "source": "rekordbox-hook-measured" }
-            }),
-        );
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::Release,
-            4,
-            "latched-release",
-            json!({ "state": "released", "timelineId": timeline_id, "playSessionId": "unmapped-ownerless" }),
-        );
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::StateSync,
-            5,
-            "latched-state-sync",
-            json!({ "released": false, "masterDeck": 1, "activePlaySessionId": "unmapped-ownerless" }),
-        );
-        // Correlated transport commands retain the ownerless ACTIVE latch
-        // before their current-session fence is considered.
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::TimelineBeatJump,
-            6,
-            "latched-beat-jump",
-            json!({
-                "timelineId": timeline_id,
-                "playSessionId": "unmapped-ownerless",
-                "bars": 4
-            }),
-        );
-        assert_latched_rejection(
-            protocol::DjLinkMessageType::TimelineLoopSet,
-            61,
-            "latched-timeline-loop-set",
-            json!({
-                "timelineId": timeline_id,
-                "playSessionId": "unmapped-ownerless",
-                "active": true
-            }),
-        );
-
-        let mapped_payload = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 2,
-            "contentId": "mapped-after-latch",
-            "trackBpm": 120.0,
-            "positionAtSendSec": 2.0,
-            "effectiveBpm": 120.0,
-            "positionRevision": 2,
-            "sampleAgeMs": 0,
-            "playSessionId": "mapped-session",
-            "isPlaying": true,
-            "master": true,
-            "startedAt": "2026-08-26T00:01:00Z",
-            "loop": null
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    7,
-                    "mapped-active-clears-latch",
-                    mapped_payload.clone(),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(!runtime.lock().unwrap().unmapped_active_blocked);
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-
-        let assert_exact_rejection = |event: protocol::DjLinkEnvelope, expected_code: &str| {
-            let engine_before = engine.snapshot();
-            let runtime_before = runtime.lock().unwrap().clone();
-            assert!(matches!(
-                dispatch_dj_link_event(
-                    event,
-                    &engine,
-                    &coordinator,
-                    &runtime,
-                    &admission,
-                    &transaction_active,
-                ),
-                DjLinkDispatchOutcome::Rejected { code, .. } if code == expected_code
-            ));
-            assert_eq!(engine.snapshot(), engine_before);
-            assert_eq!(*runtime.lock().unwrap(), runtime_before);
-        };
-        let mut stale_position = mapped_payload.clone();
-        stale_position["positionRevision"] = json!(1);
-        assert_exact_rejection(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                8,
-                "stale-position-revision",
-                stale_position,
-            ),
-            "stale_position_revision",
-        );
-        let mut stale_master = mapped_payload.clone();
-        stale_master["masterDeckRevision"] = json!(1);
-        assert_exact_rejection(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                9,
-                "stale-master-deck-revision",
-                stale_master,
-            ),
-            "stale_master_deck_revision",
-        );
-        let mut mismatched_session = mapped_payload;
-        mismatched_session["playSessionId"] = json!("different-session");
-        assert_exact_rejection(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::MasterTrackActive,
-                10,
-                "play-session-revision-mismatch",
-                mismatched_session,
-            ),
-            "play_session_revision_mismatch",
-        );
-        assert_exact_rejection(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::StateSync,
-                11,
-                "state-sync-master-context-mismatch",
-                json!({
-                    "released": false,
-                    "masterDeck": 2,
-                    "activePlaySessionId": "mapped-session"
-                }),
-            ),
-            "state_sync_master_context_mismatch",
-        );
-    }
-
-    #[test]
-    fn dj_link_dispatch_same_session_master_reentry_refreshes_context_without_start() {
-        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
-            enabled: false,
-            ..DmxOutputConfig::default()
-        });
-        let mut initial_snapshot = engine.snapshot();
-        initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
-            id: protocol::TimelinePhaseId(1),
-            label: "DJ Link master reentry test phase".to_string(),
-            role: protocol::TimelinePhaseRole::Intro,
-            start_ms: 0,
-            end_ms: 16_000,
-        }];
-        initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
-            a_ms: 0,
-            b_ms: 16_000,
-            enabled: false,
-            musical_length_beats: None,
-        });
-        engine
-            .apply_timeline_bank_published(
-                vec![initial_snapshot.timeline.clone()],
-                initial_snapshot.timeline.id,
-                false,
-            )
-            .unwrap();
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
-        let mut mapping = dj_link_test_mapping(
-            "master-reentry",
-            protocol::DjTrackSelector {
-                content_id: Some("master-reentry-content".to_string()),
-                title: None,
-                artist: None,
-            },
-        );
-        mapping.timeline_id = engine.snapshot().timeline.id;
-        coordinator.mappings.dj_track_triggers = vec![mapping];
-        let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
-        let coordinator = Mutex::new(coordinator);
-        let admission = ProjectExternalCommandAdmission::default();
-        let transaction_active = AtomicBool::new(false);
-        let initial_active = json!({
-            "deck": 1,
-            "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
-            "contentId": "master-reentry-content",
-            "trackBpm": 120.0,
-            "positionAtSendSec": 1.0,
-            "effectiveBpm": 120.0,
-            "positionRevision": 1,
-            "sampleAgeMs": 0,
-            "playSessionId": "master-reentry-session",
-            "isPlaying": true,
-            "master": true,
-            "startedAt": "2026-08-26T00:00:00Z",
-            "loop": null
-        });
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    1,
-                    "master-reentry-initial-active",
-                    initial_active.clone(),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-        let engine_before_nonmaster = engine.snapshot();
-        let runtime_before_nonmaster = runtime.lock().unwrap().clone();
-        let mut nonmaster = initial_active.clone();
-        nonmaster["master"] = json!(false);
-        nonmaster["masterDeckRevision"] = json!(2);
-        nonmaster["positionRevision"] = json!(2);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    2,
-                    "master-reentry-nonmaster",
-                    nonmaster,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "not_current_playing_master"
-        ));
-        assert_eq!(engine.snapshot(), engine_before_nonmaster);
-        assert_eq!(*runtime.lock().unwrap(), runtime_before_nonmaster);
-
-        let engine_before_master_return = engine.snapshot();
-        let runtime_before_master_return = runtime.lock().unwrap().clone();
-        let mut master_return = initial_active.clone();
-        master_return["masterDeckRevision"] = json!(3);
-        master_return["positionRevision"] = json!(3);
-        master_return["positionAtSendSec"] = json!(3.0);
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    3,
-                    "master-reentry-return",
-                    master_return,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        assert_eq!(engine.snapshot(), engine_before_master_return);
-        let mut expected_runtime_after_master_return = runtime_before_master_return;
-        expected_runtime_after_master_return.master_deck_revision = Some(3);
-        expected_runtime_after_master_return.last_event_id =
-            Some("master-reentry-return".to_string());
-        assert_eq!(
-            *runtime.lock().unwrap(),
-            expected_runtime_after_master_return,
-            "same-session master reentry may refresh only context revision and last event"
-        );
-
-        engine
-            .send(EngineCommand::SetTimelinePlaying(true))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackSync,
-                    4,
-                    "master-reentry-sync-rev3",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 3,
-                        "contentId": "master-reentry-content",
-                        "trackBpm": 120.0,
-                        "positionAtSendSec": 4.0,
-                        "effectiveBpm": 120.0,
-                        "positionRevision": 4,
-                        "sampleAgeMs": 0,
-                        "playSessionId": "master-reentry-session",
-                        "isPlaying": true,
-                        "master": true,
-                        "startedAt": "2026-08-26T00:00:00Z",
-                        "loop": null
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::TimelineState { .. }
-        ));
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::LoopState,
-                    5,
-                    "master-reentry-loop-rev3",
-                    json!({
-                        "deck": 1,
-                        "deckId": "rekordbox-deck-1",
-                        "masterDeckRevision": 3,
-                        "playSessionId": "master-reentry-session",
-                        "loop": {
-                            "active": true,
-                            "startBeat": 0.0,
-                            "endBeat": 8.0,
-                            "lengthBeats": 8.0,
-                            "revision": 1,
-                            "sampleAgeMs": 0,
-                            "source": "rekordbox-hook-measured"
-                        }
-                    }),
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Accepted { .. }
-        ));
-        engine
-            .send(EngineCommand::SetTimelinePlaying(false))
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(25));
-        let engine_before_stale_master = engine.snapshot();
-        let runtime_before_stale_master = runtime.lock().unwrap().clone();
-        assert!(matches!(
-            dispatch_dj_link_event(
-                dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
-                    6,
-                    "master-reentry-stale-rev1",
-                    initial_active,
-                ),
-                &engine,
-                &coordinator,
-                &runtime,
-                &admission,
-                &transaction_active,
-            ),
-            DjLinkDispatchOutcome::Rejected { code, .. } if code == "stale_master_deck_revision"
-        ));
-        assert_eq!(engine.snapshot(), engine_before_stale_master);
-        assert_eq!(*runtime.lock().unwrap(), runtime_before_stale_master);
-    }
-
-    #[test]
     fn dj_link_dispatch_engine_errors_preserve_full_runtime_authority() {
         let active_payload = json!({
             "deck": 1,
             "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 1,
             "contentId": "content-1",
             "trackBpm": 60.0,
             "positionAtSendSec": 0.0,
@@ -116884,7 +113493,6 @@ f 1 2 3
             "sampleAgeMs": 0,
             "playSessionId": "play-error",
             "isPlaying": true,
-            "master": true,
             "startedAt": "2026-08-25T00:04:00Z",
             "loop": null
         });
@@ -116922,7 +113530,7 @@ f 1 2 3
         assert!(matches!(
             dispatch_dj_link_event(
                 dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
+                    protocol::DjLinkMessageType::TrackActive,
                     1,
                     "active-engine-error",
                     active_payload.clone(),
@@ -116977,7 +113585,7 @@ f 1 2 3
         assert!(matches!(
             dispatch_dj_link_event(
                 dj_link_test_envelope(
-                    protocol::DjLinkMessageType::MasterTrackActive,
+                    protocol::DjLinkMessageType::TrackActive,
                     1,
                     "active-before-errors",
                     active_payload,
@@ -117016,13 +113624,12 @@ f 1 2 3
         };
 
         assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
-            protocol::DjLinkMessageType::MasterTrackSync,
+            protocol::DjLinkMessageType::TrackSync,
             2,
             "sync-engine-error",
             json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
                 "contentId": "content-1",
                 "trackBpm": 60.0,
                 "positionAtSendSec": 1.0,
@@ -117031,7 +113638,6 @@ f 1 2 3
                 "sampleAgeMs": 0,
                 "playSessionId": "play-error",
                 "isPlaying": true,
-                "master": true,
                 "startedAt": "2026-08-25T00:04:00Z",
                 "loop": null
             }),
@@ -117043,7 +113649,6 @@ f 1 2 3
             json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
                 "playSessionId": "play-error",
                 "loop": {
                     "active": true,
@@ -117063,7 +113668,6 @@ f 1 2 3
             json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 1,
                 "playSessionId": "play-error",
                 "pedalIntentId": 1,
                 "baseMeasuredLoopRevision": null,
@@ -117742,10 +114346,6 @@ mod live_audio_input_tests {
             saturated.load(Ordering::Acquire),
             u64::MAX,
             "a rejected allocation must not consume identity 0"
-        );
-        assert_eq!(
-            rotate_live_audio_generation(&saturated),
-            Err("Live audio input generation counter was exhausted".to_string())
         );
         assert_eq!(saturated.load(Ordering::Acquire), u64::MAX);
     }
@@ -123748,6 +120348,7 @@ mod live_audio_input_tests {
         legacy.events[0].cue_id = cue_id;
         legacy.events[0].layer_id = None;
         legacy.events[0].track = TimelineTrackKind::Lighting;
+        legacy.events[0].jump_to_event_id = None;
         legacy.events[0].conform_to_tempo = false;
         legacy.events[0].time_beats = None;
         legacy.events[0].duration_beats = None;

@@ -36319,19 +36319,16 @@ a[href]:focus-visible,
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-/* Web Remote connection controls remain reachable while its disclosures use
-   the zone's remaining height.  The disclosure stack, not the whole Remote
-   zone, owns the vertical scrollport. */
+/* Remote connection surfaces share one contained disclosure scrollport.
+   Web Remote is no longer a fixed top row, so its controls cannot reserve
+   height ahead of the DJ Link authority surface. */
 .layoutSetup.setupMode-io .remoteControl {
-  /* Keep the Web Remote identity/start action visible while reserving a real
-     scrollable row for its five disclosures. The old auto row could consume
-     the whole compact I/O zone, leaving the DJ Link controls in a 5px
-     scrollport even though no control dimensions had changed. */
-  grid-template-rows: 80px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
 .layoutSetup.setupMode-io .remoteControl > .ioDisclosureStack {
+  height: 100%;
   min-height: 0;
   overflow: hidden auto;
   padding-right: 2px;

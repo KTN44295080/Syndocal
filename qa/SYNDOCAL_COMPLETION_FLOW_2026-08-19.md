@@ -255,8 +255,8 @@ a current stop. The following documents remain normative within their domains:
   traceability, severity, hardware, distribution, and final integrated gate;
 - `qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md`: AI0-AI8 architecture and safety;
 - `qa/ASIO_INPUT_ACCEPTANCE.md`: mandatory Windows ASIO acceptance;
-- `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`: mandatory wired DJ Agent,
-  Master Track mapping, absolute Timeline Loop, Release, and peer/hardware acceptance;
+- `qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md`: mandatory wired any-deck DJ Agent,
+  Track mapping, absolute Timeline Loop, Release, and peer/hardware acceptance;
 - `qa/M4_IO_VALIDATION.md`, `qa/M5_RELIABILITY_VALIDATION.md`, and
   `qa/M6_RELEASE_VALIDATION.md`: physical I/O, soak, and release evidence;
 - `RELEASE_STATUS.md`: historical release evidence and external blockers;
@@ -346,7 +346,8 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.17`.
+alpha checkpoints; the current synchronized ordinal is `1.2.0-alpha.18` in the
+dirty working tree. Its native rebuild and UI retest are pending.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
 MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
 hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
@@ -365,8 +366,10 @@ published tag or installer, and it does not close Show-ASIO or physical DJ
 acceptance. The branch name may remain historical; artifact metadata and tags
 must not derive a false version from it.
 
-The current `1.2.0-alpha.17` any-deck DJ-Link/source and synchronized metadata
-checkpoint is the pushed, upstream-equal
+The current `1.2.0-alpha.18` any-deck DJ-Link/source and synchronized metadata
+ordinal is present in the dirty working tree; no alpha.18 source commit or
+native artifact has been built. The last committed alpha.17 source checkpoint
+is the pushed, upstream-equal
 `fb5d18fdf898a1435bed173ddd17934a04a97897`. Its engine `dj_link_` proof is
 `25/25`, Syndocal `dj_link_dispatch_` is `8/8`, the three-display harness is
 `80/80`, the frontend build passed, detached `check:release` passed including
@@ -374,10 +377,12 @@ checkpoint is the pushed, upstream-equal
 native artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
 Product/FileVersion `1.2.0-alpha.17`, size `59,021,824` bytes, SHA-256
 `8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`, with
-  exactly one responsive maximized Syndocal window at PID `57640`. The external
+  exactly one responsive maximized Syndocal window at PID `57640`. This alpha.17
+  artifact/process evidence is historical and is not re-bound to alpha.18. The external
   rb-output v1.1.8 source is pushed and clean at exact commit
-  `e4f6929a30d321215abbdf05ef0cb163f1aa3215`; its stable suite passed `413` total
-  / `411` pass / `0` fail / `2` intentional skips. The verified alpha.16/alpha.15
+  `0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed `415` total
+  / `413` pass / `0` fail / `2` intentional skips, including the focused
+  non-Master Deck 2 router-to-real-MIDI seven-byte proof at `12/12`. The verified alpha.16/alpha.15
   artifacts remain immutable historical evidence and are not relabeled.
 
 The synchronized product-version surfaces are:
@@ -663,7 +668,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
 - [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Open: UI-H3-SETUP-001 -->
   validation, empty/error states, keyboard/pointer reachability, and native proof.
 - [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation, <!-- completion-ledger: Open: DJ-LINK-SETUP-001 -->
-  connection/session diagnostics, current Master Track, project Track-to-Timeline
+  connection/session diagnostics, current admitted owner deck, project Track-to-Timeline
   mapping CAS, disconnect recovery, and `Use Current Track`. No Pedal/MIDI controls.
 - [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage, <!-- completion-ledger: Open: UI-H4-EDIT-001 -->
   history/Undo/Redo, import/relink, save/reload focus, and native proof.
@@ -717,7 +722,7 @@ driver/device, raw logs, operator, date, and measurement source.
 - [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/ <!-- completion-ledger: Open: INPUT-PHYSICAL-001 -->
   Android Remote over wired/Wi-Fi with p50/p95/p99/max latency.
 - [ ] Physical DJ-PC Pedal -> `rekordbox-DJ-Link-ForPCDJ` local MIDI plus wired <!-- completion-ledger: Open: DJ-LINK-HARDWARE-001 -->
-  Agent -> Syndocal acceptance: preload/non-Master non-trigger, Master Track start,
+  Agent -> Syndocal acceptance: preload/non-playing non-trigger, exact any-deck Track start,
   absolute repeated Loop divisions, Filter isolation, idempotent Release, local
   operation during disconnect, State Sync, ACK, and next-use readiness, with exact
   device/software/repository/NIC/mapping/timestamp evidence.
@@ -1928,8 +1933,9 @@ identity-bound current peer, verify its setup API, explicitly select the current
 provisioned show LAN (FOH Syndocal `Ethernet 4 / 192.168.50.1`; DJ-agent local NIC
 `192.168.50.2`) and `syndocal-envelope-v3`, rotate/copy the show-once token, start
 the Syndocal Remote listener, and first prove authenticated wired HELLO/ACK. The
-current setup and handshake must explicitly reject flat, v1, and v2 envelope
-selection or payloads; none may fall back, normalize, or
+current setup and handshake must explicitly reject flat, v1, v2, and retired
+Master-only envelope selections, HELLO capability sets, event names, or payload
+fields; none may fall back, normalize, or
 proceed. Only then may the twelve-row hardware sequence proceed. This observation
 checks none of HW-4.1 through HW-4.12: the DJ/Pedal submatrix remains 0/12, and the
 whole-product accepted denominator remains exactly 19/71 (26.8%).
@@ -1940,7 +1946,7 @@ The immediate completion denominator is now the physical next-show scenario in
 `qa/SYNDOCAL_NEAR_SHOW_READINESS_2026-08-25.md`. It requires the exact
 `DSF2026.dvc` import boundary; representative Lighting; temporary deterministic
 LED `1920x1080` and projector `3840x2160` video with a `1920x1080` editor;
-authored `人生オーバー` and `惑う星` Timelines; wired authenticated DJ-Link Master
+authored `人生オーバー` and `惑う星` Timelines; wired authenticated any-deck DJ-Link
 trigger, position and loop synchronization; pedal-mediated DJ-to-band
 continuation; BPM-aware automatic transition to `惑う星`; real ASIO; three
 physical displays; persistence/restart; native artifact identity; and closure of
@@ -2103,11 +2109,11 @@ This closes the standard alpha.16 build/launch/maximize gate only. DJ Link was
 not armed and HW-4 remains **0/12**. Show-ASIO physical/fault/endurance/latency,
 three displays, representative show content, and full rehearsal remain open.
 
-## 48. 2026-08-27 current alpha.17 and DJ peer v1.1.8 handoff
+## 48. SUPERSEDED / HISTORICAL — 2026-08-27 alpha.17 native and DJ peer v1.1.8 handoff
 
-The current KDMX source checkpoint is pushed and upstream-equal at
+The alpha.17 KDMX source checkpoint is pushed and upstream-equal at
 `fb5d18fdf898a1435bed173ddd17934a04a97897`, product version
-`1.2.0-alpha.17`. The current native artifact is
+`1.2.0-alpha.17`. The alpha.17 native artifact is
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, size
 `59,021,824` bytes, SHA-256
 `8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`,
@@ -2119,14 +2125,14 @@ Syndocal `dj_link_dispatch_` passed `8/8`, the three-display harness passed
 
 The current DJ-PC source target is branch `beta-v1.1.2`, package version
 `1.1.8`, clean and upstream-equal at exact commit
-`e4f6929a30d321215abbdf05ef0cb163f1aa3215`, exact adapter
+`0f3e8c6851857c8542c132a89a7d44289002b1f5`, exact adapter
 `syndocal-envelope-v3`, and the checkout-external `dj-agent-v1.1.8.json`
-configuration with its versioned `CustomMIDI1` mapping. The stable peer suite
-passed `413` total / `411` pass / `0` fail / `2` intentional skips; affected
-focused proof passed `110/110`, MinHook+Inno `59/59`, Root key `59/59`, and Node
-syntax `26/26`. Final Terra xHigh review is GO with no P0/P1; the dedicated
-deck-2 full F13 CC17 byte-sequence test remains a future P2 item. v1.1.7 is
-historical only and no peer or hardware row is promoted from it.
+configuration with its versioned `CustomMIDI1` mapping. Production remains on
+version `1.1.8`. The latest non-Master Deck 2 router-to-real-MIDI seven-byte
+proof passed focused `12/12`; the full peer suite passed `415` total / `413` pass
+/ `0` fail / `2` intentional skips. The commit is pushed, clean, and independently
+reviewed GO. v1.1.7 is historical only and no peer or hardware row is promoted
+from it.
 
 The accepted Stage 1 F13 contract is: start HPF and synchronously route exactly
 one correlated `DJ_RELEASE` at the accepted edge, before local MIDI completion;
@@ -2143,3 +2149,50 @@ This is software/native evidence, not physical acceptance. DJ deployment,
 authenticated two-process behavior, Rekordbox/MIDI/pedal evidence, and HW-4
 remain **0/12**; the 2026-08-29 completion deadline and 2026-08-30 performance
 remain in force.
+
+## 49. 2026-08-27 current alpha.18 source/native/UI authority
+
+The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
+no alpha.18 source commit or native artifact is claimed. The alpha.17 source,
+native artifact, process identity, and hash recorded in section 48 remain
+historical and are not re-bound to alpha.18. A fresh alpha.18 native rebuild and
+maximized UI retest remain pending.
+
+The existing alpha.17 native artifact returned
+`wired_candidate_discovery_failed` during wired refresh; its typed live
+diagnostic exposed the old `Structural DuplicateIpv4Address` code. The root
+cause was a typed `sin_addr` read against the `SOCKADDR_IN` `+8` padding. The
+source fix corrects that layout handling and drops COM objects before
+`CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware-enumeration checks
+passed and identify `192.168.50.1` as eligible, but a fresh native rebuild and
+maximized UI retest remain pending.
+
+The Web Remote source layout now uses the same connection disclosure stack as
+DJ Link and Endpoints without shrinking controls; native visual confirmation
+remains pending. The standard and dedicated Setup I/O browser contracts pass all
+five viewports, including `1280x720`. Independent review found and closed an
+adjacent fail-closed defect where rejected DMX network-route buttons mutated the
+protocol draft before reporting `no state changed`; the candidate-only path now
+leaves the full draft and all `128` route signatures unchanged and invokes no
+retired output command. Remote Start/Stop is asserted exactly once and in order;
+independent re-review is GO with P0/P1/P2 all zero. Focused root revalidation of the MASTER clean break passed
+protocol `7/7`, runtime `5/5`, I/O `37/37`, frontend/build, live, and static
+checks under the required single-thread standard gate; independent review is GO.
+A parallel I/O race is baseline-existing and is not acceptance evidence;
+the exact MSVC 14.44 / locked full-workspace rerun passed with zero failed tests,
+including `1164` pass / `11` intentional hardware-media ignores in the Syndocal
+binary target. The touched full-gate fixture repairs were independently reviewed
+GO with P0/P1/P2 all zero; frontend production build and its warning ratchet are
+green at zero warnings. Release metadata must still be rerun from a clean
+non-OneDrive source image because this checkout's pre-existing runtime-inventory
+hard-link alias fails closed. Native integration remains pending.
+
+`app/dist` has already been freshly rebuilt and its old stale marker is `0`.
+The ignored peer `dist` remains stale at `277,382,202` bytes but is outside the
+production/source checkpoint. Cleanup of the prior alpha.17 temporary tree
+(`394,438,512` bytes) remains policy-blocked with no bytes reclaimed. The
+reviewer baseline
+`C:\Users\kouty\AppData\Local\Temp\kdmx-head-baseline-review-20260827-1246`
+is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
+direct cleanup remains policy-blocked. HW-4 remains **0/12**; this continuation
+does not claim native or physical acceptance.

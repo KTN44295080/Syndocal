@@ -6345,6 +6345,7 @@ export default function App() {
     sendDmxRoutesTestFrame,
     applyCurrentDmxRoutes,
     addCurrentDmxRoute,
+    addDmxNetworkRoute,
     removeDmxRoute,
     setDmxRouteEnabled,
     setOutputProtocol,
@@ -28959,6 +28960,7 @@ export default function App() {
             onProtocolChange={setOutputProtocol}
             onRefreshSerialPorts={refreshSerialPorts}
             onApply={applyOutput}
+            onAddNetworkRoute={addDmxNetworkRoute}
             onAddCurrentRoute={addCurrentDmxRoute}
             onApplyRoutes={applyCurrentDmxRoutes}
             onRouteEnabled={setDmxRouteEnabled}

@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 Updated: 2026-08-27
-Status: Required; strict DJ-Link v3 software gates are current on KDMX `1.2.0-alpha.17` and controlled rb-output `1.1.8` commit/full-suite evidence is accepted at the pinned peer identity; target-DJ-PC deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
+Status: Required; strict DJ-Link v3 software gates are current on KDMX `1.2.0-alpha.18` dirty source (native rebuild pending) and controlled rb-output `1.1.8` commit/full-suite evidence is accepted at the pinned peer identity; target-DJ-PC deployment and the physical matrix remain unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current v3 authority — 2026-08-26
@@ -12,12 +12,15 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 and adapter names are retired and rejected without a shim. The new Agent HELLO
 advertises the complete nine-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`; the current KDMX source
-checkpoint is `1.2.0-alpha.17` at
-`fb5d18fdf898a1435bed173ddd17934a04a97897`, with the native artifact/process
-  evidence recorded below. The controlled rb-output `1.1.8` source is pinned to
-  peer commit `e4f6929a30d321215abbdf05ef0cb163f1aa3215`; its stable suite passed
-  `413` total / `411` pass / `0` fail / `2` intentional skips. KDMX software gates
-  passed, but no alpha.17/target-DJ-PC deployment or physical row is accepted.
+ordinal is `1.2.0-alpha.18` in the dirty working tree, with its native rebuild
+and UI retest pending. The last committed alpha.17 source checkpoint is
+`fb5d18fdf898a1435bed173ddd17934a04a97897`; its native artifact/process
+evidence recorded below remains historical and is not re-bound to alpha.18.
+The controlled rb-output `1.1.8` source is pinned to
+  peer commit `0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed
+  `415` total / `413` pass / `0` fail / `2` intentional skips. Peer software gates
+  passed, but no alpha.18 native build, target-DJ-PC deployment, or physical row
+  is accepted.
   The live target-DJ-PC evidence remains on source version `1.1.5`.
 Any later text that calls v2 current is retained only as dated history
 and is superseded by this section and the v3 restatement near the end.
@@ -61,8 +64,8 @@ must be complete by the separate **2026-08-29 completion deadline**. Current
 executable guidance does not wait for or use an installer: it uses only the
 controlled source checkout on the target DJ PC. Peer branch `beta-v1.1.2` must
 be clean and upstream-equal at source version `1.1.8`, with both `HEAD` and
-`@{upstream}` exactly `e4f6929a30d321215abbdf05ef0cb163f1aa3215`. The stable peer
-suite passed `413` total / `411` pass / `0` fail / `2` intentional skips. The
+`@{upstream}` exactly `0f3e8c6851857c8542c132a89a7d44289002b1f5`. The stable peer
+suite passed `415` total / `413` pass / `0` fail / `2` intentional skips. The
 branch name is not the product version, and a docs-only tip does not redefine
 runtime identity.
 The checkout requires a show JSON outside the checkout through
@@ -181,30 +184,19 @@ object used by track and `DJ_LOOP_STATE` frames contains `active`, optional
 Optional `trackBpm` and track-level `loop` values may be omitted or JSON `null`;
 no other substitute shape is accepted.
 
-For the new Agent, the nine capabilities above are the only advertised and emitted
-show contract. Syndocal temporarily accepts the former complete nine-capability
-Master-only set and its `DJ_MASTER_TRACK_ACTIVE` / `DJ_MASTER_TRACK_SYNC` events
-only for an already-deployed v1.1.5 Agent. The controlled v1.1.8 source never
-uses that route. Mixed sets, an eleven-capability union, and a new Agent emitting
-an unadvertised legacy event fail closed.
-
-Master-v3 deletion is ineligible until all three pre-deletion gates have direct
-evidence: the target DJ PC is deployed to the controlled v1.1.8 generic peer; an
-exact show-route inventory records no v1.1.5/Master-only Agent; and a generic
-HELLO plus exact mapped any-deck/non-Master playback admits and starts one
-Timeline. Those future proofs earn no HW-4 credit by themselves. Only then, in a
-separately versioned clean-break tranche, delete the legacy capability set,
-parser/dispatch paths, tests, and documentation together without a compatibility
-shim. After that deletion, prove Master HELLO, Master fields/events, and the
-mixed eleven-capability union reject fail-closed while the generic route still
-succeeds.
+The nine capabilities above are the sole advertised and emitted show contract.
+There is no Master-only capability family, event enum, payload DTO, runtime
+field, status projection, UI diagnostic, or compatibility shim. A former
+Master-only HELLO, `DJ_MASTER_TRACK_ACTIVE`/`DJ_MASTER_TRACK_SYNC`,
+`masterDeckRevision`, `masterDeck`, and a mixed capability set are all rejected
+at strict ingress. The positive companion proof is the generic exact any-deck
+HELLO and mapped `DJ_TRACK_ACTIVE`; this software proof does not close HW-4.
 
 For the new generic capability set, `DJ_STATE_SYNC.payload` contains `released`
 and optional correlated `ownerDeck`, `ownerDeckId`, and `activePlaySessionId`.
 The three owner fields are all present together or all omitted; partial and
-explicit-null owner triples fail closed. It must not relabel that owner as
-`masterDeck`. The old migration session alone may retain its legacy optional
-`masterDeck` field. `DJ_TIMELINE_STATE_REQUEST` has `{}` as its payload.
+explicit-null owner triples fail closed. `masterDeck` is not a supported alias
+or persisted compatibility field. `DJ_TIMELINE_STATE_REQUEST` has `{}` as its payload.
 `DJ_TIMELINE_BEAT_JUMP` carries `{ bars: -4|4, timelineId }`, and
 `DJ_TIMELINE_LOOP_SET` carries `{ active: boolean, timelineId }`; both are
 Agent-to-Syndocal and ACKed.
@@ -616,8 +608,10 @@ denominator, which remains **19/71 (26.8%)**.
 The separately developed DJ-Link peer has no current-final published release. The
 immutable v1.1.3 package is blocked by its `DJ_MASTER_CHANGED` mismatch. The
 required peer is branch `beta-v1.1.2`, package version `1.1.8`, clean and
-upstream-equal at `e4f6929a30d321215abbdf05ef0cb163f1aa3215`; its stable suite is
-`413` total / `411` pass / `0` fail / `2` intentional skips. For the 2026-08-30 performance, with preparation
+upstream-equal at `0f3e8c6851857c8542c132a89a7d44289002b1f5`; its latest
+non-Master Deck 2 router-to-real-MIDI seven-byte proof is focused `12/12` and
+its stable suite is `415` total / `413` pass / `0` fail / `2` intentional skips.
+For the 2026-08-30 performance, with preparation
 complete by 2026-08-29, the only permitted path is that
 target-DJ-PC source checkout with the checkout-external configuration and real
 current token described above, not an installer. Until identity binding and the
@@ -780,7 +774,8 @@ no hardware row.
 ## SUPERSEDED / HISTORICAL — KDMX runtime/operator preflight gaps
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
-alpha.17 source checkpoint below supersedes them. **P1:** Web Remote/DJ Link enabled state, bind
+then-current alpha.17 source checkpoint superseded them. The current alpha.18
+source authority is recorded at the end. **P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
 configured peer therefore cannot satisfy HW-4.11 restart/next-show reuse without
@@ -807,23 +802,13 @@ session becomes ready only after `DJ_AGENT_HELLO`, an authoritative
 timeline-state response. Missing, unknown, stale, reordered, or legacy-shaped
 frames fail closed without fallback or implicit conversion.
 
-The new show peer advertises exactly the generic any-deck nine-capability set
-defined in section 2. It never uses Master state as trigger authority. The former
-complete Master-only nine-capability set remains a bounded Syndocal ingress
-migration only; mixed capability sets and the eleven-capability union are invalid.
-
-**Master-v3 retirement milestone (not a current HW-4 pass):** legacy ingress is
-temporarily accepted only for an already-deployed v1.1.5 Agent; the controlled
-v1.1.8 source never uses it. Before deletion, require direct evidence of target
-DJ-PC v1.1.8 deployment, an exact route inventory with no legacy Agent, and a
-generic HELLO plus exact mapped any-deck/non-Master positive admission/Timeline
-start. Then remove the legacy Master-v3 capability set, parser/dispatch paths,
-tests, and documentation together in one separately versioned clean-break
-tranche, with no compatibility shim. Only after deletion, prove Master HELLO,
-Master fields/events, and the mixed eleven-capability union reject fail-closed
-while the generic route still succeeds. None of these future proofs closes an
-HW-4 row; until removal, legacy ingress is not an executable controlled-source
-route and HW-4 remains **0/12 checked (0%)**.
+The show peer advertises exactly the generic any-deck nine-capability set defined
+in section 2. Master state has no ingress or trigger authority. The clean break
+is complete in the controlled KDMX source: old capability sets, Master events,
+and Master-shaped payload fields reject fail-closed while the generic HELLO and
+mapped any-deck route remain the only positive software contract. This does not
+claim target-DJ-PC deployment or change the HW-4 matrix, which remains **0/12
+checked (0%)**.
 
 This restatement moves the same authority out of the historical 2026-08-25
 correction record below, which stays under its SUPERSEDED label as history
@@ -885,9 +870,10 @@ claimed.
 ## SUPERSEDED / HISTORICAL — 2026-08-27 HW-4.11 machine-authority source checkpoint
 
 This append-only section records the source checkpoint that superseded the two
-historical implementation gaps above. The later alpha.17 checkpoint is current;
-this section does not rewrite the dated hardware observations above and checks no
-HW-4 row.
+historical implementation gaps above. The alpha.17 checkpoint was current at
+that historical point; the current alpha.18 source authority is recorded at the
+end. This section does not rewrite the dated hardware observations above and
+checks no HW-4 row.
 
 - **Old path:** listener enable/bind/start state and the process-local token did
   not survive a Syndocal restart; discovery exposed address-only candidates and
@@ -1010,15 +996,16 @@ the ordered hardware and bounded fault cases below are captured.
 This section supersedes the historical v1.1.7 section above and every earlier
 operational peer instruction in this document. The target-DJ-PC source must be
 branch `beta-v1.1.2`, clean and upstream-equal at exact commit
-`e4f6929a30d321215abbdf05ef0cb163f1aa3215`, package version `1.1.8`,
+`0f3e8c6851857c8542c132a89a7d44289002b1f5`, package version `1.1.8`,
 with external show configuration
 `C:\SyndocalShow\dj-agent-v1.1.8.json`, mapping artifact
 `server/public/setup/CustomMIDI1-Syndocal-v1.1.8.csv`, and exact adapter
-`syndocal-envelope-v3`. Affected focused proof is `110/110`, MinHook+Inno
-`59/59`, Root key `59/59`, and Node syntax `26/26`; final Terra xHigh review is
-GO with no P0/P1. The dedicated deck-2 full F13 CC17 byte-sequence test remains
-a future P2 item. v1.1.7 and older configurations/mappings are historical only
-and must not be substituted.
+`syndocal-envelope-v3`. The latest non-Master Deck 2 router-to-real-MIDI
+seven-byte proof passed focused `12/12`; the full peer suite passed `415` total /
+`413` pass / `0` fail / `2` intentional skips. Production remains on version
+`1.1.8`; this peer commit is pushed, clean, and independently reviewed GO.
+v1.1.7 and older configurations/mappings are historical only and must not be
+substituted.
 
 The accepted Stage 1 F13 edge begins HPF CC16 and synchronously routes exactly
 one correlated `DJ_RELEASE` before local MIDI completion. Syndocal's Release
@@ -1038,8 +1025,9 @@ boundary is unchanged and still requires direct confirmation; it is not the
 Stage 1 Release path. MASTER remains diagnostic only; any exact mapped,
 actually-playing deck may be admitted.
 
-KDMX alpha.17 source checkpoint `fb5d18fdf898a1435bed173ddd17934a04a97897`
-is pushed and upstream-equal. Its evidence is engine `dj_link_` `25/25`,
+The last committed KDMX alpha.17 source checkpoint
+`fb5d18fdf898a1435bed173ddd17934a04a97897` is pushed and upstream-equal. Its
+evidence is engine `dj_link_` `25/25`,
 Syndocal `dj_link_dispatch_` `8/8`, three-display harness `80/80`, frontend
 build pass, detached `check:release` pass including `169` ASIO packaging
 assertions, and `0` first-party warnings. The exact native artifact is
@@ -1048,3 +1036,49 @@ assertions, and `0` first-party warnings. The exact native artifact is
 `8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`,
 PID `57640`, exactly one responsive maximized window. These are software/native
 proof only; target-DJ-PC deployment and HW-4 remain **0/12 checked (0%)**.
+
+### 2026-08-27 latest alpha.18 source/UI authority
+
+The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
+no alpha.18 source commit or native artifact is claimed. The alpha.17 native
+artifact/process identity and hash above remain historical, and the alpha.18
+native rebuild and maximized UI retest are pending.
+
+The existing alpha.17 native artifact returned
+`wired_candidate_discovery_failed` during wired refresh; its typed live
+diagnostic exposed the old `Structural DuplicateIpv4Address` code. The root
+cause was a typed `sin_addr` read against the `SOCKADDR_IN` `+8` padding. The
+source fix corrects that layout handling and drops COM objects before
+`CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware-enumeration checks
+passed and identify `192.168.50.1` as eligible, but the corrected source still
+requires a fresh native rebuild and maximized UI retest.
+
+The Web Remote source layout now uses the same connection disclosure stack as
+DJ Link and Endpoints; controls were not resized. Native visual confirmation is
+still pending. The standard and dedicated Setup I/O browser contracts pass all
+five viewports, including `1280x720`. Independent review found and closed an
+adjacent fail-closed defect where rejected DMX network-route buttons mutated the
+protocol draft before reporting `no state changed`; the candidate-only path now
+leaves the full draft and all `128` route signatures unchanged and invokes no
+retired output command. Remote Start/Stop is asserted exactly once and in order;
+independent re-review is GO with P0/P1/P2 all zero. Focused root revalidation of the MASTER clean break passed
+protocol `7/7`, runtime `5/5`, I/O `37/37`, frontend/build, live, and static
+checks under the required single-thread standard gate; independent review is GO.
+A parallel I/O race is baseline-existing and is not acceptance evidence;
+the exact MSVC 14.44 / locked full-workspace rerun passed with zero failed tests,
+including `1164` pass / `11` intentional hardware-media ignores in the Syndocal
+binary target. The touched full-gate fixture repairs were independently reviewed
+GO with P0/P1/P2 all zero; frontend production build and its warning ratchet are
+green at zero warnings. Release metadata must still be rerun from a clean
+non-OneDrive source image because this checkout's pre-existing runtime-inventory
+hard-link alias fails closed. Native integration remains pending.
+
+`app/dist` has already been freshly rebuilt and its old stale marker is `0`.
+The ignored peer `dist` remains stale at `277,382,202` bytes but is outside the
+production/source checkpoint. Cleanup of the prior alpha.17 temporary tree
+(`394,438,512` bytes) remains policy-blocked with no bytes reclaimed. The
+reviewer baseline
+`C:\Users\kouty\AppData\Local\Temp\kdmx-head-baseline-review-20260827-1246`
+is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
+direct cleanup remains policy-blocked. The DJ/Pedal matrix remains **0/12
+checked (0%)**; none of this continuation is native or physical acceptance.

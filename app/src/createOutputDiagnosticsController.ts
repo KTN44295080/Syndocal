@@ -35,6 +35,30 @@ export const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   }
 };
 
+const outputWithProtocol = (
+  current: DmxOutputConfig,
+  protocol: DmxOutputConfig["protocol"],
+  serialPorts: SerialPortSummary[],
+): DmxOutputConfig => {
+  const port = protocol === "Sacn" && current.port === 6454
+    ? 5568
+    : protocol === "ArtNet" && current.port === 5568 ? 6454 : current.port;
+  const universe = protocol === "Sacn" && current.universe === 0 ? 1 : current.universe;
+  const target_ip = protocol === "Sacn" && (current.target_ip === defaultOutput.target_ip || current.target_ip.trim() === "")
+    ? "multicast"
+    : protocol === "ArtNet" && current.target_ip === "multicast" ? defaultOutput.target_ip : current.target_ip;
+  const serial_port = isSerialDmxProtocol(protocol) && !current.serial_port && serialPorts.length > 0
+    ? serialPorts[0].name
+    : current.serial_port;
+  const serial_baud_rate = protocol === "EnttecOpenDmx"
+    ? enttecOpenDmxBaudRate
+    : (protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx") &&
+        current.serial_baud_rate === enttecOpenDmxBaudRate
+      ? enttecUsbProBaudRate
+      : current.serial_baud_rate;
+  return { ...current, protocol, target_ip, port, universe, serial_port, serial_baud_rate };
+};
+
 interface OutputDiagnosticsControllerOptions {
   invoke: Invoke;
   setMessage: (message: string) => unknown;
@@ -117,6 +141,11 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     await applyDmxOutputRoutes([...dmxOutputRoutes(), output()]);
   };
 
+  const addDmxNetworkRoute = async (protocol: "ArtNet" | "Sacn") => {
+    const candidate = outputWithProtocol(output(), protocol, options.serialPorts());
+    await applyDmxOutputRoutes([...dmxOutputRoutes(), candidate]);
+  };
+
   const removeDmxRoute = async (index: number) => {
     const routes = dmxOutputRoutes().filter((_, candidate) => candidate !== index);
     await applyDmxOutputRoutes(routes.length > 0 ? routes : [{ ...defaultOutput, enabled: false }]);
@@ -130,24 +159,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const setOutputProtocol = (protocol: DmxOutputConfig["protocol"]) => {
-    const current = output();
-    const port = protocol === "Sacn" && current.port === 6454
-      ? 5568
-      : protocol === "ArtNet" && current.port === 5568 ? 6454 : current.port;
-    const universe = protocol === "Sacn" && current.universe === 0 ? 1 : current.universe;
-    const target_ip = protocol === "Sacn" && (current.target_ip === defaultOutput.target_ip || current.target_ip.trim() === "")
-      ? "multicast"
-      : protocol === "ArtNet" && current.target_ip === "multicast" ? defaultOutput.target_ip : current.target_ip;
-    const serial_port = isSerialDmxProtocol(protocol) && !current.serial_port && options.serialPorts().length > 0
-      ? options.serialPorts()[0].name
-      : current.serial_port;
-    const serial_baud_rate = protocol === "EnttecOpenDmx"
-      ? enttecOpenDmxBaudRate
-      : (protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx") &&
-          current.serial_baud_rate === enttecOpenDmxBaudRate
-        ? enttecUsbProBaudRate
-        : current.serial_baud_rate;
-    setOutput({ ...current, protocol, target_ip, port, universe, serial_port, serial_baud_rate });
+    setOutput((current) => outputWithProtocol(current, protocol, options.serialPorts()));
   };
 
   const refreshSerialPorts = async () => {
@@ -183,6 +195,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     dmxRouteLabel,
     applyCurrentDmxRoutes,
     addCurrentDmxRoute,
+    addDmxNetworkRoute,
     removeDmxRoute,
     setDmxRouteEnabled,
     setOutputProtocol,

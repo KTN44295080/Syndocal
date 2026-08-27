@@ -56,9 +56,24 @@ fn canonical_per_deck_measured_loop_rejects_master_revision() {
         r#""masterDeckRevision": 4,
     "playSessionId": "play-session-1""#,
     );
-    let envelope = DjLinkEnvelope::parse_json(&legacy_field)
-        .expect("the retired compatibility payload remains parseable at ingress");
-    assert!(serde_json::from_value::<DjLinkTrackLoopStatePayload>(envelope.payload).is_err());
+    assert!(
+        DjLinkEnvelope::parse_json(&legacy_field).is_err(),
+        "masterDeckRevision must be rejected at strict v3 ingress"
+    );
+}
+
+#[test]
+fn canonical_per_deck_fallback_rejects_master_revision() {
+    let generic = r#"{"v":3,"type":"DJ_LOOP_FALLBACK","agentId":"rb-output-dj-agent","sessionId":"rb-session-1","sequence":18,"eventId":"fallback-18","payload":{"deck":2,"deckId":"rekordbox-deck-2","playSessionId":"play-session-2","pedalIntentId":1,"baseMeasuredLoopRevision":null,"baseLoopDivision":null,"targetLengthBeats":8.0,"responseWindowMs":50,"source":"pedal-no-response-predicted"}}"#;
+    assert!(DjLinkEnvelope::parse_json(generic).is_ok());
+    let legacy = generic.replace(
+        r#""playSessionId":"play-session-2""#,
+        r#""masterDeckRevision":4,"playSessionId":"play-session-2""#,
+    );
+    assert!(
+        DjLinkEnvelope::parse_json(&legacy).is_err(),
+        "masterDeckRevision must be rejected on DJ_LOOP_FALLBACK ingress"
+    );
 }
 
 #[test]
@@ -160,7 +175,7 @@ fn generic_state_sync_requires_omitted_or_one_exact_owner_context() {
 }
 
 #[test]
-fn generic_and_legacy_capability_fixtures_are_exact_and_cross_family_fields_fail_closed() {
+fn generic_per_deck_capabilities_are_exact_and_retired_master_ingress_fails_closed() {
     let hello = |capabilities: &[&str]| {
         format!(
             r#"{{"v":3,"type":"DJ_AGENT_HELLO","agentId":"rb-output-dj-agent","sessionId":"rb-session-1","sequence":1,"eventId":"hello","payload":{{"authToken":"0123456789abcdef0123456789abcdef","version":3,"capabilities":[{}]}}}}"#,
@@ -172,19 +187,26 @@ fn generic_and_legacy_capability_fixtures_are_exact_and_cross_family_fields_fail
         )
     };
     let generic = protocol::DJ_LINK_REQUIRED_CAPABILITIES;
-    let legacy = protocol::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES;
     assert!(DjLinkEnvelope::parse_json(&hello(&generic)).is_ok());
-    assert!(DjLinkEnvelope::parse_json(&hello(&legacy)).is_ok());
     assert!(generic.contains(&"DJ_TRACK_ACTIVE"));
     assert!(generic.contains(&"DJ_TRACK_SYNC"));
     assert!(!generic.contains(&"DJ_MASTER_TRACK_ACTIVE"));
-    assert!(legacy.contains(&"DJ_MASTER_TRACK_ACTIVE"));
-    assert!(legacy.contains(&"DJ_MASTER_TRACK_SYNC"));
-    assert!(!legacy.contains(&"DJ_TRACK_ACTIVE"));
 
     let mut mixed = generic.to_vec();
     mixed[0] = "DJ_MASTER_TRACK_ACTIVE";
     assert!(DjLinkEnvelope::parse_json(&hello(&mixed)).is_err());
+    let legacy = [
+        "DJ_MASTER_TRACK_ACTIVE",
+        "DJ_MASTER_TRACK_SYNC",
+        "DJ_LOOP_STATE",
+        "DJ_LOOP_FALLBACK",
+        "DJ_RELEASE",
+        "DJ_TIMELINE_BEAT_JUMP",
+        "DJ_TIMELINE_LOOP_SET",
+        "DJ_TIMELINE_STATE_REQUEST",
+        "DJ_STATE_SYNC",
+    ];
+    assert!(DjLinkEnvelope::parse_json(&hello(&legacy)).is_err());
 
     assert!(DjLinkEnvelope::parse_json(RB_OUTPUT_TRACK_ACTIVE_FRAME).is_ok());
     assert!(DjLinkEnvelope::parse_json(
@@ -194,7 +216,7 @@ fn generic_and_legacy_capability_fixtures_are_exact_and_cross_family_fields_fail
     let generic_state = r#"{"v":3,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"rb-session-1","sequence":2,"eventId":"generic-state","payload":{"released":false,"ownerDeck":2,"ownerDeckId":"rekordbox-deck-2","activePlaySessionId":"play-session-2"}}"#;
     assert!(DjLinkEnvelope::parse_json(generic_state).is_ok());
     let legacy_state = r#"{"v":3,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"rb-session-1","sequence":2,"eventId":"legacy-state","payload":{"released":false,"masterDeck":2,"activePlaySessionId":"play-session-2"}}"#;
-    assert!(DjLinkEnvelope::parse_json(legacy_state).is_ok());
+    assert!(DjLinkEnvelope::parse_json(legacy_state).is_err());
     assert!(DjLinkEnvelope::parse_json(
         &generic_state.replace(r#""ownerDeck":2,"#, r#""masterDeck":2,"ownerDeck":2,"#,)
     )
@@ -206,11 +228,11 @@ fn generic_and_legacy_capability_fixtures_are_exact_and_cross_family_fields_fail
     .is_err());
 
     let legacy_master = r#"{"v":3,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"rb-session-1","sequence":3,"eventId":"legacy-active","payload":{"deck":2,"deckId":"rekordbox-deck-2","masterDeckRevision":1,"contentId":"content-2","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"master":true,"startedAt":"2026-08-26T00:00:00Z","playSessionId":"play-session-2","loop":null}}"#;
-    assert!(DjLinkEnvelope::parse_json(legacy_master).is_ok());
+    assert!(DjLinkEnvelope::parse_json(legacy_master).is_err());
     assert!(DjLinkEnvelope::parse_json(
         &legacy_master.replace("DJ_MASTER_TRACK_ACTIVE", "DJ_MASTER_TRACK_SYNC"),
     )
-    .is_ok());
+    .is_err());
     assert!(DjLinkEnvelope::parse_json(
         &legacy_master.replace("DJ_MASTER_TRACK_ACTIVE", "DJ_TRACK_ACTIVE"),
     )

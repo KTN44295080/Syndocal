@@ -2,17 +2,18 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.17**
+- 製品名: **Syndocal 1.2.0-alpha.18**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current `1.2.0-alpha.17` implements strict-v3 any-playing-deck DJ admission and
+Current `1.2.0-alpha.18` implements strict-v3 any-playing-deck DJ admission and
 position-preserving RELEASE: an already-running Timeline relinquishes DJ clock
 ownership and disables its loop without Play, Pause, or Seek. The standard
-native artifact is built and locally verified; target-DJ-PC rb-output v1.1.8
-deployment and the physical HW-4 matrix remain unaccepted.
+native artifact for this source checkpoint is pending rebuild and local
+verification; target-DJ-PC rb-output v1.1.8 deployment and the physical HW-4
+matrix remain unaccepted.
 
 ## 主な機能
 
@@ -58,7 +59,7 @@ deployment and the physical HW-4 matrix remain unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.17_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.17_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.18_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.18_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

@@ -1,6 +1,6 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.17 STANDARD NATIVE ARTIFACT ACTIVE; PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.18 SOURCE DIRTY; ALPHA.17 STANDARD NATIVE ARTIFACT ACTIVE; PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. The
 show-completion deadline is **2026-08-29**, not the performance day. The code is
@@ -16,11 +16,13 @@ state, and the compatibility fallback is unchanged. The separately licensed alph
 Show-ASIO artifact has one bounded physical Ampero native/operator proof only;
 it does not close fault, long-duration, latency, or full ASIO acceptance.
 
-The current standard native artifact is `1.2.0-alpha.17`, built from source
-inputs now committed and upstream-equal at
-`fb5d18fdf898a1435bed173ddd17934a04a97897` after the focused software gates,
-warning-0 checks, and independent reviews recorded below. Its exact executable
-identity and active process proof are in section 20.
+The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
+its native rebuild and UI retest are pending. The standard native artifact
+recorded below is `1.2.0-alpha.17`, built from source inputs committed and
+upstream-equal at `fb5d18fdf898a1435bed173ddd17934a04a97897` after the focused
+software gates, warning-0 checks, and independent reviews recorded below. Its
+exact executable identity and active process proof remain in section 20 as
+historical alpha.17 evidence and are not re-bound to alpha.18.
 The separately licensed alpha.14 Show-ASIO artifact remains the only
 Show-ASIO artifact recorded here. Its runtime baseline includes the DVC
 controller checkpoint `652b197d3cce9cfc119a790baffefbd47f08cc8c`. The alpha.15
@@ -48,13 +50,14 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
+| Current alpha.18 source (dirty; native pending) | Product metadata is `1.2.0-alpha.18`; no alpha.18 source commit or native artifact is claimed |
+| Historical alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
 | Historical local alpha.15 native verification runtime/source/artifact | Pushed, upstream-equal source commit `c609b61c77e44ee028ed7322c29a0cfd04b8182c` (`refactor(scene): extract bank scene creation controller`); local artifact identity is in section 3 and is not a new distributable artifact |
 | Historical prior alpha.15 standard runtime/source/artifact | Pushed, upstream-equal source commit `1d372e795870c1a6e5687d1116161042ddac627e` (`fix(project): preserve inline authority continuation`); prior standard artifact identity is retained in section 3 |
 | Historical alpha.14 runtime/code and standard artifact | `92122f1b148d40845b2cfe3e4618a57ce132b3df` |
 | Alpha.14 local-only Show-ASIO artifact | `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb` |
 | DVC import controller extraction and focused software proof | `652b197d3cce9cfc119a790baffefbd47f08cc8c` |
-| Current rb-output v1.1.8 controlled source | `beta-v1.1.2` clean/upstream-equal at `e4f6929a30d321215abbdf05ef0cb163f1aa3215`; stable suite `413` total / `411` pass / `0` fail / `2` intentional skips; target DJ PC not yet updated |
+| Current rb-output v1.1.8 controlled source | `beta-v1.1.2` clean/upstream-equal at `0f3e8c6851857c8542c132a89a7d44289002b1f5`; stable suite `415` total / `413` pass / `0` fail / `2` intentional skips; latest non-Master Deck 2 router-to-real-MIDI seven-byte proof `12/12`; target-DJ-PC/HW-4 acceptance remains open |
 | Timeline menu/localization alpha.13 checkpoint | `bbb684cee4c8b01cfc019575569bd26835dbc732` |
 | Historical alpha.12 standard and Show-ASIO artifacts | `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae` |
 | Display stable-identity QA | `b543067b0cbde4015ee632a8c6e6ccd77e6bfd9f` |
@@ -64,8 +67,9 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.17 native
-runtime/source/artifact is bound to pushed commit
+Branch: `codex/syndocal-v1.2`. The current alpha.18 source is dirty and has no
+new source commit or native artifact. The alpha.17 native runtime/source/artifact
+remains bound to pushed commit
 `fb5d18fdf898a1435bed173ddd17934a04a97897`. The alpha.16 and alpha.15
 standard/runtime artifacts remain historical and are bound to their recorded
 source commits. The historical alpha.14 runtime
@@ -424,14 +428,15 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 - Checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - Current peer target: branch `beta-v1.1.2`, package version `1.1.8`, clean and
-  upstream-equal at exact commit `e4f6929a30d321215abbdf05ef0cb163f1aa3215`.
-  The stable suite passed `413` total / `411` pass / `0` fail / `2` intentional
-  skips; the affected focused proof is `110/110`, MinHook+Inno `59/59`, Root key
-  `59/59`, and Node syntax `26/26`. The live target-DJ-PC evidence is still the
-  historical v1.1.5 session; v1.1.8 has not yet been deployed or physically
-  accepted there.
-  Section 20 is the current peer authority and supersedes every older
-  v1.1.6/v1.1.7 operational instruction.
+  upstream-equal at exact commit `0f3e8c6851857c8542c132a89a7d44289002b1f5`.
+  Production remains on version `1.1.8`. The latest non-Master Deck 2
+  router-to-real-MIDI seven-byte proof passed focused `12/12`; the stable suite
+  passed `415` total / `413` pass / `0` fail / `2` intentional skips. The commit
+  is pushed, clean, and independently reviewed GO. Target-DJ-PC deployment and
+  physical acceptance remain open.
+  The peer identity/evidence in section 20 remains the current rb-output
+  authority and supersedes every older v1.1.6/v1.1.7 operational instruction;
+  section 21 is the current KDMX source authority.
 - FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
 - The controlled source path requires the external show JSON through
   `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
@@ -993,9 +998,9 @@ preflight, then launch. The current standard native artifact also does not close
 the separately licensed Show-ASIO fault/endurance/latency matrix, three-display
 acceptance, representative content, or full rehearsal.
 
-## 20. 2026-08-27 current alpha.17 and DJ peer v1.1.8 resume checkpoint
+## 20. SUPERSEDED / HISTORICAL — 2026-08-27 alpha.17 native and DJ peer v1.1.8 resume checkpoint
 
-The current KDMX source checkpoint is pushed and upstream-equal at
+The alpha.17 KDMX source checkpoint is pushed and upstream-equal at
 `fb5d18fdf898a1435bed173ddd17934a04a97897`, product version
 `1.2.0-alpha.17`. Focused engine `dj_link_` proof passed `25/25`, Syndocal
 `dj_link_dispatch_` passed `8/8`, the three-display harness passed `80/80`, the
@@ -1019,13 +1024,13 @@ that dependency state was unaffected; no cleanup bytes are claimed yet.
 
 The current DJ-PC target is branch `beta-v1.1.2`, package version `1.1.8`, clean
 and upstream-equal at exact commit
-`e4f6929a30d321215abbdf05ef0cb163f1aa3215`, exact adapter `syndocal-envelope-v3`,
+`0f3e8c6851857c8542c132a89a7d44289002b1f5`, exact adapter `syndocal-envelope-v3`,
 and the checkout-external `C:\SyndocalShow\dj-agent-v1.1.8.json` plus
-`CustomMIDI1-Syndocal-v1.1.8.csv`. The stable peer suite passed `413` total /
-`411` pass / `0` fail / `2` intentional skips; affected focused proof passed
-`110/110`, MinHook+Inno `59/59`, Root key `59/59`, and Node syntax `26/26`.
-Final Terra xHigh review is GO with no P0/P1; the dedicated deck-2 full F13
-CC17 byte-sequence test remains a future P2 item.
+`CustomMIDI1-Syndocal-v1.1.8.csv`. Production remains on version `1.1.8`.
+The latest non-Master Deck 2 router-to-real-MIDI seven-byte proof passed focused
+`12/12`; the stable peer suite passed `415` total / `413` pass / `0` fail /
+`2` intentional skips. The commit is pushed, clean, and independently reviewed
+GO.
 
 `RB-1.1.8-CHECKPOINT`: external rb-output v1.1.8 is committed, pushed, clean,
 and independently reviewed at the exact identity above. This completes the peer
@@ -1052,3 +1057,51 @@ The existing Stage 2 `timeline-control` boundary remains F13/F15 Timeline
 boundary is unchanged and still requires direct confirmation; it is not the
 Stage 1 Release path. The DJ/Pedal matrix remains **0/12 checked (0%)** and the
 alpha.17/native evidence above does not promote physical acceptance.
+
+## 21. 2026-08-27 current alpha.18 source/UI authority
+
+This section is the authoritative current-source continuation. The KDMX source
+ordinal is `1.2.0-alpha.18` in the dirty working tree; no alpha.18 source commit
+or native artifact is claimed. The alpha.17 source, native artifact, process
+identity, and hash in section 20 remain historical and are not re-bound to
+alpha.18; a fresh alpha.18 native rebuild and maximized UI retest are pending.
+This section does not promote native or physical acceptance.
+
+The existing alpha.17 native artifact returned
+`wired_candidate_discovery_failed` during wired refresh; its typed live
+diagnostic exposed the old `Structural DuplicateIpv4Address` code. The root
+cause was a typed `sin_addr` read against the `SOCKADDR_IN` `+8` padding. The
+source fix corrects that layout handling and drops COM objects before
+`CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware-enumeration checks
+passed and identify `192.168.50.1` as eligible, but a fresh native rebuild and
+maximized UI retest remain pending.
+
+The Web Remote source layout now uses the same connection disclosure stack as
+DJ Link and Endpoints without shrinking controls; native visual confirmation
+remains pending. The standard and dedicated Setup I/O browser contracts pass all
+five viewports, including `1280x720`. Independent review found and closed an
+adjacent fail-closed defect where rejected DMX network-route buttons mutated the
+protocol draft before reporting `no state changed`; the candidate-only path now
+leaves the full draft and all `128` route signatures unchanged and invokes no
+retired output command. Remote Start/Stop is asserted exactly once and in order;
+independent re-review is GO with P0/P1/P2 all zero. Focused root revalidation of the MASTER clean break passed
+protocol `7/7`, runtime `5/5`, I/O `37/37`, frontend/build, live, and static
+checks under the required single-thread standard gate; independent review is GO.
+A parallel I/O race is baseline-existing and is not acceptance evidence;
+the exact MSVC 14.44 / locked full-workspace rerun passed with zero failed tests,
+including `1164` pass / `11` intentional hardware-media ignores in the Syndocal
+binary target. The touched full-gate fixture repairs were independently reviewed
+GO with P0/P1/P2 all zero; frontend production build and its warning ratchet are
+green at zero warnings. Release metadata must still be rerun from a clean
+non-OneDrive source image because this checkout's pre-existing runtime-inventory
+hard-link alias fails closed. Native integration remains pending.
+
+`app/dist` has already been freshly rebuilt and its old stale marker is `0`.
+The ignored peer `dist` remains stale at `277,382,202` bytes but is outside the
+production/source checkpoint. Cleanup of the prior alpha.17 temporary tree
+(`394,438,512` bytes) remains policy-blocked with no bytes reclaimed. The
+reviewer baseline
+`C:\Users\kouty\AppData\Local\Temp\kdmx-head-baseline-review-20260827-1246`
+is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
+direct cleanup remains policy-blocked. HW-4 remains **0/12**; this continuation
+does not claim native or physical acceptance.

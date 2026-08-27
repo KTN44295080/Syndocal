@@ -918,7 +918,7 @@ pub fn discover_wired_candidates() -> Result<Vec<DjLinkWiredCandidate>, String> 
         dj_link_network::NlmTrustObserver::spawn().map_err(|_| "observer_failed".to_string())?;
     let report = observer
         .discover_ipv4_candidates()
-        .map_err(|_| "wired_candidate_discovery_failed".to_string())?;
+        .map_err(|failure| format!("wired_candidate_discovery_failed:{failure:?}"))?;
     observer
         .shutdown()
         .map_err(|_| "observer_shutdown_failed".to_string())?;

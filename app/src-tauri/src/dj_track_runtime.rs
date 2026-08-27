@@ -1,6 +1,4 @@
-//! Strict per-deck DJ Link admission.  The retired Master-only dispatcher
-//! remains in `main.rs`; this module deliberately accepts only payloads that
-//! contain no Master authority fields.
+//! Strict per-deck DJ Link admission.
 
 use super::*;
 
@@ -25,7 +23,6 @@ pub(super) fn dispatch_active(
     let mapping = dj_link_find_track_mapping(&runtime.mappings, &payload);
     let released_same_owner = runtime.track_active
         && runtime.released
-        && !runtime.master
         && runtime.track_deck_number == Some(payload.deck)
         && runtime.track_deck_id.as_deref() == Some(payload.deck_id.as_str())
         && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str());
@@ -74,8 +71,7 @@ pub(super) fn dispatch_active(
         runtime.project_epoch, mapping.id, payload.deck, payload.deck_id, payload.play_session_id
     );
     if runtime.track_active && !runtime.released {
-        let same_owner = !runtime.master
-            && runtime.track_deck_number == Some(payload.deck)
+        let same_owner = runtime.track_deck_number == Some(payload.deck)
             && runtime.track_deck_id.as_deref() == Some(payload.deck_id.as_str())
             && runtime.play_session_id.as_deref() == Some(payload.play_session_id.as_str())
             && runtime.active_dedupe_key.as_deref() == Some(dedupe_key.as_str());
@@ -97,10 +93,6 @@ pub(super) fn dispatch_active(
     }
     let mut next_runtime = runtime.clone();
     next_runtime.purge_dedupe(Instant::now());
-    next_runtime.master = false;
-    next_runtime.master_deck = None;
-    next_runtime.master_deck_number = None;
-    next_runtime.master_deck_revision = None;
     next_runtime.track_active = true;
     next_runtime.playing = true;
     next_runtime.track_content_id = payload.content_id.clone();
@@ -173,7 +165,6 @@ pub(super) fn dispatch_sync(
         return dj_link_rejected("dj_link_released", current_generation);
     }
     if !dj_link_track_payload_is_current(&payload)
-        || runtime.master
         || !runtime.track_active
         || runtime.track_deck_number != Some(payload.deck)
         || runtime.track_deck_id.as_deref() != Some(payload.deck_id.as_str())
@@ -236,7 +227,6 @@ pub(super) fn owner_matches(
     play_session_id: &str,
 ) -> bool {
     runtime.track_active
-        && !runtime.master
         && runtime.track_deck_number == Some(deck)
         && runtime.track_deck_id.as_deref() == Some(deck_id)
         && runtime.play_session_id.as_deref() == Some(play_session_id)

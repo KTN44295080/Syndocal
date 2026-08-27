@@ -44,7 +44,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PeerRoot)) {
 }
 Set-Location -LiteralPath $PeerRoot
 $ExpectedBranch = 'beta-v1.1.2'
-$ExpectedPeerHead = 'e4f6929a30d321215abbdf05ef0cb163f1aa3215'
+$ExpectedPeerHead = '0f3e8c6851857c8542c132a89a7d44289002b1f5'
 $ExpectedPeerVersion = '1.1.8'
 $branch = (git branch --show-current).Trim()
 $dirty = @(git status --porcelain=v1)
@@ -63,13 +63,47 @@ if ($branch -ne $ExpectedBranch -or $dirty.Count -ne 0 -or
 ```
 
 The required identity is a clean, upstream-equal peer commit at source version
-`1.1.8`, exactly `e4f6929a30d321215abbdf05ef0cb163f1aa3215` for both `HEAD` and
-`@{upstream}`, with strict adapter `syndocal-envelope-v3`. The stable peer suite
-is `413` total / `411` pass / `0` fail / `2` intentional skips; affected focused
-proof is `110/110`, MinHook+Inno `59/59`, Root key `59/59`, and Node syntax
-`26/26`. Branch name alone is insufficient. Do not use an installer, the blocked
-v1.1.3 release, or a historical v1.1.5/v1.1.6/v1.1.7 configuration as current
-acceptance evidence.
+`1.1.8`, exactly `0f3e8c6851857c8542c132a89a7d44289002b1f5` for both `HEAD` and
+`@{upstream}`, with strict adapter `syndocal-envelope-v3`; production remains
+on version `1.1.8`. The latest non-Master Deck 2 router-to-real-MIDI seven-byte
+proof passed focused `12/12`; the full peer suite passed `415` total / `413` pass
+/ `0` fail / `2` intentional skips. The commit is pushed, clean, and independently
+reviewed GO. This is source/full-suite evidence only and closes no HW-4 row.
+Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
+release, or a historical v1.1.5/v1.1.6/v1.1.7 configuration as current acceptance
+evidence.
+
+The current KDMX source ordinal is `1.2.0-alpha.18` in the dirty working tree;
+its native rebuild and maximized UI retest are pending. The existing alpha.17
+native artifact recorded a live wired refresh failure
+`wired_candidate_discovery_failed`; its typed diagnostic exposed the old
+`Structural DuplicateIpv4Address` code. The source root cause was a typed
+`sin_addr` read against the `SOCKADDR_IN` `+8` padding; the fix also drops COM
+objects before `CoUninitialize`. Exact MSVC/FFmpeg live-unit and hardware
+enumeration checks passed and identify `192.168.50.1` as eligible, but a fresh
+native rebuild and maximized UI retest remain pending. Focused root revalidation
+of the MASTER clean break passed protocol `7/7`, runtime `5/5`, I/O `37/37`,
+frontend/build, live, and static checks under the required single-thread standard
+gate; independent review is GO. The parallel I/O race is baseline-existing and
+is not acceptance evidence. The exact MSVC 14.44 / locked full-workspace rerun
+passed with zero failed tests; the Syndocal binary target reported `1164` pass /
+`11` intentional hardware-media ignores, and the touched fixture repairs were
+independently reviewed GO with P0/P1/P2 all zero. The frontend production build
+and zero-warning ratchet also passed. Release metadata must still be rerun from
+a clean non-OneDrive source image because this checkout's pre-existing runtime
+inventory hard-link alias fails closed. Native integration remains pending.
+The source UI now places Web Remote in the same
+connection disclosure stack as DJ Link/Endpoints without shrinking controls;
+the standard and dedicated Setup I/O browser contracts pass all five viewports,
+including `1280x720`. An independent review found that rejected DMX network-route
+buttons still changed the protocol draft before reporting `no state changed`;
+the corrected candidate-only path now leaves the full draft and all `128` route
+signatures unchanged, invokes neither retired output command, and independently
+re-reviewed GO with P0/P1/P2 all zero. Native visual retest remains pending.
+`app/dist` is freshly rebuilt (old stale
+marker `0`); the ignored peer `dist` remains stale but is outside this source
+acceptance checkpoint. These observations do not promote native or HW-4
+acceptance.
 
 If and only if the v1.1.8 external configuration is absent:
 
@@ -171,7 +205,7 @@ the checkbox open and name the missing subcheck.
   non-playing, unmapped, and nonmatching identity do not trigger. Ambiguous
   identity requires a bounded injected protocol case.
 - [ ] **HW-4.3 — any-deck exact playback.** Play an exact mapped track on every
-  intended deck, including a non-Master deck. Require one `DJ_TRACK_ACTIVE`, one
+  intended deck; any Master display state is irrelevant to admission. Require one `DJ_TRACK_ACTIVE`, one
   admitted owner, and exactly one mapped Timeline start.
 - [ ] **HW-4.4 — concurrent owner fencing.** A second playing deck cannot steal
   the admitted owner. Terminally release it, then prove a later mapped deck or

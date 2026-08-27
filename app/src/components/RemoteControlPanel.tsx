@@ -152,91 +152,95 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
   };
   return (
     <div class="remoteControl ioOperatorSurface">
-      <section class="remoteServerDesk ioConnectionDesk" data-io-default-surface="remote">
-        <header class="ioDeskHeader">
-          <div>
-            <h2>Web Remote</h2>
-            <span>PIN-protected operator access</span>
-          </div>
-          <span class={`ioConnectionState ${props.genericRunning ? "ok" : "idle"}`}><i aria-hidden="true" />{props.genericRunning ? "Running" : "Stopped"}</span>
-        </header>
-        <div class="ioConnectionControls remoteConnectionControls">
-          <details class="ioDisclosure" data-io-disclosure="remote-connection-settings">
-            <summary>Connection and access settings</summary>
-            <div class="ioDisclosureBody">
-              <label>
-                Bind IP
-                <input
-                  data-io-control="remote-bind-ip"
-                  value={props.bindIp}
-                  disabled={props.listenerRunning || !props.allowLan}
-                  onInput={(event) => props.onBindIp(event.currentTarget.value)}
-                />
-              </label>
-              <label>
-                Port
-                <input
-                  data-io-control="remote-port"
-                  type="number"
-                  min="1"
-                  value={props.port}
-                  disabled={props.listenerRunning || props.djLinkMachineStatus.autoStartArmed}
-                  onInput={(event) => props.onPort(Number(event.currentTarget.value))}
-                />
-              </label>
-              <label class="remoteLanToggle">
-                <input
-                  data-io-control="remote-lan"
-                  type="checkbox"
-                  checked={props.allowLan}
-                  disabled={props.listenerRunning}
-                  onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
-                />
-                Trusted LAN access
-              </label>
-              <label class="remotePinField">
-                Pairing PIN
-                <div class="remoteUrlActions">
-                  <input
-                    data-io-control="remote-pin"
-                    inputmode="numeric"
-                    maxlength="6"
-                    pattern="[0-9]{6}"
-                    value={props.pairingPin}
-                    disabled={props.listenerRunning}
-                    onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
-                  />
-                  <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.listenerRunning}>New PIN</button>
-                </div>
-              </label>
-            </div>
-          </details>
-          <Show when={props.genericRunning} fallback={
-            <Show
-              when={props.djListenerRunning}
-              fallback={
-                <Show
-                  when={props.listenerStatusHydrated}
-                  fallback={<button data-io-control="remote-start" disabled>Checking listener…</button>}
-                >
-                  <button data-io-control="remote-start" class="primary" onClick={() => void props.onStart()}>Start Remote</button>
-                </Show>
-              }
-            >
-              <button data-io-control="remote-start" disabled>DJ Link listener active</button>
-            </Show>
-          }>
-            <button data-io-control="remote-stop" onClick={() => void props.onStop()}>Stop Remote</button>
-          </Show>
-        </div>
-        <p class={props.allowLan ? "inlineWarning" : "inlineSuccess"}>
-          {props.allowLan
-            ? "HTTP is not encrypted. Use only on a dedicated trusted LAN; never expose this port to the internet."
-            : "Local-only mode: connections are restricted to this computer."}
-        </p>
-      </section>
-
       <div class="ioDisclosureStack">
+        <details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">
+          <summary>Web Remote</summary>
+          <div class="ioDisclosureBody" data-io-disclosure-body>
+            <section class="remoteServerDesk ioConnectionDesk">
+          <header class="ioDeskHeader">
+            <div>
+              <h2>Web Remote</h2>
+              <span>PIN-protected operator access</span>
+            </div>
+            <span class={`ioConnectionState ${props.genericRunning ? "ok" : "idle"}`}><i aria-hidden="true" />{props.genericRunning ? "Running" : "Stopped"}</span>
+          </header>
+          <div class="ioConnectionControls remoteConnectionControls">
+            <details class="ioDisclosure" data-io-disclosure="remote-connection-settings">
+              <summary>Connection and access settings</summary>
+              <div class="ioDisclosureBody">
+                <label>
+                  Bind IP
+                  <input
+                    data-io-control="remote-bind-ip"
+                    value={props.bindIp}
+                    disabled={props.listenerRunning || !props.allowLan}
+                    onInput={(event) => props.onBindIp(event.currentTarget.value)}
+                  />
+                </label>
+                <label>
+                  Port
+                  <input
+                    data-io-control="remote-port"
+                    type="number"
+                    min="1"
+                    value={props.port}
+                    disabled={props.listenerRunning || props.djLinkMachineStatus.autoStartArmed}
+                    onInput={(event) => props.onPort(Number(event.currentTarget.value))}
+                  />
+                </label>
+                <label class="remoteLanToggle">
+                  <input
+                    data-io-control="remote-lan"
+                    type="checkbox"
+                    checked={props.allowLan}
+                    disabled={props.listenerRunning}
+                    onChange={(event) => props.onAllowLan(event.currentTarget.checked)}
+                  />
+                  Trusted LAN access
+                </label>
+                <label class="remotePinField">
+                  Pairing PIN
+                  <div class="remoteUrlActions">
+                    <input
+                      data-io-control="remote-pin"
+                      inputmode="numeric"
+                      maxlength="6"
+                      pattern="[0-9]{6}"
+                      value={props.pairingPin}
+                      disabled={props.listenerRunning}
+                      onInput={(event) => props.onPairingPin(event.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
+                    />
+                    <button data-io-control="remote-new-pin" onClick={props.onRegeneratePairingPin} disabled={props.listenerRunning}>New PIN</button>
+                  </div>
+                </label>
+              </div>
+            </details>
+            <Show when={props.genericRunning} fallback={
+              <Show
+                when={props.djListenerRunning}
+                fallback={
+                  <Show
+                    when={props.listenerStatusHydrated}
+                    fallback={<button data-io-control="remote-start" disabled>Checking listener…</button>}
+                  >
+                    <button data-io-control="remote-start" class="primary" onClick={() => void props.onStart()}>Start Remote</button>
+                  </Show>
+                }
+              >
+                <button data-io-control="remote-start" disabled>DJ Link listener active</button>
+              </Show>
+            }>
+              <button data-io-control="remote-stop" onClick={() => void props.onStop()}>Stop Remote</button>
+            </Show>
+          </div>
+          <p class={props.allowLan ? "inlineWarning" : "inlineSuccess"}>
+            {props.allowLan
+              ? "HTTP is not encrypted. Use only on a dedicated trusted LAN; never expose this port to the internet."
+              : "Local-only mode: connections are restricted to this computer."}
+          </p>
+          </section>
+          </div>
+        </details>
         <details class="ioDisclosure" data-io-disclosure="remote-security">
           <summary>Security limits</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
@@ -420,9 +424,6 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                     <span>Generation <strong class="tabularNums" data-no-localize>{status().generation}</strong></span>
                     <span>Heartbeat <strong class="tabularNums" data-no-localize>{status().ageMs ?? "—"} ms</strong></span>
                     <span>Owner deck / playing <strong data-no-localize>{status().ownerDeck ?? "—"} / {status().trackPlaying ? "Yes" : "No"}</strong></span>
-                    <Show when={status().master}>
-                      <span>Legacy Master diagnostic <strong>Yes</strong></span>
-                    </Show>
                     <span>Track <strong data-no-localize>{status().trackTitle ?? "—"} · {status().trackArtist ?? "—"}</strong></span>
                     <span>Content ID <strong data-no-localize>{status().trackContentId ?? "—"}</strong></span>
                     <span>Loop / released <strong data-no-localize>{status().loopDivision ?? "—"} / {status().released ? "Yes" : "No"}</strong></span>

@@ -10,7 +10,6 @@ export const emptyDjLinkRuntimeStatus = (): DjLinkRuntimeStatus => ({
   connected: false,
   peer: null,
   generation: 0,
-  master: false,
   trackActive: false,
   loopDivision: null,
   released: false,

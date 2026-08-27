@@ -8006,21 +8006,6 @@ pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 9] = [
     "DJ_TIMELINE_STATE_REQUEST",
     "DJ_STATE_SYNC",
 ];
-/// The retired Master-only sender contract remains accepted during the
-/// migration to exact per-deck track ownership.  Its capability set must stay
-/// complete and exact: a partial or mixed declaration cannot negotiate a
-/// permissive hybrid protocol.
-pub const DJ_LINK_LEGACY_REQUIRED_CAPABILITIES: [&str; 9] = [
-    "DJ_MASTER_TRACK_ACTIVE",
-    "DJ_MASTER_TRACK_SYNC",
-    "DJ_LOOP_STATE",
-    "DJ_LOOP_FALLBACK",
-    "DJ_RELEASE",
-    "DJ_TIMELINE_BEAT_JUMP",
-    "DJ_TIMELINE_LOOP_SET",
-    "DJ_TIMELINE_STATE_REQUEST",
-    "DJ_STATE_SYNC",
-];
 /// Mandatory source discriminator of every measured loop report.
 pub const DJ_LINK_MEASURED_LOOP_SOURCE: &str = "rekordbox-hook-measured";
 /// Exact source discriminator for the bounded Stage-1 pedal fallback. This is
@@ -8061,12 +8046,6 @@ pub enum DjLinkMessageType {
     TrackActive,
     #[serde(rename = "DJ_TRACK_SYNC")]
     TrackSync,
-    /// Retired Master-only events remain wire-compatible only while senders
-    /// migrate to the exact per-deck event pair above.
-    #[serde(rename = "DJ_MASTER_TRACK_ACTIVE")]
-    MasterTrackActive,
-    #[serde(rename = "DJ_MASTER_TRACK_SYNC")]
-    MasterTrackSync,
     #[serde(rename = "DJ_LOOP_STATE")]
     LoopState,
     #[serde(rename = "DJ_LOOP_FALLBACK")]
@@ -8140,8 +8119,7 @@ impl std::fmt::Debug for DjLinkHelloPayload {
 #[serde(deny_unknown_fields)]
 pub struct DjLinkHeartbeatPayload {}
 
-/// Exact measured-loop report shared by `DJ_MASTER_TRACK_ACTIVE`,
-/// `DJ_MASTER_TRACK_SYNC`, and the prefixed external `DJ_LOOP_STATE` frame.
+/// Exact measured-loop report carried by per-deck track and loop-state frames.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkMeasuredLoop {
@@ -8193,42 +8171,6 @@ pub struct DjLinkTrackPayload {
     pub loop_state: Option<DjLinkMeasuredLoop>,
 }
 
-/// Strict retired Master-only report. New senders must use
-/// `DjLinkTrackPayload`; this shape remains accepted only to keep an already
-/// deployed DJ Agent interoperable during the migration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkMasterTrackPayload {
-    pub deck: u8,
-    #[serde(rename = "deckId")]
-    pub deck_id: String,
-    #[serde(rename = "masterDeckRevision")]
-    pub master_deck_revision: u64,
-    #[serde(rename = "contentId")]
-    pub content_id: Option<String>,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    #[serde(rename = "trackBpm")]
-    pub track_bpm: Option<f64>,
-    #[serde(rename = "positionAtSendSec")]
-    pub position_at_send_sec: f64,
-    #[serde(rename = "effectiveBpm")]
-    pub effective_bpm: f64,
-    #[serde(rename = "positionRevision")]
-    pub position_revision: u64,
-    #[serde(rename = "sampleAgeMs")]
-    pub sample_age_ms: u64,
-    #[serde(rename = "isPlaying")]
-    pub is_playing: bool,
-    pub master: bool,
-    #[serde(rename = "startedAt")]
-    pub started_at: String,
-    #[serde(rename = "playSessionId")]
-    pub play_session_id: String,
-    #[serde(rename = "loop")]
-    pub loop_state: Option<DjLinkMeasuredLoop>,
-}
-
 /// Canonical measured-loop event for an admitted per-deck route. It binds to
 /// the exact deck and play session, never to a Master-deck revision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -8237,22 +8179,6 @@ pub struct DjLinkTrackLoopStatePayload {
     pub deck: u8,
     #[serde(rename = "deckId")]
     pub deck_id: String,
-    #[serde(rename = "playSessionId")]
-    pub play_session_id: String,
-    #[serde(rename = "loop")]
-    pub loop_state: DjLinkMeasuredLoop,
-}
-
-/// Retired Master-only measured-loop event. It remains a distinct shape so a
-/// generic route can neither receive nor synthesize masterDeckRevision.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkLoopStatePayload {
-    pub deck: u8,
-    #[serde(rename = "deckId")]
-    pub deck_id: String,
-    #[serde(rename = "masterDeckRevision")]
-    pub master_deck_revision: u64,
     #[serde(rename = "playSessionId")]
     pub play_session_id: String,
     #[serde(rename = "loop")]
@@ -8284,39 +8210,6 @@ pub struct DjLinkTrackLoopFallbackPayload {
     pub source: String,
 }
 
-/// Retired Master-only bounded loop target. It remains accepted only for the
-/// legacy Master route and cannot correlate to a generic per-deck owner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkLoopFallbackPayload {
-    pub deck: u8,
-    #[serde(rename = "deckId")]
-    pub deck_id: String,
-    #[serde(rename = "masterDeckRevision")]
-    pub master_deck_revision: u64,
-    #[serde(rename = "playSessionId")]
-    pub play_session_id: String,
-    /// Monotonic physical F14 intent identity. A fallback may consume this
-    /// identity only once for the current deck/session runtime.
-    #[serde(rename = "pedalIntentId")]
-    pub pedal_intent_id: u64,
-    /// The last accepted measured Rekordbox loop revision, or explicit null
-    /// when this lineage has never had accepted measured loop authority.
-    #[serde(rename = "baseMeasuredLoopRevision")]
-    pub base_measured_loop_revision: Option<u64>,
-    /// The exact effective active Syndocal loop division at that base. Null
-    /// means either no accepted loop authority or an accepted inactive
-    /// measurement; it can be non-null with a null measured revision after an
-    /// earlier no-response prediction.
-    #[serde(rename = "baseLoopDivision")]
-    pub base_loop_division: Option<u8>,
-    #[serde(rename = "targetLengthBeats")]
-    pub target_length_beats: f64,
-    #[serde(rename = "responseWindowMs")]
-    pub response_window_ms: u64,
-    pub source: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DjLinkReleasePayload {
@@ -8336,16 +8229,6 @@ pub struct DjLinkTrackStateSyncPayload {
     #[serde(default, rename = "ownerDeckId")]
     pub owner_deck_id: Option<String>,
     #[serde(default, rename = "activePlaySessionId")]
-    pub active_play_session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct DjLinkStateSyncPayload {
-    pub released: bool,
-    #[serde(rename = "masterDeck")]
-    pub master_deck: Option<u8>,
-    #[serde(rename = "activePlaySessionId")]
     pub active_play_session_id: Option<String>,
 }
 
@@ -8465,7 +8348,6 @@ pub struct DjLinkRuntimeStatus {
     pub agent_id: Option<String>,
     #[serde(rename = "sessionId")]
     pub session_id: Option<String>,
-    pub master: bool,
     #[serde(rename = "trackActive")]
     pub track_active: bool,
     #[serde(rename = "loopDivision")]
@@ -8475,11 +8357,7 @@ pub struct DjLinkRuntimeStatus {
     pub last_event_id: Option<String>,
     #[serde(rename = "ageMs")]
     pub age_ms: Option<u64>,
-    #[serde(default, rename = "masterDeck")]
-    pub master_deck: Option<String>,
-    /// The deck that owns the admitted per-track route. Unlike `masterDeck`,
-    /// this is populated for both the current generic route and the retired
-    /// Master-only diagnostics.
+    /// The deck that owns the admitted per-track route.
     #[serde(default, rename = "ownerDeck")]
     pub owner_deck: Option<String>,
     #[serde(default, rename = "trackContentId")]
@@ -8729,29 +8607,13 @@ impl DjLinkEnvelope {
                 let payload: DjLinkTrackPayload = parse_dj_link_payload(&self.payload)?;
                 validate_dj_link_track_payload(&payload)?;
             }
-            DjLinkMessageType::MasterTrackActive | DjLinkMessageType::MasterTrackSync => {
-                let payload: DjLinkMasterTrackPayload = parse_dj_link_payload(&self.payload)?;
-                validate_dj_link_master_track_payload(&payload)?;
-            }
             DjLinkMessageType::LoopState => {
-                if self.payload.get("masterDeckRevision").is_some() {
-                    let payload: DjLinkLoopStatePayload = parse_dj_link_payload(&self.payload)?;
-                    validate_dj_link_legacy_loop_state_payload(&payload)?;
-                } else {
-                    let payload: DjLinkTrackLoopStatePayload =
-                        parse_dj_link_payload(&self.payload)?;
-                    payload.validate()?;
-                }
+                let payload: DjLinkTrackLoopStatePayload = parse_dj_link_payload(&self.payload)?;
+                payload.validate()?;
             }
             DjLinkMessageType::LoopFallback => {
-                if self.payload.get("masterDeckRevision").is_some() {
-                    let payload: DjLinkLoopFallbackPayload = parse_dj_link_payload(&self.payload)?;
-                    payload.validate()?;
-                } else {
-                    let payload: DjLinkTrackLoopFallbackPayload =
-                        parse_dj_link_payload(&self.payload)?;
-                    payload.validate()?;
-                }
+                let payload: DjLinkTrackLoopFallbackPayload = parse_dj_link_payload(&self.payload)?;
+                payload.validate()?;
             }
             DjLinkMessageType::Release => {
                 let payload: DjLinkReleasePayload = parse_dj_link_payload(&self.payload)?;
@@ -8762,30 +8624,19 @@ impl DjLinkEnvelope {
                 validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
             }
             DjLinkMessageType::StateSync => {
-                if self.payload.get("masterDeck").is_some() {
-                    let payload: DjLinkStateSyncPayload = parse_dj_link_payload(&self.payload)?;
-                    if let Some(deck) = payload.master_deck {
-                        validate_dj_link_deck(deck)?;
-                    }
-                    if let Some(session) = payload.active_play_session_id.as_deref() {
-                        validate_dj_link_string(session, "activePlaySessionId")?;
-                    }
-                } else {
-                    let owner_context_fields = ["ownerDeck", "ownerDeckId", "activePlaySessionId"]
-                        .into_iter()
-                        .filter(|field| self.payload.get(*field).is_some())
-                        .count();
-                    if !matches!(owner_context_fields, 0 | 3) {
-                        return Err(
-                            "generic DJ state sync must omit owner context or provide ownerDeck,ownerDeckId,activePlaySessionId together"
-                                .to_string(),
-                        );
-                    }
-                    validate_dj_link_generic_state_sync_raw_shape(&self.payload)?;
-                    let payload: DjLinkTrackStateSyncPayload =
-                        parse_dj_link_payload(&self.payload)?;
-                    payload.validate()?;
+                let owner_context_fields = ["ownerDeck", "ownerDeckId", "activePlaySessionId"]
+                    .into_iter()
+                    .filter(|field| self.payload.get(*field).is_some())
+                    .count();
+                if !matches!(owner_context_fields, 0 | 3) {
+                    return Err(
+                        "generic DJ state sync must omit owner context or provide ownerDeck,ownerDeckId,activePlaySessionId together"
+                            .to_string(),
+                    );
                 }
+                validate_dj_link_generic_state_sync_raw_shape(&self.payload)?;
+                let payload: DjLinkTrackStateSyncPayload = parse_dj_link_payload(&self.payload)?;
+                payload.validate()?;
             }
             DjLinkMessageType::TimelineStateRequest => {
                 let _: DjLinkTimelineStateRequestPayload = parse_dj_link_payload(&self.payload)?;
@@ -8842,15 +8693,9 @@ fn validate_dj_link_capability_set(capabilities: &[String]) -> Result<(), String
             .all(|capability| DJ_LINK_REQUIRED_CAPABILITIES.contains(&capability.as_str()))
     {
         &DJ_LINK_REQUIRED_CAPABILITIES[..]
-    } else if capabilities.len() == DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.len()
-        && capabilities
-            .iter()
-            .all(|capability| DJ_LINK_LEGACY_REQUIRED_CAPABILITIES.contains(&capability.as_str()))
-    {
-        &DJ_LINK_LEGACY_REQUIRED_CAPABILITIES[..]
     } else {
         return Err(
-            "DJ Link HELLO capabilities must list exactly one supported capability set".to_string(),
+            "DJ Link HELLO capabilities must list the exact per-deck capability set".to_string(),
         );
     };
     let mut seen = BTreeSet::new();
@@ -9066,43 +8911,6 @@ impl DjLinkTrackLoopStatePayload {
     }
 }
 
-fn validate_dj_link_legacy_loop_state_payload(
-    payload: &DjLinkLoopStatePayload,
-) -> Result<(), String> {
-    let track_payload = DjLinkTrackLoopStatePayload {
-        deck: payload.deck,
-        deck_id: payload.deck_id.clone(),
-        play_session_id: payload.play_session_id.clone(),
-        loop_state: payload.loop_state.clone(),
-    };
-    track_payload.validate()?;
-    if payload.master_deck_revision == 0 || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
-        return Err("masterDeckRevision must be a positive safe integer".to_string());
-    }
-    Ok(())
-}
-
-impl DjLinkLoopFallbackPayload {
-    pub fn validate(&self) -> Result<(), String> {
-        validate_dj_link_deck(self.deck)?;
-        if self.deck_id != dj_link_deck_id(self.deck) {
-            return Err("deckId must be rekordbox-deck-N matching deck".to_string());
-        }
-        if self.master_deck_revision == 0 || self.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
-            return Err("masterDeckRevision must be a positive safe integer".to_string());
-        }
-        validate_dj_link_loop_fallback_fields(
-            &self.play_session_id,
-            self.pedal_intent_id,
-            self.base_measured_loop_revision,
-            self.base_loop_division,
-            self.target_length_beats,
-            self.response_window_ms,
-            &self.source,
-        )
-    }
-}
-
 impl DjLinkTrackLoopFallbackPayload {
     pub fn validate(&self) -> Result<(), String> {
         validate_dj_link_deck(self.deck)?;
@@ -9258,33 +9066,6 @@ fn validate_dj_link_track_payload(payload: &DjLinkTrackPayload) -> Result<(), St
     validate_dj_link_string(&payload.play_session_id, "playSessionId")?;
     if let Some(loop_state) = payload.loop_state.as_ref() {
         loop_state.validate()?;
-    }
-    Ok(())
-}
-
-fn validate_dj_link_master_track_payload(payload: &DjLinkMasterTrackPayload) -> Result<(), String> {
-    let track_payload = DjLinkTrackPayload {
-        deck: payload.deck,
-        deck_id: payload.deck_id.clone(),
-        content_id: payload.content_id.clone(),
-        title: payload.title.clone(),
-        artist: payload.artist.clone(),
-        track_bpm: payload.track_bpm,
-        position_at_send_sec: payload.position_at_send_sec,
-        effective_bpm: payload.effective_bpm,
-        position_revision: payload.position_revision,
-        sample_age_ms: payload.sample_age_ms,
-        is_playing: payload.is_playing,
-        started_at: payload.started_at.clone(),
-        play_session_id: payload.play_session_id.clone(),
-        loop_state: payload.loop_state.clone(),
-    };
-    validate_dj_link_track_payload(&track_payload)?;
-    if payload.master_deck_revision == 0 || payload.master_deck_revision > DJ_LINK_MAX_SEQUENCE {
-        return Err("masterDeckRevision must be a positive safe integer".to_string());
-    }
-    if !payload.master {
-        return Err("master must be true on master-track events".to_string());
     }
     Ok(())
 }
@@ -17753,11 +17534,10 @@ mod tests {
             )
         }
         let active = envelope_text(
-            "DJ_MASTER_TRACK_ACTIVE",
+            "DJ_TRACK_ACTIVE",
             &serde_json::json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 3,
                 "contentId": "abc",
                 "trackBpm": 128.0,
                 "positionAtSendSec": 1.25,
@@ -17765,19 +17545,15 @@ mod tests {
                 "positionRevision": 7,
                 "sampleAgeMs": 42,
                 "isPlaying": true,
-                "master": true,
                 "startedAt": "2026-08-21T00:00:00Z",
                 "playSessionId": "p1",
             }),
         );
         let envelope = super::DjLinkEnvelope::parse_json(&active).unwrap();
-        assert_eq!(
-            envelope.message_type,
-            super::DjLinkMessageType::MasterTrackActive
-        );
+        assert_eq!(envelope.message_type, super::DjLinkMessageType::TrackActive);
         assert_eq!(envelope.agent_id, super::DJ_LINK_AGENT_ID);
         let shape = envelope.canonical_shape().unwrap();
-        assert!(shape.contains("DJ_MASTER_TRACK_ACTIVE"));
+        assert!(shape.contains("DJ_TRACK_ACTIVE"));
         assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":3", "\"v\":2")).is_err());
         assert!(super::DjLinkEnvelope::parse_json(&active.replace("\"v\":3", "\"v\":4")).is_err());
         assert!(super::DjLinkEnvelope::parse_json(
@@ -17843,17 +17619,7 @@ mod tests {
             &serde_json::json!({
                 "authToken": "0123456789abcdef0123456789abcdef",
                 "version": 3,
-                "capabilities": [
-                    "DJ_MASTER_TRACK_ACTIVE",
-                    "DJ_MASTER_TRACK_SYNC",
-                    "DJ_LOOP_STATE",
-                    "DJ_LOOP_FALLBACK",
-                    "DJ_RELEASE",
-                    "DJ_TIMELINE_BEAT_JUMP",
-                    "DJ_TIMELINE_LOOP_SET",
-                    "DJ_TIMELINE_STATE_REQUEST",
-                    "DJ_STATE_SYNC",
-                ],
+                "capabilities": super::DJ_LINK_REQUIRED_CAPABILITIES,
             }),
         );
         assert_eq!(
@@ -17866,7 +17632,8 @@ mod tests {
             "DJ_STATE_SYNC",
             &serde_json::json!({
                 "released": false,
-                "masterDeck": 2,
+                "ownerDeck": 2,
+                "ownerDeckId": "rekordbox-deck-2",
                 "activePlaySessionId": "play-1",
             }),
         );
@@ -17890,7 +17657,6 @@ mod tests {
             &serde_json::json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 3,
                 "playSessionId": "p1",
                 "loop": {
                     "active": true,
@@ -17914,7 +17680,6 @@ mod tests {
             &serde_json::json!({
                 "deck": 1,
                 "deckId": "rekordbox-deck-1",
-                "masterDeckRevision": 3,
                 "playSessionId": "p1",
                 "pedalIntentId": 1,
                 "baseMeasuredLoopRevision": null,
@@ -18049,14 +17814,14 @@ mod tests {
         );
 
         let nested = format!(
-            r#"{{"v":3,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"released":false,"released":true,"masterDeck":null,"activePlaySessionId":null}}}}"#
+            r#"{{"v":3,"type":"DJ_STATE_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"released":false,"released":true}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&nested)
             .err()
             .is_some_and(|error| error.contains("duplicate")));
 
         let deep = format!(
-            r#"{{"v":3,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":1,"contentId":"c","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00Z","playSessionId":"p1","loop":{{"active":false,"startBeat":null,"endBeat":null,"lengthBeats":null,"revision":1,"revision":2,"sampleAgeMs":0,"source":"rekordbox-hook-measured"}}}}}}"#
+            r#"{{"v":3,"type":"DJ_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","contentId":"c","trackBpm":null,"positionAtSendSec":0,"effectiveBpm":120,"positionRevision":1,"sampleAgeMs":0,"isPlaying":true,"startedAt":"2026-08-25T00:00:00Z","playSessionId":"p1","loop":{{"active":false,"startBeat":null,"endBeat":null,"lengthBeats":null,"revision":1,"revision":2,"sampleAgeMs":0,"source":"rekordbox-hook-measured"}}}}}}"#
         );
         assert!(super::DjLinkEnvelope::parse_json(&deep)
             .err()
@@ -18077,7 +17842,6 @@ mod tests {
         let payload = serde_json::json!({
             "deck": 1,
             "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 3,
             "contentId": "abc",
             "trackBpm": 128.0,
             "positionAtSendSec": 1.25,
@@ -18085,13 +17849,12 @@ mod tests {
             "positionRevision": 7,
             "sampleAgeMs": 42,
             "isPlaying": true,
-            "master": true,
             "startedAt": "2026-08-21T00:00:00Z",
             "playSessionId": "p1",
         });
         let envelope = |payload: &serde_json::Value| {
             format!(
-                r#"{{"v":3,"type":"DJ_MASTER_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
+                r#"{{"v":3,"type":"DJ_TRACK_SYNC","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{payload}}}"#
             )
         };
         assert!(super::DjLinkEnvelope::parse_json(&envelope(&payload)).is_ok());
@@ -18141,16 +17904,7 @@ mod tests {
         variant["isPlaying"] = serde_json::json!(false);
         reject(variant);
         let mut variant = payload.clone();
-        variant["master"] = serde_json::json!(false);
-        reject(variant);
-        let mut variant = payload.clone();
         variant["startedAt"] = serde_json::json!("not-a-timestamp");
-        reject(variant);
-        let mut variant = payload.clone();
-        variant["masterDeckRevision"] = serde_json::json!(0);
-        reject(variant);
-        let mut variant = payload.clone();
-        variant["masterDeckRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
         reject(variant);
         let mut variant = payload.clone();
         variant["positionRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
@@ -18174,7 +17928,7 @@ mod tests {
     fn dj_link_measured_loop_rules_are_exact() {
         let loop_of = |loop_payload: serde_json::Value| {
             format!(
-                r#"{{"v":3,"type":"DJ_MASTER_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":3,"contentId":"abc","trackBpm":null,"positionAtSendSec":10,"effectiveBpm":120,"positionRevision":7,"sampleAgeMs":20,"isPlaying":true,"master":true,"startedAt":"2026-08-25T00:00:00+09:00","playSessionId":"p1","loop":{loop_payload}}}}}"#
+                r#"{{"v":3,"type":"DJ_TRACK_ACTIVE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","contentId":"abc","trackBpm":null,"positionAtSendSec":10,"effectiveBpm":120,"positionRevision":7,"sampleAgeMs":20,"isPlaying":true,"startedAt":"2026-08-25T00:00:00+09:00","playSessionId":"p1","loop":{loop_payload}}}}}"#
             )
         };
         let valid_active = serde_json::json!({
@@ -18187,11 +17941,6 @@ mod tests {
             "source": "rekordbox-hook-measured",
         });
         assert!(super::DjLinkEnvelope::parse_json(&loop_of(valid_active.clone())).is_ok());
-        let unsafe_outer_revision = format!(
-            r#"{{"v":3,"type":"DJ_LOOP_STATE","agentId":"rb-output-dj-agent","sessionId":"s1","sequence":1,"eventId":"e1","payload":{{"deck":1,"deckId":"rekordbox-deck-1","masterDeckRevision":{},"playSessionId":"p1","loop":{valid_active}}}}}"#,
-            super::DJ_LINK_MAX_SEQUENCE + 1
-        );
-        assert!(super::DjLinkEnvelope::parse_json(&unsafe_outer_revision).is_err());
         let valid_inactive = serde_json::json!({
             "active": false,
             "startBeat": null,
@@ -18256,7 +18005,6 @@ mod tests {
         let payload = serde_json::json!({
             "deck": 1,
             "deckId": "rekordbox-deck-1",
-            "masterDeckRevision": 3,
             "playSessionId": "p1",
             "pedalIntentId": 1,
             "baseMeasuredLoopRevision": null,
@@ -18320,12 +18068,6 @@ mod tests {
         variant["deckId"] = serde_json::json!("rekordbox-deck-2");
         reject(variant);
         let mut variant = payload.clone();
-        variant["masterDeckRevision"] = serde_json::json!(0);
-        reject(variant);
-        let mut variant = payload.clone();
-        variant["masterDeckRevision"] = serde_json::json!(super::DJ_LINK_MAX_SEQUENCE + 1);
-        reject(variant);
-        let mut variant = payload.clone();
         variant["playSessionId"] = serde_json::json!(" ");
         reject(variant);
         let mut variant = payload.clone();
@@ -18358,25 +18100,31 @@ mod tests {
             )
         };
         let generic_set = super::DJ_LINK_REQUIRED_CAPABILITIES;
-        let legacy_set = super::DJ_LINK_LEGACY_REQUIRED_CAPABILITIES;
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,
             &generic_set
         ))
         .is_ok());
-        assert!(super::DjLinkEnvelope::parse_json(&hello(
-            "0123456789abcdef0123456789abcdef",
-            3,
-            &legacy_set
-        ))
-        .is_ok());
         assert!(generic_set.contains(&"DJ_TRACK_ACTIVE"));
         assert!(generic_set.contains(&"DJ_TRACK_SYNC"));
         assert!(!generic_set.contains(&"DJ_MASTER_TRACK_ACTIVE"));
-        assert!(legacy_set.contains(&"DJ_MASTER_TRACK_ACTIVE"));
-        assert!(legacy_set.contains(&"DJ_MASTER_TRACK_SYNC"));
-        assert!(!legacy_set.contains(&"DJ_TRACK_ACTIVE"));
+        assert!(super::DjLinkEnvelope::parse_json(&hello(
+            "0123456789abcdef0123456789abcdef",
+            3,
+            &[
+                "DJ_MASTER_TRACK_ACTIVE",
+                "DJ_MASTER_TRACK_SYNC",
+                "DJ_LOOP_STATE",
+                "DJ_LOOP_FALLBACK",
+                "DJ_RELEASE",
+                "DJ_TIMELINE_BEAT_JUMP",
+                "DJ_TIMELINE_LOOP_SET",
+                "DJ_TIMELINE_STATE_REQUEST",
+                "DJ_STATE_SYNC",
+            ]
+        ))
+        .is_err());
         assert!(super::DjLinkEnvelope::parse_json(&hello("too-short", 3, &generic_set)).is_err());
         assert!(
             super::DjLinkEnvelope::parse_json(&hello(&"a".repeat(257), 3, &generic_set)).is_err()
@@ -18422,7 +18170,7 @@ mod tests {
         ))
         .is_err());
         let mut mixed = generic_set.to_vec();
-        mixed[0] = legacy_set[0];
+        mixed[0] = "DJ_MASTER_TRACK_ACTIVE";
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,

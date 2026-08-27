@@ -361,14 +361,12 @@ export interface DjLinkRuntimeStatus {
   generation: number;
   agentId?: string | null;
   sessionId?: string | null;
-  master: boolean;
   trackActive: boolean;
   loopDivision: number | null;
   released: boolean;
   lastEventId: string | null;
   outcome?: string | null;
   ageMs: number | null;
-  masterDeck?: string | null;
   ownerDeck?: string | null;
   trackContentId?: string | null;
   trackTitle?: string | null;

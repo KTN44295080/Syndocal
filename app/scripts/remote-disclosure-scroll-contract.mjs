@@ -1,11 +1,13 @@
 async function remoteDisclosureScrollInPage() {
   const remoteZone = document.querySelector('[data-io-zone="remote"]');
   const remoteControl = remoteZone?.querySelector('.remoteControl');
-  const serverDesk = remoteControl?.querySelector(':scope > .remoteServerDesk');
+  const disclosureStack = remoteControl?.querySelector(':scope > .ioDisclosureStack');
+  const webRemoteDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="web-remote"]') ?? null;
+  const webRemoteBody = webRemoteDisclosure?.querySelector(':scope > [data-io-disclosure-body]') ?? null;
+  const serverDesk = webRemoteBody?.querySelector(':scope > .remoteServerDesk');
   const serverHeader = serverDesk?.querySelector(':scope > .ioDeskHeader');
   const remoteAction = serverDesk?.querySelector('[data-io-control="remote-start"], [data-io-control="remote-stop"]');
-  const disclosureStack = remoteControl?.querySelector(':scope > .ioDisclosureStack');
-  const disclosureNames = ['remote-security', 'remote-endpoints', 'dj-link', 'remote-standby'];
+  const disclosureNames = ['web-remote', 'remote-security', 'remote-endpoints', 'dj-link', 'remote-standby'];
   const disclosures = disclosureNames.map((name) =>
     remoteControl?.querySelector(`[data-io-disclosure="${name}"]`) ?? null,
   );
@@ -73,19 +75,25 @@ async function remoteDisclosureScrollInPage() {
     await settle();
   };
 
-  const remoteActionSizeBeforeDisclosureScroll = sizeOf(remoteAction);
+  // Web Remote now owns the server desk inside the shared stack. Open that
+  // peer disclosure explicitly before measuring its header/action reachability.
+  const openDisclosure = (disclosure) => {
+    const summary = disclosure?.querySelector(':scope > summary');
+    if (summary instanceof HTMLElement && !disclosure.open) summary.click();
+  };
   if (remoteControl instanceof HTMLElement) remoteControl.scrollTop = 0;
   if (serverDesk instanceof HTMLElement) serverDesk.scrollTop = 0;
   if (disclosureStack instanceof HTMLElement) disclosureStack.scrollTop = 0;
   for (const endpointDesk of remoteControl?.querySelectorAll('.remoteEndpointDesk') ?? []) {
     if (endpointDesk instanceof HTMLElement) endpointDesk.scrollTop = 0;
   }
+  openDisclosure(webRemoteDisclosure);
   for (const disclosure of disclosures) {
-    const summary = disclosure?.querySelector(':scope > summary');
-    if (summary instanceof HTMLElement && !disclosure.open) summary.click();
+    openDisclosure(disclosure);
   }
   await settle();
 
+  const remoteActionSizeBeforeDisclosureScroll = sizeOf(remoteAction);
   const allDisclosuresOpen = disclosures.every((disclosure) => disclosure?.open === true);
   const remoteStyle = remoteControl ? getComputedStyle(remoteControl) : null;
   const disclosureStackStyle = disclosureStack ? getComputedStyle(disclosureStack) : null;
@@ -93,6 +101,18 @@ async function remoteDisclosureScrollInPage() {
     disclosureStack instanceof HTMLElement &&
     disclosureStack.scrollHeight > disclosureStack.clientHeight,
   );
+  if (disclosureStack instanceof HTMLElement) {
+    disclosureStack.scrollTop = disclosureStack.scrollHeight;
+  }
+  await settle();
+  // Web Remote now scrolls in the same stack as DJ Link. Reveal its critical
+  // controls before moving the stack back to the lower DJ Link surface.
+  await revealInDisclosureStack(serverHeader);
+  await revealInDisclosureStack(remoteAction);
+  const serverHeaderReachableAfterDisclosureScroll = visibleWithin(serverHeader, remoteZone);
+  const remoteActionReachableAfterDisclosureScroll = visibleWithin(remoteAction, remoteZone);
+  const remoteActionHitTestableAfterDisclosureScroll = hitTestableAtCenter(remoteAction);
+
   if (disclosureStack instanceof HTMLElement) {
     disclosureStack.scrollTop = disclosureStack.scrollHeight;
   }
@@ -157,9 +177,9 @@ async function remoteDisclosureScrollInPage() {
     remoteActionSizeBeforeDisclosureScroll,
     remoteActionSizeAfterDisclosureScroll,
     remoteActionSizePreserved,
-    serverHeaderReachableAfterDisclosureScroll: visibleWithin(serverHeader, remoteZone),
-    remoteActionReachableAfterDisclosureScroll: visibleWithin(remoteAction, remoteZone),
-    remoteActionHitTestableAfterDisclosureScroll: hitTestableAtCenter(remoteAction),
+    serverHeaderReachableAfterDisclosureScroll,
+    remoteActionReachableAfterDisclosureScroll,
+    remoteActionHitTestableAfterDisclosureScroll,
     djLinkControlReachableAfterDisclosureScroll:
       visibleWithin(djLinkControl, remoteZone) &&
       visibleWithin(djLinkControl, disclosureStack) &&
@@ -176,8 +196,11 @@ async function remoteDisclosureScrollInPage() {
   for (const endpointDesk of remoteControl?.querySelectorAll('.remoteEndpointDesk') ?? []) {
     if (endpointDesk instanceof HTMLElement) endpointDesk.scrollTop = 0;
   }
+  // Leave the primary Web Remote disclosure open for the caller's next
+  // operation (the standard Setup I/O flow immediately starts the listener),
+  // while returning every secondary peer disclosure to its closed baseline.
   for (const disclosure of disclosures) {
-    if (disclosure instanceof HTMLDetailsElement) disclosure.open = false;
+    if (disclosure instanceof HTMLDetailsElement) disclosure.open = disclosure === webRemoteDisclosure;
   }
   await settle();
   return {

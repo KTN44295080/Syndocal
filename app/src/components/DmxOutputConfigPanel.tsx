@@ -11,6 +11,7 @@ interface DmxOutputConfigPanelProps {
   onProtocolChange: (protocol: DmxOutputConfig["protocol"]) => void;
   onRefreshSerialPorts: () => void | Promise<void>;
   onApply: () => void | Promise<void>;
+  onAddNetworkRoute: (protocol: "ArtNet" | "Sacn") => void | Promise<void>;
   onAddCurrentRoute: () => void | Promise<void>;
   onApplyRoutes: () => void | Promise<void>;
   onRouteEnabled: (index: number, enabled: boolean) => void | Promise<void>;
@@ -90,9 +91,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
     return { tone: "ready", label: "Route enabled" };
   };
   const addNetworkRoute = async (protocol: "ArtNet" | "Sacn") => {
-    props.onProtocolChange(protocol);
-    await Promise.resolve();
-    await props.onAddCurrentRoute();
+    await props.onAddNetworkRoute(protocol);
   };
 
   return (

@@ -1289,7 +1289,7 @@ mod nlm_observer {
         IEnumNetworkConnections, IEnumNetworks, INetwork, INetworkConnection, INetworkListManager,
         NetworkListManager, NLM_ENUM_NETWORK_CONNECTED,
     };
-    use windows::Win32::Networking::WinSock::{AF_INET, AF_UNSPEC};
+    use windows::Win32::Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR, SOCKADDR_IN};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
     };
@@ -1506,6 +1506,9 @@ mod nlm_observer {
             }
         };
         if ready_tx.send(Ok(())).is_err() {
+            // Release the apartment-bound interface before balancing COM.
+            // Dropping it after CoUninitialize can terminate the process.
+            drop(manager);
             // SAFETY: same thread as above; no receiver remains.
             unsafe { CoUninitialize() };
             return;
@@ -1541,6 +1544,10 @@ mod nlm_observer {
                 }
             }
         }
+        // COM interfaces must be released while their apartment is still
+        // initialized. The reverse order caused an access violation after an
+        // otherwise successful live candidate-discovery result.
+        drop(manager);
         // SAFETY: balances CoInitializeEx on this same thread.
         unsafe { CoUninitialize() };
     }
@@ -1815,39 +1822,12 @@ mod nlm_observer {
             let node_off = offset as usize;
             // SAFETY: validated full-node in-allocation access.
             let sock_addr = unsafe {
-                core::ptr::read_unaligned(
-                    (base + node_off + address_field)
-                        as *const *mut windows::Win32::Networking::WinSock::SOCKADDR,
-                )
+                core::ptr::read_unaligned((base + node_off + address_field) as *const *mut SOCKADDR)
             };
-            if sock_addr.is_null() {
-                return Err(DjLinkIpv4DiscoveryFailure::Walk(
-                    DjLinkGaaWalkError::ProtocolViolated,
-                ));
-            }
-            let sa_off = match (sock_addr as usize).checked_sub(base) {
-                Some(delta) => delta as u64,
-                None => {
-                    return Err(DjLinkIpv4DiscoveryFailure::Walk(
-                        DjLinkGaaWalkError::ProtocolViolated,
-                    ))
-                }
-            };
-            // SOCKADDR_IN layout: family u16 @0, port u16 @2, IN_ADDR @8..12.
-            if sa_off + 12 > buffer_len {
-                return Err(DjLinkIpv4DiscoveryFailure::Walk(
-                    DjLinkGaaWalkError::ProtocolViolated,
-                ));
-            }
-            // SAFETY: bounded reads inside the allocation; binary parsing
-            // straight from the socket-address bytes, never from any text.
-            let family =
-                unsafe { core::ptr::read_unaligned((base + sa_off as usize) as *const u16) };
-            if family != AF_INET.0 {
+            let Some(octets) = read_ipv4_sockaddr(sock_addr, base, buffer_len)
+                .map_err(DjLinkIpv4DiscoveryFailure::Walk)?
+            else {
                 continue;
-            }
-            let octets = unsafe {
-                core::ptr::read_unaligned((base + sa_off as usize + 8) as *const [u8; 4])
             };
             let dad_state =
                 unsafe { core::ptr::read_unaligned((base + node_off + dad_field) as *const i32) };
@@ -1857,6 +1837,40 @@ mod nlm_observer {
             ));
         }
         Ok(raw_addresses)
+    }
+
+    /// Reads one bounded IPv4 socket address through the generated Windows
+    /// structure rather than hard-coding ABI offsets. `sin_addr` is at byte 4
+    /// in `SOCKADDR_IN`; byte 8 begins `sin_zero` padding and previously made
+    /// every adapter appear to own `0.0.0.0`, poisoning discovery as a false
+    /// duplicate IPv4 address.
+    fn read_ipv4_sockaddr(
+        sock_addr: *const SOCKADDR,
+        base: usize,
+        buffer_len: u64,
+    ) -> Result<Option<[u8; 4]>, DjLinkGaaWalkError> {
+        if sock_addr.is_null() {
+            return Err(DjLinkGaaWalkError::ProtocolViolated);
+        }
+        let offset = (sock_addr as usize)
+            .checked_sub(base)
+            .ok_or(DjLinkGaaWalkError::ProtocolViolated)? as u64;
+        let end = offset
+            .checked_add(core::mem::size_of::<SOCKADDR_IN>() as u64)
+            .ok_or(DjLinkGaaWalkError::ProtocolViolated)?;
+        if end > buffer_len {
+            return Err(DjLinkGaaWalkError::ProtocolViolated);
+        }
+        // SAFETY: the full generated SOCKADDR_IN structure was bounded above;
+        // unaligned reads are required because the OS owns the packed buffer.
+        let ipv4 = unsafe { core::ptr::read_unaligned(sock_addr.cast::<SOCKADDR_IN>()) };
+        if ipv4.sin_family != AF_INET {
+            return Ok(None);
+        }
+        // SAFETY: S_un_b is the byte representation of the initialized IN_ADDR
+        // union returned by GetAdaptersAddresses, already copied into `ipv4`.
+        let bytes = unsafe { ipv4.sin_addr.S_un.S_un_b };
+        Ok(Some([bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4]))
     }
 
     /// Decode-only alias extraction for DISPLAY diagnostics: lossless UTF-16
@@ -1968,10 +1982,13 @@ mod nlm_observer {
             DJ_LINK_NL_DAD_STATE_PREFERRED, DJ_LINK_TUNNEL_TYPE_NONE,
         };
         use super::{
-            DjLinkNetworkObservations, DjLinkObserverFailure, DjLinkSettleDwellError,
-            DjLinkTrustDecision, NlmTrustObserver,
+            read_ipv4_sockaddr, DjLinkNetworkObservations, DjLinkObserverFailure,
+            DjLinkSettleDwellError, DjLinkTrustDecision, NlmTrustObserver,
         };
         use std::time::Duration;
+        use windows::Win32::Networking::WinSock::{
+            ADDRESS_FAMILY, AF_INET, IN_ADDR_0_0, SOCKADDR, SOCKADDR_IN,
+        };
 
         #[test]
         fn observer_handle_is_send_for_managed_state() {
@@ -2029,6 +2046,75 @@ mod nlm_observer {
                 NlmTrustObserver::validate_ipv4_binding;
             // Bound, never called: no COM init, no thread spawn, no I/O.
             let _pinned_ipv4_surface = (discover, validate);
+        }
+
+        #[test]
+        fn sockaddr_in_reader_uses_sin_addr_instead_of_padding() {
+            let mut address = SOCKADDR_IN {
+                sin_family: AF_INET,
+                sin_port: 0x3412,
+                ..SOCKADDR_IN::default()
+            };
+            address.sin_addr.S_un.S_un_b = IN_ADDR_0_0 {
+                s_b1: 192,
+                s_b2: 168,
+                s_b3: 50,
+                s_b4: 1,
+            };
+            address.sin_zero = [0x7f; 8];
+            let base = (&address as *const SOCKADDR_IN) as usize;
+            let socket = (&address as *const SOCKADDR_IN).cast::<SOCKADDR>();
+            assert_eq!(
+                read_ipv4_sockaddr(socket, base, core::mem::size_of::<SOCKADDR_IN>() as u64),
+                Ok(Some([192, 168, 50, 1]))
+            );
+
+            let non_ipv4 = SOCKADDR_IN {
+                sin_family: ADDRESS_FAMILY(23),
+                ..SOCKADDR_IN::default()
+            };
+            let non_ipv4_base = (&non_ipv4 as *const SOCKADDR_IN) as usize;
+            let non_ipv4_socket = (&non_ipv4 as *const SOCKADDR_IN).cast::<SOCKADDR>();
+            assert_eq!(
+                read_ipv4_sockaddr(
+                    non_ipv4_socket,
+                    non_ipv4_base,
+                    core::mem::size_of::<SOCKADDR_IN>() as u64
+                ),
+                Ok(None)
+            );
+            assert_eq!(
+                read_ipv4_sockaddr(socket, base, 4),
+                Err(super::DjLinkGaaWalkError::ProtocolViolated)
+            );
+        }
+
+        /// Explicit operator-only diagnostic for the real Windows NLM/GAA
+        /// boundary. Normal test runs must remain deterministic and therefore
+        /// skip this test; run it only when a physical show adapter is present
+        /// and candidate discovery has failed in the native UI.
+        #[test]
+        #[ignore = "reads live Windows network state"]
+        fn live_ipv4_discovery_reports_typed_result() {
+            let observer = NlmTrustObserver::spawn()
+                .expect("live NLM observer must initialize for hardware diagnosis");
+            let result = observer.discover_ipv4_candidates();
+            match &result {
+                Ok(report) => eprintln!(
+                    "live DJ Link eligible IPv4 candidates: {:#?}",
+                    report.eligible()
+                ),
+                Err(failure) => {
+                    eprintln!("live DJ Link IPv4 discovery failure: {failure:#?}")
+                }
+            }
+            observer
+                .shutdown()
+                .expect("live NLM observer must shut down cleanly");
+            assert!(
+                result.is_ok(),
+                "live DJ Link IPv4 discovery failed: {result:?}"
+            );
         }
 
         /// Pins every header-mirroring numeric constant used by the pure gate
