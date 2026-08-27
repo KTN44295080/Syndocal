@@ -29,8 +29,8 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. Never substitute an older source hash or an alpha.20-or-earlier
-process as the alpha.21 artifact identity.
+at execution time. Never substitute an older source hash or an alpha.24-or-earlier
+process as the current alpha.25 artifact identity.
 
 ### 1.1 Historical alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
@@ -39,8 +39,9 @@ KDMX `1.2.0-alpha.20` was the source/native checkpoint at exact commit
 Stage 2 source authority remains alpha.19 commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` and is carried forward without a
 wire or policy change.
-The external peer is committed/pushed at
-`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, version `1.1.9`. Follow hold,
+The v1.1.9 runtime implementation provenance is the external peer commit
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; it is historical provenance, not
+the current peer checkout identity. Follow hold,
 Stage 2 F13 loop-off, reconnect fail-closed behavior, focused/full suites, and
 independent source review are complete. The local alpha.20 native build was
 launched as exactly one responsive maximized window, but target-DJ-PC identity,
@@ -48,9 +49,9 @@ configuration, token, NIC, and physical observations are still required before
 any row is accepted. HW-4 remains **0/12** until those observations are recorded;
 source or local native acceptance alone closes no hardware row.
 
-### 1.2 Current alpha.21 Setup I/O operator checkpoint — 2026-08-28
+### 1.2 Historical alpha.21 Setup I/O operator checkpoint — 2026-08-28
 
-The current I/O/native source checkpoint is committed and pushed at
+The historical I/O/native source checkpoint was committed and pushed at
 `536742db968b242164349c34dd6940fe3ced8e92`
 (`feat(setup): streamline the I/O operator workbench`), with product/file
 version `1.2.0-alpha.21`. Setup I/O presents five selectors (DMX, MIDI, OSC,
@@ -107,6 +108,23 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
+### 1.3 Current alpha.25 source/native operator checkpoint — 2026-08-28
+
+The current KDMX native artifact was built from the exact alpha.25 source
+checkpoint `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. The final documentation
+and evidence checkpoint carrying this binding is `c77b68f0d30075e7aed7de3d4273cc479c8f5abc`.
+Product/FileVersion is `1.2.0-alpha.25`; the artifact is
+`target/release/syndocal.exe`, `59,807,744` bytes, SHA-256
+`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`.
+
+Exactly one responsive maximized exact-checkout Syndocal window was observed
+(PID `83252`). Native visual proof covers the I/O DMX workbench and the
+Lighting/Profile path only. Native Web Remote and DJ Link selector switching
+remain unaccepted; their browser contracts are not native proof. The show
+project/mapping, target-DJ-PC token and NIC, Rekordbox, pedal/MIDI, reconnect,
+three-display, physical output, and all HW-4 observations remain open. HW-4 is
+still exactly **0/12**.
+
 ## 2. DJ-PC controlled source
 
 Open one PowerShell inside the actual target-DJ-PC checkout. Resolve and verify
@@ -119,7 +137,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PeerRoot)) {
 }
 Set-Location -LiteralPath $PeerRoot
 $ExpectedBranch = 'beta-v1.1.2'
-$ExpectedPeerHead = 'b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec'
+$ExpectedPeerHead = 'c22acaa265cbbc4936ab3af5b092b59d5d543f63'
 $ExpectedPeerVersion = '1.1.9'
 $branch = (git branch --show-current).Trim()
 $dirty = @(git status --porcelain=v1)
@@ -138,12 +156,13 @@ if ($branch -ne $ExpectedBranch -or $dirty.Count -ne 0 -or
 ```
 
 The required identity is a clean, upstream-equal peer commit at source version
-`1.1.9`, exactly `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec` for both `HEAD` and
-`@{upstream}`, with strict adapter `syndocal-envelope-v3`. The final focused
-envelope/smoke gate passed `115/115`; the full peer suite passed `455` total /
-`453` pass / `0` fail / `2` intentional skips. The commit is pushed, clean, and
-independently reviewed GO. This is source/full-suite evidence only and closes no
-HW-4 row.
+`1.1.9`, exactly `c22acaa265cbbc4936ab3af5b092b59d5d543f63` for both `HEAD` and
+`@{upstream}`, with strict adapter `syndocal-envelope-v3`. The v1.1.9 runtime
+implementation ancestor is `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; retain it
+as provenance only and never accept it as the current checkout identity. The
+current full peer suite passed `465` total / `463` pass / `0` fail / `2`
+intentional skips. The commit is pushed, clean, and independently reviewed GO.
+This is source/full-suite evidence only and closes no HW-4 row.
 Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
 release, or a historical v1.1.5/v1.1.6/v1.1.7/v1.1.8 configuration as current
 acceptance evidence.
@@ -168,8 +187,8 @@ alpha.20 `pnpm --dir app tauri build --no-bundle` artifact was Product/FileVersi
 `1.2.0-alpha.20`, SHA-256
 `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; it was
 launched as exactly one responsive maximized window. It must not be substituted
-for the current alpha.21 artifact. Immediately before HW-4 execution, recheck
-the alpha.21 identity recorded in section 1.2; every alpha.20-or-earlier artifact
+for the current alpha.25 artifact. Immediately before HW-4 execution, recheck
+the alpha.25 identity recorded in section 1.3; every alpha.24-or-earlier artifact
 or PID is historical.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
@@ -180,14 +199,161 @@ the corrected candidate-only path now leaves the full draft and all `128` route
 signatures unchanged, invokes neither retired output command, and independently
 re-reviewed GO with P0/P1/P2 all zero. The earlier native visual capture belongs
 only to the historical alpha.18 artifact; its direct native refresh-button click
-also remains unconfirmed and neither observation accepts alpha.20. Current
-alpha.21 native Setup-I/O visual proof is recorded in section 1.2 and the main
-pause handoff; native Web/DJ card switching remains unaccepted because UI
+also remains unconfirmed and neither observation accepts alpha.20. The
+historical alpha.21 native Setup-I/O visual proof is recorded in section 1.2 and
+the main pause handoff; current alpha.25 native Web/DJ card switching remains
+unaccepted because UI
 Automation could not act on the cached element.
-`app/dist` is freshly rebuilt (old stale
-marker `0`); the ignored peer `dist` remains stale but is outside this source
+`app/dist` was freshly rebuilt (old stale
+marker `0`); the ignored peer `dist` remained stale but was outside that source
 acceptance checkpoint. These observations do not promote native or HW-4
 acceptance.
+
+### 2.1 Migrate an older external show config
+
+An existing v1.1.8-or-earlier JSON is not a v1.1.9 config. Strict readiness
+rejects it when the top-level `version` is not `1.1.9` or when the exact
+production selector is absent: `trackActivity.ownerSelection.mode` must be
+`titleContains`, `trackActivity.ownerSelection.titleNeedle` must be
+`人生オーバー`, and `trackActivity.ownerSelection.deck1MetadataWaitMs` must be
+`1400` (the bounded Deck 1 fallback wait). Do not edit, rename, or copy
+the old JSON into the new target. The initializer must refuse an existing
+target and never overwrite it; stop and resolve that conflict explicitly.
+
+If the old file is the only available config, set `$OldConfigPath` to its
+actual path (for example `C:\SyndocalShow\dj-agent-v1.1.8.json`) and run this
+in the same target-checkout PowerShell. The token is held only in memory and is
+never printed:
+
+```powershell
+$OldConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.8.json' # use the actual older file
+$NewConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.9.json'
+if (-not (Test-Path -LiteralPath $OldConfigPath -PathType Leaf)) {
+  throw 'The older external show config was not found.'
+}
+if (Test-Path -LiteralPath $NewConfigPath -PathType Leaf) {
+  throw 'The v1.1.9 target already exists; initializer refusal is fail-closed and no overwrite is allowed.'
+}
+$OldConfig = [System.IO.File]::ReadAllText(
+  $OldConfigPath,
+  [System.Text.Encoding]::UTF8
+) | ConvertFrom-Json
+$TokenInMemory = [string]$OldConfig.syndocal.token
+if ($TokenInMemory.Length -lt 32 -or $TokenInMemory.Length -gt 256 -or
+    $TokenInMemory -match '\s' -or
+    $TokenInMemory -eq '<SYNDOCAL_ONE_TIME_TOKEN>') {
+  throw 'The older config token is not reusable; rotate it in Syndocal and enter it without printing it.'
+}
+.\start-all.bat --init-config
+if (-not (Test-Path -LiteralPath $NewConfigPath -PathType Leaf)) {
+  throw 'The initializer did not create the v1.1.9 target.'
+}
+$NewConfig = [System.IO.File]::ReadAllText(
+  $NewConfigPath,
+  [System.Text.Encoding]::UTF8
+) | ConvertFrom-Json
+if ($NewConfig.version -ne '1.1.9' -or
+    $NewConfig.trackActivity.ownerSelection.mode -ne 'titleContains' -or
+    $NewConfig.trackActivity.ownerSelection.titleNeedle -ne '人生オーバー' -or
+    $NewConfig.trackActivity.ownerSelection.deck1MetadataWaitMs -ne 1400) {
+  throw 'Initializer output failed the exact v1.1.9 production owner-selection check.'
+}
+$NewConfig.syndocal.token = $TokenInMemory
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText(
+  $NewConfigPath,
+  ($NewConfig | ConvertTo-Json -Depth 12),
+  $Utf8NoBom
+)
+$env:DJ_AGENT_CONFIG_PATH = $NewConfigPath
+$TokenInMemory = $null
+$OldConfig = $null
+$NewConfig = $null
+```
+
+Continue with the forbidden-override check below, then run `--preflight-only`
+and the real no-argument launch. Do not print the token while checking the
+result; record only configured/length-valid status and non-secret generation or
+session identifiers.
+
+If the initializer has already created the exact v1.1.9 target but a
+Windows PowerShell 5.1 default-encoding read corrupted only the Unicode owner
+selector, do not rerun the initializer and do not reuse a stale in-memory
+template object. Repair that existing target explicitly as follows. This path
+requires one regular non-link file, reads and writes UTF-8 explicitly, preserves
+the configured token without printing it, and constructs `人生オーバー` from
+Unicode code points so neither the console code page nor a Japanese checkout
+path can alter the selector:
+
+```powershell
+$NewConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.9.json'
+$NewConfigItem = Get-Item -LiteralPath $NewConfigPath -Force
+if (-not $NewConfigItem.PSIsContainer -and
+    -not ($NewConfigItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+  $NewConfig = [System.IO.File]::ReadAllText(
+    $NewConfigPath,
+    [System.Text.Encoding]::UTF8
+  ) | ConvertFrom-Json
+} else {
+  throw 'The existing v1.1.9 target is not a regular non-link file.'
+}
+if ($NewConfig.version -ne '1.1.9') {
+  throw 'This recovery applies only to an existing v1.1.9 target.'
+}
+$TrackActivityKeys = @($NewConfig.trackActivity.PSObject.Properties.Name)
+$OwnerSelectionKeys = @($NewConfig.trackActivity.ownerSelection.PSObject.Properties.Name)
+if ($TrackActivityKeys.Count -ne 1 -or
+    $TrackActivityKeys[0] -cne 'ownerSelection' -or
+    $OwnerSelectionKeys.Count -ne 3 -or
+    @($OwnerSelectionKeys | Where-Object {
+      $_ -notin @('mode', 'titleNeedle', 'deck1MetadataWaitMs')
+    }).Count -ne 0) {
+  throw 'The existing target differs beyond the Unicode owner selector; do not repair it in place.'
+}
+$TokenInMemory = [string]$NewConfig.syndocal.token
+if ($TokenInMemory.Length -lt 32 -or $TokenInMemory.Length -gt 256 -or
+    $TokenInMemory -match '\s' -or
+    $TokenInMemory -eq '<SYNDOCAL_ONE_TIME_TOKEN>') {
+  throw 'The existing target token is not reusable; rotate it in Syndocal and enter it without printing it.'
+}
+$TitleNeedle = -join (
+  0x4EBA, 0x751F, 0x30AA, 0x30FC, 0x30D0, 0x30FC |
+    ForEach-Object { [char]$_ }
+)
+$NewConfig.trackActivity.ownerSelection = [pscustomobject]@{
+  mode = 'titleContains'
+  titleNeedle = $TitleNeedle
+  deck1MetadataWaitMs = 1400
+}
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText(
+  $NewConfigPath,
+  ($NewConfig | ConvertTo-Json -Depth 32),
+  $Utf8NoBom
+)
+$VerifiedConfig = [System.IO.File]::ReadAllText(
+  $NewConfigPath,
+  [System.Text.Encoding]::UTF8
+) | ConvertFrom-Json
+if ($VerifiedConfig.version -ne '1.1.9' -or
+    $VerifiedConfig.trackActivity.ownerSelection.mode -ne 'titleContains' -or
+    $VerifiedConfig.trackActivity.ownerSelection.titleNeedle -cne $TitleNeedle -or
+    $VerifiedConfig.trackActivity.ownerSelection.deck1MetadataWaitMs -ne 1400 -or
+    [string]$VerifiedConfig.syndocal.token -cne $TokenInMemory) {
+  throw 'The repaired v1.1.9 target failed exact local verification.'
+}
+$env:DJ_AGENT_CONFIG_PATH = $NewConfigPath
+$TokenInMemory = $null
+$NewConfig = $null
+$VerifiedConfig = $null
+$TitleNeedle = $null
+$TrackActivityKeys = $null
+$OwnerSelectionKeys = $null
+```
+
+Continue with the forbidden-override check and strict launcher preflight below.
+The launcher remains the final contract validator; a locally repaired file that
+still differs anywhere else fails closed and must not start the show process.
 
 If and only if the v1.1.9 external configuration is absent:
 
@@ -262,6 +428,37 @@ On the maximized Syndocal window:
 
 Do not proceed from UI `CONNECTED` alone. Timeline state must be known and the
 initial snapshot must be authoritative.
+
+### 3.1 2026-08-28 recovered connection (pre-matrix evidence only)
+
+After creating the exact external v1.1.9 configuration, the only remaining
+non-secret differential observed before the final retry was the forbidden
+process override `SYNDOCAL_TOKEN`. The override was removed from the same
+PowerShell before the next controlled no-argument launch. The separate CLI
+preflight success line was not preserved, so this record does not claim an
+isolated before/after causal proof. At `2026-08-28T07:07:22+09:00`, the exact
+alpha.25 `target/release/syndocal.exe` PID `83252` was responsive and owned both
+the `192.168.50.1:9100` listener and an established session from
+`192.168.50.2:63235`. The unique maximized I/O > DJ Link workbench reported
+`接続済み`, generation `1`, and a live heartbeat near `758 ms`.
+
+This is accepted as connection-recovery evidence only. The initial authoritative
+Timeline snapshot has not yet been re-recorded, and none of the MIDI, pedal,
+track-admission, fault, reconnect, or shared-LAN subchecks below has run.
+Accordingly the ordered matrix remains exactly **0/12**.
+
+The operator then captured the DJ-PC extension with Deck 1 in `PLAY`, title
+`More One Night × 動く、動く (Agate Trance&Makina bootleg)`, realtime/track
+BPM `140.00`, and Artist displayed as `-`; the screenshot did not expose a
+Content ID. The fresh FOH card simultaneously remained
+`所有デッキ — / 再生中 No / トラック —` with the heartbeat live. This does
+not prove a fallback bug: strict v3 requires either a nonempty Content ID or
+complete title+Artist identity before the 1400 ms fallback timer may arm, and
+also requires a fresh position sample/revision. Treat this as an
+identity-incomplete diagnostic observation only. Preserve playback or switch
+to a Deck 1 track with visible Artist, then capture the non-secret per-deck
+identity/freshness fields before classifying any fallback or negative-admission
+subcheck.
 
 ## 4. Evidence record
 

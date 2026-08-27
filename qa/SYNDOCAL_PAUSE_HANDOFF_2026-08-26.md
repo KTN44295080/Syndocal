@@ -1837,3 +1837,72 @@ checkpoint was `1.2.0-alpha.21`, PID `41912`, `58,778,112` bytes, SHA-256
 Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
 unverified. This is not a final-completion claim; the remaining physical/show
 gates are open.
+
+## 35. 2026-08-28 current pending checkpoint — v1.1.9 owner-selection recovery
+
+This tranche started from a clean, upstream-equal source tree at
+`c77b68f0d30075e7aed7de3d4273cc479c8f5abc` on `codex/syndocal-v1.2`. The
+working tree is intentionally dirty while the stale Cue/Recall checker is
+being repaired to the current Undo-ticket, authoritative replacement, and
+load-replacement contract; the current HW-4 runbook is being rebound from the
+historical `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec` runtime ancestor to the
+checkout authority `c22acaa265cbbc4936ab3af5b092b59d5d543f63` and alpha.25
+artifact authority; and the exact v1.1.9 migration, including explicit UTF-8
+recovery for an existing target under Windows PowerShell 5.1, is being
+recorded. Near-show wording is being aligned with any-deck
+`titleContains: 人生オーバー`, the 1400 ms Deck 1-only zero-match fallback and
+multiple-match policy, F13 Release, the one-source-measure Follow, and the
+indefinite destination-first-measure hold. Historical sections above remain
+unchanged.
+
+The DJ-PC operator created
+`C:\SyndocalShow\dj-agent-v1.1.9.json`, rotated a 43-character token, and
+completed the non-secret differential diagnostic. The file parses as exact
+v1.1.9, the token is valid without being disclosed, and the production owner
+selector is exactly `mode: titleContains`, `titleNeedle: 人生オーバー`, with
+the 1400 ms Deck 1 fallback. The only remaining non-secret differential
+observed before the final retry was the forbidden process override
+`SYNDOCAL_TOKEN`. It was removed from the same PowerShell before the next
+controlled no-argument launch reached the FOH listener. The separate CLI
+preflight success line was not preserved, so this record does not claim an
+isolated before/after causal proof.
+
+At `2026-08-28T07:07:22+09:00`, read-only OS evidence showed the exact running
+`target/release/syndocal.exe` PID `83252` responsive, listening on
+`192.168.50.1:9100`, with one established TCP session from
+`192.168.50.2:63235`. Computer Use independently observed the unique maximized
+Syndocal window at the I/O > DJ Link workbench reporting `接続済み`, peer
+`192.168.50.2:63235`, generation `1`, and a live heartbeat (approximately
+`758 ms`). This proves the controlled DJ Agent has reached the current listener;
+it does not by itself prove the authoritative Timeline snapshot, real MIDI,
+pedal behavior, reconnect/ABA protection, or any completed HW-4 row. HW-4
+therefore remains exactly **0/12**.
+
+The final current-diff review result is recorded below after the connection and
+identity-incomplete observations. The cue-effect-recall,
+project-transaction, and completion-ledger gates,
+PowerShell 7 and Windows PowerShell 5.1 migration checks covering six code
+blocks, and `git diff --check` have passed. This is still a pending
+documentation and contract-alignment checkpoint: no final gate, commit, or new
+commit hash is claimed yet. The first safe resume action for hardware is to
+play an arbitrary fresh track on Deck 1, wait beyond the 1400 ms metadata
+window, and confirm the explicit zero-positive Deck 1 fallback without
+touching the pedal; the supervisor will then advance the ordered HW-4
+observations without promoting a row from connection status alone.
+
+The operator then captured the DJ-PC extension with Deck 1 in `PLAY`, title
+`More One Night × 動く、動く (Agate Trance&Makina bootleg)`, BPM `140.00`,
+and Artist displayed as `-`; the screenshot did not expose a Content ID. A
+fresh FOH read still showed `所有デッキ — / 再生中 No / トラック —` while
+the heartbeat remained live. Read-only source inspection found no fader gate:
+strict v3 requires either a nonempty Content ID or complete title+Artist
+identity before the 1400 ms Deck 1 fallback timer may arm, plus a fresh
+position sample/revision. This is an identity-incomplete diagnostic, not
+HW-4.2 or HW-4.3 evidence. Use a Deck 1 track with visible Artist or capture the
+non-secret identity/freshness fields before changing transport.
+
+The final independent current-diff review is GO with P0/P1/P2 all zero. It
+verified the exact helper extraction, executable behavioral assertions for all
+four moved exports, PS5.1/PS7 parsing of all six migration blocks, the corrected
+non-causal `SYNDOCAL_TOKEN` wording, and the preserved HW-4 `0/12` boundary.
+Native and hardware acceptance remain explicitly unclaimed.
