@@ -26,10 +26,11 @@ use protocol::control_plane_command::{
     OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
     OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
     OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
-    SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
-    TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID,
+    SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
     AdapterPolicy, CanonicalControlPlaneRegistry, CanonicalOperationDescriptor,
@@ -53,7 +54,7 @@ const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
 const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 481;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "b0d598db0a77f67b9035df336fbf4807ea045ec1b87babf7b6590fafa807afb2";
+    "c6c90b83be34898f868d41ff2b63ad98d543aa4a5636deae23e6a3543b74040e";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -346,6 +347,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "analyze_timeline_audio_clip_path"
             | "arm_dj_link_machine"
             | "arm_output_control_v2"
+            | "assign_video_output_composition_v2"
             | "begin_media_asset_preview"
             | "bootstrap_vj_show"
             | "cancel_pane_window_close"
@@ -612,7 +614,6 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "remove_video_output"
             | "set_video_output_config"
             | "set_video_output_enabled"
-            | "set_video_output_routing"
             | "set_video_output_opacity"
             | "fade_video_output_opacity"
             | "set_video_output_mapping"
@@ -1141,6 +1142,7 @@ enum ReviewedCanonicalOperation {
     TakeOverStandby,
     AddDisplayOutput,
     SetDisplayWindowOpen,
+    AssignVideoOutputComposition,
     EnableOutput,
     AcquireOutputLease,
     RenewOutputLease,
@@ -1166,6 +1168,7 @@ impl ReviewedCanonicalOperation {
             Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
             Self::SetDisplayWindowOpen => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+            Self::AssignVideoOutputComposition => OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
             Self::AcquireOutputLease => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewOutputLease => OUTPUT_LEASE_RENEW_OPERATION_ID,
@@ -1197,6 +1200,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "add_display_output_v2" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
         "set_display_output_window_open_v2" => {
             Some(ReviewedCanonicalOperation::SetDisplayWindowOpen)
+        }
+        "assign_video_output_composition_v2" => {
+            Some(ReviewedCanonicalOperation::AssignVideoOutputComposition)
         }
         "enable_output_control_v2" => Some(ReviewedCanonicalOperation::EnableOutput),
         "acquire_output_lease_v2" => Some(ReviewedCanonicalOperation::AcquireOutputLease),
@@ -1319,6 +1325,7 @@ fn canonical_descriptor_for_source(
         | ReviewedCanonicalOperation::ArmOutputOwnership
         | ReviewedCanonicalOperation::TakeOverStandby
         | ReviewedCanonicalOperation::AddDisplayOutput
+        | ReviewedCanonicalOperation::AssignVideoOutputComposition
         | ReviewedCanonicalOperation::ForceTransferOutputLease => (
             OperationClass::Mutation,
             vec![
@@ -1366,6 +1373,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1389,6 +1397,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1412,6 +1421,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1443,6 +1453,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             ConsentPolicy::NativeDangerConfirmation
@@ -1743,6 +1754,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -1985,7 +1997,7 @@ mod tests {
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
         assert_eq!(names.len(), 481);
-        const ENGINE_COMMAND_COUNT: usize = 264;
+        const ENGINE_COMMAND_COUNT: usize = 263;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2016,7 +2028,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1488);
+        assert_eq!(registry.operations.len(), 1487);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2102,6 +2114,10 @@ mod tests {
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             ),
             ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
+            (
+                "assign_video_output_composition_v2",
+                OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+            ),
         ] {
             let descriptor = registry
                 .operations
@@ -2321,7 +2337,7 @@ mod tests {
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
         const TAURI_COUNT: usize = 481;
-        const ENGINE_COUNT: usize = 264;
+        const ENGINE_COUNT: usize = 263;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 421;
@@ -2331,10 +2347,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1488);
-        assert_eq!(SOURCE_TOTAL, 1521);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1487);
+        assert_eq!(SOURCE_TOTAL, 1520);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 33);
+        assert_eq!(canonical.canonical_operations.len(), 34);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2347,6 +2363,7 @@ mod tests {
                         | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                        | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                         | OUTPUT_ENABLE_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2356,7 +2373,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 11);
+        assert_eq!(output_control_operations.len(), 12);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -2372,6 +2389,10 @@ mod tests {
             (
                 "set_display_output_window_open_v2",
                 OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+            ),
+            (
+                "assign_video_output_composition_v2",
+                OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
             ),
             ("acquire_output_lease_v2", OUTPUT_LEASE_ACQUIRE_OPERATION_ID),
             ("renew_output_lease_v2", OUTPUT_LEASE_RENEW_OPERATION_ID),
@@ -2637,11 +2658,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 33);
+        assert_eq!(direct.len(), 34);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1062);
+        assert_eq!(unclassified.len(), 1060);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -2933,6 +2954,7 @@ mod tests {
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                    | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3073,6 +3095,7 @@ mod tests {
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                    | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3300,11 +3323,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1488);
+        assert_eq!(legacy.operations.len(), 1487);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1488);
+        assert_eq!(operations.len(), 1487);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

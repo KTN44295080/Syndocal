@@ -5010,9 +5010,17 @@ define_engine_command! {
         output_id: VideoOutputId,
         enabled: bool,
     },
-    SetVideoOutputRouting {
+    /// Authoritative video-output assignment. The shared snapshot ACK either
+    /// publishes the complete B image or restores the complete A video image;
+    /// an ACK disconnect after admission is classified by the handle instead
+    /// of being misreported as a rollback.
+    SetVideoOutputRoutingPublished {
         output_id: VideoOutputId,
+        expected_from_composition_id: CompositionId,
         composition_id: CompositionId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetVideoOutputOpacity {
         output_id: VideoOutputId,
@@ -5087,7 +5095,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::RemoveVideoOutputPublished { .. }
             | EngineCommand::SetVideoOutputConfig { .. }
             | EngineCommand::SetVideoOutputEnabled { .. }
-            | EngineCommand::SetVideoOutputRouting { .. }
+            | EngineCommand::SetVideoOutputRoutingPublished { .. }
             | EngineCommand::SetVideoOutputOpacity { .. }
             | EngineCommand::FadeVideoOutputOpacity { .. }
             | EngineCommand::SetVideoOutputMapping { .. }
@@ -7701,6 +7709,46 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Display output acknowledgement failed: {error}"))?
+    }
+
+    /// Authoritatively assign one existing video output to an existing
+    /// composition. The internal source route is observed by the backend
+    /// during its project-B preflight and is rechecked by the worker so a
+    /// stale candidate cannot silently overwrite a newer route.
+    pub fn set_video_output_routing_published(
+        &self,
+        output_id: VideoOutputId,
+        expected_from_composition_id: CompositionId,
+        composition_id: CompositionId,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.set_video_output_routing_published_with_timeout(
+            output_id,
+            expected_from_composition_id,
+            composition_id,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn set_video_output_routing_published_with_timeout(
+        &self,
+        output_id: VideoOutputId,
+        expected_from_composition_id: CompositionId,
+        composition_id: CompositionId,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.submit_authoritative_snapshot_mutation(
+            "Video output assignment acknowledgement disconnected after engine admission; publication outcome is indeterminate until the next shared snapshot observation",
+            timeout,
+            |expires_at, admission, ack| EngineCommand::SetVideoOutputRoutingPublished {
+                output_id,
+                expected_from_composition_id,
+                composition_id,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
     }
 
     /// Definitively remove a Display candidate after native resource setup
@@ -10586,7 +10634,7 @@ impl EngineHandle {
             | EngineCommand::RemoveVideoOutputPublished { .. }
             | EngineCommand::SetVideoOutputConfig { .. }
             | EngineCommand::SetVideoOutputEnabled { .. }
-            | EngineCommand::SetVideoOutputRouting { .. }
+            | EngineCommand::SetVideoOutputRoutingPublished { .. }
             | EngineCommand::SetVideoOutputOpacity { .. }
             | EngineCommand::FadeVideoOutputOpacity { .. }
             | EngineCommand::SetVideoOutputBlackout { .. }
@@ -27412,18 +27460,60 @@ impl EngineRuntime {
             EngineCommand::SetVideoOutputEnabled { output_id, enabled } => {
                 self.update_video_output(output_id, |output| output.enabled = enabled);
             }
-            EngineCommand::SetVideoOutputRouting {
+            EngineCommand::SetVideoOutputRoutingPublished {
                 output_id,
+                expected_from_composition_id,
                 composition_id,
+                expires_at,
+                admission,
+                ack,
             } => {
-                if self.video_composition_exists(composition_id) {
-                    self.update_video_output(output_id, |output| {
-                        output.composition_id = composition_id
-                    });
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreMediaAssetTransaction {
+                    media_assets: self.media_assets.clone(),
+                    video_layers: self.video_layers.clone(),
+                    video_compositions: self.video_compositions.clone(),
+                    video_layer_fades: self.video_layer_fades.clone(),
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if !admission.try_admit_before(expires_at) {
+                    Err(
+                        "Video output assignment expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                } else if !self.video_composition_exists(composition_id) {
+                    Err(format!("Video composition {composition_id} was not found"))
                 } else {
-                    self.last_error =
-                        Some(format!("Video composition {composition_id} was not found"));
-                }
+                    let output = self
+                        .video_outputs
+                        .iter_mut()
+                        .find(|output| output.summary.id == output_id)
+                        .ok_or_else(|| format!("Video output {output_id} was not found"));
+                    output.and_then(|output| {
+                        if output.summary.composition_id != expected_from_composition_id {
+                            return Err(format!(
+                                "Video output {output_id} route changed before authoritative assignment"
+                            ));
+                        }
+                        output.summary.composition_id = composition_id;
+                        output.summary = sanitize_video_output(output.summary.clone());
+                        Ok(())
+                    })
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Video output assignment could not publish an acknowledged engine snapshot",
+                });
             }
             EngineCommand::SetVideoOutputOpacity { output_id, opacity } => {
                 if opacity.is_finite() {
@@ -76308,6 +76398,77 @@ mod tests {
             before_runtime
         );
         assert_eq!(published.read().unwrap().video.outputs, before_published);
+    }
+
+    #[test]
+    fn published_video_output_assignment_is_fenced_and_rolls_back_on_publication_failure() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::AddVideoComposition(CompositionSummary {
+            id: 2,
+            label: "Aux".to_string(),
+            layer_ids: Vec::new(),
+            output_ids: Vec::new(),
+        }));
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: published_display_output(41),
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetVideoOutputRoutingPublished {
+            output_id: 41,
+            expected_from_composition_id: 1,
+            composition_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: admission.clone(),
+            ack,
+        });
+        assert_eq!(runtime.video_outputs[0].summary.composition_id, 2);
+        assert_eq!(published.read().unwrap().video.outputs[0].composition_id, 1);
+        assert_eq!(
+            admission.current_state(),
+            ProjectSnapshotLoadAdmissionState::Admitted
+        );
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().video.outputs[0].composition_id, 2);
+
+        // The backend's observed A route is part of the command. A stale
+        // value rejects before B can be published.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetVideoOutputRoutingPublished {
+            output_id: 41,
+            expected_from_composition_id: 1,
+            composition_id: 2,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.video_outputs[0].summary.composition_id, 2);
+        assert_eq!(published.read().unwrap().video.outputs[0].composition_id, 2);
+
+        // A definitive shared-snapshot publication failure restores exactly
+        // the prior engine A image and leaves the shared image on A too.
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetVideoOutputRoutingPublished {
+            output_id: 41,
+            expected_from_composition_id: 2,
+            composition_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.video_outputs[0].summary.composition_id, 2);
+        assert_eq!(published.read().unwrap().video.outputs[0].composition_id, 2);
     }
 
     #[test]

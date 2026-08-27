@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js";
 import type {
   CompositionSummary,
   VideoOutputMapping,
@@ -46,6 +46,8 @@ type VideoOutputListPanelProps = {
   windowStateForOutput: (outputId: number) => VideoOutputSetupWindowState;
   windowActionBusyForOutput: (outputId: number) => boolean;
   onToggleWindow: (outputId: number, open: boolean) => MaybePromise;
+  routingBusyForOutput: (outputId: number) => boolean;
+  onAssignComposition: (outputId: number, compositionId: number) => MaybePromise;
 };
 
 export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
@@ -53,10 +55,14 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
     const id = props.selectedOutputId;
     return props.outputs.find((output) => output.id === id) ?? props.outputs[0] ?? null;
   });
+  const [routeCompositionId, setRouteCompositionId] = createSignal<number | null>(null);
+  createEffect(() => {
+    const output = selectedOutput();
+    setRouteCompositionId(output?.composition_id ?? null);
+  });
 
-  const compositionLabel = (output: VideoOutputSummary) =>
-    props.compositions.find((composition) => composition.id === output.composition_id)?.label ??
-    `Composition ${output.composition_id}`;
+  const compositionForOutput = (output: VideoOutputSummary) =>
+    props.compositions.find((composition) => composition.id === output.composition_id) ?? null;
 
   return (
     <div class="videoOutputSetupShell">
@@ -111,6 +117,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
         {(output) => {
           const windowState = () => props.windowStateForOutput(output().id);
           const busy = () => props.windowActionBusyForOutput(output().id);
+          const routingBusy = () => props.routingBusyForOutput(output().id);
           const ownershipBlocked = () => windowState().stateClass === "blocked";
           return (
             <main
@@ -138,9 +145,47 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
               <div class="videoOutputRouteSummary">
                 <div>
                   <span>Route</span>
-                  <strong>{compositionLabel(output())}</strong>
+                  <Show
+                    when={compositionForOutput(output())}
+                    fallback={(
+                      <strong>
+                        Composition <span data-no-localize>{output().composition_id}</span>
+                      </strong>
+                    )}
+                  >
+                    {(composition) => <strong data-no-localize>{composition().label}</strong>}
+                  </Show>
                 </div>
-                <small>Output routing is read-only until a canonical v2 route exists.</small>
+                <label>
+                  <span>Composition</span>
+                  <select
+                    value={String(routeCompositionId() ?? output().composition_id)}
+                    disabled={routingBusy() || props.compositions.length === 0}
+                    onChange={(event) => {
+                      const compositionId = Number(event.currentTarget.value);
+                      setRouteCompositionId(Number.isSafeInteger(compositionId) && compositionId > 0
+                        ? compositionId
+                        : null);
+                    }}
+                  >
+                    <For each={props.compositions}>
+                      {(composition) => (
+                        <option data-no-localize value={composition.id}>{composition.label}</option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  disabled={routingBusy() || routeCompositionId() === null}
+                  onClick={() => {
+                    const compositionId = routeCompositionId();
+                    if (compositionId !== null) void props.onAssignComposition(output().id, compositionId);
+                  }}
+                >
+                  {routingBusy() ? "Applying route…" : "Apply route"}
+                </button>
+                <small>Changing the route requires local output authority and confirmation.</small>
               </div>
 
               <Show when={props.previewOutputId === output().id}>

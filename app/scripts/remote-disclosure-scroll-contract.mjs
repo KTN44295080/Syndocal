@@ -44,6 +44,7 @@ async function remoteDisclosureScrollInPage() {
     const body = document.querySelector('[data-io-workbench-body]');
     const zone = body?.querySelector('[data-io-zone]');
     const disclosureStack = zone?.querySelector('.remoteControl > .ioDisclosureStack');
+    const directSurface = disclosureStack?.querySelector(':scope > .ioDirectSurface');
     const disclosureMounted = (name) => Boolean(
       disclosureStack?.querySelector(`:scope > [data-io-disclosure="${name}"]`),
     );
@@ -60,6 +61,7 @@ async function remoteDisclosureScrollInPage() {
         remoteStandby: disclosureMounted('remote-standby'),
         djLink: disclosureMounted('dj-link'),
       },
+      directSurface: directSurface instanceof HTMLElement,
     };
   };
   const resetScroll = (root) => {
@@ -98,13 +100,12 @@ async function remoteDisclosureScrollInPage() {
     const workbenchBody = remoteZone?.closest('[data-io-workbench-body]');
     const remoteControl = remoteZone?.querySelector('.remoteControl');
     const disclosureStack = remoteControl?.querySelector(':scope > .ioDisclosureStack');
-    const webRemoteDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="web-remote"]') ?? null;
+    const webRemoteSurface = disclosureStack?.querySelector(':scope > .ioDirectSurface[data-io-default-surface="remote"]') ?? null;
     const remoteSecurityDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-security"]') ?? null;
     const remoteEndpointsDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-endpoints"]') ?? null;
     const remoteStandbyDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-standby"]') ?? null;
-    const webDisclosures = [webRemoteDisclosure, remoteSecurityDisclosure, remoteEndpointsDisclosure, remoteStandbyDisclosure];
-    const webRemoteBody = webRemoteDisclosure?.querySelector(':scope > [data-io-disclosure-body]') ?? null;
-    const serverDesk = webRemoteBody?.querySelector(':scope > .remoteServerDesk');
+    const webDisclosures = [remoteSecurityDisclosure, remoteEndpointsDisclosure, remoteStandbyDisclosure];
+    const serverDesk = webRemoteSurface?.querySelector(':scope > .remoteServerDesk');
     const remoteAction = serverDesk?.querySelector('[data-io-control="remote-start"], [data-io-control="remote-stop"]');
     const remoteStandbySummary = remoteStandbyDisclosure?.querySelector(':scope > summary');
     const remoteStandbyBody = remoteStandbyDisclosure?.querySelector(':scope > [data-io-disclosure-body]');
@@ -113,7 +114,7 @@ async function remoteDisclosureScrollInPage() {
     if (remoteControl instanceof HTMLElement) resetScroll(remoteControl);
     if (disclosureStack instanceof HTMLElement) resetScroll(disclosureStack);
     for (const disclosure of webDisclosures) openDisclosure(disclosure);
-    for (const nested of webRemoteDisclosure?.querySelectorAll('details') ?? []) openDisclosure(nested);
+    for (const nested of webRemoteSurface?.querySelectorAll('details') ?? []) openDisclosure(nested);
     await settle();
     const remoteActionSizeBeforeDisclosureScroll = sizeOf(remoteAction);
     const remoteStyle = remoteControl ? getComputedStyle(remoteControl) : null;
@@ -140,6 +141,8 @@ async function remoteDisclosureScrollInPage() {
     );
     return {
       remoteFound: remoteControl instanceof HTMLElement,
+      directSurfaceFound: webRemoteSurface instanceof HTMLElement,
+      directSurfaceVisible: visible(webRemoteSurface),
       serverDeskFound: serverDesk instanceof HTMLElement,
       remoteActionFound: remoteAction instanceof HTMLElement,
       remoteStandbySummaryFound: remoteStandbySummary instanceof HTMLElement,
@@ -164,6 +167,8 @@ async function remoteDisclosureScrollInPage() {
       remoteActionHitTestableAfterDisclosureScroll: remoteActionHitTestable,
       passed:
         remoteControl instanceof HTMLElement &&
+        webRemoteSurface instanceof HTMLElement &&
+        visible(webRemoteSurface) &&
         serverDesk instanceof HTMLElement &&
         remoteAction instanceof HTMLElement &&
         remoteStandbySummary instanceof HTMLElement &&
@@ -173,7 +178,6 @@ async function remoteDisclosureScrollInPage() {
         webDisclosures.every((disclosure) => disclosure?.open === true) &&
         remoteStyle?.overflowY === 'hidden' &&
         workbenchStyle?.overflowY === 'auto' &&
-        workbenchScrollable &&
         remoteControl.scrollTop === 0 &&
         remoteActionSizePreserved &&
         remoteStandbySummaryReachable &&
@@ -189,19 +193,17 @@ async function remoteDisclosureScrollInPage() {
     const workbenchBody = remoteZone?.closest('[data-io-workbench-body]');
     const remoteControl = remoteZone?.querySelector('.remoteControl');
     const disclosureStack = remoteControl?.querySelector(':scope > .ioDisclosureStack');
-    const djDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="dj-link"]') ?? null;
-    const djLinkBody = djDisclosure?.querySelector(':scope > [data-io-disclosure-body]') ?? null;
-    const djLinkControl = djLinkBody?.querySelector('[data-io-control="dj-link-wired-binding"]');
-    const djLinkRefreshControl = djLinkBody?.querySelector('[data-io-control="dj-link-refresh-wired-candidates"]');
-    const djLinkArmControl = djLinkBody?.querySelector('[data-io-control="dj-link-arm"]');
-    const djLinkDisarmControl = djLinkBody?.querySelector('[data-io-control="dj-link-disarm"]');
-    const djLinkRotateControl = djLinkBody?.querySelector('[data-io-control="dj-link-rotate-token"]');
+    const djSurface = disclosureStack?.querySelector(':scope > .ioDirectSurface.remoteEndpointGrid');
+    const djLinkControl = djSurface?.querySelector('[data-io-control="dj-link-wired-binding"]');
+    const djLinkRefreshControl = djSurface?.querySelector('[data-io-control="dj-link-refresh-wired-candidates"]');
+    const djLinkArmControl = djSurface?.querySelector('[data-io-control="dj-link-arm"]');
+    const djLinkDisarmControl = djSurface?.querySelector('[data-io-control="dj-link-disarm"]');
+    const djLinkRotateControl = djSurface?.querySelector('[data-io-control="dj-link-rotate-token"]');
     const djLinkArmOrDisarmControl = djLinkArmControl ?? djLinkDisarmControl;
     const actionControls = [djLinkRefreshControl, djLinkArmOrDisarmControl, djLinkRotateControl];
     if (workbenchBody instanceof HTMLElement) resetScroll(workbenchBody);
     if (remoteControl instanceof HTMLElement) resetScroll(remoteControl);
     if (disclosureStack instanceof HTMLElement) resetScroll(disclosureStack);
-    openDisclosure(djDisclosure);
     await settle();
     if (workbenchBody instanceof HTMLElement) workbenchBody.scrollTop = workbenchBody.scrollHeight;
     await settle();
@@ -219,15 +221,15 @@ async function remoteDisclosureScrollInPage() {
     );
     return {
       remoteFound: remoteControl instanceof HTMLElement,
+      directSurfaceFound: djSurface instanceof HTMLElement,
+      directSurfaceVisible: visible(djSurface),
       disclosureStackFound: disclosureStack instanceof HTMLElement,
       workbenchBodyFound: workbenchBody instanceof HTMLElement,
-      djLinkDisclosureFound: djDisclosure instanceof HTMLElement,
       djLinkControlFound: djLinkControl instanceof HTMLElement,
       djLinkArmControlFound: djLinkArmControl instanceof HTMLElement,
       djLinkDisarmControlFound: djLinkDisarmControl instanceof HTMLElement,
       djLinkArmOrDisarmExclusive: (djLinkArmControl instanceof HTMLElement) !== (djLinkDisarmControl instanceof HTMLElement),
       djLinkActionControlsFound: actionControls.every((control) => control instanceof HTMLElement),
-      disclosureOpen: djDisclosure?.open === true,
       remoteOwnsNoVerticalScroll: remoteStyle?.overflowY === 'hidden',
       workbenchOwnsVerticalScroll: workbenchStyle?.overflowY === 'auto',
       workbenchScrollable,
@@ -243,15 +245,14 @@ async function remoteDisclosureScrollInPage() {
         remoteControl instanceof HTMLElement &&
         disclosureStack instanceof HTMLElement &&
         workbenchBody instanceof HTMLElement &&
-        djDisclosure instanceof HTMLElement &&
+        djSurface instanceof HTMLElement &&
+        visible(djSurface) &&
         djLinkControl instanceof HTMLElement &&
         djLinkArmOrDisarmControl instanceof HTMLElement &&
         djLinkRotateControl instanceof HTMLElement &&
         djLinkRefreshControl instanceof HTMLElement &&
-        djDisclosure.open &&
         remoteStyle?.overflowY === 'hidden' &&
         workbenchStyle?.overflowY === 'auto' &&
-        workbenchScrollable &&
         remoteControl.scrollTop === 0 &&
         visibleWithin(djLinkControl, workbenchBody) &&
         hitTestableAtCenter(djLinkControl) &&
@@ -266,12 +267,9 @@ async function remoteDisclosureScrollInPage() {
   const restoredWebSelection = await selectConnection('web');
   const restoredWebZone = document.querySelector('[data-io-zone="remote"]');
   const restoredWebStack = restoredWebZone?.querySelector('.remoteControl > .ioDisclosureStack');
-  const restoredWebDisclosure = restoredWebStack?.querySelector('[data-io-disclosure="web-remote"]');
-  if (restoredWebDisclosure instanceof HTMLDetailsElement) {
-    openDisclosure(restoredWebDisclosure);
-    for (const disclosure of restoredWebStack?.querySelectorAll('[data-io-disclosure]') ?? []) {
-      if (disclosure !== restoredWebDisclosure) closeDisclosure(disclosure);
-    }
+  const restoredWebSurface = restoredWebStack?.querySelector(':scope > .ioDirectSurface[data-io-default-surface="remote"]');
+  if (restoredWebSurface instanceof HTMLElement) {
+    for (const disclosure of restoredWebStack?.querySelectorAll('[data-io-disclosure]') ?? []) closeDisclosure(disclosure);
   }
   await settle();
   return {
@@ -284,19 +282,22 @@ async function remoteDisclosureScrollInPage() {
     djCardReachable: djSelection.found && djSelection.selected && djSelection.zone === 'remote',
     passed:
       webSelection.found && webSelection.selected && webSelection.zoneMountedInWorkbench &&
-      webSelection.mountedDisclosures.webRemote &&
+      webSelection.directSurface &&
+      !webSelection.mountedDisclosures.webRemote &&
       webSelection.mountedDisclosures.remoteSecurity &&
       webSelection.mountedDisclosures.remoteEndpoints &&
       webSelection.mountedDisclosures.remoteStandby &&
       !webSelection.mountedDisclosures.djLink &&
       djSelection.found && djSelection.selected && djSelection.zoneMountedInWorkbench &&
-      djSelection.mountedDisclosures.djLink &&
+      djSelection.directSurface &&
+      !djSelection.mountedDisclosures.djLink &&
       !djSelection.mountedDisclosures.webRemote &&
       !djSelection.mountedDisclosures.remoteSecurity &&
       !djSelection.mountedDisclosures.remoteEndpoints &&
       !djSelection.mountedDisclosures.remoteStandby &&
       restoredWebSelection.found && restoredWebSelection.selected &&
-      restoredWebSelection.mountedDisclosures.webRemote &&
+      restoredWebSelection.directSurface &&
+      !restoredWebSelection.mountedDisclosures.webRemote &&
       restoredWebSelection.mountedDisclosures.remoteStandby &&
       !restoredWebSelection.mountedDisclosures.djLink &&
       web.passed && dj.passed,

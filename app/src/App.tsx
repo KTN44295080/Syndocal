@@ -436,7 +436,6 @@ import type {
   ProjectPublicationRequestV1,
   ProjectPublicationStatusV1,
   ProjectPublicationSurfaceV1,
-  UserTemplateLoadResult,
   ReferencePaletteSummary,
   RemoteControlConfig,
   RemoteControlStatus,
@@ -501,7 +500,6 @@ import type {
   VideoSourceKind,
   VjFirstRunSetupResult,
   VjPreviewTransportSummary,
-  VisualizerRenderPayload,
 } from "./types";
 import {
   clearedDjLinkSecret,
@@ -630,6 +628,7 @@ import {
   VIDEO_OUTPUT_WINDOW_STATE_EVENT,
   type VideoOutputWindowPhysicalState,
 } from "./outputControlController";
+import { createVideoOutputRoutingController } from "./videoOutputRoutingController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
 import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
@@ -1154,7 +1153,6 @@ const projectMutationCommands = new Set([
   "remove_video_output",
   "set_video_output_config",
   "set_video_output_enabled",
-  "set_video_output_routing",
   "set_video_output_opacity",
   "fade_video_output_opacity",
   "set_video_output_mapping",
@@ -3688,6 +3686,7 @@ export default function App() {
   const [videoOutputWindowQueryAvailable, setVideoOutputWindowQueryAvailable] = createSignal(false);
   const [videoOutputWindowActionBusy, setVideoOutputWindowActionBusy] = createSignal<Record<string, boolean>>({});
   const [videoOutputWindowActionErrors, setVideoOutputWindowActionErrors] = createSignal<Record<string, string>>({});
+  const [videoOutputRoutingBusy, setVideoOutputRoutingBusy] = createSignal<Record<string, boolean>>({});
   const [videoRuntimeStatus, setVideoRuntimeStatus] = createSignal<VideoRuntimeStatus | null>(null);
   const [externalVideoIoPlans, setExternalVideoIoPlans] = createSignal<ExternalVideoIoPlans | null>(null);
   const [externalVideoTransportStatus, setExternalVideoTransportStatus] =
@@ -10561,22 +10560,8 @@ export default function App() {
   };
   const exportVisualizerRenderPayload = async () => {
     try {
-      const payload = await invoke<VisualizerRenderPayload>("get_visualizer_render_payload", { config: null });
-      const projectLabel = projectFileLabel().replace(/\s+\*$/, "");
-      const envelope = {
-        version: 1,
-        software: "Syndocal",
-        kind: "visualizer-render-payload",
-        project: projectLabel,
-        exported_at: new Date().toISOString(),
-        payload,
-      };
-      const jsonText = `${JSON.stringify(envelope, null, 2)}\n`;
-      const fileName = `${safeExportFileNamePart(projectLabel)}-visualizer-scene.json`;
-      downloadTextFile(fileName, jsonText, "application/json;charset=utf-8");
-      setMessage(
-        `Exported visualizer scene JSON ${fileName} (${payload.scene.fixtures.length} fixture(s), ${payload.scene.video_surfaces.length} projection surface(s)).`,
-      );
+      const { exportVisualizerRenderPayloadAction } = await import("./phase1Actions");
+      await exportVisualizerRenderPayloadAction(phase1ActionContext);
     } catch (error) {
       setMessage(String(error));
     }
@@ -16335,29 +16320,9 @@ export default function App() {
   };
 
   const loadUserTemplate = async () => {
-    const authority = captureProjectAuthorityIdentity();
-    if (!await confirmDiscardProjectChanges("create a project from a user template")) {
-      setMessage("Template load canceled.");
-      return;
-    }
     try {
-      const result = await invoke<UserTemplateLoadResult | null>("load_user_template", {
-        ownerId: projectTransactionOwnerId,
-        expectedEpoch: authority.project_epoch,
-        expectedRevision: authority.project_revision,
-        expectedCheckpointHash: authority.checkpoint_hash,
-      });
-      if (!result) {
-        setMessage("Template load canceled.");
-        return;
-      }
-      const applied = await applyLoadedProjectResult(result, null);
-      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
-      setWorkspaceTab("setup");
-      setSetupSubTab("patch");
-      setMessage(
-        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC, ${result.dmx_mappings.length} DMX mappings). Outputs remain disarmed until explicit Arm; authored output settings were preserved.`,
-      );
+      const { loadUserTemplateAction } = await import("./phase1Actions");
+      await loadUserTemplateAction(phase1ActionContext);
     } catch (error) {
       setMessage(`Template load failed: ${String(error)}`);
     }
@@ -17046,44 +17011,39 @@ export default function App() {
     }
   };
 
+  const phase1ActionContext = {
+    invoke: <T,>(command: FrontendTauriInvokeCommand, args?: Record<string, unknown>) => invoke<T>(command, args),
+    confirmDiscardProjectChanges,
+    captureProjectAuthorityIdentity,
+    projectTransactionOwnerId,
+    applyLoadedProjectResult: async (result: ProjectLoadResult) =>
+      projectAuthorityApplicationResultIsCurrent(await applyLoadedProjectResult(result, null)),
+    loadedProjectMessage,
+    refreshProjectControlMappings,
+    refreshSnapshot,
+    projectFileLabel,
+    setPhase1SmokeReport,
+    setCurrentProjectPath,
+    setWorkspaceTab,
+    setSetupSubTab,
+    setRawDmxUniverse,
+    setDmxTestChannel,
+    setDmxTestWidth,
+    setDmxTestValue,
+    setMessage,
+  };
   const loadPhase1SampleProject = async () => {
-    if (!await confirmDiscardProjectChanges("load the Phase 1 sample project")) {
-      setMessage("Sample project load canceled.");
-      return;
-    }
     try {
-      const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
-      const applied = await applyLoadedProjectResult(result, null);
-      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
-      setPhase1SmokeReport(null);
-      setWorkspaceTab("setup");
-      setSetupSubTab("patch");
-      setMessage(loadedProjectMessage(result));
+      const { loadPhase1SampleProjectAction } = await import("./phase1Actions");
+      await loadPhase1SampleProjectAction(phase1ActionContext);
     } catch (error) {
       setMessage(String(error));
     }
   };
-
   const runPhase1Smoke = async () => {
     try {
-      const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
-      await refreshProjectControlMappings();
-      setPhase1SmokeReport(report);
-      setCurrentProjectPath(null);
-      setWorkspaceTab("setup");
-      setSetupSubTab("video");
-      setRawDmxUniverse(0);
-      setDmxTestChannel(1);
-      setDmxTestWidth(8);
-      setDmxTestValue(255);
-      await refreshSnapshot(true, true);
-      const values = report.first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
-      const expected = report.expected_first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
-      setMessage(
-        report.passed
-          ? `Smoke passed: ${report.path}, ${report.cue_label}, ${report.primary_output_label}, U0 A1-A8 ${values}.`
-          : `Smoke failed: ${report.primary_output_label}, active cue ${report.active_cue_id ?? "none"}, got ${values}, expected ${expected}.`,
-      );
+      const { runPhase1SmokeAction } = await import("./phase1Actions");
+      await runPhase1SmokeAction(phase1ActionContext);
     } catch (error) {
       setMessage(String(error));
     }
@@ -23132,9 +23092,21 @@ export default function App() {
     setMessage(`Changing authored enabled state for output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
   };
 
-  const setVideoOutputRouting = async (outputId: number, compositionId: number) => {
-    setMessage(`Changing routing for output ${outputId} is unavailable until a canonical v2 route exists; no state changed.`);
-  };
+  const videoOutputRoutingController = createVideoOutputRoutingController({
+    invoke,
+    snapshot,
+    refreshSnapshotAndVideoOutputRenderPlans,
+    setMessage,
+    setBusy: (outputId, busy) => {
+      setVideoOutputRoutingBusy((current) => {
+        const next = { ...current };
+        if (busy) next[String(outputId)] = true;
+        else delete next[String(outputId)];
+        return next;
+      });
+    },
+  });
+  const setVideoOutputRouting = videoOutputRoutingController.assign;
 
   const setVideoOutputOpacity = async (outputId: number, opacity: number) => {
     setMessage(`Changing opacity for output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
@@ -27707,6 +27679,8 @@ export default function App() {
           windowStateForOutput={videoOutputWindowState}
           windowActionBusyForOutput={(outputId) => Boolean(videoOutputWindowActionBusy()[String(outputId)])}
           onToggleWindow={setDisplayVideoWindowOpen}
+          routingBusyForOutput={(outputId) => Boolean(videoOutputRoutingBusy()[String(outputId)])}
+          onAssignComposition={setVideoOutputRouting}
         />
         </Show>
 
@@ -28981,8 +28955,8 @@ export default function App() {
           </IoDisclosure>
           <IoDisclosure
             id="dmx-rdm"
-            summary="RDM tools"
-            description="Discover, inspect, or send RDM through the selected gateway or USB interface."
+            summary="Advanced RDM tools"
+            description="Use only with an RDM-capable gateway or USB interface to discover, inspect, or send RDM."
           >
           <ArtRdmPanel
             gatewayIp={output().target_ip}

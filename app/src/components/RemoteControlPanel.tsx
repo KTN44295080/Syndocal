@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, type JSX } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type {
   DjLinkMachineStatus,
@@ -66,6 +66,41 @@ interface RemoteControlPanelProps {
   onStart: () => void | Promise<void>;
   onStop: () => void | Promise<void>;
   onDisconnectClient: (clientId: number) => void | Promise<void>;
+}
+
+interface RemoteWorkbenchSurfaceProps {
+  immediate: boolean;
+  disclosureId: string;
+  summary: string;
+  defaultSurface?: string;
+  bodyClass?: string;
+  children: JSX.Element;
+}
+
+/**
+ * A selected connection is already named by the I/O workbench.  Keep its
+ * controls direct there, while retaining the legacy collapsed presentation
+ * when this panel is intentionally mounted as the combined Remote surface.
+ */
+function RemoteWorkbenchSurface(props: RemoteWorkbenchSurfaceProps) {
+  const bodyClass = () => props.bodyClass ? ` ${props.bodyClass}` : "";
+  return (
+    <Show
+      when={props.immediate}
+      fallback={(
+        <details class="ioDisclosure" data-io-disclosure={props.disclosureId} data-io-default-surface={props.defaultSurface}>
+          <summary>{props.summary}</summary>
+          <div class={`ioDisclosureBody${bodyClass()}`} data-io-disclosure-body>
+            {props.children}
+          </div>
+        </details>
+      )}
+    >
+      <div class={`ioDirectSurface${bodyClass()}`} data-io-default-surface={props.defaultSurface}>
+        {props.children}
+      </div>
+    </Show>
+  );
 }
 
 export function RemoteControlPanel(props: RemoteControlPanelProps) {
@@ -190,13 +225,17 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
     props.onDjTrackTriggers(props.djTrackTriggers.filter((mapping) => mapping.id !== id));
     if (editingId() === id) resetMappingDraft();
   };
+  const surface = () => props.surface ?? "all";
   return (
     <div class="remoteControl ioOperatorSurface">
       <div class="ioDisclosureStack">
-        <Show when={props.surface !== "dj"}>
-        <details class="ioDisclosure" data-io-disclosure="web-remote" data-io-default-surface="remote">
-          <summary>Web Remote</summary>
-          <div class="ioDisclosureBody" data-io-disclosure-body>
+        <Show when={surface() !== "dj"}>
+        <RemoteWorkbenchSurface
+          immediate={surface() !== "all"}
+          disclosureId="web-remote"
+          summary="Web Remote"
+          defaultSurface="remote"
+        >
             <section class="remoteServerDesk ioConnectionDesk">
           <header class="ioDeskHeader">
             <div>
@@ -280,12 +319,11 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
               : "Local-only mode: connections are restricted to this computer."}
           </p>
           </section>
-          </div>
-        </details>
+        </RemoteWorkbenchSurface>
         <details class="ioDisclosure" data-io-disclosure="remote-security">
-          <summary>Remote access limits</summary>
+          <summary>Advanced remote safety limits</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
-            <p class="ioDisclosureDescription">Limit client count, message size, and request rate for trusted remote access.</p>
+            <p class="ioDisclosureDescription">Set the maximum client count, message size, and request rate for trusted remote access.</p>
             <p class="hint">Share only the PIN-protected endpoint with trusted operators.</p>
             <div class="split remoteLimitGrid">
               <label>
@@ -327,9 +365,9 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
         </details>
 
         <details class="ioDisclosure" data-io-disclosure="remote-endpoints">
-          <summary>Connection endpoints and clients</summary>
+          <summary>Connection information and clients</summary>
           <div class="ioDisclosureBody remoteEndpointGrid" data-io-disclosure-body>
-            <p class="ioDisclosureDescription">Copy or open a Web Remote URL and disconnect a specific client.</p>
+            <p class="ioDisclosureDescription">View Web Remote addresses, share a trusted URL, or disconnect a specific client.</p>
             <section class="remoteEndpointDesk">
               <header class="ioDeskHeader">
                 <h2>Endpoints</h2>
@@ -376,10 +414,13 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
         </details>
         </Show>
 
-        <Show when={props.surface !== "web"}>
-        <details class="ioDisclosure" data-io-disclosure="dj-link">
-          <summary>DJ Link</summary>
-          <div class="ioDisclosureBody remoteEndpointGrid" data-io-disclosure-body>
+        <Show when={surface() !== "web"}>
+        <RemoteWorkbenchSurface
+          immediate={surface() !== "all"}
+          disclosureId="dj-link"
+          summary="DJ Link"
+          bodyClass="remoteEndpointGrid"
+        >
             <section class="remoteEndpointDesk">
               <header class="ioDeskHeader">
                 <div>
@@ -581,8 +622,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 </div>
               </Show>
             </section>
-          </div>
-        </details>
+        </RemoteWorkbenchSurface>
 
         </Show>
 

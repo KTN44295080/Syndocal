@@ -7,10 +7,11 @@ import ts from "typescript";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(appRoot, "src");
 const appPath = path.join(srcRoot, "App.tsx");
-// Authority-bearing project invokes intentionally live in the App facade and
-// the focused DVC controller. Audit both AST sources; scanning App alone
-// would silently omit the controller-owned import route.
+// Authority-bearing project invokes intentionally live in the App facade,
+// its lazy Phase 1 action module, and the focused DVC controller. Audit all
+// three AST sources; scanning App alone would silently omit extracted routes.
 const dvcImportControllerPath = path.join(srcRoot, "dvcImportController.ts");
+const phase1ActionsPath = path.join(srcRoot, "phase1Actions.ts");
 const detachedVideoPath = path.join(srcRoot, "components", "VideoOutputWindow.tsx");
 const controlPlanePath = path.join(appRoot, "src-tauri", "src", "control_plane.rs");
 const manifest = JSON.parse(fs.readFileSync(path.join(srcRoot, "tauri-invoke-manifest.json"), "utf8"));
@@ -35,6 +36,10 @@ const dvcImportControllerSource = sourceFiles.find(
   (sourceFile) => path.resolve(sourceFile.fileName) === dvcImportControllerPath,
 );
 assert(dvcImportControllerSource, "dvcImportController.ts must be part of the frontend TypeScript program");
+const phase1ActionsSource = sourceFiles.find(
+  (sourceFile) => path.resolve(sourceFile.fileName) === phase1ActionsPath,
+);
+assert(phase1ActionsSource, "phase1Actions.ts must be part of the frontend TypeScript program");
 const appText = appSource.getFullText();
 
 const functionSlice = (source, marker, nextMarker) => {
@@ -327,11 +332,13 @@ const backendRendererMutations = rustClassification(
 // authority routes intentionally advanced the used-by-frontend manifest from
 // 417 to 422 after the retired address-only LAN picker route was removed. The
 // Scene-create clean break then removes two obsolete commands and adds one
-// versioned replacement: 421 manifest routes, 129 renderer-ticketed and 31
-// backend-authoritative project mutations.
-// routes; the machine-local DJ authority routes are neither category.
+// versioned replacement: 421 manifest routes, 128 renderer-ticketed and 31
+// backend-authoritative project mutations. The later R4 video-output
+// composition assignment replaces the retired direct route one-for-one and
+// remains outside both generic project-mutation classifiers; the machine-local
+// DJ authority routes are neither category.
 assert.equal(manifest.length, 421, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 129, "backend renderer-ticketed classification count drifted");
+assert.equal(backendRendererMutations.length, 128, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),
@@ -552,7 +559,7 @@ const auditAuthorityCalls = (node) => {
   }
   ts.forEachChild(node, auditAuthorityCalls);
 };
-for (const source of [appSource, dvcImportControllerSource]) auditAuthorityCalls(source);
+for (const source of [appSource, phase1ActionsSource, dvcImportControllerSource]) auditAuthorityCalls(source);
 for (const command of requiredAuthorityFields.keys()) {
   assert(seenAuthorityCommands.has(command), `${command} authority-fenced frontend callsite was not found`);
 }

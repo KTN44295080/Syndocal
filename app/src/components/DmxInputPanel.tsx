@@ -17,11 +17,14 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
   return (
     <div class="dmxInputPanel">
       <div class="panelHeader">
-        <h3>DMX Input / Merge</h3>
+        <h3>Optional external DMX input</h3>
         <span class={props.status.signal_present ? "pill ok" : props.status.running ? "pill warn" : "pill"}>
           {props.status.signal_present ? "Signal" : props.status.running ? "Waiting" : "Stopped"}
         </span>
       </div>
+      <p class="ioDisclosureDescription">
+        Raw merge sends incoming channel levels directly to the DMX output. Control mappings turn selected input channels into specific Syndocal controls.
+      </p>
       <div class="dmxInputFields">
         <label>
           Protocol
@@ -51,14 +54,14 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
           <input type="number" min={props.config.protocol === "Sacn" ? 1 : 0} max="63999" value={props.config.universe} disabled={props.status.running} onInput={(event) => setConfig({ universe: Number(event.currentTarget.value) })} />
         </label>
         <label>
-          Input use
+          Use incoming DMX for
           <select
             data-io-control="dmx-input-use"
             value={props.config.merge_enabled ? "merge" : "control"}
             disabled={props.status.running}
             onInput={(event) => setConfig({ merge_enabled: event.currentTarget.value === "merge" })}
           >
-            <option value="merge">Merge raw DMX</option>
+            <option value="merge">Raw merge to output</option>
             <option value="control">Control mappings</option>
           </select>
         </label>

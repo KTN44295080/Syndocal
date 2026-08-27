@@ -17,11 +17,13 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
+  container-type: inline-size;
+  container-name: setup-io-deck;
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   min-width: 0;
 }
@@ -155,6 +157,8 @@
   overflow: auto;
   overscroll-behavior: contain;
   padding: 8px;
+  container-type: inline-size;
+  container-name: setup-io-workbench;
 }
 
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .ioUnifiedZone {
@@ -268,6 +272,18 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The workbench is the measuring boundary: restore the established paired
+   desks only when both can keep their existing minimum control widths. */
+@container setup-io-workbench (min-width: 980px) {
+  .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioMappingWorkbench {
+    grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
+  }
+
+  .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteEndpointGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioConnectionControls,
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteConnectionControls {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -279,9 +295,23 @@
   line-height: 1.45;
 }
 
-@media (max-width: 720px) {
+.setupIoPanel[data-io-layout="operator"] .ioDirectSurface {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px;
+}
+
+@container setup-io-deck (max-width: 900px) {
   .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
-    grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container setup-io-deck (max-width: 620px) {
+  .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCard {

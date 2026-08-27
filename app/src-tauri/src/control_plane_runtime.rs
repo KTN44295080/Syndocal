@@ -78,6 +78,7 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
             | OutputControlActionV2::AddDisplay { .. }
+            | OutputControlActionV2::AssignVideoOutputComposition { .. }
             | OutputControlActionV2::ForceTransferLease { .. }
     )
 }
@@ -687,6 +688,23 @@ where
                 expected_owner_incarnation: binding.owner_incarnation,
             },
         ),
+        OutputControlActionV2::AssignVideoOutputComposition {
+            output_id,
+            composition_id,
+            ..
+        } => super::assign_video_output_composition_with_output_control_fence(
+            state,
+            *output_id,
+            *composition_id,
+            super::VideoOutputCompositionAssignmentControlRequest {
+                expected_fence: &request.expected_fence,
+                lease_request: &lease_request,
+                lease_now_ms,
+                expected_owner_principal: &binding.principal,
+                expected_owner_window_label: &binding.window_label,
+                expected_owner_incarnation: binding.owner_incarnation,
+            },
+        ),
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
@@ -899,6 +917,30 @@ fn validate_output_action_current(
                 || output.monitor_identity.as_deref().is_none_or(str::is_empty)
             {
                 return Err("Display output monitor identity is missing".to_string());
+            }
+            Ok(())
+        }
+        OutputControlActionV2::AssignVideoOutputComposition {
+            output_id,
+            composition_id,
+            ..
+        } => {
+            let snapshot = state.engine.snapshot();
+            if !snapshot
+                .video
+                .outputs
+                .iter()
+                .any(|output| output.id == *output_id)
+            {
+                return Err("Video output no longer exists".to_string());
+            }
+            if !snapshot
+                .video
+                .compositions
+                .iter()
+                .any(|composition| composition.id == *composition_id)
+            {
+                return Err("Video composition no longer exists".to_string());
             }
             Ok(())
         }
@@ -1661,6 +1703,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
+        | OutputControlActionV2::AssignVideoOutputComposition { .. }
         | OutputControlActionV2::SetDisplayWindowOpen { .. } => {
             OutputLeaseReceiptOutcomeV2::Authorized
         }

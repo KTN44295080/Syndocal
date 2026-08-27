@@ -12,6 +12,8 @@ export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.tak
 export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v2";
 export const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =
   "syndocal.output.display.window.set_open.v2";
+export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
+  "syndocal.output.video.composition.assign.v2";
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
 export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v2";
@@ -100,6 +102,14 @@ export type OutputDisplayWindowAction = {
   lease: OutputLeaseAuthority;
 };
 
+/** The sole persisted assignment of one output to one composition. */
+export type OutputVideoCompositionAssignmentAction = {
+  kind: "assign_video_output_composition";
+  output_id: number;
+  composition_id: number;
+  lease: OutputLeaseAuthority;
+};
+
 export type OutputEnableAction = { kind: "enable_output" };
 
 export type OutputControlAction =
@@ -114,7 +124,8 @@ export type OutputControlAction =
       lease: OutputLeaseAuthority;
     }
   | OutputDisplayAction
-  | OutputDisplayWindowAction;
+  | OutputDisplayWindowAction
+  | OutputVideoCompositionAssignmentAction;
 
 export type OutputLeaseLifecycleAction =
   | { kind: "acquire_lease"; role: OutputControlTargetRole }
@@ -351,6 +362,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
     case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
     case "set_display_window_open": return OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID;
+    case "assign_video_output_composition": return OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID;
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
@@ -366,6 +378,7 @@ type OutputControlInvokeCommand =
   | "take_over_output_control_v2"
   | "add_display_output_v2"
   | "set_display_output_window_open_v2"
+  | "assign_video_output_composition_v2"
   | "acquire_output_lease_v2"
   | "renew_output_lease_v2"
   | "recover_output_lease_v2"
@@ -380,6 +393,7 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "take_over_standby": return "take_over_output_control_v2";
     case "add_display": return "add_display_output_v2";
     case "set_display_window_open": return "set_display_output_window_open_v2";
+    case "assign_video_output_composition": return "assign_video_output_composition_v2";
     case "acquire_lease": return "acquire_output_lease_v2";
     case "renew_lease": return "renew_output_lease_v2";
     case "recover_lease": return "recover_output_lease_v2";
@@ -633,6 +647,12 @@ const assertAction = (action: OutputControlOperationAction): void => {
       || typeof action.open !== "boolean") {
       throw new Error("OutputControl Display window action was invalid; nothing was applied.");
     }
+  } else if (action.kind === "assign_video_output_composition") {
+    if (!hasExactKeys(record, ["kind", "output_id", "composition_id", "lease"])
+      || !isPositiveSafeInteger(action.output_id)
+      || !isPositiveSafeInteger(action.composition_id)) {
+      throw new Error("OutputControl video composition assignment was invalid; nothing was applied.");
+    }
   } else if (!hasExactKeys(record, ["kind", "lease"])) {
     throw new Error("Output lease lifecycle action was invalid; nothing was applied.");
   }
@@ -715,6 +735,9 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
     case "set_display_window_open":
+      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+      break;
+    case "assign_video_output_composition":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
     case "acquire_lease":
@@ -820,6 +843,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
     || action.kind === "set_display_window_open"
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
+    || action.kind === "assign_video_output_composition" && selected[0].status !== "held_active"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
@@ -829,7 +853,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       ? resourcesForRole(action.role)
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
-  } else if (action.kind === "add_display" || action.kind === "set_display_window_open") {
+  } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
+    || action.kind === "assign_video_output_composition") {
     const expectedResources = ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }

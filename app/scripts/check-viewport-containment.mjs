@@ -5049,11 +5049,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
 
     await selectIoConnection(client, 'web');
-    const webRemote = await exerciseSetupIoDisclosure(client, 'web-remote', '[data-io-control="remote-start"]');
-    // Web Remote owns the connection settings disclosure in the shared I/O
-    // stack. Open the owner first so the nested control contract measures the
-    // actual visible path rather than a details element behind a closed peer.
-    await client.evaluate(`document.querySelector('[data-io-disclosure="web-remote"] > summary')?.click()`);
     const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
@@ -5073,7 +5068,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
     }))()`);
     await selectIoConnection(client, 'dj');
-    const remoteDjLink = await exerciseSetupIoDisclosure(client, 'dj-link', '[data-io-control="dj-link-refresh-wired-candidates"]');
     // Wired discovery is a read-only machine query and remains available while
     // the shared listener is running. Start this flow with no candidates so a
     // click must prove both the native invoke and the rendered result rather
@@ -5085,9 +5079,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       adapterAlias: "Ethernet4",
     };
     const djLinkRefresh = await evaluatePageFunction(client, async (candidate) => {
-      const disclosure = document.querySelector('[data-io-disclosure="dj-link"]');
-      const summary = disclosure?.querySelector(':scope > summary');
-      if (disclosure && !disclosure.open && summary instanceof HTMLElement) summary.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const read = () => {
         const select = document.querySelector('[data-io-control="dj-link-wired-binding"]');
@@ -5161,7 +5152,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       const callsAfterFailure = window.__syndocalSetupIoMock?.calls
         .filter((call) => call.command === 'list_dj_link_wired_candidates').length ?? 0;
       const failure = read();
-      if (disclosure?.open && summary instanceof HTMLElement) summary.click();
       const listenerControlsRemainDisabled = (state) =>
         state.selectDisabled && state.armDisabled && state.rotateDisabled;
       return {
@@ -5206,8 +5196,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     }, djLinkRefreshFixture);
     await selectIoConnection(client, 'web');
     await client.evaluate(`(() => {
-      const disclosure = document.querySelector('[data-io-disclosure="web-remote"]');
-      if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
       document.querySelector('[data-io-control="remote-stop"]')?.scrollIntoView({ block: 'nearest' });
     })()`);
     await clickVisibleSelector(client, '[data-io-control="remote-stop"]');
@@ -5231,7 +5219,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       })(),
       genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
     }))()`);
-    disclosures.remote = [webRemote, remoteConnection, remoteSecurity, remoteEndpoints, remoteDjLink, remoteStandby];
+    disclosures.remote = [remoteConnection, remoteSecurity, remoteEndpoints, remoteStandby];
     const remoteCalls = await readSetupIoMockCalls(client);
     const remoteStartCalls = remoteCalls.filter((call) => call.command === 'start_remote_control');
     const remoteStopCalls = remoteCalls.filter((call) => call.command === 'stop_remote_control');

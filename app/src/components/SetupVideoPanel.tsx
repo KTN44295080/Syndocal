@@ -83,6 +83,8 @@ type SetupVideoPanelProps = {
   };
   windowActionBusyForOutput: (outputId: number) => boolean;
   onToggleWindow: (outputId: number, open: boolean) => MaybePromise;
+  routingBusyForOutput: (outputId: number) => boolean;
+  onAssignComposition: (outputId: number, compositionId: number) => MaybePromise;
 };
 
 export function SetupVideoPanel(props: SetupVideoPanelProps) {
@@ -167,6 +169,8 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
             windowStateForOutput={props.windowStateForOutput}
             windowActionBusyForOutput={props.windowActionBusyForOutput}
             onToggleWindow={props.onToggleWindow}
+            routingBusyForOutput={props.routingBusyForOutput}
+            onAssignComposition={props.onAssignComposition}
           />
         </div>
       </div>

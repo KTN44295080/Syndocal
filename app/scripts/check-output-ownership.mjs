@@ -965,7 +965,6 @@ const legacyTauriOutputRoutes = [
   "set_video_output_mapping",
   "set_video_output_mapping_field",
   "set_video_output_opacity",
-  "set_video_output_routing",
   "sync_external_video_transports",
   "sync_open_video_output_windows",
   "sync_video_output_window",
@@ -1113,7 +1112,6 @@ const nativePhysicalSinkMarkers = [
   "EngineCommand::SetVideoOutputMapping {",
   "EngineCommand::SetVideoOutputMappingField {",
   "EngineCommand::SetVideoOutputOpacity {",
-  "EngineCommand::SetVideoOutputRouting {",
   "admit_output_activation(",
   "apply_output_ownership_role(",
   "begin_output_ownership_transition(",
@@ -1141,6 +1139,7 @@ const canonicalR4TauriOutputRoutes = [
   "add_display_output_v2",
   "arm_output_control_v2",
   "arm_output_ownership_role",
+  "assign_video_output_composition_v2",
   "enable_output_control_v2",
   "force_transfer_output_lease_v2",
   "recover_output_lease_v2",
@@ -1176,6 +1175,7 @@ for (const dangerousAction of [
   "Arm",
   "TakeOverStandby",
   "AddDisplay",
+  "AssignVideoOutputComposition",
   "ForceTransferLease",
 ]) {
   assert.match(

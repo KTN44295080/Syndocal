@@ -1659,6 +1659,12 @@ pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v
 /// output graph, routing, mapping, enable state, or blackout state.
 pub const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID: &str =
     "syndocal.output.display.window.set_open.v2";
+/// The sole authoritative assignment of one persisted video-output route.
+/// This is intentionally separate from the physical Display-window command:
+/// it changes the authored project graph and therefore always advances the
+/// project fence on an Applied receipt.
+pub const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID: &str =
+    "syndocal.output.video.composition.assign.v2";
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
@@ -2315,6 +2321,11 @@ pub enum OutputControlActionV2 {
         open: bool,
         lease: OutputLeaseAuthorityV1,
     },
+    AssignVideoOutputComposition {
+        output_id: u64,
+        composition_id: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2358,6 +2369,11 @@ enum OutputControlActionV2Wire {
         open: bool,
         lease: OutputLeaseAuthorityV1,
     },
+    AssignVideoOutputComposition {
+        output_id: u64,
+        composition_id: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV2 {
@@ -2374,6 +2390,9 @@ impl OutputControlActionV2 {
             Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::AddDisplay { .. } => OUTPUT_DISPLAY_ADD_OPERATION_ID,
             Self::SetDisplayWindowOpen { .. } => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+            Self::AssignVideoOutputComposition { .. } => {
+                OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
+            }
         }
     }
 
@@ -2414,6 +2433,20 @@ impl OutputControlActionV2 {
                 output_id, lease, ..
             } => {
                 if *output_id == 0 || *output_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+                    return Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec);
+                }
+                lease.validate()?;
+            }
+            Self::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
+                lease,
+            } => {
+                if *output_id == 0
+                    || *output_id > MAX_SAFE_JAVASCRIPT_INTEGER
+                    || *composition_id == 0
+                    || *composition_id > MAX_SAFE_JAVASCRIPT_INTEGER
+                {
                     return Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec);
                 }
                 lease.validate()?;
@@ -2470,6 +2503,15 @@ impl OutputControlActionV2 {
             } => OutputControlActionV2Wire::SetDisplayWindowOpen {
                 output_id: *output_id,
                 open: *open,
+                lease: lease.clone(),
+            },
+            Self::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
+                lease,
+            } => OutputControlActionV2Wire::AssignVideoOutputComposition {
+                output_id: *output_id,
+                composition_id: *composition_id,
                 lease: lease.clone(),
             },
         }
@@ -2560,6 +2602,19 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
+                lease,
+            } => {
+                // 0..=10 are frozen wire discriminants.  Assignment is an
+                // append-only v2 action, so 11 cannot rewrite old shapes.
+                output.push(11);
+                append_u64(output, *output_id);
+                append_u64(output, *composition_id);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -2615,6 +2670,15 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             } => Self::SetDisplayWindowOpen {
                 output_id,
                 open,
+                lease,
+            },
+            OutputControlActionV2Wire::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
+                lease,
+            } => Self::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
                 lease,
             },
         };
@@ -3023,6 +3087,7 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Transferred,
             OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
@@ -3179,6 +3244,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3286,6 +3352,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -4400,6 +4467,56 @@ mod tests {
             }))
             .is_err()
         );
+        // Assignment follows the frozen physical-window action and must keep
+        // both the wire object and canonical bytes exact.
+        let assign_video_composition = OutputControlActionV2::AssignVideoOutputComposition {
+            output_id: 42,
+            composition_id: 7,
+            lease: lease_authority(),
+        };
+        let mut assign_shape = Vec::new();
+        assign_video_composition
+            .append_canonical_bytes(&mut assign_shape)
+            .unwrap();
+        assert_eq!(
+            assign_video_composition.operation_id(),
+            OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
+        );
+        assert_eq!(assign_shape.first(), Some(&11));
+        assert_eq!(assign_shape[1..9], 42_u64.to_be_bytes());
+        assert_eq!(assign_shape[9..17], 7_u64.to_be_bytes());
+        let assign_json = serde_json::to_value(&assign_video_composition).unwrap();
+        assert_eq!(
+            assign_json["kind"],
+            serde_json::Value::String("assign_video_output_composition".to_string())
+        );
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(assign_json).unwrap(),
+            assign_video_composition
+        );
+        for invalid in [
+            serde_json::json!({
+                "kind": "assign_video_output_composition",
+                "output_id": 0,
+                "composition_id": 7,
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            }),
+            serde_json::json!({
+                "kind": "assign_video_output_composition",
+                "output_id": 42,
+                "composition_id": 0,
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            }),
+            serde_json::json!({
+                "kind": "assign_video_output_composition",
+                "output_id": 42,
+                "composition_id": 7,
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+                "unexpected": true,
+            }),
+        ] {
+            assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
+        }
         let enable_json = serde_json::to_value(&enable).unwrap();
         assert_eq!(enable_json, serde_json::json!({ "kind": "enable_output" }));
         assert_eq!(

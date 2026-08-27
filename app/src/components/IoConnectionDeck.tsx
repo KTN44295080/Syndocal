@@ -180,7 +180,7 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
     {
       id: "dmx",
       label: "DMX",
-      summary: "Output routing and external input",
+      summary: "Output routing and optional input",
       state: props.outputEnabled ? "Output enabled" : "Output disabled",
       stateTone: props.outputEnabled ? "ok" : "idle",
       primaryAction: <button type="button" onClick={() => void props.onApplyOutput()}>Apply output</button>,

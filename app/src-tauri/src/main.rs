@@ -65,6 +65,7 @@ use protocol::{
         OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
         OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
         OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -18975,6 +18976,7 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
 const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "acquire_output_lease_v2",
     "add_display_output_v2",
+    "assign_video_output_composition_v2",
     "add_local_media_layers",
     "add_still_image_layer",
     "add_video_file_layer",
@@ -19559,7 +19561,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::RemoveVideoOutputPublished { .. }
         | EngineCommand::SetVideoOutputConfig { .. }
         | EngineCommand::SetVideoOutputEnabled { .. }
-        | EngineCommand::SetVideoOutputRouting { .. }
+        | EngineCommand::SetVideoOutputRoutingPublished { .. }
         | EngineCommand::SetVideoOutputOpacity { .. }
         | EngineCommand::FadeVideoOutputOpacity { .. }
         | EngineCommand::SetVideoOutputBlackout { .. }
@@ -40786,25 +40788,6 @@ fn set_video_output_enabled(
 }
 
 #[tauri::command]
-fn set_video_output_routing(
-    state: State<'_, AppState>,
-    output_id: VideoOutputId,
-    composition_id: CompositionId,
-) -> Result<(), String> {
-    reject_legacy_output_control_route::<()>("Video output routing")?;
-    let snapshot = state.engine.snapshot();
-    validate_video_output_exists(&snapshot, output_id)?;
-    validate_video_composition_exists(&snapshot, composition_id)?;
-    state
-        .engine
-        .send(EngineCommand::SetVideoOutputRouting {
-            output_id,
-            composition_id,
-        })
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn set_video_output_opacity(
     state: State<'_, AppState>,
     output_id: VideoOutputId,
@@ -41675,6 +41658,22 @@ async fn set_display_output_window_open_v2(
         app,
         window,
         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// Canonical R4 persisted route assignment.
+#[tauri::command]
+async fn assign_video_output_composition_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
         request,
     )
     .await
@@ -48234,6 +48233,9 @@ fn output_lease_resources_for_control_action(
         },
         protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
+        | protocol::control_plane_command::OutputControlActionV2::AssignVideoOutputComposition {
+            ..
+        }
         | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
         | protocol::control_plane_command::OutputControlActionV2::TakeOverStandby { .. } => {
             match action {
@@ -48317,7 +48319,8 @@ pub(crate) fn build_output_lease_authorization_request(
         }
         OutputControlActionV2::Arm { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
-        | OutputControlActionV2::TakeOverStandby { lease, .. } => {
+        | OutputControlActionV2::TakeOverStandby { lease, .. }
+        | OutputControlActionV2::AssignVideoOutputComposition { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
             OutputLeaseRequestAction::AuthorizeOrdinary {
@@ -63922,6 +63925,30 @@ fn display_output_candidate_snapshot(
     snapshot
 }
 
+/// Build one authored project-B image for a persisted video-output route.
+/// The source route is observed from the persistence image, never supplied by
+/// the renderer; the engine receives it again as an internal stale-candidate
+/// guard when it publishes B.
+fn video_output_composition_assignment_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    output_id: VideoOutputId,
+    composition_id: CompositionId,
+) -> Result<(EngineSnapshot, CompositionId), String> {
+    use_authored_video_snapshot(&mut snapshot);
+    validate_video_output_exists(&snapshot, output_id)?;
+    validate_video_composition_exists(&snapshot, composition_id)?;
+    let output = snapshot
+        .video
+        .outputs
+        .iter_mut()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    let expected_from_composition_id = output.composition_id;
+    output.composition_id = composition_id;
+    synchronize_derived_video_compositions(&mut snapshot.video);
+    Ok((snapshot, expected_from_composition_id))
+}
+
 struct DisplayOutputControlRequest<'a> {
     spec: &'a DisplayOutputSpecV2,
     expected_fence: &'a OutputControlFenceV1,
@@ -63939,6 +63966,291 @@ struct DisplayOutputWindowControlRequest<'a> {
     expected_owner_principal: &'a str,
     expected_owner_window_label: &'a str,
     expected_owner_incarnation: u64,
+}
+
+struct VideoOutputCompositionAssignmentControlRequest<'a> {
+    expected_fence: &'a OutputControlFenceV1,
+    lease_request: &'a OutputLeaseRequest,
+    lease_now_ms: u64,
+    expected_owner_principal: &'a str,
+    expected_owner_window_label: &'a str,
+    expected_owner_incarnation: u64,
+}
+
+/// Assign an existing persisted video output to an existing composition through
+/// the same local R4 authority boundary as Display creation. This operation
+/// creates no native shell, worker, process, network connection, or media
+/// resource: its only externally visible change is the engine's acknowledged
+/// shared project snapshot publication.
+fn assign_video_output_composition_with_output_control_fence(
+    state: &AppState,
+    output_id: VideoOutputId,
+    composition_id: CompositionId,
+    request: VideoOutputCompositionAssignmentControlRequest<'_>,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    assign_video_output_composition_with_output_control_fence_with_publication(
+        state,
+        output_id,
+        composition_id,
+        request,
+        |engine, output_id, expected_from_composition_id, composition_id| {
+            engine.set_video_output_routing_published(
+                output_id,
+                expected_from_composition_id,
+                composition_id,
+            )
+        },
+    )
+}
+
+/// The injected publisher is a narrow test seam: production always delegates
+/// to `EngineHandle::set_video_output_routing_published`, while focused tests
+/// can classify definitive versus admitted/terminal ACK ambiguity without
+/// fabricating a rollback or history receipt.
+fn assign_video_output_composition_with_output_control_fence_with_publication<Publish>(
+    state: &AppState,
+    output_id: VideoOutputId,
+    composition_id: CompositionId,
+    request: VideoOutputCompositionAssignmentControlRequest<'_>,
+    publish: Publish,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+>
+where
+    Publish: FnOnce(
+        &EngineHandle,
+        VideoOutputId,
+        CompositionId,
+        CompositionId,
+    ) -> Result<(), SnapshotPublicationFailure>,
+{
+    let VideoOutputCompositionAssignmentControlRequest {
+        expected_fence,
+        lease_request,
+        lease_now_ms,
+        expected_owner_principal,
+        expected_owner_window_label,
+        expected_owner_incarnation,
+    } = request;
+    let _lifecycle_guard = state
+        .standby_sync_lifecycle
+        .lock()
+        .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner-rotation lock was poisoned before video output assignment"
+                .to_string()
+        })?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let _transition_guard = lock_output_ownership_transition(state)?;
+    let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+        "Output lease registry lock was poisoned before video output assignment".to_string()
+    })?;
+    if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+        || !control_plane_runtime::exact_output_control_owner_matches(
+            state,
+            expected_owner_principal,
+            expected_owner_window_label,
+            expected_owner_incarnation,
+        )
+        || !control_plane_runtime::exact_output_control_fence_matches(
+            state,
+            &coordinator,
+            expected_fence,
+        )
+        || ensure_no_pending_project_transaction(&coordinator).is_err()
+    {
+        return Err("Output control fence changed before video output assignment".to_string());
+    }
+    if !state.engine.output_ownership_status().video_allowed {
+        return Err("Video output ownership is not active".to_string());
+    }
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_project =
+        project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
+    let before = ProjectCheckpoint {
+        hash: project_checkpoint_hash(&before_project, &coordinator.mappings)?,
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+    };
+    let (candidate_snapshot, expected_from_composition_id) =
+        video_output_composition_assignment_candidate_snapshot(
+            before_snapshot,
+            output_id,
+            composition_id,
+        )?;
+
+    // A no-op still receives one durable exact-Both authorization receipt, but
+    // never sends an engine command, advances history, or fabricates a fence
+    // delta. The UI must refresh before it reports the current route.
+    if expected_from_composition_id == composition_id {
+        let ((applied, fence_after), receipt) =
+            submit_output_lease_candidate_with_classified_commit(
+                state,
+                &mut lease_registry,
+                lease_request,
+                lease_now_ms,
+                "video output assignment",
+                || Ok((false, expected_fence.clone())),
+            )?;
+        debug_assert!(!applied);
+        return Ok((applied, fence_after, receipt));
+    }
+
+    let after = ProjectCheckpoint {
+        project: project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary),
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        "Assign Video Output Composition",
+        &format!("video-output-route:{output_id}"),
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    let expected_candidate_checkpoint_hash =
+        plan.next_checkpoint_hash.clone().ok_or_else(|| {
+            "Video output assignment candidate did not change the project".to_string()
+        })?;
+
+    let publication = submit_output_lease_candidate_with_classified_commit(
+        state,
+        &mut lease_registry,
+        lease_request,
+        lease_now_ms,
+        "video output assignment",
+        || {
+            state
+                .project_transaction_active
+                .store(true, Ordering::Release);
+            match publish(
+                &state.engine,
+                output_id,
+                expected_from_composition_id,
+                composition_id,
+            ) {
+                Ok(()) => {
+                    let actual_hash = state.engine.persistence_snapshot().and_then(|snapshot| {
+                        let project =
+                            project_file_for_save_from_parts(snapshot, &coordinator.ancillary);
+                        project_checkpoint_hash(&project, &coordinator.mappings)
+                    });
+                    let actual_hash = match actual_hash {
+                        Ok(actual_hash) if actual_hash == expected_candidate_checkpoint_hash => {
+                            actual_hash
+                        }
+                        Ok(_) => {
+                            state
+                                .project_transaction_active
+                                .store(false, Ordering::Release);
+                            state
+                                .project_external_command_admission
+                                .project_transaction_publication_faulted
+                                .store(true, Ordering::Release);
+                            return Err(OutputLeaseCandidateCommitFailure::in_doubt(
+                                "Video output assignment published an engine image that did not match the preflighted project candidate; further project mutations are fenced until Syndocal restarts",
+                            ));
+                        }
+                        Err(error) => {
+                            state
+                                .project_transaction_active
+                                .store(false, Ordering::Release);
+                            state
+                                .project_external_command_admission
+                                .project_transaction_publication_faulted
+                                .store(true, Ordering::Release);
+                            return Err(OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                                "Video output assignment acknowledgement was received but its persisted project image could not be verified: {error}; further project mutations are fenced until Syndocal restarts"
+                            )));
+                        }
+                    };
+                    debug_assert_eq!(actual_hash, expected_candidate_checkpoint_hash);
+                    apply_internal_media_asset_transaction_after_preflight(&mut coordinator, plan);
+                    let safety = state.engine.safety_blackout_authority();
+                    let fence_after = control_plane_runtime::committed_output_control_fence(
+                        expected_fence,
+                        control_plane_runtime::CommittedOutputControlFenceValues {
+                            project_epoch: coordinator.epoch,
+                            project_revision: coordinator.revision,
+                            project_checkpoint_hash: &coordinator.checkpoint_hash,
+                            project_publication_generation: coordinator.publication_generation,
+                            // Assignment changes the persisted route, not the
+                            // machine ownership state. Preserve the exact
+                            // ownership projection captured in the request.
+                            output_epoch: expected_fence.output_epoch,
+                            output_generation: expected_fence.output_generation,
+                            safety_blackout_epoch: safety.epoch,
+                            safety_blackout_generation: safety.generation,
+                        },
+                    );
+                    // Keep the project fence armed until the durable output
+                    // receipt records below. A journal fault must not invite a
+                    // second project mutation after B is already visible.
+                    Ok((true, fence_after))
+                }
+                Err(SnapshotPublicationFailure::Definitive(error)) => {
+                    state
+                        .project_transaction_active
+                        .store(false, Ordering::Release);
+                    Err(OutputLeaseCandidateCommitFailure::safe(error))
+                }
+                Err(SnapshotPublicationFailure::Indeterminate(error)) => {
+                    state
+                        .project_transaction_active
+                        .store(false, Ordering::Release);
+                    state
+                        .project_external_command_admission
+                        .project_transaction_publication_faulted
+                        .store(true, Ordering::Release);
+                    Err(OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                        "{error}; further project mutations are fenced until Syndocal restarts to preserve a single authoritative state"
+                    )))
+                }
+            }
+        },
+    );
+    match publication {
+        Ok(((applied, fence_after), receipt)) => {
+            state
+                .project_transaction_active
+                .store(false, Ordering::Release);
+            Ok((applied, fence_after, receipt))
+        }
+        Err(error) => {
+            // An engine-B success followed by durable terminal-record failure
+            // leaves the active fence armed. Promote that exact condition to
+            // the global publication fence rather than reporting a rollback.
+            if state.project_transaction_active.load(Ordering::Acquire) {
+                state
+                    .project_external_command_admission
+                    .project_transaction_publication_faulted
+                    .store(true, Ordering::Release);
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -80981,6 +81293,104 @@ pub(crate) mod tests {
         response
     }
 
+    fn seed_video_output_assignment_engine_image(state: &Arc<AppState>) -> VideoOutputId {
+        let status = state.engine.output_ownership_status();
+        if status.effective_role != MachineOutputRole::Both
+            || status.desired_role != MachineOutputRole::Both
+        {
+            let transition = state
+                .engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .expect("route-assignment test ownership transition must begin");
+            transition
+                .complete()
+                .expect("route-assignment test ownership transition must complete");
+        }
+        state
+            .engine
+            .send(EngineCommand::AddVideoComposition(CompositionSummary {
+                id: 2,
+                label: "Route Assignment Aux".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            }))
+            .expect("route-assignment auxiliary composition must seed");
+        let output_id = state.engine.allocate_video_output_id();
+        state
+            .engine
+            .send(EngineCommand::AddVideoOutput(VideoOutputSummary {
+                id: output_id,
+                label: "Route Assignment Output".to_string(),
+                kind: VideoOutputKind::Display,
+                enabled: true,
+                composition_id: 1,
+                fullscreen: false,
+                monitor_id: Some(7),
+                monitor_identity: Some("a".repeat(64)),
+                width: 1920,
+                height: 1080,
+                endpoint_name: None,
+                opacity: 1.0,
+                blackout: false,
+                mapping: VideoOutputMapping::default(),
+            }))
+            .expect("route-assignment output must seed");
+        let seeded = state
+            .engine
+            .persistence_snapshot()
+            .expect("route-assignment seed must publish");
+        assert!(seeded
+            .video
+            .outputs
+            .iter()
+            .any(|output| output.id == output_id));
+        *state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment coordinator reset") =
+            project_coordinator_for_initial_snapshot(seeded);
+        output_id
+    }
+
+    fn build_fake_video_output_assignment_request(
+        state: &Arc<AppState>,
+        authority: &FakeDisplayAddAuthority,
+        output_id: VideoOutputId,
+        composition_id: CompositionId,
+        request_id: u64,
+    ) -> (OutputControlCommandRequestV2, OutputLeaseRequest, u64) {
+        let fence = authority
+            .query_state
+            .issue_output_control_fence_for_window("main", state)
+            .expect("route-assignment output fence");
+        let action =
+            protocol::control_plane_command::OutputControlActionV2::AssignVideoOutputComposition {
+                output_id,
+                composition_id,
+                lease: authority.lease.clone(),
+            };
+        let request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID.to_string(),
+            request_id,
+            expected_fence: fence.clone(),
+            action,
+        };
+        request
+            .validate()
+            .expect("canonical route-assignment request");
+        let (lease_request, lease_now_ms) = build_output_lease_authorization_request(
+            state,
+            &authority.owner_principal,
+            "main",
+            authority.owner_incarnation,
+            request_id,
+            &request.action,
+            fence.project_epoch,
+        )
+        .expect("route-assignment lease authorization");
+        (request, lease_request, lease_now_ms)
+    }
+
     fn inspect_sample_media_asset_availability(
         state: &AppState,
         request_id: u64,
@@ -82748,6 +83158,198 @@ pub(crate) mod tests {
             project_file_for_save_from_parts(candidate, &ProjectSwapAncillaryState::default());
         assert_ne!(before, after, "Display creation must advance project truth");
         assert_eq!(after.snapshot.video.outputs, vec![output]);
+    }
+
+    #[test]
+    fn video_output_assignment_success_verifies_exact_b_commits_history_once_and_returns_receipt() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let output_id = seed_video_output_assignment_engine_image(&state);
+        let authority = prepare_fake_display_add_authority(&state, "renderer:route-success");
+        let (request, lease_request, lease_now_ms) =
+            build_fake_video_output_assignment_request(&state, &authority, output_id, 2, 71);
+        let before = state
+            .engine
+            .persistence_snapshot()
+            .expect("route-assignment A snapshot");
+        let (candidate, expected_from) =
+            video_output_composition_assignment_candidate_snapshot(before, output_id, 2)
+                .expect("route-assignment candidate B");
+        assert_eq!(expected_from, 1);
+        let expected_b_hash = {
+            let coordinator = state
+                .project_coordinator
+                .lock()
+                .expect("route-assignment expected-B coordinator");
+            let project = project_file_for_save_from_parts(candidate, &coordinator.ancillary);
+            project_checkpoint_hash(&project, &coordinator.mappings)
+                .expect("route-assignment expected-B checkpoint")
+        };
+        let before_revision = state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment A coordinator")
+            .revision;
+        let (applied, fence_after, lease_receipt) =
+            assign_video_output_composition_with_output_control_fence_with_publication(
+                &state,
+                output_id,
+                2,
+                VideoOutputCompositionAssignmentControlRequest {
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &authority.owner_principal,
+                    expected_owner_window_label: "main",
+                    expected_owner_incarnation: authority.owner_incarnation,
+                },
+                |engine, output_id, expected_from, composition_id| {
+                    engine.set_video_output_routing_published(
+                        output_id,
+                        expected_from,
+                        composition_id,
+                    )
+                },
+            )
+            .expect("exact route assignment must publish B");
+        assert!(applied);
+        assert_eq!(fence_after.project_checkpoint_hash, expected_b_hash);
+        assert_eq!(
+            state
+                .engine
+                .persistence_snapshot()
+                .expect("route-assignment published B")
+                .video
+                .outputs
+                .iter()
+                .find(|output| output.id == output_id)
+                .map(|output| output.composition_id),
+            Some(2)
+        );
+        let coordinator = state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment B coordinator");
+        assert_eq!(coordinator.revision, before_revision + 1);
+        assert_eq!(coordinator.history.undo.len(), 1);
+        drop(coordinator);
+        let response =
+            native_output_qa_receipt_response(&request, fence_after, &lease_receipt, applied);
+        let OutputControlResponseV2::Receipt(receipt) = response else {
+            panic!("route assignment must produce a terminal R4 receipt")
+        };
+        assert_eq!(
+            receipt.operation_id,
+            OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
+        );
+        assert_eq!(
+            receipt.outcome,
+            protocol::control_plane_command::OutputControlReceiptOutcomeV2::Applied
+        );
+        assert!(!state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn video_output_assignment_definitive_failure_keeps_a_and_records_no_history() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let output_id = seed_video_output_assignment_engine_image(&state);
+        let authority = prepare_fake_display_add_authority(&state, "renderer:route-definitive");
+        let (request, lease_request, lease_now_ms) =
+            build_fake_video_output_assignment_request(&state, &authority, output_id, 2, 72);
+        let before = state
+            .engine
+            .persistence_snapshot()
+            .expect("route-assignment definitive A");
+        let before_revision = state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment definitive coordinator")
+            .revision;
+        let error = assign_video_output_composition_with_output_control_fence_with_publication(
+            &state,
+            output_id,
+            2,
+            VideoOutputCompositionAssignmentControlRequest {
+                expected_fence: &request.expected_fence,
+                lease_request: &lease_request,
+                lease_now_ms,
+                expected_owner_principal: &authority.owner_principal,
+                expected_owner_window_label: "main",
+                expected_owner_incarnation: authority.owner_incarnation,
+            },
+            |_, _, _, _| {
+                Err(SnapshotPublicationFailure::Definitive(
+                    "injected route publication rollback".to_string(),
+                ))
+            },
+        )
+        .expect_err("definitive route publication failure must keep A");
+        assert!(error.contains("injected route publication rollback"));
+        let after = state
+            .engine
+            .persistence_snapshot()
+            .expect("route-assignment definitive A after rejection");
+        assert_eq!(after.video.outputs, before.video.outputs);
+        let coordinator = state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment definitive coordinator after rejection");
+        assert_eq!(coordinator.revision, before_revision);
+        assert!(coordinator.history.undo.is_empty());
+        drop(coordinator);
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert!(!state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn video_output_assignment_admitted_or_terminal_ambiguity_fences_without_receipt_or_history() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = Arc::clone(&harness.state);
+        let output_id = seed_video_output_assignment_engine_image(&state);
+        let authority = prepare_fake_display_add_authority(&state, "renderer:route-indeterminate");
+        let (request, lease_request, lease_now_ms) =
+            build_fake_video_output_assignment_request(&state, &authority, output_id, 2, 73);
+        let error = assign_video_output_composition_with_output_control_fence_with_publication(
+            &state,
+            output_id,
+            2,
+            VideoOutputCompositionAssignmentControlRequest {
+                expected_fence: &request.expected_fence,
+                lease_request: &lease_request,
+                lease_now_ms,
+                expected_owner_principal: &authority.owner_principal,
+                expected_owner_window_label: "main",
+                expected_owner_incarnation: authority.owner_incarnation,
+            },
+            |_, _, _, _| {
+                Err(SnapshotPublicationFailure::Indeterminate(
+                    "injected admitted route ACK loss".to_string(),
+                ))
+            },
+        )
+        .expect_err("admitted route ACK loss must fence project mutation");
+        assert!(error.contains("injected admitted route ACK loss"));
+        assert!(error.contains("fenced"));
+        let coordinator = state
+            .project_coordinator
+            .lock()
+            .expect("route-assignment indeterminate coordinator");
+        assert_eq!(coordinator.revision, 0);
+        assert!(coordinator.history.undo.is_empty());
+        drop(coordinator);
+        assert!(!state.project_transaction_active.load(Ordering::Acquire));
+        assert!(state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .load(Ordering::Acquire));
+        assert!(lock_project_external_command_admission(&state).is_err());
     }
 
     #[test]
@@ -125792,7 +126394,6 @@ fn main() {
             remove_video_output,
             set_video_output_config,
             set_video_output_enabled,
-            set_video_output_routing,
             set_video_output_opacity,
             fade_video_output_opacity,
             set_video_output_blackout,
@@ -125838,6 +126439,7 @@ fn main() {
             take_over_output_control_v2,
             add_display_output_v2,
             set_display_output_window_open_v2,
+            assign_video_output_composition_v2,
             acquire_output_lease_v2,
             renew_output_lease_v2,
             recover_output_lease_v2,

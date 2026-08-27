@@ -32,7 +32,7 @@ const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.trans
 ).outputText).toString("base64")}`);
 
 const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
-  || action.kind === "add_display"
+  || action.kind === "add_display" || action.kind === "assign_video_output_composition"
   ? ["lighting", "video"] : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
@@ -40,6 +40,7 @@ const operationFor = (action) => ({
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
   add_display: runtime.OUTPUT_DISPLAY_ADD_OPERATION_ID,
+  assign_video_output_composition: runtime.OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
   acquire_lease: runtime.OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
   renew_lease: runtime.OUTPUT_LEASE_RENEW_OPERATION_ID,
   recover_lease: runtime.OUTPUT_LEASE_RECOVER_OPERATION_ID,
@@ -52,6 +53,7 @@ const commandFor = (action) => ({
   release_blackout: "release_blackout_output_control_v2",
   take_over_standby: "take_over_output_control_v2",
   add_display: "add_display_output_v2",
+  assign_video_output_composition: "assign_video_output_composition_v2",
   acquire_lease: "acquire_output_lease_v2",
   renew_lease: "renew_output_lease_v2",
   recover_lease: "recover_output_lease_v2",
@@ -82,6 +84,12 @@ const ordinaryActions = [
     },
     lease: lease(),
   },
+  {
+    kind: "assign_video_output_composition",
+    output_id: 42,
+    composition_id: 7,
+    lease: lease(),
+  },
 ];
 const lifecycleActions = [
   { kind: "acquire_lease", role: "both" },
@@ -105,7 +113,8 @@ const queryFor = (action, state = "active") => {
       authority: action.lease,
       resources: action.kind === "arm" && state !== "wrong"
         ? resourcesFor(action)
-        : action.kind === "add_display" ? ["lighting", "video"] : ["lighting", "video"],
+        : action.kind === "add_display" || action.kind === "assign_video_output_composition"
+          ? ["lighting", "video"] : ["lighting", "video"],
     }],
   };
 };
@@ -115,7 +124,8 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   const resources = action.kind === "acquire_lease" || action.kind === "enable_output"
     ? resourcesFor(action)
     : action.kind === "arm" ? resourcesFor(action)
-      : action.kind === "add_display" ? ["lighting", "video"] : ["lighting", "video"];
+      : action.kind === "add_display" || action.kind === "assign_video_output_composition"
+        ? ["lighting", "video"] : ["lighting", "video"];
   const inputGeneration = action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
     ? null : recoveringEnable ? 2 : action.lease.generation;
   const terminalGeneration = inputGeneration === null ? 1
@@ -126,7 +136,8 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   const relinquished = action.kind === "relinquish_output_lease";
   const outcome = ({
     arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
-    add_display: "authorized", acquire_lease: "acquired", enable_output: recoveringEnable ? "recovered" : "acquired",
+    add_display: "authorized", assign_video_output_composition: "authorized",
+    acquire_lease: "acquired", enable_output: recoveringEnable ? "recovered" : "acquired",
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
   })[action.kind];
@@ -205,11 +216,22 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
     ? await runtime.executeOutputLeaseLifecycle(harness.invoke, action)
     : action.kind === "enable_output" || action.kind === "arm" || action.kind === "release_blackout"
       || action.kind === "take_over_standby" || action.kind === "add_display"
+      || action.kind === "assign_video_output_composition"
       ? await runtime.executeOutputControl(harness.invoke, action)
       : await runtime.executeOutputLeaseLifecycle(harness.invoke, action);
   assert.equal(receipt.operation_id, operationFor(action));
   assert.equal(harness.executeCalls, 1);
 }
+
+const assignmentAction = ordinaryActions.find((action) => action.kind === "assign_video_output_composition");
+assert.ok(assignmentAction, "canonical video-output assignment must remain an ordinary OutputControl action");
+const orphanedAssignmentHarness = createHarness({ action: assignmentAction, queryState: "orphaned" });
+await assert.rejects(
+  runtime.executeOutputControl(orphanedAssignmentHarness.invoke, assignmentAction),
+  /Selected output lease is unavailable, orphaned, stale, or has the wrong resources/,
+  "route assignment must not recover or use an orphaned lease",
+);
+assert.equal(orphanedAssignmentHarness.executeCalls, 0);
 
 const enableHarness = createHarness({ action: enableAction });
 const enableReceipt = await runtime.enableOutput(enableHarness.invoke);
@@ -383,6 +405,7 @@ const commandBody = (source, commandName) => {
 };
 const requiredCommands = [
   "enable_output_control_v2", "add_display_output_v2", "arm_output_control_v2",
+  "assign_video_output_composition_v2",
   "release_blackout_output_control_v2", "take_over_output_control_v2",
   "acquire_output_lease_v2", "force_transfer_output_lease_v2", "query_output_lease_authority_v1",
   "recover_output_lease_v2", "relinquish_output_lease_v2", "renew_output_lease_v2",
@@ -397,6 +420,7 @@ const canonicalOutputMutationWrappers = [
   "acquire_output_lease_v2",
   "add_display_output_v2",
   "arm_output_control_v2",
+  "assign_video_output_composition_v2",
   "enable_output_control_v2",
   "force_transfer_output_lease_v2",
   "recover_output_lease_v2",
@@ -407,6 +431,7 @@ const canonicalOutputMutationWrappers = [
 ];
 const outputControlWrappers = new Set([
   "add_display_output_v2",
+  "assign_video_output_composition_v2",
   "arm_output_control_v2",
   "enable_output_control_v2",
   "release_blackout_output_control_v2",
@@ -591,6 +616,7 @@ for (const operationId of [
   "syndocal.output.blackout.release.v2",
   "syndocal.output.standby.takeover.v2",
   "syndocal.output.display.add.v2",
+  "syndocal.output.video.composition.assign.v2",
   "syndocal.output.lease.acquire.v2",
   "syndocal.output.lease.renew.v2",
   "syndocal.output.lease.recover.v2",
@@ -618,7 +644,7 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "ForceTransferLease"]) {
+for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(

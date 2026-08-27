@@ -2,21 +2,20 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.22**
+- 製品名: **Syndocal 1.2.0-alpha.23**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.22` on branch
-`codex/syndocal-v1.2`. Exact source checkpoint
-`536742db968b242164349c34dd6940fe3ced8e92` is the authoritative alpha.21
-Setup-I/O operator checkpoint; its exact gates, native artifact,
-known release blocker, and remaining hardware boundary are recorded in
-`qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md` section 31 and
-`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` section 54. The immediately
-preceding immutable source checkpoint is `1.2.0-alpha.20` at
-`03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The earlier
+Current product metadata is `1.2.0-alpha.23` on branch
+`codex/syndocal-v1.2`. The immediately preceding source-only checkpoint is
+`1.2.0-alpha.22` at `cc201ad40927f0631236680392025f81e51c6130`.
+The current native artifact remains the alpha.21 Setup-I/O checkpoint built
+from `536742db968b242164349c34dd6940fe3ced8e92`; its exact gates, native
+artifact, known release blocker, and remaining hardware boundary are recorded
+in `qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md` sections 31-32 and
+`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` sections 54-55. The earlier
 `1.2.0-alpha.19` checkpoint at `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` implemented the current
 Follow-hold / Stage 2 DJ authority. The earlier `1.2.0-alpha.18` native evidence
 remains historical and is not rebound to alpha.21.
@@ -87,7 +86,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.22_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.22_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.23_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.23_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
