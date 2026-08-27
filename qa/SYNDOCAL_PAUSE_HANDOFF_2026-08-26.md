@@ -2013,6 +2013,14 @@ performed; reclaimed bytes remain `0`. The reviewed harness is still limited
 to Plan/its exact allowlist and the prior writer-topology, age, and hard-link
 blockers must not be bypassed.
 
+After the source and QA commits were clean, pushed, and upstream-equal at
+`f724dd352bbfa5286582ac022c648f28c7ceb587`, the tracked read-only cleanup Plan
+was rerun. It returned `Mode=Plan`, `Outcome=Blocked`,
+`Blocker=WriterOwnershipTopologyUnverifiable`, with the exact message
+`Writer ancestry is missing positive parent PID 49864 for writer PID 61616.`
+`Candidates=[]`, `PlannedLogicalBytes=0`, and `ReclaimedLogicalBytes=0`; Apply
+was not run and nothing was deleted.
+
 Alpha.26 native build, artifact identity, launch, maximized-window verification,
 and native UI QA were deliberately **not run**. The historical alpha.25 live DJ
 session, exact release executable PID `83252`, is intentionally preserved and
