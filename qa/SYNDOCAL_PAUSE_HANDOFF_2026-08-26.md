@@ -1,13 +1,13 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.20 STAGE/SETUP-I/O SOURCE/NATIVE CHECKPOINT VERIFIED; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.21 SETUP-I/O OPERATOR SOURCE/NATIVE CHECKPOINT VERIFIED; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. Section
-29 is the only current alpha.20 source/native authority; every earlier
+31 is the only current alpha.21 source/native authority; every earlier
 alpha.18-or-earlier `current` label below is retained as dated historical
 evidence and must not be used for execution. The show-completion deadline is
 **2026-08-29**, not the performance day. The code is not accepted as fully
-show-ready: the alpha.20 local Stage/Setup-I/O native slice and the historical
+show-ready: the alpha.21 local Setup-I/O operator slice and the historical
 DSF native import/report/Save As/restart/reload software slice are complete,
 while physical DJ, three-output Apply/content/save/restart, representative-scene
 real output, and the remaining DSF show-program gates remain open. The DVC
@@ -56,7 +56,8 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.20 Stage/Setup-I/O source/native | Product metadata is `1.2.0-alpha.20`; authoritative source is `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`; local artifact SHA-256 is `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; public release and HW-4 remain open |
+| Current alpha.21 Setup-I/O operator source/native | Product metadata is `1.2.0-alpha.21`; authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
+| Current token-free show structural preflight | Read-only/authored-only source is committed and pushed at `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`; valid fixture exits `0`, invalid/legacy/usage paths exit `2`; this is not native or hardware evidence |
 | Current rb-output v1.1.9 controlled source | `beta-v1.1.2` clean/upstream-equal source authority at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; full suite `455` total / `453` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
 | Historical alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata was `1.2.0-alpha.18`; exact source `HEAD`/upstream was `db4eefc348b01ee05dd2dc87945afa85de8803e`; historical native artifact/process identity is recorded in section 21 |
 | Historical alpha.17 standard native source/artifact | `fb5d18fdf898a1435bed173ddd17934a04a97897`; exact artifact and process identity in section 20; physical acceptance remains open |
@@ -75,8 +76,11 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.20 source authority is section
-29 at exact commit `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The historical
+Branch: `codex/syndocal-v1.2`. The current alpha.21 I/O/native source authority
+is section 31 at exact commit `536742db968b242164349c34dd6940fe3ced8e92`;
+the separate show structural preflight is committed and pushed at exact
+`b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. The historical alpha.20 source
+authority is section 29 at `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The historical
 alpha.18 source checkpoint was
 `db4eefc348b01ee05dd2dc87945afa85de8803e` at exact `HEAD`/upstream; its native
 artifact/process identity is recorded in section 21, and the direct refresh
@@ -438,16 +442,16 @@ with content visible on Editor `1920x1080`, LED `1920x1080`, and projector
 
 - Checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
-- Current peer target: branch `beta-v1.1.2`, package version `1.1.8`, clean and
-  upstream-equal at exact commit `0f3e8c6851857c8542c132a89a7d44289002b1f5`.
-  Production remains on version `1.1.8`. The latest non-Master Deck 2
+- Current peer target: branch `beta-v1.1.2`, package version `1.1.9`, clean and
+  upstream-equal at exact commit `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`.
+  The latest non-Master Deck 2
   router-to-real-MIDI seven-byte proof passed focused `12/12`; the stable suite
-  passed `415` total / `413` pass / `0` fail / `2` intentional skips. The commit
+  passed `455` total / `453` pass / `0` fail / `2` intentional skips. The commit
   is pushed, clean, and independently reviewed GO. Target-DJ-PC deployment and
   physical acceptance remain open.
-  The peer identity/evidence in section 20 remains the current rb-output
-  authority and supersedes every older v1.1.6/v1.1.7 operational instruction;
-  section 21 is the current KDMX source authority.
+  This exact peer identity and the section 1 current-authority table supersede
+  section 20 and every older v1.1.6/v1.1.7 operational instruction; section 31
+  is the current KDMX I/O/native source authority.
 - FOH/Syndocal host: `.50.1`; DJ PC: `.50.2`
 - The controlled source path requires the external show JSON through
   `DJ_AGENT_CONFIG_PATH`; a preflight-only pass is not an active Agent session.
@@ -1069,10 +1073,10 @@ boundary is unchanged and still requires direct confirmation; it is not the
 Stage 1 Release path. The DJ/Pedal matrix remains **0/12 checked (0%)** and the
 alpha.17/native evidence above does not promote physical acceptance.
 
-## 21. 2026-08-27 current alpha.18 source/UI authority
+## 21. 2026-08-27 historical alpha.18 source/UI authority
 
-This section is the authoritative current-source continuation. The KDMX source
-checkpoint is `1.2.0-alpha.18` at branch `codex/syndocal-v1.2`, exact
+This section is retained only as dated alpha.18 source/native evidence. The KDMX
+source checkpoint was `1.2.0-alpha.18` at branch `codex/syndocal-v1.2`, exact
 `HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`. The alpha.17 source,
 native artifact, process identity, and hash in section 20 remain historical and
 are not re-bound to alpha.18. The required `pnpm --dir app tauri build
@@ -1575,3 +1579,66 @@ shell attempts never started Cargo and are not accepted evidence. HW-4 remains
 exactly `0/12`; real token, wired peer, Rekordbox decks, pedal/MIDI,
 response/no-response, reconnect/restart, and shared Art-Net/sACN observations
 remain required.
+
+## 31. 2026-08-28 alpha.21 Setup I/O operator checkpoint
+
+The active product/file version is `1.2.0-alpha.21` on branch
+`codex/syndocal-v1.2`. The I/O/native source checkpoint is committed and
+pushed at exact `536742db968b242164349c34dd6940fe3ced8e92`
+(`feat(setup): streamline the I/O operator workbench`). The separate token-free
+show structural preflight is committed and pushed at exact
+`b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. Tool/helper `node --check` and
+`node qa/tests/show-structural-preflight.mjs` passed; the valid fixture exits
+`0`, while legacy, missing, usage, and unknown inputs exit `2`. Independent
+Terra xHigh final review is GO with P0/P1/P2 all `0`.
+
+Setup I/O now presents five selectors (DMX, MIDI, OSC, Web Remote, DJ Link)
+and one full-width workbench whose body is the single scroll owner. Its
+selector row uses `role=tablist`/`role=tab`, current-selection semantics, and an
+exactly labelled `tabpanel`; the active workbench keeps only a compact useful
+label/state rather than redundant selected-workbench summary text. Service and
+quick actions remain separate sibling controls with independent hit targets and
+do not change inactive selection. The dedicated browser contract proves real
+pointer hit-testing (including the
+fifth DJ tab), real keyboard selection (Enter/Space, ArrowLeft/Right,
+ArrowUp/Down, Home/End), exact tab/tabpanel relation, strict overflow
+(`scrollHeight > clientHeight`), and no competing scrollports among DMX/MIDI/
+OSC/Web/DJ descendants. The
+remote disclosure contract opens the Web disclosures, scrolls to the bottom
+`remote-standby` summary/control, and requires both visible and center
+hit-testable. Web/DJ behavior and bottom-scroll evidence are browser-contract
+evidence only, not native visual proof.
+
+Focused gates passed at all five supported viewports (`1920x1080`,
+`1920x1032`, `2048x1152`, `1366x768`, `1280x720`): Setup I/O selector/
+workbench and remote disclosure scroll contracts. `check:localization` passed
+`3577/3577 (100%)` with `0` unprotected labels. Frontend `tsc --noEmit` plus
+Vite build passed (`294` modules) without build warnings; JS syntax checks and
+`git diff --check` passed. Independent Terra xHigh final review is GO with
+P0/P1/P2 all `0`.
+
+The native gate initialized `vcvars64.bat -vcvars_ver=14.44`, pinned
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`, and verified that exact path
+first in `where.exe link.exe`. `pnpm --dir app tauri build --no-bundle`
+produced `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.21`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Exactly one responsive maximized exact-checkout Syndocal window was observed
+(PID `41912`). Native visual proof is limited to DMX/MIDI/OSC selector and
+workbench paths; Web/DJ five-way and bottom-scroll proof comes only from the
+browser contract and must not be promoted to native evidence.
+
+The token-free show structural preflight is read-only: it consumes no real
+token, launches no show process, changes no runtime/project/hardware state,
+and cannot advance HW-4. Its strict boundary excludes production `.sdc` and
+media, target-DJ-PC checkout/config/token/NIC, LAN/HELLO/ACK, Rekordbox,
+pedal/MIDI, reconnect/restart, three-display, and physical output proof.
+
+HW-4 remains exactly `0/12`. Real production `.sdc`/media, target-DJ-PC,
+LAN, and reconnect evidence remain unverified. Cleanup remains Plan-blocked
+after the latest post-`536742d` rerun: `Mode=Plan`, `Outcome=Blocked`,
+`Blocker=DirtyWorktree`, `Candidates=[]`, `PlannedLogicalBytes=0`, and
+`ReclaimedLogicalBytes=0`; no deletion was performed. The exact 12-path
+hardlink remediation was content-preserving with no content diff. The earlier
+`WriterOwnershipTopologyUnverifiable` result is historical for this checkpoint.

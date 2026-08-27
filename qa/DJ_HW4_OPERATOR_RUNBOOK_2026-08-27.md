@@ -29,12 +29,12 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. Never substitute an older source hash or an alpha.19-or-earlier
-process as the alpha.20 artifact identity.
+at execution time. Never substitute an older source hash or an alpha.20-or-earlier
+process as the alpha.21 artifact identity.
 
-### 1.1 Current alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
+### 1.1 Historical alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
-KDMX `1.2.0-alpha.20` is the current source/native checkpoint at exact commit
+KDMX `1.2.0-alpha.20` was the source/native checkpoint at exact commit
 `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The immutable Follow /
 Stage 2 source authority remains alpha.19 commit
 `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` and is carried forward without a
@@ -47,6 +47,63 @@ launched as exactly one responsive maximized window, but target-DJ-PC identity,
 configuration, token, NIC, and physical observations are still required before
 any row is accepted. HW-4 remains **0/12** until those observations are recorded;
 source or local native acceptance alone closes no hardware row.
+
+### 1.2 Current alpha.21 Setup I/O operator checkpoint — 2026-08-28
+
+The current I/O/native source checkpoint is committed and pushed at
+`536742db968b242164349c34dd6940fe3ced8e92`
+(`feat(setup): streamline the I/O operator workbench`), with product/file
+version `1.2.0-alpha.21`. Setup I/O presents five selectors (DMX, MIDI, OSC,
+Web Remote, DJ Link) and one full-width workbench body as the single scroll
+owner. Its selector row uses `role=tablist`/`role=tab`, current-selection
+semantics, and an exactly labelled `tabpanel`; the active workbench retains only
+a compact useful label/state instead of redundant selected-workbench summary
+text. Service and quick actions remain separate sibling
+controls with independent hit targets. Dedicated browser contracts prove real
+pointer hit-testing (including the fifth DJ tab),
+keyboard selection (Enter/Space, ArrowLeft/Right, ArrowUp/Down, Home/End),
+exact tab/tabpanel relation, strict overflow (`scrollHeight > clientHeight`),
+and no competing scrollports among DMX/MIDI/OSC/Web/DJ descendants. The
+remote-scroll contract opens Web
+disclosures and scrolls the bottom `remote-standby` summary/control, requiring
+visibility and a center hit-test. Web/DJ five-way and bottom-scroll proof is
+browser-contract evidence only, not native visual proof.
+
+Focused Setup I/O and remote-disclosure-scroll contracts passed at
+`1920x1080`, `1920x1032`, `2048x1152`, `1366x768`, and `1280x720`.
+Localization passed `3577/3577 (100%)` with `0` unprotected labels; frontend
+typecheck/Vite build (`294` modules), JS syntax checks, and `git diff --check`
+passed without first-party build warnings. Independent Terra xHigh final review
+is GO with P0/P1/P2 all `0`.
+
+The native gate used `vcvars64.bat -vcvars_ver=14.44`, pinned
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`, and verified that exact path
+first in `where.exe link.exe`. `pnpm --dir app tauri build --no-bundle`
+produced `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.21`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Exactly one responsive maximized exact-checkout Syndocal window was observed
+(PID `41912`). Native visual proof is limited to DMX/MIDI/OSC selector and
+workbench paths; browser-only Web/DJ proof must not be promoted to native.
+
+The separate token-free show structural preflight is read-only/authored-only
+and is committed and pushed at exact
+`b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. Tool/helper `node --check` and
+`node qa/tests/show-structural-preflight.mjs` passed; the valid fixture exits
+`0`, while legacy, missing, usage, and unknown inputs exit `2`. Independent
+Terra xHigh final review is GO with P0/P1/P2 all `0`. It consumes no real token,
+launches no show process, changes no runtime/project/hardware state, and cannot
+advance HW-4.
+It excludes production `.sdc`/media, target-DJ-PC checkout/config/token/NIC,
+LAN/HELLO/ACK, Rekordbox, pedal/MIDI, reconnect/restart, three-display, and
+physical-output proof. HW-4 remains exactly `0/12`; real production
+`.sdc`/media, target-DJ-PC, LAN, and reconnect evidence remain unverified.
+Cleanup is Plan-blocked after the latest post-`536742d` rerun:
+`Mode=Plan`, `Outcome=Blocked`, `Blocker=DirtyWorktree`, `Candidates=[]`,
+`PlannedLogicalBytes=0`, `ReclaimedLogicalBytes=0`; no deletion was performed.
+The exact 12-path hardlink remediation was content-preserving with no content
+diff.
 
 ## 2. DJ-PC controlled source
 
@@ -89,7 +146,7 @@ Branch name alone is insufficient. Do not use an installer, the blocked v1.1.3
 release, or a historical v1.1.5/v1.1.6/v1.1.7/v1.1.8 configuration as current
 acceptance evidence.
 
-The current KDMX source/native checkpoint is `1.2.0-alpha.20` at branch
+The preceding alpha.20 KDMX source/native checkpoint was `1.2.0-alpha.20` at branch
 `codex/syndocal-v1.2`, exact commit
 `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The DJ
 authority it carries is alpha.19 source commit
@@ -100,18 +157,18 @@ and a clean detached non-OneDrive worktree passed
 `pnpm --dir app run check:release` after staging the seven pinned runtime DLLs.
 Those are historical alpha.19 results, not an alpha.20 release pass.
 
-For alpha.20, frontend invokes are `422`, localization is `3582/3582`, and the
+For historical alpha.20 context, frontend invokes were `422`, localization was `3582/3582`, and the
 five-view Stage/Setup-I/O, stage labels, stage-live segments, TypeScript,
 frontend production, and zero-warning gates passed. This active checkout's
 tracked runtime-inventory hard-link alias still fails `check:release` before
-metadata validation by design and was not deleted or replaced. The
-alpha.20 `pnpm --dir app tauri build --no-bundle` artifact is Product/FileVersion
+metadata validation by design and was not deleted or replaced. The historical
+alpha.20 `pnpm --dir app tauri build --no-bundle` artifact was Product/FileVersion
 `1.2.0-alpha.20`, SHA-256
 `E8100D160158034A63901EA1BF775EC06A48EFF4D97CAF454D0378C0D6988D7D`; it was
-launched as exactly one responsive maximized window. Recheck that identity after
-the checkpoint commit/push and immediately before HW-4 execution. Any
-alpha.19-or-earlier artifact or PID is historical and must not be substituted
-for alpha.20 acceptance.
+launched as exactly one responsive maximized window. It must not be substituted
+for the current alpha.21 artifact. Immediately before HW-4 execution, recheck
+the alpha.21 identity recorded in section 1.2; every alpha.20-or-earlier artifact
+or PID is historical.
 The source UI now places Web Remote in the same
 connection disclosure stack as DJ Link/Endpoints without shrinking controls;
 the standard and dedicated Setup I/O browser contracts pass all five viewports,
@@ -121,10 +178,10 @@ the corrected candidate-only path now leaves the full draft and all `128` route
 signatures unchanged, invokes neither retired output command, and independently
 re-reviewed GO with P0/P1/P2 all zero. The earlier native visual capture belongs
 only to the historical alpha.18 artifact; its direct native refresh-button click
-also remains unconfirmed and neither observation accepts alpha.20. The current
-alpha.20 native Stage/I/O visual proof is recorded in the main pause handoff;
-native Web/DJ card switching remains unaccepted because UI Automation could not
-act on the cached element.
+also remains unconfirmed and neither observation accepts alpha.20. Current
+alpha.21 native Setup-I/O visual proof is recorded in section 1.2 and the main
+pause handoff; native Web/DJ card switching remains unaccepted because UI
+Automation could not act on the cached element.
 `app/dist` is freshly rebuilt (old stale
 marker `0`); the ignored peer `dist` remains stale but is outside this source
 acceptance checkpoint. These observations do not promote native or HW-4

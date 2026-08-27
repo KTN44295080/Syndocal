@@ -10,15 +10,24 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 Current product metadata is `1.2.0-alpha.21` on branch
 `codex/syndocal-v1.2`. Exact source checkpoint
-`03b70cd14a285a41c63cfd1d9b3bd89c025eec16` is the authoritative
-Stage/Setup-I/O alpha.20 checkpoint; its exact gates, native artifact,
+`536742db968b242164349c34dd6940fe3ced8e92` is the authoritative alpha.21
+Setup-I/O operator checkpoint; its exact gates, native artifact,
 known release blocker, and remaining hardware boundary are recorded in
-`qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md` section 29 and
-`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` section 52. The immediately
-preceding immutable source checkpoint is `1.2.0-alpha.19` at
-`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`; it implemented the current
+`qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md` section 31 and
+`qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md` section 54. The immediately
+preceding immutable source checkpoint is `1.2.0-alpha.20` at
+`03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The earlier
+`1.2.0-alpha.19` checkpoint at `41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f` implemented the current
 Follow-hold / Stage 2 DJ authority. The earlier `1.2.0-alpha.18` native evidence
-remains historical and is not rebound to alpha.20.
+remains historical and is not rebound to alpha.21.
+The separate token-free show structural preflight is committed and pushed at
+exact `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. Tool/helper `node --check`
+checks and `node qa/tests/show-structural-preflight.mjs` passed; the valid
+fixture exits `0`, while legacy, missing, usage, and unknown inputs exit `2`.
+Independent Terra xHigh final review is GO with P0/P1/P2 all `0`. This tool is
+read-only/authored-only, consumes no real token, launches no show process,
+changes no runtime/project/hardware state, and cannot advance HW-4; the matrix
+remains exactly `0/12`.
 At the alpha.18 checkpoint, the file later overwritten at
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` was
 Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
