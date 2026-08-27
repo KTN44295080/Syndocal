@@ -749,11 +749,10 @@ every physical gate remain open. The reviewed HW-4 execution companion is
 `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`; it checks no row by itself and HW-4
 remains **0/12**.
 
-## 2026-08-27 current uncommitted Follow-hold / Stage 2 authority
+## 2026-08-27 alpha.19 Follow-hold / Stage 2 source authority
 
-Current KDMX authority is base
-`e43edcf60dfa116d67bbb5ff096f4590df684964` plus the uncommitted Follow-hold and
-`+4`-only diff. It is source proof only: non-Cut hold-enabled Follow settles in
+Current KDMX source authority is committed/pushed `1.2.0-alpha.19` at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. Non-Cut hold-enabled Follow settles in
 exactly one source admission bar, then holds the destination's meter-aware first
 measure indefinitely at runtime. The authored loop/project snapshot is unchanged.
 Both `人生オーバー` C-melody and post-Follow holds release only through F13 loop-off;
@@ -771,9 +770,11 @@ beside `title` whenever `contentId` is absent. Follow can rebase DJ authority
 only after the exact same released session, receipt/pedal owner, and completed
 source/target pair; stale/abort/fault/mismatch does not rebase.
 
-Focused MSVC 14.44 tests passed engine hold `3/3`, helpers `3/3`, engine DJ Link
-`28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored; first-
-party warnings are `0`, with fmt/diff clean. Independent re-review is pending.
-The peer title checkpoint `262a484` is committed/pushed but its Stage 2 F13
-tranche is pending. The old alpha.18 PID `80264` is still running; no native or
-hardware claim changes and HW-4 remains **0/12**.
+Exact MSVC 14.44 serial locked-workspace evidence is `2622` pass / `0` fail /
+`15` intentional hardware-media ignores; Syndocal DJ Link is `119/0/1`, first-
+party warnings are `0`, and frontend/Mapping/Stage/Follow/fmt/diff gates pass.
+Independent Terra xHigh re-review is GO with P0/P1/P2 zero. The clean
+non-OneDrive release gate passed at exact `41faefc`. Peer v1.1.9 is
+committed/pushed at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, full suite
+`453/0/2`. The old alpha.18 PID `80264` is still running; alpha.19 native and
+hardware acceptance remain pending and HW-4 stays **0/12**.

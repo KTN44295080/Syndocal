@@ -8,11 +8,11 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current development metadata is `1.2.0-alpha.19` on branch
-`codex/syndocal-v1.2`, based on exact upstream
-`e43edcf60dfa116d67bbb5ff096f4590df684964`. Its Stage/Timeline changes and
-native artifact remain uncommitted and unaccepted until the alpha.19 gates,
-build, launch, commit, and push recorded below are complete. The preceding
+Current committed development checkpoint is `1.2.0-alpha.19` on branch
+`codex/syndocal-v1.2`, exact `HEAD`/upstream
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. Its Stage/Timeline source and the
+clean non-OneDrive release gate are accepted; its native artifact remains
+unaccepted until the alpha.19 build and launch gate recorded below completes. The preceding
 `1.2.0-alpha.18` remains the latest immutable native evidence checkpoint. It
 implements strict-v3 any-playing-deck DJ admission and position-preserving
 RELEASE: an already-running Timeline relinquishes DJ clock ownership and

@@ -2278,10 +2278,11 @@ acceptance is claimed. The running alpha.18 process remains the prior artifact.
 The next safe action is to finish the separate Follow-hold/F13 source tranches,
 advance the prerelease, and execute the exact native and HW-4 gates.
 
-## 51. 2026-08-27 current uncommitted Follow-hold / +4-only checkpoint
+## 51. 2026-08-27 alpha.19 Follow-hold / +4-only source checkpoint
 
-KDMX is based at `e43edcf60dfa116d67bbb5ff096f4590df684964` with an uncommitted
-protocol/engine/app backend diff. `hold_first_destination_measure=true` clean-
+KDMX `1.2.0-alpha.19` is committed and pushed at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`.
+`hold_first_destination_measure=true` clean-
 breaks arbitrary non-Cut authored Follow duration: settlement is exactly one
 source admission meter-aware bar, then success installs an indefinite runtime-
 only loop from destination `0` through its first meter-aware measure. Authored
@@ -2302,9 +2303,13 @@ rebases. Exact mapping is any-deck; the zero-positive fallback is fresh Deck 1,
 and multiple positives prefer Deck 1 then the lowest valid deck. The strict wire
 preserves actual `artist` with `title` whenever `contentId` is absent.
 
-MSVC 14.44 focused proof: engine hold `3/3`, helpers `3/3`, engine DJ Link
-`28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored;
-first-party warnings `0`, `cargo fmt --all -- --check`, and `git diff --check`
-passed. Independent re-review is pending. Peer title checkpoint `262a484` is
-committed/pushed, but the Stage 2 F13 peer tranche is pending. PID `80264` is the
-old alpha.18 artifact; no native/HW acceptance is claimed and HW-4 stays **0/12**.
+MSVC 14.44 focused proof includes Syndocal DJ Link `119` pass / `0` fail / `1`
+ignored. The exact serial locked-workspace gate is `2622` pass / `0` fail / `15`
+intentional hardware-media ignores with first-party warnings `0`; frontend
+build, 422 invokes, localization `3568/3568`, Mapping/Stage/Follow focused gates,
+fmt, and diff all pass. Independent Terra xHigh re-review is GO with P0/P1/P2
+zero. The clean non-OneDrive release gate passed at exact `41faefc` after
+frozen-lock dependency restoration and staging seven pinned FFmpeg DLLs. Peer
+v1.1.9 is committed/pushed at `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`
+with `453` pass / `0` fail / `2` skips. PID `80264` remains the old alpha.18
+artifact; alpha.19 native/HW acceptance is pending and HW-4 stays **0/12**.

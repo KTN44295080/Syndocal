@@ -1131,8 +1131,8 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## Current Follow-hold / Stage 2 authority — 2026-08-27
 
 This supersedes older current-source Stage 2 prose, not the labeled historical
-evidence above. KDMX currently has base
-`e43edcf60dfa116d67bbb5ff096f4590df684964` plus an uncommitted backend diff.
+evidence above. KDMX source is committed/pushed `1.2.0-alpha.19` at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`.
 With `hold_first_destination_measure=true`, non-Cut Follow settles over exactly
 one source admission measure, then installs a runtime-only, destination-meter
 first-measure indefinite loop. Both the `人生オーバー` C-melody and the post-Follow
@@ -1153,9 +1153,11 @@ deck. Strict wire identity still carries the actual `artist` with `title` when i
 does not carry `contentId`; title arbitration must never strip, synthesize, or
 substitute that artist identity.
 
-Focused MSVC 14.44 proof is engine hold `3/3`, pure hold helpers `3/3`, engine
-DJ Link `28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored,
-with zero first-party warnings, fmt, and diff checks. Independent re-review is
-pending. The external peer title checkpoint `262a484` is committed/pushed, but
-the Stage 2 F13 peer tranche is pending. No new native/HW claim is made; the old
-alpha.18 PID `80264` remains the prior artifact and HW-4 remains **0/12**.
+Exact MSVC 14.44 serial locked-workspace proof is `2622` pass / `0` fail / `15`
+intentional hardware-media ignores; Syndocal DJ Link is `119/0/1`, with zero
+first-party warnings, frontend/Mapping/Stage/Follow/fmt/diff gates. Independent
+Terra xHigh review is GO with P0/P1/P2 zero and the clean non-OneDrive release
+gate passed at exact `41faefc`. The external peer v1.1.9 is committed/pushed at
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, full suite `453/0/2`. No new
+native/HW claim is made yet; the old alpha.18 PID `80264` remains the prior
+artifact and HW-4 remains **0/12**.

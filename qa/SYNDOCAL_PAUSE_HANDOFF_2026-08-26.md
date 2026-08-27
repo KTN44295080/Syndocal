@@ -1371,10 +1371,10 @@ stopped. The next safe action is to finish, review, and commit the concurrent
 Follow-hold/F13 source work, advance to alpha.19, then replace that process only
 at the explicit native-build boundary and execute the physical matrix.
 
-## 28. 2026-08-27 current uncommitted Follow-hold / Stage 2 handoff
+## 28. 2026-08-27 alpha.19 Follow-hold / Stage 2 source handoff
 
-Base is `e43edcf60dfa116d67bbb5ff096f4590df684964` plus the uncommitted backend
-Follow-hold and `+4`-only diff. With hold enabled on non-Cut Follow, source
+Source is committed/pushed `1.2.0-alpha.19` at
+`41faefc054a3c37cef81cfd2e69b4e3f3df5ab4f`. With hold enabled on non-Cut Follow, source
 settlement is one admission meter-aware bar; only successful settlement installs
 the destination's first meter-aware measure as an indefinite runtime-only loop.
 There is no counter or automatic release. `人生オーバー` C-melody and post-Follow
@@ -1393,9 +1393,12 @@ exact mapping remains primary; only fresh Deck 1 resolves zero positives and
 multiple positives prefer Deck 1 then the lowest valid deck. The strict title
 wire retains its actual `artist` field whenever it uses title identity.
 
-Focused MSVC 14.44 results: engine hold `3/3`, helpers `3/3`, engine DJ Link
-`28/28`, protocol `1/1`, I/O `1/1`, Syndocal `119` pass / `1` ignored; warnings
-are `0` and fmt/diff checks pass. Independent re-review is pending. Peer title
-checkpoint `262a484` is committed/pushed but Stage 2 F13 is still pending. PID
-`80264` is the prior alpha.18 artifact; no native build, commit, push, or HW
-claim was made, and HW-4 remains **0/12**.
+Exact MSVC 14.44 serial locked-workspace results are `2622` pass / `0` fail /
+`15` intentional hardware-media ignores; Syndocal DJ Link is `119/0/1`, warnings
+are `0`, and frontend/Mapping/Stage/Follow/fmt/diff checks pass. Independent
+Terra xHigh review is GO with P0/P1/P2 zero. The clean non-OneDrive release gate
+passed at exact `41faefc`. Peer v1.1.9 is committed/pushed at
+`b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`, full suite `453/0/2`. PID `80264`
+is the prior alpha.18 artifact; the next safe action is the exact-path process
+termination followed by the required alpha.19 native build/launch gate. HW-4
+remains **0/12**.
