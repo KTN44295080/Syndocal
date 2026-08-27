@@ -2008,6 +2008,8 @@ const japaneseText: Record<string, string> = {
   "Move Timeline later": "タイムラインを後へ",
   "Follow to next Timeline": "次のタイムラインへFollow",
   "Auto-play next": "次を自動再生",
+  "Hold destination first measure until pedal release": "到達先の先頭1小節をペダル解除までループ",
+  "Transition uses one source measure, then the destination first measure loops until F13.": "転換は移行元の1小節で完了し、その後は到達先の先頭1小節をF13までループします。",
   "Video transition": "映像トランジション",
   "Ease in/out": "イーズイン／アウト",
   "Fade (ms)": "フェード（ms）",

@@ -199,14 +199,14 @@ and optional correlated `ownerDeck`, `ownerDeckId`, and `activePlaySessionId`.
 The three owner fields are all present together or all omitted; partial and
 explicit-null owner triples fail closed. `masterDeck` is not a supported alias
 or persisted compatibility field. `DJ_TIMELINE_STATE_REQUEST` has `{}` as its payload.
-`DJ_TIMELINE_BEAT_JUMP` carries `{ bars: -4|4, timelineId }`, and
+`DJ_TIMELINE_BEAT_JUMP` carries `{ bars: 4, timelineId }`, and
 `DJ_TIMELINE_LOOP_SET` carries `{ active: boolean, timelineId }`; both are
 Agent-to-Syndocal and ACKed.
 
 `DJ_TIMELINE_STATE` is Syndocal-to-Agent and authoritative. Its payload contains
 `state` (`idle`, `running`, `stopped`, `ended`, or `reset`), `loopActive`,
 `timelineId`, `positionBars`, `playSessionId`, `pedalOwner`, and the correlated
-`releaseEventId`. State Sync updates diagnostics and measured-loop truth only; it
+`releaseEventId`, plus required boolean `transitionHoldActive`. State Sync updates diagnostics and measured-loop truth only; it
 cannot fire a Track mapping or infer Release. Stage 2 F14 derives `active` as the
 logical inverse of the latest authoritative `loopActive` for that `timelineId`;
 neither the local LoopHalf action nor an ACK alone changes authority.
@@ -248,13 +248,18 @@ for current acceptance.
 Only an authoritative `DJ_TIMELINE_STATE` with `state:"running"`, the current
 `timelineId`/`playSessionId`, `pedalOwner:"timeline"`, and the correlated Release
 event enters Stage 2.
-There F13/F15 send `DJ_TIMELINE_BEAT_JUMP` with `bars:-4/+4`, while F14 sends the
-absolute `DJ_TIMELINE_LOOP_SET` value derived from the latest authoritative
-`loopActive`; Stage 2 never sends Rekordbox MIDI. This existing
-`timeline-control` beat-jump boundary is unchanged by v1.1.8 and remains to be
-confirmed directly; it is not the Stage 1 Release path. The requested F14 value is
-`active: !loopActive` for the current authoritative `timelineId`. An ACK does not
-replace that authority; the next `DJ_TIMELINE_STATE` broadcast does.
+There F13 requires authoritative `loopActive:true` and sends exactly one
+`DJ_TIMELINE_LOOP_SET { active:false }`; F14 sends the absolute
+`active: !loopActive` toggle, and F15 alone sends
+`DJ_TIMELINE_BEAT_JUMP { bars:4 }`. `bars:-4` is rejected. Stage 2 never sends
+Rekordbox MIDI. The exact running timeline/play-session/pedal-owner/Release
+correlation is required in both cases. A completed Follow rebase is additionally
+required only for the post-Follow destination target; the ordinary authored
+`人生オーバー` C-melody A-B loop does not depend on that rebase. Transitioning,
+Settling, abort, fault, stale, or mismatched state fails closed. The required
+`transitionHoldActive` boolean diagnoses the post-Follow hold but is not the F13
+admission gate. An ACK does not replace authoritative state; the next
+`DJ_TIMELINE_STATE` broadcast does.
 
 During initial connection, authoritative-snapshot wait, disconnect, and immediately
 after reconnect, Stage 1 F13/F14 local Rekordbox operation continues. The peer marks
@@ -372,14 +377,15 @@ diagnostic evidence without manufacturing ownership; a receiver that already has
 owner requires an exact triple match. Only the later re-announced `DJ_TRACK_ACTIVE`
 may run mapping admission on the restarted receiver.
 
-`DJ_TIMELINE_BEAT_JUMP` is accepted only for `bars:-4` or `bars:4` and the current
-authoritative `timelineId`; it is available only in Stage 2. `DJ_TIMELINE_LOOP_SET`
+`DJ_TIMELINE_BEAT_JUMP` is accepted only for `bars:4` and the current
+authoritative `timelineId`; `bars:-4` is retired and rejected. It is available
+only in Stage 2. `DJ_TIMELINE_LOOP_SET`
 is an absolute boolean request for that same authoritative `timelineId`, not another
-relative Loop Half operation. The peer derives F14's requested boolean from
-`DJ_TIMELINE_STATE.loopActive`, holds a second toggle while the first is pending, and
-discards the pending request on rejection, timeout, or send failure. A successful ACK
-still waits for the next authoritative timeline-state broadcast before changing the
-peer's state.
+relative Loop Half operation. F13 uses `active:false` only; F14 derives its
+requested boolean from `DJ_TIMELINE_STATE.loopActive`, holds a second toggle while
+the first is pending, and discards the pending request on rejection, timeout, or
+send failure. A successful ACK still waits for the next authoritative
+timeline-state broadcast before changing the peer's state.
 
 ## 7. Syndocal operator surface
 
@@ -469,10 +475,11 @@ hardware execution claim:
   measured-loop payloads, exact ACK outcomes, snapshot ordering, reconnect fencing,
   and Stage 1/Stage 2 fail-closed behavior.
 
-These tests statically cover the authoritative `running` gate, F13/F15 `-4/+4`
-beat-jump payloads, F14 absolute loop-set payload, no Stage 2 MIDI, invalid/missing
-state handling, typed ACK rejection/timeout, and disconnect fail-closed behavior.
-They do not close the physical pedal, rekordbox, wired-LAN, or two-process rows.
+These tests preserve historical peer proof for the prior F13/F15 `-4/+4`
+contract. They do not prove the current F13 loop-off/F14 toggle/F15 `+4` Stage 2
+boundary, whose peer tranche remains pending; invalid/missing state, typed ACK,
+and disconnect behavior remain fail-closed. Neither proof closes the physical
+pedal, rekordbox, wired-LAN, or two-process rows.
 
 ### SUPERSEDED / DO NOT EXECUTE — 2026-08-25 v1.1.3 peer source and distribution checkpoint (immutable historical release evidence)
 
@@ -601,7 +608,7 @@ denominator, which remains **19/71 (26.8%)**.
 | [ ] HW-4.5 | Stage 1 F14 local LoopHalf plus repeated absolute measured-loop `DJ_LOOP_STATE` reports | Required / Peer and hardware pending |
 | [ ] HW-4.6 | Current v1.1.8 Stage 1 F13: HPF CC16 start plus immediate exactly-once `DJ_RELEASE`, then ChannelFader CC17 fade, Cue/Stop, HPF/fader reset; local MIDI failures do not gate Release | Required / Peer and hardware pending |
 | [ ] HW-4.7 | Stage 1 F13 Release, ACK/rejection/timeout, and retry disposition | Required / Peer and hardware pending |
-| [ ] HW-4.8 | Stage 2 authoritative `running`; F13/F15 `-4/+4`, F14 absolute loop set, and no MIDI | Required / Peer and hardware pending |
+| [ ] HW-4.8 | Stage 2 authoritative `running` + exact correlation + `loopActive:true`; F13 exactly-once loop-off for ordinary C-melody or post-Follow hold, strict `transitionHoldActive` diagnostic only, F14 absolute toggle, F15 `+4`, no `-4` or MIDI | Required / Peer tranche and hardware pending |
 | [ ] HW-4.9 | Disconnect/local Stage 1 operation, reconnect State Sync, and Stage 2 fail-closed behavior | Required / Peer and hardware pending |
 | [ ] HW-4.10 | Same-session event dedupe and replay safety | Required / Peer and hardware pending |
 | [ ] HW-4.11 | App restart and next-show reuse | Required / Peer and hardware pending |
@@ -1120,3 +1127,35 @@ all five Setup I/O viewport gates passed with zero first-party warnings.
 Independent Terra xHigh review is GO after the local-error/draft-retention P1
 was fixed. This is source/UI evidence only: no alpha.19 native artifact exists,
 the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
+
+## Current Follow-hold / Stage 2 authority — 2026-08-27
+
+This supersedes older current-source Stage 2 prose, not the labeled historical
+evidence above. KDMX currently has base
+`e43edcf60dfa116d67bbb5ff096f4590df684964` plus an uncommitted backend diff.
+With `hold_first_destination_measure=true`, non-Cut Follow settles over exactly
+one source admission measure, then installs a runtime-only, destination-meter
+first-measure indefinite loop. Both the `人生オーバー` C-melody and the post-Follow
+destination use F13 loop-off; there is no repeat count or automatic release.
+`transitionHoldActive` is a required authoritative boolean which diagnoses only
+the post-Follow hold; it is not the F13 gate. F13 instead requires the exact
+running timeline/play-session/pedal-owner/Release correlation and authoritative
+`loopActive:true`. Completed Follow rebase is required only for the destination
+hold, not for the ordinary C-melody loop.
+
+The completed Follow rebase is valid only for the same released play session,
+exact Release receipt/pedal owner, and exact completed source/target pair. Any
+abort, fault, stale generation, target/session mismatch, or missing receipt does
+not rebase. Track admission remains any-deck for a fresh exact mapping; the
+external arbitration rule is one positive deck, otherwise only a fresh playing
+Deck 1 fallback, with multiple positives preferring Deck 1 then the lowest valid
+deck. Strict wire identity still carries the actual `artist` with `title` when it
+does not carry `contentId`; title arbitration must never strip, synthesize, or
+substitute that artist identity.
+
+Focused MSVC 14.44 proof is engine hold `3/3`, pure hold helpers `3/3`, engine
+DJ Link `28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored,
+with zero first-party warnings, fmt, and diff checks. Independent re-review is
+pending. The external peer title checkpoint `262a484` is committed/pushed, but
+the Stage 2 F13 peer tranche is pending. No new native/HW claim is made; the old
+alpha.18 PID `80264` remains the prior artifact and HW-4 remains **0/12**.

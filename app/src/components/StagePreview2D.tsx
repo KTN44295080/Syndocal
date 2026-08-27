@@ -204,7 +204,6 @@ export function StagePreview2D(props: StagePreview2DProps) {
     return planStageFixtureLabels({
       fixtures: props.fixtures,
       viewport: { x: view.x, z: view.z, width: view.width, height: view.height },
-      zoom: stageViewBoxSize / Math.max(view.width, view.height),
       showLabels: props.showLabels !== false,
       pickedFixtureId: props.selectedFixtureId,
       hoveredFixtureId: hoveredFixtureId(),

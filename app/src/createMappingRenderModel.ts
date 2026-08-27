@@ -43,13 +43,14 @@ import type {
   VideoOutputSummary,
 } from "./types";
 import { mappingVideoOutputCornerGain, mappingVideoOutputCorners } from "./videoOutputMapping";
+import type { MappingViewportBox } from "./createMappingViewportModel";
 
 interface MappingRenderModelOptions {
   mappingDrag: Accessor<MappingDragState | null>;
   mappingShowGeometry: Accessor<boolean>;
   mappingFilteredFixtures: Accessor<PatchedFixtureSummary[]>;
   liveFixtures: Accessor<PatchedFixtureSummary[]>;
-  mappingViewportBox: Accessor<{ x: number; z: number; size: number }>;
+  mappingViewportBox: Accessor<MappingViewportBox>;
   dmxPreviews: Accessor<DmxUniversePreview[]>;
   stageWorldBounds: Accessor<StageWorldBounds>;
   selectedMappingFixtureIdSet: Accessor<Set<number>>;
@@ -404,8 +405,8 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     const viewport = {
       x: viewportBox.x,
       z: viewportBox.z,
-      width: viewportBox.size,
-      height: viewportBox.size,
+      width: viewportBox.width,
+      height: viewportBox.height,
     };
     const liveIds = new Set<number>();
     const fixtures = baseFixtures.map((base) => {

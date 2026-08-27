@@ -2972,6 +2972,8 @@ export interface TimelineFollowSummary {
   preroll_ms: number;
   trans_cadence_bars: number;
   fault_policy: TimelineFollowFaultPolicy;
+  /** Hold the destination's first measure until the operator releases the pedal. */
+  hold_first_destination_measure?: boolean;
 }
 
 export type TimelineLoopRuntimeStatus = "disabled" | "armed" | "looping";

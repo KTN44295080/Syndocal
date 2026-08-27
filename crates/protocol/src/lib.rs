@@ -4040,6 +4040,10 @@ pub struct TimelineFollowSummary {
     /// legacy behavior (derive targets from `trans_cadence_bars`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trans_target_measures: Vec<u64>,
+    /// Hold a successfully settled destination in one runtime-only first
+    /// measure loop. Legacy authored Follow data remains false.
+    #[serde(default)]
+    pub hold_first_destination_measure: bool,
     #[serde(default)]
     pub fault_policy: TimelineFollowFaultPolicy,
 }
@@ -5102,6 +5106,9 @@ pub struct TimelineFollowRuntimeSummary {
     pub progress_millis: u16,
     #[serde(default)]
     pub fault: Option<String>,
+    /// Runtime-only; this is not written into authored Timeline data.
+    #[serde(default)]
+    pub transition_hold_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<TimelineFollowSettlementSummary>,
 }
@@ -5134,6 +5141,8 @@ pub struct TimelineFollowRuntimeStatusSnapshot {
     pub progress_millis: u16,
     #[serde(default)]
     pub fault: Option<String>,
+    #[serde(default)]
+    pub transition_hold_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<TimelineFollowSettlementSummary>,
 }
@@ -5152,6 +5161,7 @@ impl TimelineFollowRuntimeStatusSnapshot {
             duration_ms: runtime.duration_ms,
             progress_millis: runtime.progress_millis,
             fault: runtime.fault.clone(),
+            transition_hold_active: runtime.transition_hold_active,
             settlement: runtime.settlement.clone(),
         }
     }
@@ -8277,6 +8287,10 @@ pub struct DjLinkTimelineState {
     pub state: DjLinkTimelineStateValue,
     #[serde(rename = "loopActive")]
     pub loop_active: bool,
+    /// Strict runtime truth for the post-Follow, pedal-released destination
+    /// hold. This is deliberately distinct from an authored A-B loop.
+    #[serde(rename = "transitionHoldActive")]
+    pub transition_hold_active: bool,
     #[serde(rename = "timelineId")]
     pub timeline_id: String,
     #[serde(rename = "positionBars")]
@@ -8678,8 +8692,8 @@ impl DjLinkEnvelope {
             }
             DjLinkMessageType::TimelineBeatJump => {
                 let payload: DjLinkTimelineBeatJumpPayload = parse_dj_link_payload(&self.payload)?;
-                if !matches!(payload.bars, -4 | 4) {
-                    return Err("DJ timeline beat jump must be exactly -4 or 4 bars".to_string());
+                if payload.bars != 4 {
+                    return Err("DJ timeline beat jump must be exactly +4 bars".to_string());
                 }
                 validate_dj_link_string(&payload.timeline_id, "timelineId")?;
                 validate_dj_link_required_identity(&payload.play_session_id, "playSessionId")?;
@@ -13029,6 +13043,7 @@ mod tests {
                 preroll_ms: 500,
                 trans_cadence_bars: 4,
                 trans_target_measures: Vec::new(),
+                hold_first_destination_measure: false,
                 fault_policy: super::TimelineFollowFaultPolicy::Hold,
             }),
             guide_enabled: true,
@@ -13108,6 +13123,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         super::validate_timeline_bank(&snapshot, &[]).unwrap();
@@ -13154,6 +13170,7 @@ mod tests {
                 duration_ms: 1_000,
                 progress_millis: 250,
                 fault: None,
+                transition_hold_active: false,
                 settlement: Some(super::TimelineFollowSettlementSummary {
                     started_at_ms: 9_000,
                     deadline_ms: 11_000,
@@ -13756,6 +13773,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         assert!(super::validate_timeline_bank(&snapshot, &[])
@@ -13788,6 +13806,7 @@ mod tests {
                 preroll_ms: super::TIMELINE_FOLLOW_MAX_PREROLL_MS,
                 trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
                 trans_target_measures: Vec::new(),
+                hold_first_destination_measure: false,
                 fault_policy: super::TimelineFollowFaultPolicy::Cut,
             }),
             ..Default::default()
@@ -13874,6 +13893,7 @@ mod tests {
                 preroll_ms: 0,
                 trans_cadence_bars: 4,
                 trans_target_measures: vec![149, 151, 153, 155],
+                hold_first_destination_measure: false,
                 fault_policy: super::TimelineFollowFaultPolicy::Hold,
             }),
             ..Default::default()
@@ -17831,6 +17851,19 @@ mod tests {
                 super::DjLinkEnvelope::parse_json(&envelope_text(message_type, unknown)).is_err()
             );
         }
+
+        for bars in [-4, 3] {
+            let error = super::DjLinkEnvelope::parse_json(&envelope_text(
+                "DJ_TIMELINE_BEAT_JUMP",
+                serde_json::json!({
+                    "bars": bars,
+                    "timelineId": "show-1",
+                    "playSessionId": "play-1",
+                }),
+            ))
+            .unwrap_err();
+            assert_eq!(error, "DJ timeline beat jump must be exactly +4 bars");
+        }
     }
 
     #[test]
@@ -18279,6 +18312,7 @@ mod tests {
             sequence: 3,
             state: super::DjLinkTimelineStateValue::Running,
             loop_active: false,
+            transition_hold_active: false,
             timeline_id: "show-1".to_string(),
             position_bars: 16,
             play_session_id: Some("play-1".to_string()),
@@ -18294,6 +18328,7 @@ mod tests {
             "sequence",
             "state",
             "loopActive",
+            "transitionHoldActive",
             "timelineId",
             "positionBars",
             "playSessionId",
@@ -19025,6 +19060,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         }
     }

@@ -202,7 +202,8 @@ export interface MappingViewportPanDragState {
   startClientY: number;
   startCenterX: number;
   startCenterZ: number;
-  viewBoxSize: number;
+  viewBoxWidth: number;
+  viewBoxHeight: number;
   rectWidth: number;
   rectHeight: number;
 }

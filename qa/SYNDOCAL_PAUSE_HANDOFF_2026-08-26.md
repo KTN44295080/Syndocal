@@ -1370,3 +1370,32 @@ found the prior exact-checkout alpha.18 PID `80264` still listening on
 stopped. The next safe action is to finish, review, and commit the concurrent
 Follow-hold/F13 source work, advance to alpha.19, then replace that process only
 at the explicit native-build boundary and execute the physical matrix.
+
+## 28. 2026-08-27 current uncommitted Follow-hold / Stage 2 handoff
+
+Base is `e43edcf60dfa116d67bbb5ff096f4590df684964` plus the uncommitted backend
+Follow-hold and `+4`-only diff. With hold enabled on non-Cut Follow, source
+settlement is one admission meter-aware bar; only successful settlement installs
+the destination's first meter-aware measure as an indefinite runtime-only loop.
+There is no counter or automatic release. `人生オーバー` C-melody and post-Follow
+holds both release via F13 loop-off; F14 is the absolute-loop toggle and F15 is
+the sole `+4` jump. `-4` and Stage 2 MIDI fail closed. The required outbound
+state boolean `transitionHoldActive` diagnoses the post-Follow hold but is not
+the F13 gate. F13 requires exact running timeline/play-session/pedal-owner/Release
+correlation plus authoritative `loopActive:true`; completed Follow rebase is
+additionally required only for post-Follow destination authority, not for the
+ordinary C-melody loop.
+
+DJ authority may rebase only on the same released play session, exact Release
+receipt/pedal owner, and exact completed Follow source/target pair. Abort, fault,
+stale generation, or target/session/receipt mismatch never rebases. Any-deck
+exact mapping remains primary; only fresh Deck 1 resolves zero positives and
+multiple positives prefer Deck 1 then the lowest valid deck. The strict title
+wire retains its actual `artist` field whenever it uses title identity.
+
+Focused MSVC 14.44 results: engine hold `3/3`, helpers `3/3`, engine DJ Link
+`28/28`, protocol `1/1`, I/O `1/1`, Syndocal `119` pass / `1` ignored; warnings
+are `0` and fmt/diff checks pass. Independent re-review is pending. Peer title
+checkpoint `262a484` is committed/pushed but Stage 2 F13 is still pending. PID
+`80264` is the prior alpha.18 artifact; no native build, commit, push, or HW
+claim was made, and HW-4 remains **0/12**.

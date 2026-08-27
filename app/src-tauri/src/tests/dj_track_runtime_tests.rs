@@ -1,6 +1,448 @@
 use super::*;
 
 #[test]
+fn completed_follow_rebases_only_the_exact_released_stage2_receipt() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut runtime = DjLinkRuntime::from_coordinator(&coordinator);
+    runtime.state_generation = 7;
+    runtime.track_active = true;
+    runtime.released = true;
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.pedal_owner = Some("timeline".to_string());
+    runtime.release_event_id = Some("release-exact".to_string());
+    runtime.play_session_id = Some("play-exact".to_string());
+    runtime.timeline_id = Some("801".to_string());
+
+    let completed_snapshot = || EngineSnapshot {
+        timeline: TimelineSnapshot {
+            id: TimelineId(802),
+            playing: true,
+            follow_runtime: protocol::TimelineFollowRuntimeSummary {
+                generation: 19,
+                status: protocol::TimelineFollowRuntimeStatus::Idle,
+                outcome: Some(protocol::TimelineFollowOutcome::Completed),
+                source_timeline_id: Some(TimelineId(801)),
+                target_timeline_id: Some(TimelineId(802)),
+                transition_hold_active: true,
+                ..protocol::TimelineFollowRuntimeSummary::default()
+            },
+            loop_runtime: protocol::TimelineLoopRuntimeSummary {
+                generation: 20,
+                status: protocol::TimelineLoopRuntimeStatus::Looping,
+                a_ms: Some(0),
+                b_ms: Some(1_000),
+                ..protocol::TimelineLoopRuntimeSummary::default()
+            },
+            ..TimelineSnapshot::default()
+        },
+        ..EngineSnapshot::default()
+    };
+
+    let snapshot = completed_snapshot();
+    assert!(dj_track_runtime::rebase_released_follow_completion(
+        &mut runtime,
+        &snapshot,
+        Some("802"),
+        Some("play-exact"),
+    ));
+    assert_eq!(runtime.timeline_id.as_deref(), Some("802"));
+    assert_eq!(runtime.state_generation, 8);
+    assert!(runtime.loop_active);
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(&runtime, "802", "play-exact", &snapshot),
+        None
+    );
+    assert_eq!(
+        dj_track_runtime::timeline_loop_set_authority_rejection(&runtime, &snapshot, false),
+        None
+    );
+    assert_eq!(
+        dj_track_runtime::timeline_loop_set_authority_rejection(&runtime, &snapshot, true),
+        Some("timeline_loop_state_unchanged")
+    );
+    let mut mismatched_loop_runtime = runtime.clone();
+    mismatched_loop_runtime.loop_active = false;
+    assert_eq!(
+        dj_track_runtime::timeline_loop_set_authority_rejection(
+            &mismatched_loop_runtime,
+            &snapshot,
+            false,
+        ),
+        Some("timeline_loop_state_mismatch")
+    );
+    let state = dj_link_timeline_state_from_snapshot(&runtime, &snapshot, "state", 1);
+    assert!(state.transition_hold_active);
+
+    let mut settling = snapshot.clone();
+    settling.timeline.follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Settling;
+    settling.timeline.follow_runtime.outcome = None;
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(&runtime, "802", "play-exact", &settling),
+        Some("timeline_follow_settling")
+    );
+
+    // The exact completion is idempotent; a lost outbound state reply never
+    // advances the runtime generation or replays the rebase.
+    assert!(!dj_track_runtime::rebase_released_follow_completion(
+        &mut runtime,
+        &snapshot,
+        Some("802"),
+        Some("play-exact"),
+    ));
+    assert_eq!(runtime.state_generation, 8);
+
+    fn fault_outcome(snapshot: &mut EngineSnapshot) {
+        snapshot.timeline.follow_runtime.outcome = Some(protocol::TimelineFollowOutcome::Fault);
+    }
+    fn mismatched_target(snapshot: &mut EngineSnapshot) {
+        snapshot.timeline.id = TimelineId(999);
+    }
+    fn stale_generation(snapshot: &mut EngineSnapshot) {
+        snapshot.timeline.follow_runtime.generation = 0;
+    }
+    for mutate in [
+        fault_outcome as fn(&mut EngineSnapshot),
+        mismatched_target,
+        stale_generation,
+    ] {
+        let mut candidate = DjLinkRuntime::from_coordinator(&coordinator);
+        candidate.state_generation = 7;
+        candidate.track_active = true;
+        candidate.released = true;
+        candidate.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+        candidate.pedal_owner = Some("timeline".to_string());
+        candidate.release_event_id = Some("release-exact".to_string());
+        candidate.play_session_id = Some("play-exact".to_string());
+        candidate.timeline_id = Some("801".to_string());
+        let mut rejected = completed_snapshot();
+        mutate(&mut rejected);
+        let before = candidate.clone();
+        assert!(!dj_track_runtime::rebase_released_follow_completion(
+            &mut candidate,
+            &rejected,
+            Some("802"),
+            Some("play-exact"),
+        ));
+        assert_eq!(candidate, before);
+    }
+
+    let mut wrong_session = DjLinkRuntime::from_coordinator(&coordinator);
+    wrong_session.state_generation = 7;
+    wrong_session.track_active = true;
+    wrong_session.released = true;
+    wrong_session.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    wrong_session.pedal_owner = Some("timeline".to_string());
+    wrong_session.release_event_id = Some("release-exact".to_string());
+    wrong_session.play_session_id = Some("play-exact".to_string());
+    wrong_session.timeline_id = Some("801".to_string());
+    let before = wrong_session.clone();
+    assert!(!dj_track_runtime::rebase_released_follow_completion(
+        &mut wrong_session,
+        &completed_snapshot(),
+        Some("802"),
+        Some("other-session"),
+    ));
+    assert_eq!(wrong_session, before);
+}
+
+#[test]
+fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() {
+    let source_timeline_id = TimelineId(9_101);
+    let target_timeline_id = TimelineId(9_102);
+    let play_session_id = "follow-hold-play-session";
+    let release_event_id = "follow-hold-release";
+    let loop_off_event_id = "follow-hold-loop-off";
+    let source_timeline_id_string = source_timeline_id.0.to_string();
+    let target_timeline_id_string = target_timeline_id.0.to_string();
+    let source_duration_ms = 1_000;
+
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut source = TimelineSnapshot {
+        id: source_timeline_id,
+        label: "Follow hold source".to_string(),
+        phases: vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(9_103),
+            label: "Follow hold source body".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: source_duration_ms,
+        }],
+        duration_ms: source_duration_ms,
+        ..TimelineSnapshot::default()
+    };
+    source.follow = Some(TimelineFollowSummary {
+        enabled: true,
+        next_timeline_id: target_timeline_id,
+        duration: VideoClipTakeDuration::milliseconds(1),
+        curve: VideoLayerTransitionCurve::Linear,
+        video_kind: VideoClipTakeKind::Crossfade,
+        lighting_policy: protocol::TimelineFollowLightingPolicy::HoldThenCut,
+        destination_bpm: None,
+        preroll_ms: 0,
+        trans_cadence_bars: 4,
+        trans_target_measures: Vec::new(),
+        hold_first_destination_measure: true,
+        fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+    });
+    let target = TimelineSnapshot {
+        id: target_timeline_id,
+        label: "Follow hold target".to_string(),
+        phases: vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(9_104),
+            label: "Follow hold target body".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 10_000,
+        }],
+        duration_ms: 10_000,
+        ..TimelineSnapshot::default()
+    };
+    engine
+        .apply_timeline_bank_published(vec![source, target], source_timeline_id, true)
+        .unwrap();
+
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut mapping = dj_link_test_mapping(
+        "follow-hold-mapping",
+        protocol::DjTrackSelector {
+            content_id: Some("follow-hold-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+    );
+    mapping.timeline_id = source_timeline_id;
+    coordinator.mappings.dj_track_triggers = vec![mapping];
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+    let coordinator = Mutex::new(coordinator);
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    let dispatch = |message_type, sequence, event_id, payload| {
+        dispatch_dj_link_event(
+            dj_link_test_envelope(message_type, sequence, event_id, payload),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        )
+    };
+
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TrackActive,
+            1,
+            "follow-hold-active",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "contentId": "follow-hold-content",
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 120.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
+                "isPlaying": true,
+                "startedAt": "2026-08-27T00:00:00Z",
+                "playSessionId": play_session_id,
+                "loop": null
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::Release,
+            2,
+            release_event_id,
+            json!({
+                "state": "released",
+                "timelineId": source_timeline_id_string,
+                "playSessionId": play_session_id
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    let released_generation = runtime.lock().unwrap().state_generation;
+    assert_eq!(
+        runtime.lock().unwrap().timeline_id.as_deref(),
+        Some(source_timeline_id_string.as_str())
+    );
+    assert_eq!(
+        runtime.lock().unwrap().release_event_id.as_deref(),
+        Some(release_event_id)
+    );
+    assert_eq!(
+        runtime.lock().unwrap().play_session_id.as_deref(),
+        Some(play_session_id)
+    );
+
+    engine
+        .send(EngineCommand::SeekTimeline(source_duration_ms - 1))
+        .unwrap();
+    let target_snapshot = {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let snapshot = engine.snapshot();
+            if snapshot.timeline.id == target_timeline_id
+                && snapshot.timeline.playing
+                && snapshot.timeline.follow_runtime.status
+                    == protocol::TimelineFollowRuntimeStatus::Idle
+                && snapshot.timeline.follow_runtime.outcome
+                    == Some(protocol::TimelineFollowOutcome::Completed)
+                && snapshot.timeline.follow_runtime.transition_hold_active
+            {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Follow did not settle into the target hold: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    assert_eq!(
+        target_snapshot.timeline.follow_runtime.source_timeline_id,
+        Some(source_timeline_id)
+    );
+    assert_eq!(
+        target_snapshot.timeline.follow_runtime.target_timeline_id,
+        Some(target_timeline_id)
+    );
+    assert_eq!(
+        target_snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Looping
+    );
+    assert_eq!(
+        runtime.lock().unwrap().timeline_id.as_deref(),
+        Some(source_timeline_id_string.as_str())
+    );
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(
+            &runtime.lock().unwrap(),
+            &target_timeline_id_string,
+            play_session_id,
+            &target_snapshot,
+        ),
+        Some("timeline_identity_mismatch")
+    );
+
+    let loop_off_outcome = dispatch(
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        3,
+        loop_off_event_id,
+        json!({
+            "timelineId": target_timeline_id_string,
+            "playSessionId": play_session_id,
+            "active": false
+        }),
+    );
+    let (loop_off_state, loop_off_generation) = match loop_off_outcome {
+        DjLinkDispatchOutcome::TimelineState {
+            state,
+            state_generation,
+        } => (state, state_generation),
+        outcome => panic!("Follow hold loop-off should be accepted: {outcome:?}"),
+    };
+    assert_eq!(loop_off_generation, released_generation + 2);
+    assert_eq!(loop_off_state.timeline_id, target_timeline_id_string);
+    assert_eq!(
+        loop_off_state.play_session_id.as_deref(),
+        Some(play_session_id)
+    );
+    assert!(!loop_off_state.loop_active);
+    assert!(!loop_off_state.transition_hold_active);
+
+    let after_loop_off = engine.snapshot();
+    assert_eq!(after_loop_off.timeline.id, target_timeline_id);
+    assert!(after_loop_off.timeline.playing);
+    assert!(
+        !after_loop_off
+            .timeline
+            .follow_runtime
+            .transition_hold_active
+    );
+    assert_eq!(
+        after_loop_off.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+    let runtime_after_loop_off = runtime.lock().unwrap().clone();
+    assert_eq!(
+        runtime_after_loop_off.timeline_id.as_deref(),
+        Some(target_timeline_id_string.as_str())
+    );
+    assert_eq!(
+        runtime_after_loop_off.release_event_id.as_deref(),
+        Some(release_event_id)
+    );
+    assert_eq!(
+        runtime_after_loop_off.play_session_id.as_deref(),
+        Some(play_session_id)
+    );
+    assert!(!runtime_after_loop_off.loop_active);
+    assert_eq!(
+        runtime_after_loop_off.last_event_id.as_deref(),
+        Some(loop_off_event_id)
+    );
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(
+            &runtime_after_loop_off,
+            target_timeline_id_string.as_str(),
+            play_session_id,
+            &after_loop_off,
+        ),
+        None
+    );
+
+    let before_stale_loop_off_engine = engine.snapshot();
+    let before_stale_loop_off_runtime = runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            4,
+            "follow-hold-stale-loop-off",
+            json!({
+                "timelineId": target_timeline_id_string,
+                "playSessionId": play_session_id,
+                "active": false
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "timeline_loop_state_unchanged"
+    ));
+    assert_eq!(engine.snapshot(), before_stale_loop_off_engine);
+    assert_eq!(*runtime.lock().unwrap(), before_stale_loop_off_runtime);
+
+    let position_before_advance = after_loop_off.timeline.position_ms;
+    std::thread::sleep(Duration::from_millis(100));
+    let advanced_snapshot = engine.snapshot();
+    assert!(
+        advanced_snapshot.timeline.position_ms > position_before_advance,
+        "target Timeline did not advance after hold release: before={position_before_advance}, after={}",
+        advanced_snapshot.timeline.position_ms
+    );
+    assert_eq!(advanced_snapshot.timeline.id, target_timeline_id);
+    assert!(advanced_snapshot.timeline.playing);
+    assert!(
+        !advanced_snapshot
+            .timeline
+            .follow_runtime
+            .transition_hold_active
+    );
+    assert_eq!(
+        advanced_snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+}
+
+#[test]
 fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
     let engine = EngineHandle::start_for_tests(DmxOutputConfig {
         enabled: false,
@@ -1387,9 +1829,8 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         before_jump.timeline.position_ms
     );
 
-    // Authority admission must not turn an engine-side validation failure
-    // into a runtime projection.  A valid Release is present here, but the
-    // authored beat-grid rejects any bar count other than +/-4.
+    // The retired -4 command is rejected before engine admission, so neither
+    // clock nor runtime authority can mutate after a valid release.
     let before_engine_rejection = engine.snapshot();
     let before_runtime_rejection = runtime.lock().unwrap().clone();
     assert!(matches!(
@@ -1397,15 +1838,15 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             &runtime,
             protocol::DjLinkMessageType::TimelineBeatJump,
             7,
-            "stage2-engine-rejected-beat",
+            "stage2-retired-minus-four",
             json!({
                 "timelineId": timeline_id,
                 "playSessionId": play_session_id,
-                "bars": 3
+                "bars": -4
             }),
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. }
-            if code == "engine_publication_rejected"
+            if code == "invalid_timeline_beat_jump_payload"
     ));
     assert_eq!(engine.snapshot(), before_engine_rejection);
     assert_eq!(*runtime.lock().unwrap(), before_runtime_rejection);

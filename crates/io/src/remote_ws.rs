@@ -3031,6 +3031,7 @@ struct DjLinkEngineObservation {
     position_ms: u64,
     duration_ms: u64,
     loop_active: bool,
+    transition_hold_active: bool,
     bpm_millis: u32,
 }
 
@@ -3040,6 +3041,7 @@ impl DjLinkEngineObservation {
             snapshot.timeline.loop_runtime.status,
             protocol::TimelineLoopRuntimeStatus::Disabled
         );
+        let transition_hold_active = snapshot.timeline.follow_runtime.transition_hold_active;
         let bpm_millis = if snapshot.clock.bpm.is_finite() && snapshot.clock.bpm > 0.0 {
             (snapshot.clock.bpm * 1_000.0)
                 .round()
@@ -3053,6 +3055,7 @@ impl DjLinkEngineObservation {
             position_ms: snapshot.timeline.position_ms,
             duration_ms: snapshot.timeline.duration_ms,
             loop_active,
+            transition_hold_active,
             bpm_millis,
         }
     }
@@ -3097,14 +3100,20 @@ impl DjLinkEngineObservation {
     fn semantic_key(
         self,
         previous: Option<Self>,
-    ) -> (u64, protocol::DjLinkTimelineStateValue, bool) {
-        (self.timeline_id, self.state(previous), self.loop_active)
+    ) -> (u64, protocol::DjLinkTimelineStateValue, bool, bool) {
+        (
+            self.timeline_id,
+            self.state(previous),
+            self.loop_active,
+            self.transition_hold_active,
+        )
     }
 }
 
 fn dj_link_state_truth_equal(left: &DjLinkTimelineState, right: &DjLinkTimelineState) -> bool {
     left.state == right.state
         && left.loop_active == right.loop_active
+        && left.transition_hold_active == right.transition_hold_active
         && left.timeline_id == right.timeline_id
         && left.position_bars == right.position_bars
         && left.play_session_id == right.play_session_id
@@ -4492,6 +4501,7 @@ impl RemoteWsServer {
                                     sequence: 1,
                                     state: current.state(previous_dj_observation),
                                     loop_active: current.loop_active,
+                                    transition_hold_active: current.transition_hold_active,
                                     timeline_id: current.timeline_id.to_string(),
                                     position_bars: current.position_bars(),
                                     play_session_id: None,
@@ -5521,8 +5531,8 @@ fn send_dj_link_ack<S: Read + Write>(
 }
 
 /// The outbound timeline-state frame is the exact v3 envelope whose payload
-/// carries exactly `state`, `loopActive`, `timelineId`, `positionBars`,
-/// `playSessionId`, `pedalOwner`, and `releaseEventId`.
+/// carries exactly `state`, `loopActive`, `transitionHoldActive`, `timelineId`,
+/// `positionBars`, `playSessionId`, `pedalOwner`, and `releaseEventId`.
 fn dj_link_state_wire(
     state: &DjLinkTimelineState,
     agent_id: &str,
@@ -5539,6 +5549,7 @@ fn dj_link_state_wire(
         "payload": {
             "state": state.state,
             "loopActive": state.loop_active,
+            "transitionHoldActive": state.transition_hold_active,
             "timelineId": state.timeline_id,
             "positionBars": state.position_bars,
             "playSessionId": state.play_session_id,
@@ -6971,6 +6982,7 @@ mod tests {
                         sequence: envelope.sequence,
                         state: protocol::DjLinkTimelineStateValue::Idle,
                         loop_active: false,
+                        transition_hold_active: false,
                         timeline_id: "1".to_string(),
                         position_bars: 0,
                         play_session_id: None,
@@ -9866,6 +9878,7 @@ mod tests {
                         sequence: envelope.sequence,
                         state: protocol::DjLinkTimelineStateValue::Running,
                         loop_active: false,
+                        transition_hold_active: false,
                         timeline_id: "show-1".to_string(),
                         position_bars: 16,
                         play_session_id: Some("play-1".to_string()),
@@ -9969,6 +9982,7 @@ mod tests {
         assert_eq!(state["agentId"], DJ_V3_AGENT);
         assert_eq!(state["sessionId"], "snapshot-order-session");
         assert_eq!(state["payload"]["state"], "running");
+        assert_eq!(state["payload"]["transitionHoldActive"], false);
         assert_eq!(state["payload"]["timelineId"], "show-1");
         assert_eq!(state["payload"]["positionBars"], 16);
         assert_eq!(state["payload"]["playSessionId"], "play-1");
@@ -9976,8 +9990,8 @@ mod tests {
         assert_eq!(state["payload"]["releaseEventId"], serde_json::json!(null));
         assert_eq!(
             state["payload"].as_object().unwrap().len(),
-            7,
-            "timeline-state payload must be exactly seven keys"
+            8,
+            "timeline-state payload must be exactly eight keys"
         );
         wait_for_dj_link_snapshot_ready(&server);
 
@@ -10802,6 +10816,7 @@ mod tests {
             position_ms: 0,
             duration_ms: 20_000,
             loop_active: false,
+            transition_hold_active: false,
             bpm_millis: 128_000,
         };
         let running = DjLinkEngineObservation {
@@ -10841,7 +10856,7 @@ mod tests {
         // ordinary engine ticks do not flood the bounded outbound queue.
         assert_eq!(
             running.semantic_key(Some(idle)),
-            (7, protocol::DjLinkTimelineStateValue::Running, false)
+            (7, protocol::DjLinkTimelineStateValue::Running, false, false)
         );
         assert_eq!(
             running.semantic_key(Some(idle)),
@@ -10854,6 +10869,7 @@ mod tests {
             sequence: 11,
             state: protocol::DjLinkTimelineStateValue::Running,
             loop_active: true,
+            transition_hold_active: false,
             timeline_id: "7".to_string(),
             position_bars: 2,
             play_session_id: Some("play-1".to_string()),
@@ -10868,6 +10884,7 @@ mod tests {
         assert_eq!(wire_value["sessionId"], "matrix-session");
         assert_eq!(wire_value["sequence"], 11);
         assert_eq!(wire_value["payload"]["state"], "running");
+        assert_eq!(wire_value["payload"]["transitionHoldActive"], false);
         assert_eq!(wire_value["payload"]["positionBars"], 2);
         assert_eq!(wire_value["payload"]["playSessionId"], "play-1");
         assert_eq!(wire_value["payload"]["pedalOwner"], "pedal-1");
@@ -10894,6 +10911,21 @@ mod tests {
             .into_iter()
             .map(str::to_string)
             .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn dj_link_observation_forwards_authoritative_transition_hold() {
+        let mut snapshot = protocol::EngineSnapshot::default();
+        snapshot.timeline.id = protocol::TimelineId(77);
+        snapshot.timeline.playing = true;
+        snapshot.timeline.follow_runtime.transition_hold_active = true;
+
+        let observation = DjLinkEngineObservation::from_snapshot(&snapshot);
+        assert!(observation.transition_hold_active);
+        assert_eq!(
+            observation.semantic_key(None),
+            (77, protocol::DjLinkTimelineStateValue::Running, false, true)
         );
     }
 
@@ -10941,6 +10973,7 @@ mod tests {
             sequence: 1,
             state: protocol::DjLinkTimelineStateValue::Running,
             loop_active: false,
+            transition_hold_active: false,
             timeline_id: "queue".to_string(),
             position_bars: 1,
             play_session_id: None,
@@ -10994,6 +11027,7 @@ mod tests {
             sequence: 1,
             state: protocol::DjLinkTimelineStateValue::Running,
             loop_active: true,
+            transition_hold_active: false,
             timeline_id: "7".to_string(),
             position_bars: 2,
             play_session_id: play_session_id.map(str::to_string),
@@ -11070,6 +11104,10 @@ mod tests {
             },
             DjLinkTimelineState {
                 loop_active: false,
+                ..dj_truth_state(Some("play-1"), Some("pedal-1"), None)
+            },
+            DjLinkTimelineState {
+                transition_hold_active: true,
                 ..dj_truth_state(Some("play-1"), Some("pedal-1"), None)
             },
             DjLinkTimelineState {

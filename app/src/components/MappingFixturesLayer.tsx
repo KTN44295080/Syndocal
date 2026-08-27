@@ -63,7 +63,6 @@ type MappingFixturesLayerProps = {
   showLabels: boolean;
   labelViewport: StageLabelViewport;
   worldPerCssPixel: number;
-  labelZoom: number;
   showLevels: boolean;
   placePreview: MappingPlacePreview2D | null;
   isDragging: (fixtureId: number) => boolean;
@@ -78,7 +77,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
     planStageFixtureLabels({
       fixtures: props.labelFixtures ?? props.fixtures,
       viewport: props.labelViewport,
-      zoom: props.labelZoom,
       showLabels: props.showLabels,
       pickedFixtureIds: props.selectedFixtureIds,
       pickedFixtureId: props.selectedFixtureId,
@@ -107,6 +105,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
               <g
                 class={className()}
                 data-stage-fixture-id={fixture.id}
+                data-stage-fixture-hovered={hoveredFixtureId() === fixture.id ? "true" : "false"}
                 data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
                 data-live-color-source={fixture.liveColorValueSource ?? "none"}
                 data-live-segment-count={fixture.liveSegments?.length ?? 1}
@@ -116,10 +115,14 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 data-stage-fixture-drag-threshold={MAPPING_FIXTURE_DRAG_THRESHOLD_PX}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
-                onPointerEnter={() => setHoveredFixtureId(fixture.id)}
-                onPointerLeave={() =>
-                  setHoveredFixtureId((current) => current === fixture.id ? null : current)
-                }
+                onMouseOver={() => setHoveredFixtureId(fixture.id)}
+                onMouseOut={(event) => {
+                  const nextTarget = event.relatedTarget;
+                  if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+                    return;
+                  }
+                  setHoveredFixtureId((current) => current === fixture.id ? null : current);
+                }}
               >
                 <StageFixtureGlyph
                   visualKind={fixture.visualKind}
@@ -130,7 +133,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   segmentColumns={fixture.segmentColumns}
                   segmentRows={fixture.segmentRows}
                   segmentOrder={fixture.segmentOrder}
-                  liveSegmentScreenScale={1 / Math.max(1, props.labelZoom)}
                   hitTargetRadius={6}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
                 />

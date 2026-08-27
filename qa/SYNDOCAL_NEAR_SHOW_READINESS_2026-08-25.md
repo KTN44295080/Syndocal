@@ -748,3 +748,32 @@ authoring/save/restart, zero-FX UI/runtime/publication-failure acceptance, and
 every physical gate remain open. The reviewed HW-4 execution companion is
 `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`; it checks no row by itself and HW-4
 remains **0/12**.
+
+## 2026-08-27 current uncommitted Follow-hold / Stage 2 authority
+
+Current KDMX authority is base
+`e43edcf60dfa116d67bbb5ff096f4590df684964` plus the uncommitted Follow-hold and
+`+4`-only diff. It is source proof only: non-Cut hold-enabled Follow settles in
+exactly one source admission bar, then holds the destination's meter-aware first
+measure indefinitely at runtime. The authored loop/project snapshot is unchanged.
+Both `人生オーバー` C-melody and post-Follow holds release only through F13 loop-off;
+F14 is the absolute-loop toggle and F15 is `+4`. `-4` and Stage 2 MIDI are
+retired/rejected. `transitionHoldActive` is a required authoritative diagnostic
+for the post-Follow hold, not the F13 gate. F13 requires exact running
+timeline/play-session/pedal-owner/Release correlation and authoritative
+`loopActive:true`; completed Follow rebase is additionally required only for the
+post-Follow destination, not for the ordinary C-melody loop.
+
+Any-deck exact mapping remains the primary selector; only the defined fresh
+Deck 1 fallback resolves zero positives, while multiple positives prefer Deck 1
+then the lowest valid deck. Wire `artist` remains the exact payload identity
+beside `title` whenever `contentId` is absent. Follow can rebase DJ authority
+only after the exact same released session, receipt/pedal owner, and completed
+source/target pair; stale/abort/fault/mismatch does not rebase.
+
+Focused MSVC 14.44 tests passed engine hold `3/3`, helpers `3/3`, engine DJ Link
+`28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored; first-
+party warnings are `0`, with fmt/diff clean. Independent re-review is pending.
+The peer title checkpoint `262a484` is committed/pushed but its Stage 2 F13
+tranche is pending. The old alpha.18 PID `80264` is still running; no native or
+hardware claim changes and HW-4 remains **0/12**.

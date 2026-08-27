@@ -5,7 +5,7 @@ import {
   mappingFixtureWorldToSvgScale,
 } from "../fixtureVisuals";
 import type { MappingStageTool } from "../mappingViewPresets";
-import { stageViewBoxSize, type StageWorldBounds } from "../stageGeometry";
+import type { StageWorldBounds } from "../stageGeometry";
 
 type MaybePromise = void | Promise<void>;
 
@@ -35,6 +35,7 @@ type MappingEditableStageShellProps = {
   dragging: boolean;
   stageTool: MappingStageTool;
   viewBox: string;
+  viewport: { x: number; z: number; width: number; height: number };
   stageWorldBounds: StageWorldBounds;
   stageOrigin: StagePoint;
   snapEnabled: boolean;
@@ -72,6 +73,7 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       class={className()}
       data-persistent-band-part="stage"
       viewBox={props.viewBox}
+      preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="2D fixture and projection surface mapping stage"
       onPointerDown={(event) => void props.onPointerDown(event)}
@@ -117,22 +119,34 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
           />
         </pattern>
       </defs>
-      <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-      <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
+      <rect
+        class="stageFloor"
+        x={props.viewport.x}
+        y={props.viewport.z}
+        width={props.viewport.width}
+        height={props.viewport.height}
+      />
+      <rect
+        class="stageGrid"
+        x={props.viewport.x}
+        y={props.viewport.z}
+        width={props.viewport.width}
+        height={props.viewport.height}
+      />
       <line
         class="stageAxis2d"
         data-mapping-origin-axis="x"
         x1={props.stageOrigin.x}
-        y1="0"
+        y1={props.viewport.z}
         x2={props.stageOrigin.x}
-        y2={stageViewBoxSize}
+        y2={props.viewport.z + props.viewport.height}
       />
       <line
         class="stageAxis2d"
         data-mapping-origin-axis="z"
-        x1="0"
+        x1={props.viewport.x}
         y1={props.stageOrigin.z}
-        x2={stageViewBoxSize}
+        x2={props.viewport.x + props.viewport.width}
         y2={props.stageOrigin.z}
       />
       <Show when={props.snapEnabled}>
@@ -141,10 +155,10 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
             {(line) => (
               <line
                 class={`stageSnapLine ${line.axis}`}
-                x1={line.axis === "x" ? line.svg : 0}
-                y1={line.axis === "z" ? line.svg : 0}
-                x2={line.axis === "x" ? line.svg : stageViewBoxSize}
-                y2={line.axis === "z" ? line.svg : stageViewBoxSize}
+                x1={line.axis === "x" ? line.svg : props.viewport.x}
+                y1={line.axis === "z" ? line.svg : props.viewport.z}
+                x2={line.axis === "x" ? line.svg : props.viewport.x + props.viewport.width}
+                y2={line.axis === "z" ? line.svg : props.viewport.z + props.viewport.height}
               />
             )}
           </For>

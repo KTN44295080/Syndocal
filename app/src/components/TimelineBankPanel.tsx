@@ -49,12 +49,24 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
       preroll_ms: 1_000,
       trans_cadence_bars: 4,
       fault_policy: "hold",
+      hold_first_destination_measure: false,
     };
   };
+  const followIsCut = () => (currentFollow()?.video_kind ?? "Crossfade") === "Cut";
+  const followDestinationHoldEnabled = () =>
+    !followIsCut() && (currentFollow()?.hold_first_destination_measure ?? false);
   const updateFollow = (patch: Partial<TimelineFollowSummary>) => {
     const base = currentFollow() ?? defaultFollow();
     if (!base) return;
-    void props.onSetFollow({ ...base, ...patch, next_timeline_id: timelineId(nextTimeline()!) });
+    const nextFollow: TimelineFollowSummary = {
+      ...base,
+      ...patch,
+      next_timeline_id: timelineId(nextTimeline()!),
+    };
+    if (nextFollow.video_kind === "Cut") {
+      nextFollow.hold_first_destination_measure = false;
+    }
+    void props.onSetFollow(nextFollow);
   };
   const reorder = (index: number, direction: -1 | 1) => {
     const target = index + direction;
@@ -170,6 +182,19 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
               <option value="Dip">Dip</option>
             </select>
           </label>
+          <label class="toggleRow">
+            <input
+              type="checkbox"
+              data-timeline-follow-hold
+              checked={followDestinationHoldEnabled()}
+              disabled={followIsCut()}
+              onChange={(event) => updateFollow({ hold_first_destination_measure: event.currentTarget.checked })}
+            />
+            Hold destination first measure until pedal release
+          </label>
+          <small class="timelineFollowHoldHint" data-timeline-follow-hold-hint>
+            Transition uses one source measure, then the destination first measure loops until F13.
+          </small>
           <label>
             Curve
             <select value={currentFollow()?.curve ?? "ease_in_out"} onChange={(event) => updateFollow({ curve: event.currentTarget.value as VideoLayerTransitionCurve })}>
@@ -179,7 +204,7 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
           </label>
           <label>
             Fade (ms)
-            <input type="number" min="0" step="50" value={currentFollow()?.duration.value_milliunits ?? 1_000} disabled={(currentFollow()?.video_kind ?? "Crossfade") === "Cut"} onChange={(event) => updateFollow({ duration: { unit: "Milliseconds", value_milliunits: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) } })} />
+            <input type="number" min="0" step="50" value={currentFollow()?.duration.value_milliunits ?? 1_000} disabled={followIsCut() || followDestinationHoldEnabled()} onChange={(event) => updateFollow({ duration: { unit: "Milliseconds", value_milliunits: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) } })} />
           </label>
           <label>
             Preroll (ms)

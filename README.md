@@ -2,24 +2,25 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.18**
+- 製品名: **Syndocal 1.2.0-alpha.19**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current `1.2.0-alpha.18` is the committed source checkpoint at branch
-`codex/syndocal-v1.2`, exact `HEAD`/upstream `db4eefc348b01ee05dd2dc87945afa85de8803e`.
-It implements strict-v3 any-playing-deck DJ admission and position-preserving
+Current development metadata is `1.2.0-alpha.19` on branch
+`codex/syndocal-v1.2`, based on exact upstream
+`e43edcf60dfa116d67bbb5ff096f4590df684964`. Its Stage/Timeline changes and
+native artifact remain uncommitted and unaccepted until the alpha.19 gates,
+build, launch, commit, and push recorded below are complete. The preceding
+`1.2.0-alpha.18` remains the latest immutable native evidence checkpoint. It
+implements strict-v3 any-playing-deck DJ admission and position-preserving
 RELEASE: an already-running Timeline relinquishes DJ clock ownership and
-disables its loop without Play, Pause, or Seek. Source gates are green: the
-Syndocal target is `1164` pass / `0` fail / `11` intentional hardware-media
-ignores with zero first-party warnings, frontend build, DJ Link, `422` invokes,
-`3559` localization checks, viewport/setup harness, and exact-MSVC live discovery
-all pass; Ethernet4 identifies `192.168.50.1` as eligible. The clean release
-gate `4fc443d` passed after staging the seven pinned DLLs. The required
-`pnpm --dir app tauri build --no-bundle` then passed with exact MSVC 14.44
-linker-first setup and zero first-party warnings. The alpha.18 artifact is
+disables its loop without Play, Pause, or Seek. Its source gates passed at
+`1164` / `0` / `11` for pass/fail/intentional hardware-media ignores with zero
+first-party warnings, plus frontend build, DJ Link, `422` invokes, `3559`
+localization checks, viewport/setup harness, and exact-MSVC live discovery.
+The alpha.18 artifact is
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
 Product/FileVersion `1.2.0-alpha.18`, `58,740,224` bytes, SHA-256
 `841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
@@ -78,7 +79,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.18_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.18_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.19_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.19_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

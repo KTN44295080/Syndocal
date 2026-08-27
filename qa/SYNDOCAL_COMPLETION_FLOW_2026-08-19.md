@@ -2277,3 +2277,34 @@ No native build, deployed process, saved show project, or physical DJ/pedal
 acceptance is claimed. The running alpha.18 process remains the prior artifact.
 The next safe action is to finish the separate Follow-hold/F13 source tranches,
 advance the prerelease, and execute the exact native and HW-4 gates.
+
+## 51. 2026-08-27 current uncommitted Follow-hold / +4-only checkpoint
+
+KDMX is based at `e43edcf60dfa116d67bbb5ff096f4590df684964` with an uncommitted
+protocol/engine/app backend diff. `hold_first_destination_measure=true` clean-
+breaks arbitrary non-Cut authored Follow duration: settlement is exactly one
+source admission meter-aware bar, then success installs an indefinite runtime-
+only loop from destination `0` through its first meter-aware measure. Authored
+loops and project persistence remain unchanged. Both the `人生オーバー` C-melody and
+post-Follow destination hold release only via F13 loop-off; F14 is the absolute
+toggle and F15 is the only beat jump, `+4`. `-4` and all Stage 2 MIDI are rejected.
+`transitionHoldActive` is required in authoritative Timeline state as a
+post-Follow diagnostic, not as the F13 gate. F13 requires exact running
+timeline/play-session/pedal-owner/Release correlation plus authoritative
+`loopActive:true`, so the same absolute loop-off releases either the ordinary
+C-melody A-B loop or the post-Follow hold. Completed Follow rebase is required
+only for the latter destination authority.
+
+Completed Follow rebases DJ runtime authority only for the exact released play
+session, Release receipt/pedal owner, and completed source/target pair. Abort,
+fault, stale generation, target/session mismatch, or receipt mismatch never
+rebases. Exact mapping is any-deck; the zero-positive fallback is fresh Deck 1,
+and multiple positives prefer Deck 1 then the lowest valid deck. The strict wire
+preserves actual `artist` with `title` whenever `contentId` is absent.
+
+MSVC 14.44 focused proof: engine hold `3/3`, helpers `3/3`, engine DJ Link
+`28/28`, protocol `1/1`, I/O `1/1`, and Syndocal `119` pass / `1` ignored;
+first-party warnings `0`, `cargo fmt --all -- --check`, and `git diff --check`
+passed. Independent re-review is pending. Peer title checkpoint `262a484` is
+committed/pushed, but the Stage 2 F13 peer tranche is pending. PID `80264` is the
+old alpha.18 artifact; no native/HW acceptance is claimed and HW-4 stays **0/12**.

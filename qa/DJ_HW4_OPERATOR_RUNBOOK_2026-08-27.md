@@ -32,6 +32,16 @@ The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
 at execution time. Never substitute an older alpha.16 source hash or the
 previous alpha.15 process as the artifact identity.
 
+### 1.1 Current Follow/Stage 2 execution stop — 2026-08-27
+
+Do **not** execute this runbook as accepted HW-4 evidence yet. KDMX is based at
+`e43edcf60dfa116d67bbb5ff096f4590df684964` with an uncommitted Follow-hold and
+`+4`-only source diff; the running alpha.18 PID `80264` is the older artifact.
+No new native build, launch, or hardware observation is claimed here. The external
+peer title checkpoint `262a484` is committed/pushed, but its Stage 2 F13 tranche
+is still pending. HW-4 therefore remains **0/12** and no preflight, launch, or
+pedal observation may be promoted from the current source state.
+
 ## 2. DJ-PC controlled source
 
 Open one PowerShell inside the actual target-DJ-PC checkout. Resolve and verify
@@ -246,11 +256,18 @@ the checkbox open and name the missing subcheck.
   Release. Only accepted/duplicate ACK succeeds. Rejection, timeout, disconnect,
   and send failure remain visible and fail closed; withheld/rejected ACK needs a
   bounded protocol/fault harness.
-- [ ] **HW-4.8 — Stage 2.** With authoritative `running`, the existing
-  `timeline-control` boundary remains F13/F15 Timeline `-4/+4`, F14 absolute
-  loop, and zero Rekordbox MIDI. This Stage 2 beat-jump contract is unchanged
-  by v1.1.8 and still requires direct confirmation; it is not the Stage 1
-  release path.
+- [ ] **HW-4.8 — Stage 2.** Require authoritative `running`, exact
+  timeline/play-session/pedal-owner/release correlation, and authoritative
+  `loopActive:true`. F13 sends exactly one absolute
+  `DJ_TIMELINE_LOOP_SET { active:false }`, releasing either the authored
+  `人生オーバー` C-melody A-B loop or the post-Follow destination-first-measure
+  runtime hold. The strict `transitionHoldActive` boolean remains required state,
+  but is diagnostic for the latter and is not the F13 admission gate. A completed
+  Follow rebase is required only to inherit authority for the post-Follow target;
+  it is not required for the ordinary C-melody loop. F14 toggles the authoritative
+  absolute loop; F15 alone sends `DJ_TIMELINE_BEAT_JUMP { bars:4 }`. `-4` and
+  every Stage 2 Rekordbox MIDI action are rejected. Stale, abort, fault, or
+  mismatched receipts remain fail-closed.
 - [ ] **HW-4.9 — disconnect/reconnect.** Stage 1 local controls continue while
   disconnected. Reconnect requires fresh State Sync. Stage 2 stays fail-closed
   until a fresh authoritative snapshot exists.

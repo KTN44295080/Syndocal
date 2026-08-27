@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
+import { handleMovementLimitKey, type MovementLimitField } from "../fixtureLimitKeyboard";
 import type { FixtureLimits } from "../types";
 
 export interface PositionControlSet {
@@ -27,7 +28,6 @@ interface PanTiltTargetPoint {
   tilt: number;
 }
 
-type MovementLimitField = "pan_min" | "pan_max" | "tilt_min" | "tilt_max";
 type MovementLimitToggle = "invert_pan" | "invert_tilt" | "swap_pan_tilt";
 type PositionToolTab = "position" | "limits";
 
@@ -74,36 +74,6 @@ interface PositionControlPanelProps {
 const clampDmxLimit = (value: number) => Math.min(65_535, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
 const favoriteMatchTolerance = 512;
 
-const limitKeyboardStep = (event: KeyboardEvent, baseAmount: number) => {
-  const base = Math.max(1, Math.round(baseAmount || 1));
-  if (event.shiftKey) {
-    return base * 4;
-  }
-  if (event.altKey) {
-    return Math.max(1, Math.round(base / 4));
-  }
-  return base;
-};
-
-const moveLimitRange = (min: number, max: number, delta: number) => {
-  const normalizedMin = Math.min(clampDmxLimit(min), clampDmxLimit(max));
-  const normalizedMax = Math.max(clampDmxLimit(min), clampDmxLimit(max));
-  const width = normalizedMax - normalizedMin;
-  const nextMin = Math.min(65_535 - width, Math.max(0, normalizedMin + delta));
-  return { min: nextMin, max: nextMin + width };
-};
-
-const resizeLimitRange = (min: number, max: number, delta: number) => {
-  const normalizedMin = Math.min(clampDmxLimit(min), clampDmxLimit(max));
-  const normalizedMax = Math.max(clampDmxLimit(min), clampDmxLimit(max));
-  const center = (normalizedMin + normalizedMax) / 2;
-  const halfWidth = Math.max(0, (normalizedMax - normalizedMin) / 2 + delta);
-  return {
-    min: clampDmxLimit(center - halfWidth),
-    max: clampDmxLimit(center + halfWidth),
-  };
-};
-
 export function PositionControlPanel(props: PositionControlPanelProps) {
   const [positionToolTab, setPositionToolTab] = createSignal<PositionToolTab>("position");
   const panPercent = () => Math.round((props.controls.panValue / 65_535) * 1000) / 10;
@@ -120,48 +90,13 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
   const activePositionToolTab = (): PositionToolTab =>
     positionToolTab() === "limits" && props.canEditLimits ? "limits" : "position";
 
-  const setMovementLimitRange = (panMin: number, panMax: number, tiltMin: number, tiltMax: number) => {
-    props.onUpdateLimit("pan_min", panMin);
-    props.onUpdateLimit("pan_max", panMax);
-    props.onUpdateLimit("tilt_min", tiltMin);
-    props.onUpdateLimit("tilt_max", tiltMax);
-  };
-
   const handleMovementLimitKeyDown = (event: KeyboardEvent) => {
-    const step = limitKeyboardStep(event, props.nudgeAmount);
-    const limits = props.normalizedLimits;
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      const delta = event.key === "ArrowLeft" ? -step : step;
-      const panRange = moveLimitRange(limits.pan_min, limits.pan_max, delta);
-      setMovementLimitRange(panRange.min, panRange.max, limits.tilt_min, limits.tilt_max);
-      return;
-    }
-    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-      event.preventDefault();
-      const delta = event.key === "ArrowUp" ? step : -step;
-      const tiltRange = moveLimitRange(limits.tilt_min, limits.tilt_max, delta);
-      setMovementLimitRange(limits.pan_min, limits.pan_max, tiltRange.min, tiltRange.max);
-      return;
-    }
-    if (event.key === "PageUp" || event.key === "=" || event.key === "+") {
-      event.preventDefault();
-      const panRange = resizeLimitRange(limits.pan_min, limits.pan_max, step);
-      const tiltRange = resizeLimitRange(limits.tilt_min, limits.tilt_max, step);
-      setMovementLimitRange(panRange.min, panRange.max, tiltRange.min, tiltRange.max);
-      return;
-    }
-    if (event.key === "PageDown" || event.key === "-") {
-      event.preventDefault();
-      const panRange = resizeLimitRange(limits.pan_min, limits.pan_max, -step);
-      const tiltRange = resizeLimitRange(limits.tilt_min, limits.tilt_max, -step);
-      setMovementLimitRange(panRange.min, panRange.max, tiltRange.min, tiltRange.max);
-      return;
-    }
-    if (event.key === "Home") {
-      event.preventDefault();
-      props.onResetMovementLimits();
-    }
+    handleMovementLimitKey(event, {
+      limits: props.normalizedLimits,
+      baseAmount: props.nudgeAmount,
+      onUpdate: props.onUpdateLimit,
+      onReset: props.onResetMovementLimits,
+    });
   };
 
   const handlePositionToolTabKeyDown = (event: KeyboardEvent & { currentTarget: HTMLButtonElement }) => {
@@ -457,6 +392,7 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
                 <div class="controlMovementLimitEditor">
                   <div
                     class={props.movementLimitDragging ? "movementLimitMap controlMovementLimitMap dragging" : "movementLimitMap controlMovementLimitMap"}
+                    data-movement-limit-map
                     aria-label="Pan tilt movement limits"
                     role="group"
                     tabIndex={0}

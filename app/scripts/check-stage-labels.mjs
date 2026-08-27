@@ -50,7 +50,6 @@ const winningFixtureId = (fixtures, options = {}) => {
   const result = layout.planStageFixtureLabels({
     fixtures,
     viewport,
-    zoom: 1,
     showLabels: true,
     ...options,
   });
@@ -73,8 +72,8 @@ assert.equal(
 const singleCellLabel = layout.planStageFixtureLabels({
   fixtures: [fixture(100, { x: 20, z: 20, label: "Single" })],
   viewport,
-  zoom: 1,
   showLabels: true,
+  pickedFixtureId: 100,
 }).labels[0];
 assert.equal(singleCellLabel.x, 23.75, "a 5-unit single-cell glyph label must clear its right edge by 1.25 units");
 assert.equal(singleCellLabel.z, 16.25, "a 5-unit single-cell glyph label must clear its top edge by 1.25 units");
@@ -86,31 +85,29 @@ const multiCellLabel = layout.planStageFixtureLabels({
     height: 5,
   }],
   viewport,
-  zoom: 1,
   showLabels: true,
+  pickedFixtureId: 101,
 }).labels[0];
 assert.equal(multiCellLabel.x, 41.25, "an eight-cell glyph label must anchor beyond the complete 40-unit footprint");
 assert.equal(multiCellLabel.z, 16.25, "multi-cell labels keep the same one-cell vertical clearance");
 
 assert.equal(
   winningFixtureId([fixture(1), fixture(2)], { pickedFixtureId: 2, hoveredFixtureId: 1 }),
-  2,
-  "picked labels must outrank hovered labels",
+  1,
+  "the current hover label must temporarily outrank an overlapping picked label",
 );
 assert.equal(
   winningFixtureId([fixture(1, { highlighted: true }), fixture(2)], { hoveredFixtureId: 2 }),
   2,
-  "hovered labels must outrank highlighted labels",
+  "hovered labels must render while a highlighted-only fixture remains unlabeled",
 );
 assert.equal(
-  winningFixtureId([fixture(1, { addressOrder: 1 }), fixture(2, { addressOrder: 99, highlighted: true })]),
+  winningFixtureId(
+    [fixture(1, { addressOrder: 99 }), fixture(2, { addressOrder: 1 })],
+    { pickedFixtureIds: new Set([1, 2]) },
+  ),
   2,
-  "highlighted labels must outrank unflagged labels",
-);
-assert.equal(
-  winningFixtureId([fixture(1, { addressOrder: 99 }), fixture(2, { addressOrder: 1 })]),
-  2,
-  "lower DMX address order must win the unflagged tie",
+  "lower DMX address order must win when two picked labels overlap",
 );
 
 const denseFixtures = Array.from({ length: 41 }, (_, index) =>
@@ -123,15 +120,15 @@ const denseFixtures = Array.from({ length: 41 }, (_, index) =>
 const denseResult = layout.planStageFixtureLabels({
   fixtures: denseFixtures,
   viewport,
-  zoom: 1,
   showLabels: true,
   pickedFixtureId: 41,
   hoveredFixtureId: 40,
 });
 assert.equal(denseResult.visibleFixtureCount, 41);
-assert.equal(denseResult.decluttered, true, "more than 25 visible fixtures must activate decluttering below 150% zoom");
-assert.equal(denseResult.candidateCount, 3, "only picked, hovered, and highlighted labels may survive dense eligibility");
-assert.equal(denseResult.labelByFixtureId.has(41), true, "the picked fixture must keep a label while decluttering");
+assert.equal(denseResult.candidateCount, 2, "only picked and hovered fixtures may become label candidates");
+assert.equal(denseResult.labelByFixtureId.has(40), true, "the current hover fixture must keep a label");
+assert.equal(denseResult.labelByFixtureId.has(41), false, "an overlapping picked label must yield while another fixture is hovered");
+assert.equal(denseResult.labelByFixtureId.has(39), false, "highlight alone must not expose a fixture label");
 assert.equal(denseResult.labelByFixtureId.has(1), false, "an unflagged dense fixture must not receive a label");
 assertNoLabelOverlaps(denseResult.labels, "the 41-fixture dense layout must have zero label rectangle overlaps");
 
@@ -142,25 +139,31 @@ const spacedFixtures = Array.from({ length: 41 }, (_, index) =>
     z: 10 + Math.floor(index / 9) * 15,
   }),
 );
-const restoredResult = layout.planStageFixtureLabels({
+const zoomedUnpickedResult = layout.planStageFixtureLabels({
   fixtures: spacedFixtures,
   viewport,
-  zoom: 1.5,
   showLabels: true,
 });
-assert.equal(restoredResult.decluttered, false, "150% zoom must disable density eligibility filtering");
-assert.equal(restoredResult.candidateCount, 41, "150% zoom must restore every visible fixture as a label candidate");
-assert.equal(restoredResult.labels.length, 41, "non-overlapping fixtures must render all labels again at 150% zoom");
-assertNoLabelOverlaps(restoredResult.labels, "the restored 41-fixture layout must have zero label rectangle overlaps");
+assert.equal(zoomedUnpickedResult.candidateCount, 0, "zoom must never expose unpicked and unhovered fixture labels");
+assert.equal(zoomedUnpickedResult.labels.length, 0, "unpicked and unhovered fixtures stay unlabeled at every zoom");
+
+const allPickedResult = layout.planStageFixtureLabels({
+  fixtures: spacedFixtures,
+  viewport,
+  showLabels: true,
+  pickedFixtureIds: new Set(spacedFixtures.map((candidate) => candidate.id)),
+});
+assert.equal(allPickedResult.candidateCount, 41, "every explicitly picked fixture must become a label candidate");
+assert.equal(allPickedResult.labels.length, 41, "non-overlapping picked fixtures must render all labels");
+assertNoLabelOverlaps(allPickedResult.labels, "the picked 41-fixture layout must have zero label rectangle overlaps");
 
 const labelsOffResult = layout.planStageFixtureLabels({
   fixtures: denseFixtures,
   viewport,
-  zoom: 2,
   showLabels: false,
   pickedFixtureId: 41,
   hoveredFixtureId: 40,
 });
 assert.equal(labelsOffResult.labels.length, 0, "the explicit labels toggle must override zoom and priority states");
 
-console.log("T24-A stage label footprint anchoring, shortening, density, priority, zoom restore, and 41-fixture overlap contracts ok");
+console.log("T24-A stage label footprint anchoring, shortening, selected-or-hovered eligibility, priority, and overlap contracts ok");

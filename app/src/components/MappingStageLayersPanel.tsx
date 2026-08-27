@@ -23,7 +23,6 @@ interface MappingStageLayersPanelProps {
   showLabels: boolean;
   labelViewport: StageLabelViewport;
   labelViewportPixelSize: { width: number; height: number };
-  labelZoom: number;
   showLevels: boolean;
   stageTool: MappingStageTool;
   stageObjects: MappingStageObject2D[];
@@ -102,7 +101,6 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         showLabels={props.showLabels}
         labelViewport={props.labelViewport}
         worldPerCssPixel={screenWorldPerCssPixel()}
-        labelZoom={props.labelZoom}
         showLevels={props.showLevels}
         placePreview={props.placePreview}
         readOnly={props.readOnly}

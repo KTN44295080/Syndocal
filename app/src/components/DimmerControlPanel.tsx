@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { FixtureLimits } from "../types";
+import { DimmerLimitMeter } from "./FixtureLimitVisuals";
 
 export interface DimmerControlSet {
   attribute: string;
@@ -191,31 +192,37 @@ export function DimmerControlPanel(props: DimmerControlPanelProps) {
               {props.formatDmxPercent(props.normalizedLimits.dimmer_max)}
             </span>
           </div>
-          <div class="controlLimitRow">
-            <label>
-              Min
-              <input
-                type="number"
-                min="0"
-                max="65535"
-                value={props.limitsDraft.dimmer_min}
-                onInput={(event) => props.onUpdateLimit("dimmer_min", Number(event.currentTarget.value))}
-              />
-            </label>
-            <label>
-              Max
-              <input
-                type="number"
-                min="0"
-                max="65535"
-                value={props.limitsDraft.dimmer_max}
-                onInput={(event) => props.onUpdateLimit("dimmer_max", Number(event.currentTarget.value))}
-              />
-            </label>
-            <button onClick={props.onResetLimits}>Full Range</button>
-            <button class="primary" onClick={props.onApplyLimits}>
-              {props.applyLimitsLabel}
-            </button>
+          <div class="dimmerControlLimitEditor">
+            <DimmerLimitMeter
+              minimum={props.normalizedLimits.dimmer_min}
+              maximum={props.normalizedLimits.dimmer_max}
+            />
+            <div class="controlLimitRow">
+              <label>
+                Min
+                <input
+                  type="number"
+                  min="0"
+                  max="65535"
+                  value={props.limitsDraft.dimmer_min}
+                  onInput={(event) => props.onUpdateLimit("dimmer_min", Number(event.currentTarget.value))}
+                />
+              </label>
+              <label>
+                Max
+                <input
+                  type="number"
+                  min="0"
+                  max="65535"
+                  value={props.limitsDraft.dimmer_max}
+                  onInput={(event) => props.onUpdateLimit("dimmer_max", Number(event.currentTarget.value))}
+                />
+              </label>
+              <button onClick={props.onResetLimits}>Full Range</button>
+              <button class="primary" onClick={props.onApplyLimits}>
+                {props.applyLimitsLabel}
+              </button>
+            </div>
           </div>
         </div>
       </Show>

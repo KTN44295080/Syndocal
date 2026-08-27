@@ -1,5 +1,6 @@
 import type { Accessor, Setter } from "solid-js";
 import type { MappingStageTool } from "./mappingViewPresets";
+import type { MappingViewportBox } from "./createMappingViewportModel";
 import type {
   MappingDragState,
   MappingMarqueeState,
@@ -36,7 +37,7 @@ export const MAPPING_FIXTURE_DRAG_THRESHOLD_PX = 4;
 
 interface MappingInteractionControllerOptions {
   snapshot: Accessor<EngineSnapshot>;
-  mappingViewportBox: Accessor<{ x: number; z: number; size: number }>;
+  mappingViewportBox: Accessor<MappingViewportBox>;
   stageWorldBounds: Accessor<StageWorldBounds>;
   zoomMappingViewportAtPoint: (direction: -1 | 1, point: StagePoint) => void;
   selectedFixture: Accessor<PatchedFixtureSummary | undefined>;
@@ -98,8 +99,8 @@ export function createMappingInteractionController(options: MappingInteractionCo
     const rect = targetSvg.getBoundingClientRect();
     const viewBox = options.mappingViewportBox();
     return {
-      x: clampRange(viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.size, 0, stageViewBoxSize),
-      z: clampRange(viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.size, 0, stageViewBoxSize),
+      x: clampRange(viewBox.x + ((clientX - rect.left) / rect.width) * viewBox.width, 0, stageViewBoxSize),
+      z: clampRange(viewBox.z + ((clientY - rect.top) / rect.height) * viewBox.height, 0, stageViewBoxSize),
     };
   };
 
@@ -382,9 +383,10 @@ export function createMappingInteractionController(options: MappingInteractionCo
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startCenterX: box.x + box.size / 2,
-      startCenterZ: box.z + box.size / 2,
-      viewBoxSize: box.size,
+      startCenterX: box.x + box.width / 2,
+      startCenterZ: box.z + box.height / 2,
+      viewBoxWidth: box.width,
+      viewBoxHeight: box.height,
       rectWidth: Math.max(1, rect.width),
       rectHeight: Math.max(1, rect.height),
     });
@@ -393,8 +395,8 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const updateMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     const drag = options.mappingViewportPanDrag();
     if (!drag || drag.pointerId !== event.pointerId) return false;
-    const deltaX = ((event.clientX - drag.startClientX) / drag.rectWidth) * drag.viewBoxSize;
-    const deltaZ = ((event.clientY - drag.startClientY) / drag.rectHeight) * drag.viewBoxSize;
+    const deltaX = ((event.clientX - drag.startClientX) / drag.rectWidth) * drag.viewBoxWidth;
+    const deltaZ = ((event.clientY - drag.startClientY) / drag.rectHeight) * drag.viewBoxHeight;
     options.setMappingViewport(options.normalizedMappingViewportZoom(), drag.startCenterX - deltaX, drag.startCenterZ - deltaZ);
     return true;
   };

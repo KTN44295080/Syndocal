@@ -10532,8 +10532,11 @@ export default function App() {
     clone.querySelectorAll(standaloneSvgExportSelectorsToRemove).forEach((element) => element.remove());
     clone.classList.remove("dragging", "placeMode", "rotateMode", "panMode", "selectMode");
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    clone.setAttribute("width", "1600");
-    clone.setAttribute("height", "1600");
+    const exportBox = mappingViewportBox();
+    const exportHeight = 1600;
+    const exportWidth = Math.max(1, Math.round(exportHeight * exportBox.width / exportBox.height));
+    clone.setAttribute("width", String(exportWidth));
+    clone.setAttribute("height", String(exportHeight));
     clone.setAttribute("data-syndocal-export", "stage-plot-v1");
     clone.setAttribute("data-syndocal-project", projectFileLabel().replace(/\s+\*$/, ""));
     clone.setAttribute("data-syndocal-view", mappingStageViewBox());
@@ -28300,6 +28303,7 @@ export default function App() {
             dragging: Boolean(mappingDrag() || mappingViewportPanDrag()),
             stageTool: mappingStageTool(),
             viewBox: mappingStageViewBox(),
+            viewport: mappingViewportBox(),
             stageWorldBounds: stageWorldBounds(),
             stageOrigin: stageOrigin2d(),
             snapEnabled: mappingSnapEnabled(),
@@ -28322,11 +28326,10 @@ export default function App() {
             labelViewport: {
               x: mappingViewportBox().x,
               z: mappingViewportBox().z,
-              width: mappingViewportBox().size,
-              height: mappingViewportBox().size,
+              width: mappingViewportBox().width,
+              height: mappingViewportBox().height,
             },
             labelViewportPixelSize: mappingStageViewportPixelSize(),
-            labelZoom: normalizedMappingViewportZoom(),
             showLevels: mappingShowLevels(),
             stageTool: mappingStageTool(),
             stageObjects: visualizerStageObjects2d(),
@@ -28393,10 +28396,12 @@ export default function App() {
               normalizedLimits: normalizedSelectedFixtureLimitsDraft(),
               limitWindowStyle: selectedFixtureLimitWindowStyle(),
               movementLimitDragging: Boolean(movementLimitDrag()),
+              movementLimitNudgeAmount: panTiltNudgeAmount(),
               formatDmxPercent,
               onUpdateNumericLimit: (field, value) => updateSelectedFixtureLimit(field, value),
               onUpdateToggleLimit: (field, value) => updateSelectedFixtureLimit(field, value),
               onResetLimits: () => setSelectedFixtureLimitsDraft(defaultFixtureLimits),
+              onResetMovementLimits: resetSelectedMovementLimits,
               onApplyLimits: setFixtureLimits,
               onMovementLimitPointerDown: startMovementLimitDrag,
               onMovementLimitPointerMove: dragMovementLimit,

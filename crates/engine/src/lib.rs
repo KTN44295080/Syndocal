@@ -15,9 +15,14 @@ use std::sync::atomic::AtomicBool;
 
 mod control_plane;
 mod move_path;
+mod timeline_follow_hold;
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
+use timeline_follow_hold::{
+    destination_first_measure_hold_plan, resolve_follow_duration_ms,
+    source_admission_measure_duration_ms, TimelineFollowHoldPlan,
+};
 
 /// Resolve an authored A-B loop to an absolute runtime boundary. Division 0
 /// is the authored range; each additional division halves the authored span
@@ -60,8 +65,8 @@ pub fn dj_link_authored_bar_jump_target(
     bpm: f32,
     bars: i8,
 ) -> Result<u64, String> {
-    if !matches!(bars, -4 | 4) {
-        return Err("DJ Link beat jump must be exactly -4 or 4 bars".to_string());
+    if bars != 4 {
+        return Err("DJ Link beat jump must be exactly +4 bars".to_string());
     }
     if !bpm.is_finite() || bpm <= 0.0 {
         return Err("DJ Link authored bar grid is unavailable".to_string());
@@ -75,17 +80,11 @@ pub fn dj_link_authored_bar_jump_target(
         return Err("DJ Link authored bar grid is invalid".to_string());
     }
     let delta_ms = (bar_ms as u64)
-        .checked_mul(u64::from(bars.unsigned_abs()))
+        .checked_mul(4)
         .ok_or_else(|| "DJ Link beat jump overflowed the authored grid".to_string())?;
-    let target = if bars < 0 {
-        current_ms
-            .checked_sub(delta_ms)
-            .ok_or_else(|| "DJ Link beat jump underflowed the authored grid".to_string())?
-    } else {
-        current_ms
-            .checked_add(delta_ms)
-            .ok_or_else(|| "DJ Link beat jump overflowed the authored grid".to_string())?
-    };
+    let target = current_ms
+        .checked_add(delta_ms)
+        .ok_or_else(|| "DJ Link beat jump overflowed the authored grid".to_string())?;
     if target > duration_ms {
         return Err("DJ Link beat jump exceeds the authored timeline".to_string());
     }
@@ -6706,6 +6705,9 @@ impl EngineHandle {
         bars: i8,
         timeout: Duration,
     ) -> Result<Arc<EngineSnapshot>, String> {
+        if bars != 4 {
+            return Err("DJ Link beat jump must be exactly +4 bars".to_string());
+        }
         self.submit_dj_link_command(
             timeout,
             "DJ Link beat jump",
@@ -9753,7 +9755,7 @@ impl EngineHandle {
                                 }
                             }
                         });
-                        let position_ms = snapshot.timeline.follow_runtime.elapsed_ms;
+                        let position_ms = timeline_follow_target_audio_position_ms(&snapshot);
                         child_clips.extend(target.audio_clips.iter().filter(|&clip| clip.duration_ms > 0
                                 && !target.audio_muted
                                 && timeline_audio_layer_is_effectively_audible(
@@ -17587,6 +17589,9 @@ struct RuntimeTimelineFollowTransition {
     source_timeline_id: TimelineId,
     target_timeline_id: TimelineId,
     target: TimelineSnapshot,
+    /// Captured at admission from the destination Timeline's own musical
+    /// authority. It is applied only after a successful settlement.
+    destination_hold: Option<TimelineFollowHoldPlan>,
     started_at: Instant,
     duration: Duration,
     source_bpm: f32,
@@ -38695,7 +38700,15 @@ impl EngineRuntime {
             has_immediate_trigger |=
                 self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
         }
-        if self.timeline_follow_transport.is_some() {
+        // A hold-enabled Follow keeps every incoming transport at zero until
+        // the captured settlement succeeds. In particular, it must not
+        // pre-fire target events/audio while source-side consumers settle.
+        if self.timeline_follow_transport.is_some()
+            && self
+                .timeline_follow_transition
+                .as_ref()
+                .is_none_or(|transition| transition.destination_hold.is_none())
+        {
             has_immediate_trigger |=
                 self.advance_child_transport(RuntimeChildTransportId::Follow, now);
         }
@@ -38834,11 +38847,37 @@ impl EngineRuntime {
             })?;
         let (target, _runtime_events) = self.prepare_timeline_bank_entry(target)?;
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
-        let resolved_duration_ms = resolve_video_clip_take_duration_ms(
-            follow.video_kind,
-            follow.duration,
-            &self.clock.snapshot(now),
-        )?;
+        let source_tempo_meter_authority = self.timeline_click_authority()?;
+        // An enabled destination hold has one unambiguous settling contract:
+        // one source measure captured at Follow admission.  The authored
+        // duration remains authoritative only for ordinary Follow, while Cut
+        // never creates a post-Follow hold.
+        let hold_first_destination_measure = follow.hold_first_destination_measure
+            && !matches!(follow.video_kind, VideoClipTakeKind::Cut);
+        let resolved_duration_ms = if hold_first_destination_measure {
+            source_admission_measure_duration_ms(
+                &source_tempo_meter_authority,
+                self.timeline_position_ms,
+            )?
+        } else {
+            resolve_follow_duration_ms(
+                follow.video_kind,
+                follow.duration,
+                &source_tempo_meter_authority,
+                self.timeline_position_ms,
+            )?
+        };
+        let source_bpm = self.clock.bpm;
+        let target_bpm = follow
+            .destination_bpm
+            .map(|bpm| clamp_bpm(bpm as f32))
+            .unwrap_or(source_bpm);
+        // Cut is intentionally a terminal handoff, never a post-Follow
+        // pedal hold. Abort/fault/cut/missing target therefore cannot arm a
+        // transient destination loop.
+        let destination_hold = hold_first_destination_measure
+            .then(|| destination_first_measure_hold_plan(&target, target_bpm))
+            .transpose()?;
         let generation = next_timeline_runtime_generation(self.timeline_follow_runtime.generation);
         let child = ChildTimelineSummary {
             layers: target.layers.clone(),
@@ -38908,11 +38947,6 @@ impl EngineRuntime {
                     .map(|clip| VideoLayerId::from(clip.layer_id)),
             )
             .collect::<HashSet<_>>();
-        let source_bpm = self.clock.bpm;
-        let target_bpm = follow
-            .destination_bpm
-            .map(|bpm| clamp_bpm(bpm as f32))
-            .unwrap_or(source_bpm);
         // Cancel any source Timeline Guide cue before publishing transition
         // cues. The captured value remains the fence for the full Follow,
         // even if authored Guide settings change after admission.
@@ -38938,6 +38972,7 @@ impl EngineRuntime {
             source_timeline_id: self.timeline_id,
             target_timeline_id: target.id,
             target: target.clone(),
+            destination_hold,
             started_at: now,
             duration: Duration::from_millis(resolved_duration_ms),
             source_bpm,
@@ -38974,6 +39009,7 @@ impl EngineRuntime {
             duration_ms: resolved_duration_ms,
             progress_millis: 0,
             fault: None,
+            transition_hold_active: false,
             settlement: None,
         };
         self.timeline_follow_natural_boundary_armed = false;
@@ -38983,6 +39019,19 @@ impl EngineRuntime {
 
     fn timeline_follow_bpm_is_externally_owned(&self) -> bool {
         !matches!(&self.clock.source, ClockSource::Manual | ClockSource::Tap)
+    }
+
+    fn timeline_follow_target_position_ms_at(
+        &self,
+        transition: &RuntimeTimelineFollowTransition,
+        now: Instant,
+    ) -> u64 {
+        if transition.destination_hold.is_some() {
+            return 0;
+        }
+        now.saturating_duration_since(transition.started_at)
+            .as_millis()
+            .min(u128::from(transition.target.duration_ms)) as u64
     }
 
     fn timeline_follow_abort_fence_pending(&self) -> bool {
@@ -39212,7 +39261,13 @@ impl EngineRuntime {
                     })
             {
                 if !target.audio_muted {
-                    let position_ms = self.timeline_follow_runtime.elapsed_ms;
+                    let position_ms = self
+                        .timeline_follow_transition
+                        .as_ref()
+                        .map(|transition| {
+                            self.timeline_follow_target_position_ms_at(transition, self.last_tick)
+                        })
+                        .unwrap_or(0);
                     active_child_clips.extend(
                         target
                             .audio_clips
@@ -40166,6 +40221,7 @@ impl EngineRuntime {
             duration_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
             progress_millis: 1_000,
             fault: None,
+            transition_hold_active: false,
             settlement: Some(settlement),
         };
         self.refresh_timeline_follow_video_render_snapshot();
@@ -40220,6 +40276,9 @@ impl EngineRuntime {
             true,
             target_position_ms,
         )?;
+        if let Some(hold) = transition.destination_hold {
+            self.install_timeline_follow_destination_hold(hold);
+        }
         // Complete is an event-domain terminal cue, not a visual-end cue.
         // It is published only after the successful settlement has installed
         // the target image and exactly once on this committed path.
@@ -40247,6 +40306,7 @@ impl EngineRuntime {
             duration_ms: transition.duration.as_millis().min(u64::MAX as u128) as u64,
             progress_millis: 1_000,
             fault: None,
+            transition_hold_active: transition.destination_hold.is_some(),
             settlement: None,
         };
         self.timeline_last_announced_phase_id = None;
@@ -40912,12 +40972,7 @@ impl EngineRuntime {
                 return;
             }
         };
-        let target_position_ms = self
-            .timeline_follow_transport
-            .as_ref()
-            .map(|transport| transport.position_ms)
-            .unwrap_or(duration_ms)
-            .min(transition.target.duration_ms);
+        let target_position_ms = self.timeline_follow_target_position_ms_at(&transition, now);
         // Do not retire either transport at the visual terminal point. The
         // captured quorum owns a short Settling phase so audio/video/lighting
         // can all attest the same target generation before root replacement.
@@ -41778,6 +41833,13 @@ impl EngineRuntime {
         division: u8,
         enabled: bool,
     ) -> Result<(), String> {
+        // Canonical Stage 2 loop-off is also the pedal release for the
+        // runtime-only post-Follow hold. It must not require an authored A-B
+        // region, because the hold deliberately does not create one.
+        if !enabled && self.timeline_follow_runtime.transition_hold_active {
+            self.clear_timeline_follow_destination_hold();
+            return Ok(());
+        }
         let target = absolute_timeline_loop_bounds(
             self.timeline_loop_region.as_ref(),
             division,
@@ -41823,8 +41885,8 @@ impl EngineRuntime {
             true,
             "DJ Link beat jump timeline identity is stale",
         )?;
-        if !matches!(bars, -4 | 4) {
-            return Err("DJ Link beat jump must be exactly -4 or 4 bars".to_string());
+        if bars != 4 {
+            return Err("DJ Link beat jump must be exactly +4 bars".to_string());
         }
         let duration = self.timeline_duration_ms();
         let current = self.timeline_position_ms;
@@ -41860,6 +41922,10 @@ impl EngineRuntime {
     }
 
     fn set_timeline_loop_enabled_state(&mut self, enabled: bool) {
+        if !enabled && self.timeline_follow_runtime.transition_hold_active {
+            self.clear_timeline_follow_destination_hold();
+            return;
+        }
         let was_enabled = !matches!(
             self.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Disabled
@@ -41885,6 +41951,34 @@ impl EngineRuntime {
                 );
             }
         }
+    }
+
+    fn install_timeline_follow_destination_hold(&mut self, hold: TimelineFollowHoldPlan) {
+        self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: next_timeline_runtime_generation(self.timeline_loop_runtime.generation),
+            status: TimelineLoopRuntimeStatus::Looping,
+            a_ms: Some(0),
+            b_ms: Some(hold.end_ms),
+            musical_length_millibeats: Some(hold.musical_length_millibeats),
+            wrap_count: 0,
+        };
+    }
+
+    fn clear_timeline_follow_destination_hold(&mut self) {
+        self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: next_timeline_runtime_generation(self.timeline_loop_runtime.generation),
+            status: TimelineLoopRuntimeStatus::Disabled,
+            a_ms: None,
+            b_ms: None,
+            musical_length_millibeats: None,
+            wrap_count: self.timeline_loop_runtime.wrap_count,
+        };
+        self.timeline_follow_runtime.transition_hold_active = false;
+        self.push_timeline_guide_cue(
+            self.timeline_position_ms,
+            "Break".to_string(),
+            TimelineGuideCueKind::Break,
+        );
     }
 
     /// Advance one monotonically increasing transport segment. Returns true
@@ -43589,20 +43683,24 @@ impl EngineRuntime {
         transition: &RuntimeTimelineFollowTransition,
     ) -> VideoSnapshot {
         let mut snapshot = self.video_snapshot_unweighted();
-        let position_ms = transition
-            .settlement_target_position_ms
-            .or_else(|| {
-                self.timeline_follow_transport
-                    .as_ref()
-                    .map(|transport| transport.position_ms)
-            })
-            .unwrap_or_else(|| {
-                self.last_tick
-                    .saturating_duration_since(transition.started_at)
-                    .as_millis()
-                    .min(u64::MAX as u128) as u64
-            })
-            .min(transition.target.duration_ms);
+        let position_ms = if transition.destination_hold.is_some() {
+            0
+        } else {
+            transition
+                .settlement_target_position_ms
+                .or_else(|| {
+                    self.timeline_follow_transport
+                        .as_ref()
+                        .map(|transport| transport.position_ms)
+                })
+                .unwrap_or_else(|| {
+                    self.last_tick
+                        .saturating_duration_since(transition.started_at)
+                        .as_millis()
+                        .min(u64::MAX as u128) as u64
+                })
+                .min(transition.target.duration_ms)
+        };
         let target_has_explicit_video_lanes = transition
             .target
             .layers
@@ -43784,6 +43882,7 @@ impl EngineRuntime {
                 .saturating_duration_since(transition.started_at)
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64;
+            let target_position_ms = self.timeline_follow_target_position_ms_at(transition, now);
             let raw = elapsed_ms.min(duration_ms) as f32 / duration_ms as f32;
             let incoming_weight = video_transition_curve_progress(transition.curve, raw);
             let outgoing_projection_ids = layers
@@ -43808,14 +43907,14 @@ impl EngineRuntime {
                 let mut projections = self.timeline_video_projection_layers_with_used_ids(
                     &transition.target.video_clips,
                     &transition.target.layers,
-                    elapsed_ms,
+                    target_position_ms,
                     true,
                     &mut used_ids,
                 );
                 self.apply_timeline_video_projection_automations_from_summaries(
                     &mut projections,
                     &transition.target.video_automations,
-                    elapsed_ms,
+                    target_position_ms,
                 );
                 layers.extend(projections.into_iter().map(|mut projection| {
                     projection.layer.state.opacity *= incoming_weight;
@@ -43826,8 +43925,8 @@ impl EngineRuntime {
                 // used the numeric lane value as an authored VJ-layer ID.
                 let mut desired = BTreeMap::<VideoLayerId, TimelineVideoClipSummary>::new();
                 for clip in transition.target.video_clips.iter().filter(|clip| {
-                    clip.start_ms <= elapsed_ms
-                        && elapsed_ms < clip.start_ms.saturating_add(clip.duration_ms)
+                    clip.start_ms <= target_position_ms
+                        && target_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
                 }) {
                     let layer_id = VideoLayerId::from(clip.layer_id);
                     match desired.get(&layer_id) {
@@ -43860,7 +43959,7 @@ impl EngineRuntime {
                     incoming.media_asset_id = Some(asset.id);
                     incoming.state.position_ms = clip
                         .offset_ms
-                        .saturating_add(elapsed_ms.saturating_sub(clip.start_ms));
+                        .saturating_add(target_position_ms.saturating_sub(clip.start_ms));
                     incoming.state.playing = true;
                     incoming.state.opacity *= incoming_weight;
                     incoming.clip_slots.clear();
@@ -49435,6 +49534,23 @@ fn child_timeline_audio_runtime_clips(
         );
     }
     active
+}
+
+/// The Follow target audio projection shares the held destination transport:
+/// an admitted hold never advances the target-side playhead while settlement
+/// is outstanding. This stays independent of the published runtime hold flag,
+/// which intentionally becomes true only after a successful settlement.
+fn timeline_follow_target_audio_position_ms(snapshot: &EngineSnapshot) -> u64 {
+    if snapshot
+        .timeline
+        .follow
+        .as_ref()
+        .is_some_and(|follow| follow.hold_first_destination_measure)
+    {
+        0
+    } else {
+        snapshot.timeline.follow_runtime.elapsed_ms
+    }
 }
 
 fn append_child_timeline_audio_runtime_clips(
@@ -61268,7 +61384,7 @@ mod tests {
     const _: () = assert!(RELEASE_GATE_HZ == 44);
 
     #[test]
-    fn dj_link_authored_bar_jump_is_bounded_and_non_cumulative() {
+    fn dj_link_authored_bar_jump_is_forward_only_bounded_and_non_cumulative() {
         assert_eq!(
             dj_link_authored_bar_jump_target(0, 20_000, 120.0, 4).unwrap(),
             8_000
@@ -61278,11 +61394,13 @@ mod tests {
             16_000
         );
         assert_eq!(
-            dj_link_authored_bar_jump_target(16_000, 20_000, 120.0, -4).unwrap(),
-            8_000
+            dj_link_authored_bar_jump_target(16_000, 20_000, 120.0, -4).unwrap_err(),
+            "DJ Link beat jump must be exactly +4 bars"
         );
-        assert!(dj_link_authored_bar_jump_target(0, 20_000, 120.0, 1).is_err());
-        assert!(dj_link_authored_bar_jump_target(0, 1_000, 120.0, -4).is_err());
+        assert_eq!(
+            dj_link_authored_bar_jump_target(0, 20_000, 120.0, 1).unwrap_err(),
+            "DJ Link beat jump must be exactly +4 bars"
+        );
         assert!(dj_link_authored_bar_jump_target(19_000, 20_000, 120.0, 4).is_err());
         assert!(dj_link_authored_bar_jump_target(0, 20_000, 0.0, 4).is_err());
         assert!(!EngineCommand::DjLinkTimelineBeatJump {
@@ -109380,6 +109498,25 @@ mod tests {
     }
 
     #[test]
+    fn dj_link_direct_minus_four_beat_jump_is_rejected_without_mutation() {
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(1), 3_500)
+            .unwrap();
+        let before = engine.snapshot();
+        let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+
+        assert_eq!(
+            engine
+                .dj_link_timeline_beat_jump_with_canonical_snapshot(TimelineId(1), -4)
+                .unwrap_err(),
+            "DJ Link beat jump must be exactly +4 bars"
+        );
+
+        assert_dj_link_exact_a("minus-four beat jump", &before, &before_audio, &engine);
+    }
+
+    #[test]
     fn dj_link_stage2_worker_revalidates_playing_and_timeline_identity() {
         let engine = dj_link_transaction_test_engine();
         engine
@@ -110041,6 +110178,7 @@ mod tests {
             preroll_ms: 100,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut second = TimelineSnapshot {
@@ -111075,6 +111213,7 @@ mod tests {
             preroll_ms: 100,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Fault,
         });
         let incoming = TimelineSnapshot {
@@ -111228,6 +111367,7 @@ mod tests {
             preroll_ms: 100,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy,
         });
         let mut target = TimelineSnapshot {
@@ -111269,6 +111409,7 @@ mod tests {
             preroll_ms: 100,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy,
         });
         runtime
@@ -111318,6 +111459,368 @@ mod tests {
             protocol::TimelineFollowRuntimeStatus::Settling
         ));
         runtime
+    }
+
+    #[test]
+    fn follow_destination_hold_is_indefinite_meter_aware_and_runtime_only() {
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        runtime.clock.bpm = 120.0;
+        let mut source = runtime.timeline_bank[0].clone();
+        source.duration_ms = 10_000;
+        source.tempo_meter_map = vec![TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 120.0,
+            numerator: 4,
+            denominator: 4,
+            interpolation: TimelineTempoInterpolation::Step,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        source.follow.as_mut().unwrap().duration = VideoClipTakeDuration {
+            unit: VideoClipTakeDurationUnit::Bars,
+            value_milliunits: 1_000,
+        };
+        source
+            .follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        let mut target = runtime.timeline_bank[1].clone();
+        target.duration_ms = 2_500;
+        target.phases[0].end_ms = 2_500;
+        target.tempo_meter_map = vec![TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 120.0,
+            numerator: 5,
+            denominator: 4,
+            interpolation: TimelineTempoInterpolation::Step,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        let authored_target = target.clone();
+        runtime
+            .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
+            .unwrap();
+        let authored_project_before_hold = runtime.build_persistence_snapshot();
+        let admitted_at = Instant::now();
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                admitted_at,
+            )
+            .unwrap();
+        let transition = runtime.timeline_follow_transition.as_ref().unwrap();
+        assert_eq!(transition.duration, Duration::from_millis(2_000));
+        assert_eq!(
+            transition.destination_hold,
+            Some(TimelineFollowHoldPlan {
+                end_ms: 2_500,
+                musical_length_millibeats: 5_000,
+            })
+        );
+
+        // The target root and descendants stay at position zero throughout
+        // Transitioning.
+        runtime.advance_child_transports(admitted_at + Duration::from_millis(1_000));
+        assert_eq!(
+            runtime
+                .timeline_follow_transport
+                .as_ref()
+                .map(|transport| transport.position_ms),
+            Some(0)
+        );
+
+        runtime.advance_timeline_follow(admitted_at + Duration::from_millis(2_000));
+        assert_eq!(runtime.timeline_id, TimelineId(8_102));
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_position_ms, 0);
+        assert!(runtime.timeline_follow_runtime.transition_hold_active);
+        assert_eq!(runtime.timeline_loop_runtime.a_ms, Some(0));
+        assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(2_500));
+        assert_eq!(
+            runtime.timeline_loop_runtime.musical_length_millibeats,
+            Some(5_000)
+        );
+        assert_eq!(runtime.timeline_bank[1], authored_target);
+        assert!(runtime.timeline_loop_region.is_none());
+        let persistence = runtime.build_persistence_snapshot();
+        assert_eq!(
+            persistence.timeline_bank[1],
+            authored_project_before_hold.timeline_bank[1]
+        );
+        assert!(persistence.timeline.loop_region.is_none());
+
+        for expected_wrap_count in 1..=3 {
+            runtime.last_tick_interval = Duration::from_millis(2_500);
+            runtime.advance_timeline(admitted_at + Duration::from_millis(2_000));
+            assert_eq!(runtime.timeline_position_ms, 0);
+            assert_eq!(
+                runtime.timeline_loop_runtime.wrap_count,
+                expected_wrap_count
+            );
+            assert!(runtime.timeline_follow_runtime.transition_hold_active);
+        }
+
+        runtime.set_timeline_loop_absolute_state(0, false).unwrap();
+        assert!(!runtime.timeline_follow_runtime.transition_hold_active);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        assert!(runtime.timeline_loop_region.is_none());
+        assert!(runtime.set_timeline_loop_absolute_state(0, true).is_err());
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(admitted_at + Duration::from_millis(2_100));
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert_eq!(runtime.timeline_bank[1], authored_target);
+    }
+
+    #[test]
+    fn follow_destination_hold_settles_one_source_measure_ignoring_authored_bars() {
+        for authored_duration in [
+            VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Bars,
+                value_milliunits: 500,
+            },
+            VideoClipTakeDuration {
+                unit: VideoClipTakeDurationUnit::Bars,
+                value_milliunits: 2_000,
+            },
+        ] {
+            let mut runtime =
+                timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+            runtime.clock.bpm = 120.0;
+            let mut source = runtime.timeline_bank[0].clone();
+            source.duration_ms = 10_000;
+            source.tempo_meter_map = vec![TimelineTempoMeterPoint {
+                position_sixteenth_steps: 0,
+                bpm: 120.0,
+                numerator: 5,
+                denominator: 4,
+                interpolation: TimelineTempoInterpolation::Step,
+                ..TimelineTempoMeterPoint::default()
+            }];
+            let follow = source.follow.as_mut().unwrap();
+            follow.duration = authored_duration;
+            follow.hold_first_destination_measure = true;
+
+            let mut target = runtime.timeline_bank[1].clone();
+            target.duration_ms = 1_500;
+            target.phases[0].end_ms = 1_500;
+            target.tempo_meter_map = vec![TimelineTempoMeterPoint {
+                position_sixteenth_steps: 0,
+                bpm: 120.0,
+                numerator: 3,
+                denominator: 4,
+                interpolation: TimelineTempoInterpolation::Step,
+                ..TimelineTempoMeterPoint::default()
+            }];
+            runtime
+                .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
+                .unwrap();
+
+            runtime
+                .begin_timeline_follow(
+                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                    Instant::now(),
+                )
+                .unwrap();
+            let transition = runtime.timeline_follow_transition.as_ref().unwrap();
+            assert_eq!(
+                transition.duration,
+                Duration::from_millis(2_500),
+                "hold must ignore authored Follow duration {authored_duration:?}"
+            );
+            assert_eq!(
+                transition.destination_hold,
+                Some(TimelineFollowHoldPlan {
+                    end_ms: 1_500,
+                    musical_length_millibeats: 3_000,
+                }),
+                "destination must use its own meter, not the source meter"
+            );
+        }
+    }
+
+    #[test]
+    fn follow_destination_hold_does_not_pre_fire_target_events_or_audio() {
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let mut source = runtime.timeline_bank[0].clone();
+        source
+            .follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        let mut target = runtime.timeline_bank[1].clone();
+        target.duration_ms = 2_500;
+        target.tempo_meter_map = vec![TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 120.0,
+            numerator: 5,
+            denominator: 4,
+            interpolation: TimelineTempoInterpolation::Step,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        target.layers = implicit_timeline_layers();
+        target.layers.push(default_timeline_audio_layer(2));
+        target.audio_clips = vec![TimelineAudioClipSummary {
+            id: 8_120,
+            layer_id: 2,
+            path: "target-hold.wav".to_string(),
+            start_ms: 50,
+            duration_ms: 1_000,
+            ..TimelineAudioClipSummary::default()
+        }];
+        target.events = vec![TimelineCueEventSummary {
+            id: 8_121,
+            cue_id: 8_122,
+            time_ms: 50,
+            track: TimelineTrackKind::Lighting,
+            duration_ms: 100,
+            ..TimelineCueEventSummary::default()
+        }];
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 8_122,
+            label: "Target event must not pre-fire".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
+            .unwrap();
+        let admitted_at = Instant::now();
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                admitted_at,
+            )
+            .unwrap();
+
+        runtime.advance_child_transports(admitted_at + Duration::from_millis(75));
+        let transport = runtime.timeline_follow_transport.as_ref().unwrap();
+        assert_eq!(transport.position_ms, 0);
+        assert_eq!(transport.activated_events, vec![false]);
+        let pre_settlement_snapshot = runtime.build_snapshot(0);
+        let target_audio_position_ms =
+            timeline_follow_target_audio_position_ms(&pre_settlement_snapshot);
+        assert_eq!(target_audio_position_ms, 0);
+        assert!(pre_settlement_snapshot.timeline_bank[1]
+            .audio_clips
+            .iter()
+            .all(|clip| target_audio_position_ms < clip.start_ms));
+
+        // Exercise the same projection read by the output consumer, rather
+        // than only its position helper. The target clip begins at 50 ms, so
+        // it must not be handed to the consumer while the Follow is held at
+        // the target origin.
+        let consumer = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        *consumer.snapshot.write().unwrap() = pre_settlement_snapshot;
+        let frozen_output = consumer.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(frozen_output.position_ms, 0);
+        assert!(frozen_output
+            .child_clips
+            .iter()
+            .all(|child| child.clip.id != 8_120));
+
+        let duration = runtime
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .duration;
+        runtime.advance_timeline_follow(admitted_at + duration);
+        let generation = runtime.timeline_follow_runtime.generation;
+        runtime
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    epoch: runtime.output_ownership_gate.status().epoch,
+                    generation,
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Applied,
+                },
+                admitted_at + duration,
+            )
+            .unwrap();
+        assert!(runtime.timeline_follow_runtime.transition_hold_active);
+        runtime.set_timeline_loop_absolute_state(0, false).unwrap();
+        runtime.last_tick_interval = Duration::from_millis(100);
+        runtime.advance_timeline(admitted_at + duration + Duration::from_millis(100));
+        *consumer.snapshot.write().unwrap() = runtime.build_snapshot(0);
+        let released_output = consumer.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(released_output.position_ms, 100);
+        assert!(released_output.clips.iter().any(|clip| clip.id == 8_120));
+    }
+
+    #[test]
+    fn follow_abort_and_fault_never_arm_the_destination_hold() {
+        let now = Instant::now();
+        let mut aborted = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        aborted.timeline_bank[1].duration_ms = 2_500;
+        aborted
+            .timeline_follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        aborted.timeline_bank[0]
+            .follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        aborted
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        assert!(
+            aborted.abort_timeline_follow(protocol::TimelineFollowAbortReason::ExplicitAbort, now,)
+        );
+        assert!(!aborted.timeline_follow_runtime.transition_hold_active);
+
+        let mut faulted = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        faulted.timeline_bank[1].duration_ms = 2_500;
+        faulted
+            .timeline_follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        faulted.timeline_bank[0]
+            .follow
+            .as_mut()
+            .unwrap()
+            .hold_first_destination_measure = true;
+        faulted
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        let transition = faulted.timeline_follow_transition.clone().unwrap();
+        faulted
+            .settle_timeline_follow_failure(
+                "forced Follow fault".to_string(),
+                TimelineFollowFailureContext {
+                    now,
+                    generation: transition.generation,
+                    source_timeline_id: transition.source_timeline_id,
+                    target: Some(transition.target),
+                    source_bpm: Some(transition.source_bpm),
+                    fault_policy: transition.fault_policy,
+                    admission_reason: transition.admission_reason,
+                },
+            )
+            .unwrap();
+        assert!(!faulted.timeline_follow_runtime.transition_hold_active);
+        assert!(matches!(
+            faulted.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
     }
 
     #[test]
@@ -111879,6 +112382,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -112887,6 +113391,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut target = TimelineSnapshot {
@@ -113047,6 +113552,7 @@ mod tests {
         source_follow.preroll_ms = 0;
         source_follow.duration = VideoClipTakeDuration::milliseconds(0);
         source_follow.video_kind = VideoClipTakeKind::Cut;
+        source_follow.hold_first_destination_measure = true;
         let target_follow = bank[1].follow.as_mut().unwrap();
         target_follow.video_kind = VideoClipTakeKind::Cut;
         target_follow.duration = VideoClipTakeDuration::milliseconds(0);
@@ -113061,6 +113567,11 @@ mod tests {
             .unwrap());
         cut.advance_timeline_follow(now);
         assert_eq!(cut.timeline_id, TimelineId(8_102));
+        assert!(!cut.timeline_follow_runtime.transition_hold_active);
+        assert!(matches!(
+            cut.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
         assert!(cut.timeline_follow_natural_boundary_armed);
         assert!(cut
             .begin_timeline_follow(
@@ -113452,6 +113963,7 @@ mod tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -113660,6 +114172,7 @@ mod tests {
             preroll_ms: 1_000,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary {
@@ -113673,6 +114186,7 @@ mod tests {
             duration_ms: 1_000,
             progress_millis: 500,
             fault: None,
+            transition_hold_active: false,
             settlement: None,
         };
         snapshot.timeline_bank = vec![snapshot.timeline.clone(), target];

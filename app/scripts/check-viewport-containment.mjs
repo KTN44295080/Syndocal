@@ -6218,6 +6218,8 @@ async function dispatchCdpMouseDrag(client, start, end, intermediate = null) {
 function readMappingViewportConformanceStateInPage() {
   const root = document.querySelector(".setupStageContext");
   const stage = root?.querySelector(".editableStage");
+  const stageFloor = stage?.querySelector(".stageFloor") ?? null;
+  const stageGrid = stage?.querySelector(".stageGrid") ?? null;
   const fixture = root?.querySelector('[data-stage-fixture-id="9"]');
   const hitTarget = fixture?.querySelector(".stageFixtureHitTarget") ?? null;
   const shape = fixture?.querySelector("[data-stage-fixture-shape]") ?? null;
@@ -6235,6 +6237,8 @@ function readMappingViewportConformanceStateInPage() {
     ?? stage?.querySelector(".stageLabel")
     ?? null;
   const stageRect = stage?.getBoundingClientRect();
+  const stageFloorRect = stageFloor?.getBoundingClientRect();
+  const stageGridRect = stageGrid?.getBoundingClientRect();
   const hitRect = hitTarget?.getBoundingClientRect();
   const shapeRect = shape?.getBoundingClientRect();
   const selectedStageObjectShapeRect = selectedStageObjectShape?.getBoundingClientRect();
@@ -6374,6 +6378,26 @@ function readMappingViewportConformanceStateInPage() {
           bottom: stageRect.bottom,
           width: stageRect.width,
           height: stageRect.height,
+        }
+      : null,
+    stageFloorRect: stageFloorRect
+      ? {
+          left: stageFloorRect.left,
+          top: stageFloorRect.top,
+          right: stageFloorRect.right,
+          bottom: stageFloorRect.bottom,
+          width: stageFloorRect.width,
+          height: stageFloorRect.height,
+        }
+      : null,
+    stageGridRect: stageGridRect
+      ? {
+          left: stageGridRect.left,
+          top: stageGridRect.top,
+          right: stageGridRect.right,
+          bottom: stageGridRect.bottom,
+          width: stageGridRect.width,
+          height: stageGridRect.height,
         }
       : null,
     fixturePoint: fixturePoint
@@ -6580,7 +6604,35 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   });
   await sleep(40);
   const initial = await readMappingViewportConformanceState(client);
-
+  const fixtureLimitVisuals = await client.evaluate(`(() => {
+    const visible = (selector) => Array.from(document.querySelectorAll(selector))
+      .find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+    const meter = visible('[data-dimmer-limit-meter]');
+    const movement = visible('[data-movement-limit-map]');
+    const meterRect = meter?.getBoundingClientRect();
+    const movementRect = movement?.getBoundingClientRect();
+    return {
+      meter: meterRect ? {
+        width: meterRect.width,
+        height: meterRect.height,
+        minimum: Number(meter.getAttribute('data-dimmer-limit-minimum')),
+        maximum: Number(meter.getAttribute('data-dimmer-limit-maximum')),
+        role: meter.getAttribute('role') ?? '',
+        ariaLabel: meter.getAttribute('aria-label') ?? '',
+        ariaDescription: meter.getAttribute('aria-description') ?? '',
+      } : null,
+      movement: movementRect ? {
+        width: movementRect.width,
+        height: movementRect.height,
+        role: movement.getAttribute('role') ?? '',
+        tabIndex: movement.tabIndex,
+        keyboardHelp: movement.getAttribute('title') ?? '',
+      } : null,
+    };
+  })()`);
   await clickVisibleSelector(client, '[data-mapping-tool="rotate"]');
   await waitForClientCondition(
     client,
@@ -6610,6 +6662,127 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   const zoomOneTracking = await exerciseMappingViewportFixtureTracking(client);
   const final = await readMappingViewportConformanceState(client);
 
+  // Probe hover-only labels last at the full-stage view. The earlier tracking
+  // proof has separated the selected fixture from the mock's stacked fixture
+  // groups, and clearing the pick can no longer disturb later geometry checks.
+  await clickVisibleSelector(client, '[data-mapping-selection-action="clear"]');
+  await sleep(40);
+  await setMappingViewportConformanceZoom(client, 1);
+  await sleep(50);
+  const hoverResetPoints = [
+    { x: initial.stageRect.left + 4, y: initial.stageRect.top + 4 },
+    { x: initial.stageRect.right - 4, y: initial.stageRect.top + 4 },
+    { x: initial.stageRect.left + 4, y: initial.stageRect.bottom - 4 },
+  ];
+  for (const point of hoverResetPoints) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+      button: "none",
+      buttons: 0,
+      pointerType: "mouse",
+    });
+    await sleep(30);
+    const anyFixtureHovered = await client.evaluate(
+      `Boolean(document.querySelector('.setupStageContext [data-stage-fixture-hovered="true"]'))`,
+    );
+    if (!anyFixtureHovered) break;
+  }
+  const hoverFixtures = await client.evaluate(`(() => {
+    const stage = document.querySelector('.setupStageContext .editableStage');
+    const stageRect = stage?.getBoundingClientRect();
+    const selectedId = ${initial.label.fixtureId};
+    const selectedRect = document
+      .querySelector('.setupStageContext [data-stage-fixture-id="${initial.label.fixtureId}"]')
+      ?.getBoundingClientRect();
+    if (!stageRect) return null;
+    return Array.from(document.querySelectorAll('.setupStageContext [data-stage-fixture-id]'))
+      .map((fixture) => {
+        const hitTarget = fixture.querySelector('.stageFixtureHitTarget') ?? fixture;
+        const rect = hitTarget.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const id = Number(fixture.getAttribute('data-stage-fixture-id') ?? 0);
+        const topId = Number(document.elementFromPoint(x, y)
+          ?.closest?.('[data-stage-fixture-id]')?.getAttribute('data-stage-fixture-id') ?? 0);
+        const distance = selectedRect
+          ? Math.hypot(x - (selectedRect.left + selectedRect.width / 2), y - (selectedRect.top + selectedRect.height / 2))
+          : Math.hypot(x - stageRect.left, y - stageRect.top);
+        return { id, x, y, topId, distance };
+      })
+      .filter((fixture) => fixture.id > 0
+        && fixture.topId === fixture.id
+        && fixture.x >= stageRect.left
+        && fixture.x <= stageRect.right
+        && fixture.y >= stageRect.top
+        && fixture.y <= stageRect.bottom)
+      .sort((left, right) => right.distance - left.distance);
+  })()`);
+  if (!Array.isArray(hoverFixtures) || hoverFixtures.length === 0) {
+    throw new Error("Mapping viewport hover probe fixture is unavailable");
+  }
+  const labelsBeforeHover = await client.evaluate(`Array.from(
+    document.querySelectorAll('.setupStageContext [data-stage-fixture-label-id]'),
+    (label) => Number(label.getAttribute('data-stage-fixture-label-id') ?? 0),
+  )`);
+  let hoverFixture = null;
+  let hoverFixtureIsCurrentHover = false;
+  let hoverFixtureLabelVisibleOnHover = false;
+  const hoverAttempts = [];
+  for (const candidate of hoverFixtures) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: candidate.x,
+      y: candidate.y,
+      button: "none",
+      buttons: 0,
+      pointerType: "mouse",
+    });
+    await sleep(30);
+    hoverFixtureIsCurrentHover = await client.evaluate(
+      `document.querySelector('.setupStageContext [data-stage-fixture-id="${candidate.id}"]')
+        ?.getAttribute('data-stage-fixture-hovered') === 'true'`,
+    );
+    hoverFixtureLabelVisibleOnHover = await client.evaluate(`(() => {
+      const label = document.querySelector('.setupStageContext [data-stage-fixture-label-id="${candidate.id}"]');
+      const rect = label?.getBoundingClientRect();
+      return Boolean(rect && rect.width > 0 && rect.height > 0);
+    })()`);
+    const hoverTopFixtureId = await client.evaluate(
+      `Number(document.elementFromPoint(${JSON.stringify(candidate.x)}, ${JSON.stringify(candidate.y)})
+        ?.closest?.('[data-stage-fixture-id]')?.getAttribute('data-stage-fixture-id') ?? 0)`,
+    );
+    hoverAttempts.push({
+      fixtureId: candidate.id,
+      topFixtureId: hoverTopFixtureId,
+      current: hoverFixtureIsCurrentHover,
+      labelVisible: hoverFixtureLabelVisibleOnHover,
+    });
+    if (hoverFixtureIsCurrentHover && hoverFixtureLabelVisibleOnHover) {
+      hoverFixture = candidate;
+      break;
+    }
+  }
+  const hoverFixtureState = await readMappingViewportConformanceState(client);
+  const hoverFixtureLabelAbsentBeforeHover = Boolean(
+    hoverFixture && !labelsBeforeHover.includes(hoverFixture.id),
+  );
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: initial.stageRect.left + 4,
+    y: initial.stageRect.top + 4,
+    button: "none",
+    buttons: 0,
+    pointerType: "mouse",
+  });
+  await sleep(40);
+  const hoverFixtureLabelAbsentAfterHover = hoverFixture
+    ? await client.evaluate(
+        `!document.querySelector('.setupStageContext [data-stage-fixture-label-id="${hoverFixture.id}"]')`,
+      )
+    : false;
+
   const close = (left, right, tolerance = 0.001) =>
     Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
   const expectedStageObjectHandleNames = [
@@ -6637,16 +6810,59 @@ async function runMappingViewportConformanceViewport(client, viewport) {
         && handle.topHitOwnsHandle;
     });
   const rotateFixtureHandle = rotateMode.detachedHandles["fixture-yaw"];
+  const rectCoversStage = (rect, state) =>
+    Boolean(rect && state.stageRect)
+    && Math.abs(rect.left - state.stageRect.left) <= 1.1
+    && Math.abs(rect.top - state.stageRect.top) <= 1.1
+    && Math.abs(rect.right - state.stageRect.right) <= 1.1
+    && Math.abs(rect.bottom - state.stageRect.bottom) <= 1.1;
   const checks = {
     initialViewportFitsVisibleContentCloserThanFullStage:
       initial.zoom.value > 1
-      && initial.viewBox.width < 100
-      && initial.viewBox.height < 100,
+      && Math.min(initial.viewBox.width, initial.viewBox.height) < 100,
     adaptiveMaximumExceedsLegacyFourX:
       initial.zoom.min === 1
       && initial.zoom.max > 4
       && maxZoom.zoom.value === initial.zoom.max
       && maxZoom.zoom.readout === `${Math.round(initial.zoom.max * 100)}%`,
+    rectangularViewBoxMatchesRenderedStageWithoutDistortion:
+      [zoomOne, maxZoom].every((state) =>
+        state.viewBox
+        && state.stageRect
+        && close(
+          state.viewBox.width / state.viewBox.height,
+          state.stageRect.width / state.stageRect.height,
+          0.02,
+        )
+      )
+      && close(Math.min(zoomOne.viewBox.width, zoomOne.viewBox.height), 100, 0.02),
+    stageFloorAndGridCoverTheWholeViewport:
+      [zoomOne, maxZoom].every((state) =>
+        rectCoversStage(state.stageFloorRect, state)
+        && rectCoversStage(state.stageGridRect, state)
+      ),
+    fixtureLimitVisualsUseAReadableMeterAndSquareMovementMap:
+      Boolean(fixtureLimitVisuals.meter)
+      && fixtureLimitVisuals.meter.minimum >= 0
+      && fixtureLimitVisuals.meter.maximum <= 65_535
+      && fixtureLimitVisuals.meter.minimum <= fixtureLimitVisuals.meter.maximum
+      && fixtureLimitVisuals.meter.height > fixtureLimitVisuals.meter.width
+      && Boolean(fixtureLimitVisuals.movement)
+      && Math.abs(fixtureLimitVisuals.movement.width - fixtureLimitVisuals.movement.height) <= 1.1
+      && fixtureLimitVisuals.movement.role === "group"
+      && fixtureLimitVisuals.movement.tabIndex === 0
+      && fixtureLimitVisuals.movement.keyboardHelp.includes("Arrow keys"),
+    dimmerLimitMeterExposesActualRangeWithoutSliderRole:
+      Boolean(fixtureLimitVisuals.meter)
+      && fixtureLimitVisuals.meter.role === "img"
+      && fixtureLimitVisuals.meter.ariaLabel === "Dimmer Limits"
+      && fixtureLimitVisuals.meter.ariaDescription.includes(
+        `minimum ${fixtureLimitVisuals.meter.minimum}`,
+      )
+      && fixtureLimitVisuals.meter.ariaDescription.includes(
+        `maximum ${fixtureLimitVisuals.meter.maximum}`,
+      )
+      && fixtureLimitVisuals.meter.role !== "slider",
     maxZoomMakesGlyphCellAtLeastNinetySixCssPixels:
       maxZoom.fixtureShape.gridUnitScreenPx >= 96,
     minorGridPatternEqualsDerivedGlyphWorldCell:
@@ -6714,6 +6930,11 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && zoomOne.label.screenHeight > 0
       && zoomOne.label.screenFontSizePx >= 9
       && zoomOne.label.screenFontSizePx <= 13,
+    fixtureLabelsRequireSelectionOrCurrentHover:
+      hoverFixtureLabelAbsentBeforeHover
+      && hoverFixtureIsCurrentHover
+      && hoverFixtureLabelVisibleOnHover
+      && hoverFixtureLabelAbsentAfterHover,
     selectModeUsesOutlineWithoutFixtureYawPins:
       initial.fixtureYawHandleCount === 0
       && zoomOne.fixtureYawHandleCount === 0
@@ -6766,6 +6987,14 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     failedChecks,
     viewport,
     initial,
+    fixtureLimitVisuals,
+    hoverFixture,
+    hoverAttempts,
+    hoverFixtureState,
+    hoverFixtureIsCurrentHover,
+    hoverFixtureLabelAbsentBeforeHover,
+    hoverFixtureLabelVisibleOnHover,
+    hoverFixtureLabelAbsentAfterHover,
     rotateMode,
     maxZoom,
     maxTracking,
@@ -31826,6 +32055,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
       const hitTarget = node?.querySelector('.stageFixtureHitTarget') ?? null;
       const outline = node?.querySelector('[data-stage-fixture-outline]') ?? null;
       const segmentElements = [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])];
+      const segmentGroup = segmentElements[0]?.parentElement ?? null;
       const beamElements = [...(root?.querySelectorAll('[data-stage-beam-fixture-id="' + id + '"]') ?? [])];
       const screenRect = (element) => {
         const rect = element?.getBoundingClientRect();
@@ -31857,6 +32087,8 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         segmentHeights: segmentElements.map((segment) => numberAttribute(segment, 'height')),
         segmentScreenRects: segmentElements.map(screenRect),
         segmentScreenSizes: segmentElements.map(screenSize),
+        segmentSpace: segmentGroup?.getAttribute('data-stage-live-segment-space') ?? '',
+        segmentGroupTransform: segmentGroup?.getAttribute('transform') ?? '',
         beamCount: beamElements.length,
         beamFills: beamElements.map((beam) => beam.getAttribute('fill')),
         beamOpacities: beamElements.map((beam) => numberAttribute(beam, 'opacity')),
@@ -37798,7 +38030,7 @@ async function main() {
           )
           && result.initial.screenFixedLabels.projectionSurface.text === "Viewport Video Output"
           && result.initial.screenFixedLabels.stageObject.text === "Viewport Screen",
-        multiSegmentGlyphAndStripHeightStayFixedAtZoom:
+        multiSegmentGlyphScalesWithStageAtZoom:
           result.initial.zoom >= 1
           && result.auditZoom.zoom === 3.8
           && result.structureOnly.zoom > 1
@@ -37811,11 +38043,49 @@ async function main() {
             return size
               && audited
               && zoomed
-              && closePx(size.width, audited.width)
-              && closePx(size.height, audited.height)
-              && closePx(size.width, zoomed.width)
-              && closePx(size.height, zoomed.height);
+              && closePx(
+                audited.width / size.width,
+                result.auditZoom.zoom / result.initial.zoom,
+                0.1,
+              )
+              && closePx(
+                audited.height / size.height,
+                result.auditZoom.zoom / result.initial.zoom,
+                0.1,
+              )
+              && closePx(
+                zoomed.width / size.width,
+                result.structureOnly.zoom / result.initial.zoom,
+                0.1,
+              )
+              && closePx(
+                zoomed.height / size.height,
+                result.structureOnly.zoom / result.initial.zoom,
+                0.1,
+              );
           }),
+        multiSegmentGlyphHasNoInverseScreenScale:
+          [result.initial, result.auditZoom, result.structureOnly].every((state) =>
+            state.mega.segmentSpace === "stage"
+            && state.mega.segmentGroupTransform === ""
+          ),
+        multiSegmentOutlineToCellRatioStaysConstant:
+          [result.auditZoom, result.structureOnly].every((state) =>
+            result.initial.mega.outlineScreenRect
+            && result.initial.mega.segmentScreenRects[0]
+            && state.mega.outlineScreenRect
+            && state.mega.segmentScreenRects[0]
+            && closePx(
+              state.mega.outlineScreenRect.width / state.mega.segmentScreenRects[0].width,
+              result.initial.mega.outlineScreenRect.width / result.initial.mega.segmentScreenRects[0].width,
+              0.05,
+            )
+            && closePx(
+              state.mega.outlineScreenRect.height / state.mega.segmentScreenRects[0].height,
+              result.initial.mega.outlineScreenRect.height / result.initial.mega.segmentScreenRects[0].height,
+              0.05,
+            )
+          ),
         multiSegmentHitTargetRemainsStageScaled:
           result.initial.mega.hitTargetCount === 1
           && result.auditZoom.mega.hitTargetCount === 1

@@ -33,6 +33,56 @@ export const mappingViewportTargetGlyphCellPx = 96;
 export const mappingViewportMinimumMaxZoom = 4;
 export const mappingViewportZoomStep = 0.05;
 
+export interface MappingViewportBox {
+  x: number;
+  z: number;
+  width: number;
+  height: number;
+}
+
+const normalizedViewportAspect = (viewportPixelSize: { width: number; height: number }) => {
+  const width = Number.isFinite(viewportPixelSize.width) && viewportPixelSize.width > 0
+    ? viewportPixelSize.width
+    : 1;
+  const height = Number.isFinite(viewportPixelSize.height) && viewportPixelSize.height > 0
+    ? viewportPixelSize.height
+    : 1;
+  return width / height;
+};
+
+export const mappingViewportDimensions = (
+  zoom: number,
+  viewportPixelSize: { width: number; height: number },
+) => {
+  const shortSpan = stageViewBoxSize / Math.max(1, zoom);
+  const aspect = normalizedViewportAspect(viewportPixelSize);
+  return aspect >= 1
+    ? { width: shortSpan * aspect, height: shortSpan }
+    : { width: shortSpan, height: shortSpan / aspect };
+};
+
+const clampViewportCenter = (center: number, span: number) =>
+  span >= stageViewBoxSize
+    ? stageViewBoxSize / 2
+    : clampRange(center, span / 2, stageViewBoxSize - span / 2);
+
+export const mappingViewportBoxFor = (
+  zoom: number,
+  centerX: number,
+  centerZ: number,
+  viewportPixelSize: { width: number; height: number },
+): MappingViewportBox => {
+  const { width, height } = mappingViewportDimensions(zoom, viewportPixelSize);
+  const normalizedCenterX = clampViewportCenter(centerX, width);
+  const normalizedCenterZ = clampViewportCenter(centerZ, height);
+  return {
+    x: normalizedCenterX - width / 2,
+    z: normalizedCenterZ - height / 2,
+    width,
+    height,
+  };
+};
+
 export const mappingViewportMaxZoomForBounds = (
   bounds: StageWorldBounds,
   viewportPixelSize: { width: number; height: number },
@@ -53,18 +103,15 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     mappingViewportMaxZoomForBounds(options.stageWorldBounds(), options.viewportPixelSize()));
   const normalizedMappingViewportZoom = createMemo(() =>
     clampRange(options.viewportZoom(), 1, mappingViewportMaxZoom()));
-  const mappingViewportSize = createMemo(() => stageViewBoxSize / normalizedMappingViewportZoom());
-  const mappingViewportBox = createMemo(() => {
-    const size = mappingViewportSize();
-    return {
-      x: clampRange(options.viewportCenterX() - size / 2, 0, stageViewBoxSize - size),
-      z: clampRange(options.viewportCenterZ() - size / 2, 0, stageViewBoxSize - size),
-      size,
-    };
-  });
+  const mappingViewportBox = createMemo(() => mappingViewportBoxFor(
+    normalizedMappingViewportZoom(),
+    options.viewportCenterX(),
+    options.viewportCenterZ(),
+    options.viewportPixelSize(),
+  ));
   const mappingStageViewBox = createMemo(() => {
     const box = mappingViewportBox();
-    return `${box.x} ${box.z} ${box.size} ${box.size}`;
+    return `${box.x} ${box.z} ${box.width} ${box.height}`;
   });
   const mappingStageCursorSvgPoint = createMemo(() => {
     const point = options.stageCursorWorld();
@@ -107,10 +154,10 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     centerZ = options.viewportCenterZ(),
   ) => {
     const nextZoom = clampRange(zoom, 1, mappingViewportMaxZoom());
-    const nextSize = stageViewBoxSize / nextZoom;
+    const nextDimensions = mappingViewportDimensions(nextZoom, options.viewportPixelSize());
     options.setViewportZoom(nextZoom);
-    options.setViewportCenterX(clampRange(centerX, nextSize / 2, stageViewBoxSize - nextSize / 2));
-    options.setViewportCenterZ(clampRange(centerZ, nextSize / 2, stageViewBoxSize - nextSize / 2));
+    options.setViewportCenterX(clampViewportCenter(centerX, nextDimensions.width));
+    options.setViewportCenterZ(clampViewportCenter(centerZ, nextDimensions.height));
   };
   const zoomMappingViewport = (direction: -1 | 1) => {
     const currentZoom = normalizedMappingViewportZoom();
@@ -124,10 +171,14 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
       1,
       mappingViewportMaxZoom(),
     );
-    const nextSize = stageViewBoxSize / nextZoom;
-    const anchorX = clampRange((point.x - currentBox.x) / currentBox.size, 0, 1);
-    const anchorZ = clampRange((point.z - currentBox.z) / currentBox.size, 0, 1);
-    setMappingViewport(nextZoom, point.x + (0.5 - anchorX) * nextSize, point.z + (0.5 - anchorZ) * nextSize);
+    const nextDimensions = mappingViewportDimensions(nextZoom, options.viewportPixelSize());
+    const anchorX = clampRange((point.x - currentBox.x) / currentBox.width, 0, 1);
+    const anchorZ = clampRange((point.z - currentBox.z) / currentBox.height, 0, 1);
+    setMappingViewport(
+      nextZoom,
+      point.x + (0.5 - anchorX) * nextDimensions.width,
+      point.z + (0.5 - anchorZ) * nextDimensions.height,
+    );
   };
   const resetMappingViewport = () => {
     setMappingViewport(1, stageViewBoxSize / 2, stageViewBoxSize / 2);

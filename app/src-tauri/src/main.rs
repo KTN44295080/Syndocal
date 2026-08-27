@@ -976,6 +976,9 @@ struct DjLinkRuntime {
     timeline_id: Option<String>,
     position_bars: u64,
     loop_active: bool,
+    /// One immutable rebase receipt per completed Follow generation.  This
+    /// remains process-local alongside the DJ Link session ledger.
+    last_follow_rebase: Option<(u64, String, String)>,
 }
 
 impl DjLinkRuntime {
@@ -1012,6 +1015,7 @@ impl DjLinkRuntime {
             timeline_id: None,
             position_bars: 0,
             loop_active: false,
+            last_follow_rebase: None,
         }
     }
 
@@ -1048,6 +1052,7 @@ impl DjLinkRuntime {
             self.timeline_id = None;
             self.position_bars = 0;
             self.loop_active = false;
+            self.last_follow_rebase = None;
         }
     }
 
@@ -1091,6 +1096,7 @@ fn dj_link_timeline_state_from_snapshot(
             snapshot.timeline.loop_runtime.status,
             protocol::TimelineLoopRuntimeStatus::Disabled
         );
+    let transition_hold_active = snapshot.timeline.follow_runtime.transition_hold_active;
     // The engine's acknowledged clock is the only grid authority. The
     // Rekordbox track BPM is diagnostic metadata and may be stale or absent.
     let position_bars = dj_link_engine_position_bars(snapshot);
@@ -1112,6 +1118,7 @@ fn dj_link_timeline_state_from_snapshot(
         sequence,
         state,
         loop_active,
+        transition_hold_active,
         timeline_id,
         position_bars,
         play_session_id: runtime.play_session_id.clone(),
@@ -1526,8 +1533,14 @@ fn dispatch_dj_link_event(
                     state_generation: current_generation,
                 };
             };
+            let _ = dj_track_runtime::rebase_released_follow_completion(
+                &mut runtime,
+                &snapshot,
+                None,
+                None,
+            );
             DjLinkDispatchOutcome::TimelineState {
-                state_generation: current_generation,
+                state_generation: runtime.state_generation,
                 state: dj_link_timeline_state_from_snapshot(
                     &runtime, &snapshot, &event_id, sequence,
                 ),
@@ -1545,6 +1558,9 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
+            if payload.bars != 4 {
+                return dj_link_rejected("invalid_timeline_beat_jump_payload", current_generation);
+            }
             // The dispatcher keeps the runtime mutex through the synchronous
             // canonical ACK, so no concurrent app projection can advance its
             // generation while the worker repeats the authority check.
@@ -1554,6 +1570,13 @@ fn dispatch_dj_link_event(
                     state_generation: current_generation,
                 };
             };
+            let _ = dj_track_runtime::rebase_released_follow_completion(
+                &mut runtime,
+                &snapshot,
+                Some(&payload.timeline_id),
+                Some(&payload.play_session_id),
+            );
+            let current_generation = runtime.state_generation;
             if let Some(code) = dj_track_runtime::stage2_authority_rejection(
                 &runtime,
                 &payload.timeline_id,
@@ -1618,11 +1641,25 @@ fn dispatch_dj_link_event(
                     state_generation: current_generation,
                 };
             };
+            let _ = dj_track_runtime::rebase_released_follow_completion(
+                &mut runtime,
+                &snapshot,
+                Some(&payload.timeline_id),
+                Some(&payload.play_session_id),
+            );
+            let current_generation = runtime.state_generation;
             if let Some(code) = dj_track_runtime::stage2_authority_rejection(
                 &runtime,
                 &payload.timeline_id,
                 &payload.play_session_id,
                 &snapshot,
+            ) {
+                return dj_link_rejected(code, current_generation);
+            }
+            if let Some(code) = dj_track_runtime::timeline_loop_set_authority_rejection(
+                &runtime,
+                &snapshot,
+                payload.active,
             ) {
                 return dj_link_rejected(code, current_generation);
             }
@@ -113725,7 +113762,7 @@ f 1 2 3
             json!({
                 "timelineId": timeline_id,
                 "playSessionId": "play-error",
-                "bars": 3
+                "bars": 4
             }),
         ));
         assert_pre_release_stage2_rejection_preserves_runtime(dj_link_test_envelope(
@@ -117130,6 +117167,7 @@ mod live_audio_input_tests {
             preroll_ms: 0,
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
+            hold_first_destination_measure: false,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {

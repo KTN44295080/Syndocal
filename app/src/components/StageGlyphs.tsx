@@ -26,7 +26,6 @@ type StageFixtureGlyphProps = {
   segmentColumns?: number;
   segmentRows?: number;
   segmentOrder?: MappingFixtureSegmentOrder;
-  liveSegmentScreenScale?: number;
   title?: string;
 };
 
@@ -69,7 +68,6 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   };
   const segmentWidth = () => Math.max(0.1, segmentPitchX() - segmentGap());
   const segmentHeight = () => Math.max(0.1, segmentPitchY() - segmentGap());
-  const liveSegmentScreenScale = () => props.liveSegmentScreenScale ?? 1;
   const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
 
   return (
@@ -105,10 +103,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         }
       >
         {(liveSegments) => (
-          <g
-            data-stage-live-segment-screen-scale={liveSegmentScreenScale()}
-            transform={`scale(${liveSegmentScreenScale()})`}
-          >
+          <g data-stage-live-segment-space="stage">
             <rect
               data-stage-fixture-shape
               data-stage-fixture-outline

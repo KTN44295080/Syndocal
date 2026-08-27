@@ -144,6 +144,7 @@ pub(super) fn dispatch_active(
     next_runtime.loop_revision = None;
     next_runtime.last_loop_fallback_intent_id = None;
     next_runtime.loop_active = false;
+    next_runtime.last_follow_rebase = None;
     next_runtime.last_event_id = Some(event_id.to_string());
     next_runtime.state_generation = next;
     *runtime = next_runtime;
@@ -238,6 +239,65 @@ pub(super) fn owner_matches(
         && runtime.play_session_id.as_deref() == Some(play_session_id)
 }
 
+/// Rebase the released Stage 2 runtime to a destination only after the engine
+/// has published the exact terminal Follow completion.  The release receipt
+/// and pedal owner remain the original physical-session fence; the rebase
+/// never creates a new ownership or accepts an abort/fault/stale image.
+pub(super) fn rebase_released_follow_completion(
+    runtime: &mut DjLinkRuntime,
+    snapshot: &EngineSnapshot,
+    expected_timeline_id: Option<&str>,
+    expected_play_session_id: Option<&str>,
+) -> bool {
+    let follow = &snapshot.timeline.follow_runtime;
+    let (Some(source_timeline_id), Some(target_timeline_id)) =
+        (follow.source_timeline_id, follow.target_timeline_id)
+    else {
+        return false;
+    };
+    let source = source_timeline_id.0.to_string();
+    let target = target_timeline_id.0.to_string();
+    if !runtime.released
+        || !runtime.track_active
+        || runtime.authoritative_state != protocol::DjLinkTimelineStateValue::Running
+        || runtime.pedal_owner.as_deref() != Some("timeline")
+        || runtime
+            .release_event_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        || runtime.play_session_id.as_deref().is_none_or(str::is_empty)
+        || follow.status != protocol::TimelineFollowRuntimeStatus::Idle
+        || follow.outcome != Some(protocol::TimelineFollowOutcome::Completed)
+        || follow.generation == 0
+        || snapshot.timeline.id != target_timeline_id
+        || runtime.timeline_id.as_deref() != Some(source.as_str())
+    {
+        return false;
+    }
+    if expected_timeline_id.is_some_and(|expected| expected != target)
+        || expected_play_session_id
+            .is_some_and(|expected| runtime.play_session_id.as_deref() != Some(expected))
+    {
+        return false;
+    }
+    let receipt = (follow.generation, source, target);
+    if runtime.last_follow_rebase.as_ref() == Some(&receipt) {
+        return false;
+    }
+    let Ok(next_generation) = dj_link_next_generation(runtime) else {
+        return false;
+    };
+    runtime.timeline_id = Some(receipt.2.clone());
+    runtime.position_bars = dj_link_engine_position_bars(snapshot);
+    runtime.loop_active = !matches!(
+        snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+    runtime.last_follow_rebase = Some(receipt);
+    runtime.state_generation = next_generation;
+    true
+}
+
 /// Return the fail-closed reason for a post-release Timeline command, if the
 /// runtime has not established the exact Stage 2 authority fence yet.
 ///
@@ -268,6 +328,15 @@ pub(super) fn stage2_authority_rejection(
     if !snapshot.timeline.playing {
         return Some("timeline_not_playing");
     }
+    if matches!(
+        snapshot.timeline.follow_runtime.status,
+        protocol::TimelineFollowRuntimeStatus::Transitioning
+            | protocol::TimelineFollowRuntimeStatus::Settling
+    ) {
+        // A Follow completion is the only legal rebase boundary. Before it,
+        // F13 must not turn off the source loop or relinquish its clock.
+        return Some("timeline_follow_settling");
+    }
     if snapshot.timeline.id.0.to_string() != timeline_id {
         return Some("timeline_identity_mismatch");
     }
@@ -287,6 +356,28 @@ pub(super) fn stage2_authority_rejection(
     }
     if runtime.play_session_id.as_deref() != Some(play_session_id) {
         return Some("timeline_play_session_mismatch");
+    }
+    None
+}
+
+/// Validate an absolute Stage 2 loop request against both authoritative
+/// projections. A pedal edge is a state transition, not an idempotent setter:
+/// a stale loop-off must never be admitted after the loop has already been
+/// released, and app/engine disagreement fails closed before enqueue.
+pub(super) fn timeline_loop_set_authority_rejection(
+    runtime: &DjLinkRuntime,
+    snapshot: &EngineSnapshot,
+    requested_active: bool,
+) -> Option<&'static str> {
+    let engine_loop_active = !matches!(
+        snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+    if runtime.loop_active != engine_loop_active {
+        return Some("timeline_loop_state_mismatch");
+    }
+    if requested_active == engine_loop_active {
+        return Some("timeline_loop_state_unchanged");
     }
     None
 }

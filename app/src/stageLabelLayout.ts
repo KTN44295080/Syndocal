@@ -1,7 +1,4 @@
 export const stageFixtureLabelMaxCharacters = 12;
-export const stageFixtureLabelDeclutterThreshold = 25;
-export const stageFixtureLabelRestoreZoom = 1.5;
-
 export const stageFixtureLabelFootprintGap = 1.25;
 // Keep T24's conservative 4-unit planning envelope even though the renderer
 // counter-scales the visible label text to a fixed screen-space size.
@@ -49,7 +46,6 @@ export interface StageFixtureLabelLayoutResult {
   labelByFixtureId: ReadonlyMap<number, StageFixtureLabelLayout>;
   visibleFixtureCount: number;
   candidateCount: number;
-  decluttered: boolean;
 }
 
 interface StageFixtureLabelCandidate extends StageFixtureLabelLayout {
@@ -62,7 +58,6 @@ interface StageFixtureLabelCandidate extends StageFixtureLabelLayout {
 interface PlanStageFixtureLabelsOptions {
   fixtures: readonly StageLabelFixture[];
   viewport: StageLabelViewport;
-  zoom: number;
   showLabels: boolean;
   pickedFixtureIds?: ReadonlySet<number>;
   pickedFixtureId?: number | null;
@@ -74,7 +69,6 @@ const emptyStageFixtureLabelLayoutResult: StageFixtureLabelLayoutResult = {
   labelByFixtureId: new Map(),
   visibleFixtureCount: 0,
   candidateCount: 0,
-  decluttered: false,
 };
 
 export const shortenStageFixtureLabel = (label: string) => {
@@ -123,8 +117,12 @@ const compareStageFixtureLabelPriority = (
   left: StageFixtureLabelCandidate,
   right: StageFixtureLabelCandidate,
 ) =>
-  Number(right.picked) - Number(left.picked) ||
+  // The currently hovered fixture must remain legible even when its label
+  // overlaps a previously selected fixture. Selection returns as soon as the
+  // pointer leaves, so this preserves both interaction states without drawing
+  // colliding labels.
   Number(right.hovered) - Number(left.hovered) ||
+  Number(right.picked) - Number(left.picked) ||
   Number(right.highlighted) - Number(left.highlighted) ||
   left.addressOrder - right.addressOrder ||
   left.fixtureId - right.fixtureId;
@@ -150,17 +148,13 @@ export const planStageFixtureLabels = (
     }
   }
 
-  const zoom = Number.isFinite(options.zoom) ? options.zoom : 1;
-  const decluttered =
-    visibleFixtures.length > stageFixtureLabelDeclutterThreshold &&
-    zoom < stageFixtureLabelRestoreZoom;
   const candidates: StageFixtureLabelCandidate[] = [];
   for (const fixture of visibleFixtures) {
     const picked =
       options.pickedFixtureId === fixture.id ||
       options.pickedFixtureIds?.has(fixture.id) === true;
     const hovered = options.hoveredFixtureId === fixture.id;
-    if (decluttered && !picked && !hovered && !fixture.highlighted) {
+    if (!picked && !hovered) {
       continue;
     }
     const displayLabel = shortenStageFixtureLabel(fixture.label);
@@ -217,6 +211,5 @@ export const planStageFixtureLabels = (
     labelByFixtureId: new Map(accepted.map((label) => [label.fixtureId, label])),
     visibleFixtureCount: visibleFixtures.length,
     candidateCount: candidates.length,
-    decluttered,
   };
 };
