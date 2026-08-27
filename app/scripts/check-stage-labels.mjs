@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
 const source = await readFile(new URL("../src/stageLabelLayout.ts", import.meta.url), "utf8");
+const geometryLayerSource = await readFile(
+  new URL("../src/components/MappingGeometryLayer.tsx", import.meta.url),
+  "utf8",
+);
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -165,5 +169,16 @@ const labelsOffResult = layout.planStageFixtureLabels({
   hoveredFixtureId: 40,
 });
 assert.equal(labelsOffResult.labels.length, 0, "the explicit labels toggle must override zoom and priority states");
+
+assert.match(
+  geometryLayerSource,
+  /<Show when=\{props\.showLabels && geometry\.selected\}>/,
+  "geometry labels must require both the labels toggle and an explicitly selected fixture",
+);
+assert.doesNotMatch(
+  geometryLayerSource,
+  /<Show when=\{props\.showLabels\}>/,
+  "geometry labels must not render for every fixture when labels are enabled",
+);
 
 console.log("T24-A stage label footprint anchoring, shortening, selected-or-hovered eligibility, priority, and overlap contracts ok");

@@ -11021,6 +11021,7 @@ export default function App() {
   const clearMappingFixtureSelection = () => {
     const count = selectedMappingFixtureIds().length;
     setSelectedMappingFixtureIds([]);
+    setSelectedFixtureId(null);
     setMessage(count > 0 ? `Cleared ${count} mapped fixture pick${count === 1 ? "" : "s"}.` : "No mapped fixtures are picked.");
   };
 

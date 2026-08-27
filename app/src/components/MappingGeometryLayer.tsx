@@ -1,6 +1,8 @@
 import { For, Show } from "solid-js";
 
 export interface MappingGeometryNode2D {
+  key: string;
+  fixtureId: number;
   className: string;
   fixtureLabel: string;
   name: string;
@@ -11,6 +13,7 @@ export interface MappingGeometryNode2D {
   footprintWidth: number;
   footprintHeight: number;
   mappedChannelCount: number;
+  selected: boolean;
 }
 
 type MappingGeometryLayerProps = {
@@ -41,8 +44,12 @@ export function MappingGeometryLayer(props: MappingGeometryLayerProps) {
               {geometry.mappedChannelCount > 0 ? ` / ${geometry.mappedChannelCount} channel(s)` : ""}
             </title>
           </circle>
-          <Show when={props.showLabels}>
-            <text x={geometry.x + 1.8} y={geometry.z - 1.6}>
+          <Show when={props.showLabels && geometry.selected}>
+            <text
+              data-stage-geometry-label-id={geometry.key}
+              x={geometry.x + 1.8}
+              y={geometry.z - 1.6}
+            >
               {geometry.name}
             </text>
           </Show>

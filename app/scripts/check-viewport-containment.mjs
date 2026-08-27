@@ -6664,9 +6664,27 @@ async function runMappingViewportConformanceViewport(client, viewport) {
 
   // Probe hover-only labels last at the full-stage view. The earlier tracking
   // proof has separated the selected fixture from the mock's stacked fixture
-  // groups, and clearing the pick can no longer disturb later geometry checks.
+  // groups. Clearing the pick must also clear the active fixture so no stale
+  // selected label remains while the drawer reports 0 / visible count.
   await clickVisibleSelector(client, '[data-mapping-selection-action="clear"]');
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: initial.stageRect.left + 4,
+    y: initial.stageRect.top + 4,
+    button: "none",
+    buttons: 0,
+    pointerType: "mouse",
+  });
   await sleep(40);
+  const clearPickState = await client.evaluate(`(() => {
+    const drawerSummary = document.querySelector('[data-workspace-selection-drawer] summary strong');
+    return {
+      summary: (drawerSummary?.textContent ?? '').trim(),
+      selectedFixtureCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-id].selected').length,
+      fixtureLabelCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-label-id]').length,
+      geometryLabelCount: document.querySelectorAll('.setupStageContext [data-stage-geometry-label-id]').length,
+    };
+  })()`);
   await setMappingViewportConformanceZoom(client, 1);
   await sleep(50);
   const hoverResetPoints = [
@@ -6935,6 +6953,11 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && hoverFixtureIsCurrentHover
       && hoverFixtureLabelVisibleOnHover
       && hoverFixtureLabelAbsentAfterHover,
+    clearPickedSelectionRemovesActiveFixtureLabel:
+      /^0\s*\/\s*\d+$/.test(clearPickState.summary)
+      && clearPickState.selectedFixtureCount === 0
+      && clearPickState.fixtureLabelCount === 0
+      && clearPickState.geometryLabelCount === 0,
     selectModeUsesOutlineWithoutFixtureYawPins:
       initial.fixtureYawHandleCount === 0
       && zoomOne.fixtureYawHandleCount === 0
@@ -6991,6 +7014,7 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     hoverFixture,
     hoverAttempts,
     hoverFixtureState,
+    clearPickState,
     hoverFixtureIsCurrentHover,
     hoverFixtureLabelAbsentBeforeHover,
     hoverFixtureLabelVisibleOnHover,
