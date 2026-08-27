@@ -856,7 +856,49 @@ This is a source/browser checkpoint, not native acceptance. PID `46120` was
 re-resolved as the same responsive historical alpha.15 executable with the
 same size/hash, LISTEN `192.168.50.1:9100`, and ESTABLISHED
 `192.168.50.2:58211` peer; it was not stopped or rebuilt. Fresh alpha.16 native
-proof remains open. The separate FC-09 defect also remains open: when a
-manually selected ASIO device disappears without a saved pin, the frontend
-must retain the missing ASIO identity and lock Start instead of selecting
-WASAPI Shared or the first returned backend.
+proof remains open. FC-09 was still open at this exact checkpoint and was
+closed by the later checkpoint below.
+
+## 17. 2026-08-27 FC-09 unavailable audio-input selection checkpoint
+
+Commit `a65e3ccb4a8dd14f4941109d06e1644876329a8c` is pushed to
+`origin/codex/syndocal-v1.2`. The retired behavior could silently substitute
+WASAPI Shared or the first returned backend when an explicitly selected input
+disappeared, and a failed device catalogue could leave a saved `ready` request
+usable. The supported path now retains the exact missing backend/device
+identity, downgrades saved readiness to `stale`, and locks Start before every
+control/start IPC boundary. Invalid, duplicate, wrong-backend, missing, or
+failed catalogues remain typed failures; no backend/device substitution is
+performed.
+
+Cold restore retains only the persisted stable device name and label for the
+renderer's unavailable option; generation-scoped device IDs are not persisted
+or synthesized. A successful passive refresh cannot re-arm a selection after
+a catalogue failure, even when the same name/label returns with a new ID. Only
+an explicit exact current-device selection may revalidate it. The stale option
+is disabled, and a forged stale input event rejects before capability IPC,
+downgrades any saved ready state, and leaves Start locked.
+
+The browser acceptance was extracted from the already oversized viewport
+runner into
+`app/scripts/live-audio-backend-disappearance-contract.mjs`; the runner keeps
+only the fixture/dispatch seam. A named `check:live-audio-restore` package gate
+now executes that contract. Supervisor proof passed:
+
+- syntax checks for the static checker, extracted contract, and runner;
+- `check:live-audio`;
+- `check:live-audio-restore`, including cold-first-failure and passive-recovery
+  EN/JA cases, raw storage byte equality, and unchanged backend/device/
+  capability/Start IPC counts;
+- `check:live-audio-viewport` in English and Japanese at `1920x1080`, measured
+  client `1920x1032`, `2048x1152`, `1366x768`, and `1280x720`;
+- TypeScript/Vite production build and `git diff --check`.
+
+All executed frontend gates reported zero first-party warnings. The final
+independent Terra xHigh review reported P0/P1/P2 none. No Cargo/Tauri native
+build or test was run: the protected historical alpha.15 process remains PID
+`46120` at this checkout's exact `target/release/syndocal.exe` path and was not
+stopped. Its DJ socket was not re-probed in this checkpoint. Fresh alpha.16
+native/maximized UI proof, current final ASIO DLL/operator proof, the DJ HW-4
+matrix, three displays, representative DSF content, and the full rehearsal all
+remain open.
