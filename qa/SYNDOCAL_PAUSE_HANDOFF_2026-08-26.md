@@ -1,10 +1,13 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.22 SCENE-AUTHORITY SOURCE CHECKPOINT VERIFIED; ALPHA.21 REMAINS THE CURRENT NATIVE ARTIFACT; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.24 TIMELINE FOLLOW REARM SOURCE CHECKPOINT VERIFIED; ALPHA.23 OUTPUT-ROUTING / SETUP-I/O / FRONTEND CHECKPOINT IS HISTORICAL; ALPHA.21 REMAINS THE CURRENT RUNNING NATIVE ARTIFACT; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. Section
-32 is the current alpha.22 source authority and section 31 remains the current
-alpha.21 native-artifact authority; every earlier
+34 is the current alpha.24 rearm source checkpoint; section 33 preserves the
+historical alpha.23 source checkpoint and
+section 31 preserves the historical alpha.21 native-artifact authority. Section
+32 is preserved as the historical alpha.22 Scene-authority source checkpoint,
+and every earlier
 alpha.18-or-earlier `current` label below is retained as dated historical
 evidence and must not be used for execution. The show-completion deadline is
 **2026-08-29**, not the performance day. The code is not accepted as fully
@@ -57,8 +60,10 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact has been built yet |
-| Current alpha.21 Setup-I/O native artifact | Authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
+| Current alpha.24 Timeline Follow rearm source | Product metadata is `1.2.0-alpha.24`; committed/pushed, upstream-equal source is `8367bdf50a49fe130e3619eaf29ca410b61d2cd9`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); no alpha.24 native artifact exists |
+| Historical alpha.23 output-routing / Setup I/O / frontend source | Product metadata was `1.2.0-alpha.23`; committed/pushed, upstream-equal source is `5e7d27df7f5864449d4838782f6eca2f9b81d360`; no alpha.23 native artifact was built |
+| Historical alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact was built |
+| Historical alpha.21 Setup-I/O native artifact | Authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; Product/FileVersion at that checkpoint was `1.2.0-alpha.21`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
 | Current token-free show structural preflight | Read-only/authored-only source is committed and pushed at `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`; valid fixture exits `0`, invalid/legacy/usage paths exit `2`; this is not native or hardware evidence |
 | Current rb-output v1.1.9 controlled checkout | `beta-v1.1.2` clean/upstream-equal at `c22acaa265cbbc4936ab3af5b092b59d5d543f63`; runtime authority remains the ancestor `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; post-tooling full suite `465` total / `463` pass / `0` fail / `2` intentional skips; target-DJ-PC identity and HW-4 remain open |
 | Historical alpha.18 source/native (db4eefc; direct refresh click unconfirmed) | Product metadata was `1.2.0-alpha.18`; exact source `HEAD`/upstream was `db4eefc348b01ee05dd2dc87945afa85de8803e`; historical native artifact/process identity is recorded in section 21 |
@@ -78,10 +83,16 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. The current alpha.22 source authority is section
-32 at exact commit `cc201ad40927f0631236680392025f81e51c6130`.
-The current alpha.21 I/O/native artifact authority remains section 31 at exact
-source commit `536742db968b242164349c34dd6940fe3ced8e92`;
+Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.24`;
+the current alpha.24 source authority is section 34 at exact committed,
+pushed, upstream-equal commit `8367bdf50a49fe130e3619eaf29ca410b61d2cd9`.
+The historical alpha.23 source authority is
+section 33 at exact commit `5e7d27df7f5864449d4838782f6eca2f9b81d360`. The
+preceding alpha.22 Scene-authority source remains section 32 at exact commit
+`cc201ad40927f0631236680392025f81e51c6130`.
+The historical alpha.21 I/O/native artifact authority remains section 31 at
+exact source commit `536742db968b242164349c34dd6940fe3ced8e92`; Product/FileVersion
+at that checkpoint was `1.2.0-alpha.21`;
 the separate show structural preflight is committed and pushed at exact
 `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`. The historical alpha.20 source
 authority is section 29 at `03b70cd14a285a41c63cfd1d9b3bd89c025eec16`. The historical
@@ -1584,10 +1595,10 @@ exactly `0/12`; real token, wired peer, Rekordbox decks, pedal/MIDI,
 response/no-response, reconnect/restart, and shared Art-Net/sACN observations
 remain required.
 
-## 31. 2026-08-28 alpha.21 Setup I/O operator checkpoint
+## 31. 2026-08-28 historical alpha.21 Setup I/O operator checkpoint
 
-The active product/file version is `1.2.0-alpha.21` on branch
-`codex/syndocal-v1.2`. The I/O/native source checkpoint is committed and
+Product/FileVersion at this historical checkpoint was `1.2.0-alpha.21` on
+branch `codex/syndocal-v1.2`. The I/O/native source checkpoint is committed and
 pushed at exact `536742db968b242164349c34dd6940fe3ced8e92`
 (`feat(setup): streamline the I/O operator workbench`). The separate token-free
 show structural preflight is committed and pushed at exact
@@ -1648,9 +1659,9 @@ PID `61616` has missing positive parent PID `49864`, `Candidates=[]`,
 performed. The exact 12-path hardlink remediation was content-preserving with
 no content diff.
 
-## 32. 2026-08-28 alpha.22 authoritative Scene-create source checkpoint
+## 32. 2026-08-28 historical alpha.22 authoritative Scene-create source checkpoint
 
-The current source authority is branch `codex/syndocal-v1.2`, exact committed
+The historical source authority is branch `codex/syndocal-v1.2`, exact committed
 and pushed `cc201ad40927f0631236680392025f81e51c6130`
 (`feat(scene): unify authoritative scene creation`), with product metadata
 `1.2.0-alpha.22`. This is a source-only checkpoint. The running and currently
@@ -1698,3 +1709,85 @@ replace the still-working alpha.21 process immediately before another required
 native build. Projector keystone/mask editing, real `.sdc` authoring, target
 display assignment, media playback, and HW-4 remain externally or physically
 unverified.
+
+## 33. 2026-08-28 historical alpha.23 output-routing / Setup I/O / frontend source checkpoint
+
+The historical source authority is exact committed and pushed, upstream-equal
+`5e7d27df7f5864449d4838782f6eca2f9b81d360` on branch
+`codex/syndocal-v1.2`, with synchronized product metadata
+`1.2.0-alpha.23`. This was a source-only checkpoint: no alpha.23 native
+artifact has been built, launched, or used for native UI acceptance.
+
+Old path: composition-to-output assignment could enter through a raw direct
+routing mutation. New path: the canonical
+`assign_video_output_composition_v2` operation is the only R4 composition-to-
+output route. The raw/retired `set_video_output_routing` route is absent from
+the protocol, control-plane registration, frontend manifest, and App mutation
+path. A successful assignment requires a terminal authoritative receipt,
+fresh snapshot/render-plan refresh, and exact output-to-composition
+verification. A definitive pre-admission failure restores the prior state;
+admitted ACK loss is indeterminate, retains ownership/fence state, and uses the
+existing restart boundary. Reason: keep composition/output authority and
+success classification on one fail-closed path without a local snapshot or
+compatibility route.
+
+Setup I/O now presents five selectors (DMX, MIDI, OSC, Web Remote, DJ Link)
+inside one single-scroll workbench. Web Remote and DJ Link are direct selected
+workbenches; DMX input is explicitly optional. Advanced remote safety limits
+and connection/client information remain available behind disclosures. The
+wide operator layout uses the requested two-column reflow while preserving
+typography, controls, and hit targets.
+
+Rarely used App-only phase-1 actions are loaded through a dynamic
+`phase1Actions` import. This creates a separate lazy chunk while preserving
+labels, error semantics, and call timing; no UI behavior or output authority
+is changed by the split.
+
+Supervisor gates initialized the exact MSVC 14.44 Community toolchain, pinned
+the absolute `Hostx64\\x64\\link.exe`, and verified it first in
+`where.exe link.exe`, ahead of Git. Protocol tests passed `1/1`, engine tests
+`1/1`, App tests passed `3/3`, and first-party warnings were `0`. Output
+control, ownership, routing, and frontend checks passed `128/31/30/412`.
+Setup I/O viewport and remote-scroll contracts passed `5/5` viewports each;
+localization passed `3578/3578` with no unprotected labels. The final
+frontend build transformed `296` modules and emitted `App-CNx-MFOg.js` at
+`499.68 kB` and the `phase1Actions` chunk at `2.84 kB`, with zero Vite chunk
+warnings. `check:release` and `check:release:self-test`, format, and
+`git diff --check` passed. Independent Terra xHigh source review was GO.
+
+The current running native process remains the historical alpha.21 artifact:
+PID `41912`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
+reconnect, and three-display evidence remain unverified; this checkpoint does
+not claim final completion. The next action is the alpha.24 native build and
+launch gate; no alpha.24 native artifact exists yet.
+
+## 34. 2026-08-28 current alpha.24 Timeline Follow rearm source checkpoint
+
+Current product metadata is `1.2.0-alpha.24`. The current source authority is
+exact committed, pushed, and upstream-equal
+`8367bdf50a49fe130e3619eaf29ca410b61d2cd9`. Alpha.23 remains historical at
+exact pushed commit `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not
+relabeled as alpha.24. The release path performs the actual DjLink clock
+handoff only, arms an enabled, unfenced, eligible Follow, performs no
+seek/play/jump or authored-state mutation, and admits exactly one Follow
+transition at the next natural boundary. For an authored non-Cut first-measure
+hold, settlement uses one source measure and installs the destination's first
+meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate
+authored state. No alpha.24 native artifact exists yet.
+
+The exact supervisor gate passed `29/29` engine `dj_link` with warnings `0`.
+The MSVC 14.44 linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+was pinned and verified first in `where.exe link.exe`, ahead of Git.
+`check:release` and `check:release:self-test` passed. Independent Terra xHigh
+source review was GO.
+
+The current running native process remains the historical alpha.21 artifact;
+Product/FileVersion at that checkpoint was `1.2.0-alpha.21`, PID `41912`,
+`58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
+unverified. This is not a final-completion claim; the next action is the
+alpha.24 native build/launch gate.

@@ -354,12 +354,26 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the current source checkpoint is `1.2.0-alpha.22` at exact
-committed/pushed source `cc201ad40927f0631236680392025f81e51c6130` on branch
-`codex/syndocal-v1.2`. The current native artifact remains
-`1.2.0-alpha.21`, built from exact I/O/native source
+alpha checkpoints; current product metadata is `1.2.0-alpha.24`. The current
+source checkpoint is exact committed, pushed, and upstream-equal
+`8367bdf50a49fe130e3619eaf29ca410b61d2cd9` on branch `codex/syndocal-v1.2`.
+The completed alpha.23 source checkpoint remains historical at exact
+committed/pushed, upstream-equal source
+`5e7d27df7f5864449d4838782f6eca2f9b81d360`. Alpha.24's Timeline Follow rearm
+performs the actual DjLink clock handoff only, arms an enabled/unfenced eligible
+Follow, performs no seek/play/jump or authored-state mutation, and admits
+exactly one Follow transition at the next natural boundary. For an authored
+non-Cut first-measure hold, settlement uses one source measure and installs the
+destination's first meter-aware measure as a runtime-only hold; the 5/4 proof
+does not mutate authored state. The current running native
+process remains the historical
+`1.2.0-alpha.21` artifact, built from exact I/O/native source
 `536742db968b242164349c34dd6940fe3ced8e92`; its launch and maximized-window
-I/O layout are verified within the native/browser boundary in section 54.
+I/O layout are verified within the native/browser boundary in historical
+section 54; Product/FileVersion at that checkpoint was `1.2.0-alpha.21`.
+The preceding alpha.22 authoritative Scene source evidence remains preserved in
+historical section 55; alpha.23 has no native artifact claim and alpha.24 has
+no native artifact yet.
 The separate read-only show structural preflight is committed and pushed at
 `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
@@ -2468,10 +2482,10 @@ Current-head focused revalidation used exact MSVC 14.44 and its pinned linker
 first: engine DJ-Link `28/28`; Syndocal DJ-Link `119` passed / `0` failed / `1`
 intentional live-network ignore; first-party warnings `0`.
 
-## 54. 2026-08-28 current alpha.21 Setup I/O operator checkpoint
+## 54. 2026-08-28 historical alpha.21 Setup I/O operator checkpoint
 
-The active product/file version is `1.2.0-alpha.21` on branch
-`codex/syndocal-v1.2`. The I/O/native source checkpoint is the committed and
+Product/FileVersion at this historical checkpoint was `1.2.0-alpha.21` on
+branch `codex/syndocal-v1.2`. The I/O/native source checkpoint is the committed and
 pushed `536742db968b242164349c34dd6940fe3ced8e92`
 (`feat(setup): streamline the I/O operator workbench`). The separate token-free
 show structural preflight is committed and pushed at exact
@@ -2529,9 +2543,9 @@ missing positive parent PID `49864`, `Candidates=[]`, `PlannedLogicalBytes=0`,
 and `ReclaimedLogicalBytes=0`, so no deletion was performed. The exact 12-path
 hardlink remediation was content-preserving with no content diff.
 
-## 55. 2026-08-28 alpha.22 authoritative Scene-create source checkpoint
+## 55. 2026-08-28 historical alpha.22 authoritative Scene-create source checkpoint
 
-Exact source authority is committed and pushed at
+Historical exact source authority is committed and pushed at
 `cc201ad40927f0631236680392025f81e51c6130` with synchronized
 `1.2.0-alpha.22` metadata. Empty and Capture-current Scene creation now share
 the strict tagged backend operation `syndocal.scenes.create.v1` through
@@ -2562,3 +2576,85 @@ The next native build is deferred until the missing canonical composition-to-
 video-output assignment path is closed under a new prerelease ordinal, avoiding
 an unnecessary second show-time process replacement. Physical outputs,
 projector mapping, authored `.sdc`, and HW-4 remain open gates.
+
+## 56. 2026-08-28 historical alpha.23 output-routing / Setup I/O / frontend source checkpoint
+
+The historical source authority is exact committed and pushed, upstream-equal
+`5e7d27df7f5864449d4838782f6eca2f9b81d360` on branch
+`codex/syndocal-v1.2`, with synchronized product metadata
+`1.2.0-alpha.23`. This was a source-only checkpoint: no alpha.23 native
+artifact has been built, launched, or used for native UI acceptance.
+
+Old path: composition-to-output assignment could enter through a raw direct
+routing mutation. New path: the canonical
+`assign_video_output_composition_v2` operation is the only R4 composition-to-
+output route. The raw/retired `set_video_output_routing` route is absent from
+the protocol, control-plane registration, frontend manifest, and App mutation
+path. A successful assignment requires a terminal authoritative receipt,
+fresh snapshot/render-plan refresh, and exact output-to-composition
+verification. A definitive pre-admission failure restores the prior state;
+admitted ACK loss is indeterminate, retains ownership/fence state, and uses the
+existing restart boundary. Reason: keep composition/output authority and
+success classification on one fail-closed path without a local snapshot or
+compatibility route.
+
+Setup I/O now presents five selectors (DMX, MIDI, OSC, Web Remote, DJ Link)
+inside one single-scroll workbench. Web Remote and DJ Link are direct selected
+workbenches; DMX input is explicitly optional. Advanced remote safety limits
+and connection/client information remain available behind disclosures. The
+wide operator layout uses the requested two-column reflow while preserving
+typography, controls, and hit targets.
+
+Rarely used App-only phase-1 actions are loaded through a dynamic
+`phase1Actions` import. This creates a separate lazy chunk while preserving
+labels, error semantics, and call timing; no UI behavior or output authority
+is changed by the split.
+
+Supervisor gates initialized the exact MSVC 14.44 Community toolchain, pinned
+the absolute `Hostx64\\x64\\link.exe`, and verified it first in
+`where.exe link.exe`, ahead of Git. Protocol tests passed `1/1`, engine tests
+`1/1`, App tests passed `3/3`, and first-party warnings were `0`. Output
+control, ownership, routing, and frontend checks passed `128/31/30/412`.
+Setup I/O viewport and remote-scroll contracts passed `5/5` viewports each;
+localization passed `3578/3578` with no unprotected labels. The final
+frontend build transformed `296` modules and emitted `App-CNx-MFOg.js` at
+`499.68 kB` and the `phase1Actions` chunk at `2.84 kB`, with zero Vite chunk
+warnings. `check:release` and `check:release:self-test`, format, and
+`git diff --check` passed. Independent Terra xHigh source review was GO.
+
+The current running native process remains the historical alpha.21 artifact:
+PID `41912`, `58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
+reconnect, and three-display evidence remain unverified; this checkpoint does
+not claim final completion. The next action is the alpha.24 native build and
+launch gate.
+
+## 57. 2026-08-28 current alpha.24 Timeline Follow rearm source checkpoint
+
+Current product metadata is `1.2.0-alpha.24`. The current source authority is
+exact committed, pushed, and upstream-equal
+`8367bdf50a49fe130e3619eaf29ca410b61d2cd9`. Alpha.23 remains historical at
+exact pushed commit `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not
+relabelled as alpha.24. The release path performs the actual DjLink clock
+handoff only, arms an enabled, unfenced, eligible Follow, performs no
+seek/play/jump or authored-state mutation, and admits exactly one Follow
+transition at the next natural boundary. For an authored non-Cut first-measure
+hold, settlement uses one source measure and installs the destination's first
+meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate
+authored state. No alpha.24 native artifact exists yet.
+
+The exact supervisor gate passed `29/29` engine `dj_link` with warnings `0`.
+The MSVC 14.44 linker
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
+was pinned and verified first in `where.exe link.exe`, ahead of Git.
+`check:release` and `check:release:self-test` passed. Independent Terra xHigh
+source review was GO.
+
+The current running native process remains the historical alpha.21 artifact;
+Product/FileVersion at that checkpoint was `1.2.0-alpha.21`, PID `41912`,
+`58,778,112` bytes, SHA-256
+`F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
+Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
+unverified. This is not a final-completion claim; the next action is the
+alpha.24 native build/launch gate.
