@@ -1169,3 +1169,38 @@ TOCTOU fence, project-mapping persistence, or the requested `title contains`
 show selector. The next safe action is to finish those separate source tranches,
 advance the prerelease version, then run the exact native build/launch/maximized
 window gate before Stage 2 hardware testing.
+
+## 23. 2026-08-27 project-control mapping persistence race checkpoint
+
+This source checkpoint starts from branch `codex/syndocal-v1.2`, exact
+`HEAD`/upstream `8b34b40054cab21c7fae96929bab7ff95ae48ae2`. Its owned change is
+limited to the project-control mapping authority bridge, its narrow
+`App.tsx` integration hunks, `projectAuthority.ts`, and the focused authority
+checker. The separate DJ wired-refresh/UI/localization/viewport dirty hunks are
+not staged in this checkpoint.
+
+The old path could durably commit mapping image B, receive an ordinary poll for
+the same B before the original R1 IPC reply, then reject the stale reply and
+abort Save even though B was already authoritative. The new path permits
+exactly one R2 acknowledgement only when the returned and current project
+epoch/revision/checkpoint hash are identical and the project identity was not
+replaced. A foreign token, CAS/validation/worker failure, identity replacement,
+or a second stale result remains untrusted and fail-closed. The explicit flush
+owns and cancels only its own zero-delay retry; ordinary autosave remains live.
+
+The retry/flush/publication and media terminal logic was extracted from the
+oversized `App.tsx` into `projectControlMappingsAuthorityBridge.ts`. The final
+production App chunk is **499.51 kB** (gzip **152.58 kB**) and the prior Vite
+chunk warning is gone without raising the warning limit. Focused
+`check:project-transaction`, `check:frontend-command-routing`, `check:dj-link`,
+`check-project-publication-e4`, TypeScript, and frontend production build gates
+passed. `git diff --check` passed with only Git LF-to-CRLF notices. The modified
+frontend configuration emitted **0 first-party warnings**. Independent Terra
+xHigh adversarial review is **GO**; Ox was unavailable, so this is the recorded
+narrow review exception.
+
+No native build or real Tauri transport test was run for this source checkpoint.
+The next safe action is to land the requested deterministic
+`titleContains = 人生オーバー` owner selector separately, then advance the
+prerelease and run the required exact native build/launch/maximized-window and
+physical save/reload gates.

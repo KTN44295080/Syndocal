@@ -31,10 +31,16 @@ import {
   projectRecoveryIntentStartupAction,
   projectAuthorityResponseIsCurrent,
   projectAuthorityShouldRetryPersist,
+  successfulStaleProjectControlMappingsReplyIsRetryable,
   projectAuthorityTokenIsCurrent,
   rebaseDirtyProjectAuthorityMappings,
   runAfterProjectAuthorityFlush,
 } from "../src/projectAuthority.ts";
+import {
+  flushProjectControlMappingsAuthorityBridge,
+  projectControlMappingsFlushDecision,
+  projectControlMappingsFlushTimerAction,
+} from "../src/projectControlMappingsAuthorityBridge.ts";
 import {
   applyPolledProjectAuthorityBundleProduction,
   applyProjectAuthorityBundleProduction,
@@ -116,6 +122,158 @@ assert.equal(rebased.requestGeneration, rebasedRequestGeneration + 1);
 assert.equal(projectAuthorityResponseIsCurrent(rebased, delayedPersistB.request), false);
 assert.equal(projectAuthorityHasDirtyMappings(rebased), true);
 assert.equal(projectAuthorityShouldRetryPersist(rebased, delayedPersistB.request.identityGeneration), true);
+
+// The mapping writer may commit B, while an ordinary authority poll returns
+// that exact B token before the writer's IPC reply. The poll invalidates R1's
+// renderer request generation but does not make B foreign: one R2 ACK is safe
+// and is required before Save can obtain trusted mapping authority.
+const committedB = { project_epoch: 0, project_revision: 1, checkpoint_hash: "B" };
+assert.equal(
+  successfulStaleProjectControlMappingsReplyIsRetryable(
+    rebased,
+    delayedPersistB.request,
+    committedB,
+    committedB,
+    false,
+  ),
+  true,
+  "an exact poll-observed successful B mapping reply may receive one ACK replay",
+);
+assert.equal(
+  projectControlMappingsFlushDecision(
+    "retryable",
+    rebased,
+    delayedPersistB.request.identityGeneration,
+    false,
+    1,
+  ),
+  "retry",
+  "flush must continue from stale R1 to exact R2 instead of failing Save",
+);
+const r2 = beginProjectAuthorityRequest(rebased);
+let afterR2 = acknowledgeProjectAuthorityPersist(
+  r2.state,
+  r2.request,
+  r2.state.localGeneration,
+);
+assert.equal(projectAuthorityHasDirtyMappings(afterR2), false, "R2 exact ACK clears the local B generation");
+assert.equal(
+  projectControlMappingsFlushDecision(
+    "acknowledged",
+    afterR2,
+    r2.request.identityGeneration,
+    false,
+    0,
+  ),
+  "acknowledged",
+  "Save may proceed only after the exact R2 acknowledgement",
+);
+assert.equal(
+  successfulStaleProjectControlMappingsReplyIsRetryable(
+    rebased,
+    delayedPersistB.request,
+    committedB,
+    { project_epoch: 0, project_revision: 2, checkpoint_hash: "foreign-C" },
+    false,
+  ),
+  false,
+  "a later foreign C authority must not be replayed over",
+);
+const replacedIdentity = invalidateProjectAuthorityIdentity(rebased);
+assert.equal(
+  successfulStaleProjectControlMappingsReplyIsRetryable(
+    replacedIdentity,
+    delayedPersistB.request,
+    committedB,
+    committedB,
+    false,
+  ),
+  false,
+  "identity replacement must reject a delayed B reply",
+);
+assert.equal(
+  projectControlMappingsFlushDecision(
+    "untrusted",
+    rebased,
+    delayedPersistB.request.identityGeneration,
+    false,
+    1,
+  ),
+  "fail",
+  "CAS, validation, and worker-retirement failures remain fail-closed",
+);
+assert.equal(
+  projectControlMappingsFlushDecision(
+    "retryable",
+    rebased,
+    delayedPersistB.request.identityGeneration,
+    false,
+    0,
+  ),
+  "fail",
+  "a second stale reply must not make Save retry forever",
+);
+
+// R2 can be invalidated only by a separate refresh/authority request; an
+// equal-B ordinary poll returns no bundle and cannot create this path. Model
+// that R2 stale result with the retry timer its finally scheduled. The bridge
+// must execute exactly R1/R2, consume its own R3 timer, and return untrusted.
+const r2AuthorityWrite = beginProjectAuthorityRequest(rebased);
+const separateRefreshDuringR2 = beginProjectAuthorityRequest(r2AuthorityWrite.state);
+assert.equal(
+  projectAuthorityResponseIsCurrent(separateRefreshDuringR2.state, r2AuthorityWrite.request),
+  false,
+  "only a separate refresh/request can invalidate R2; an equal-B poll cannot",
+);
+const flushTimerOwner = Symbol("explicit-flush");
+let pendingRetry = { owner: flushTimerOwner, fired: false };
+let bridgeSync = rebased;
+const cancelFlushOwnedRetry = (owner) => {
+  if (pendingRetry?.owner !== owner) return false;
+  pendingRetry = null;
+  return true;
+};
+const r2StaleTerminal = projectControlMappingsFlushDecision(
+  "retryable",
+  rebased,
+  delayedPersistB.request.identityGeneration,
+  false,
+  0,
+);
+assert.equal(r2StaleTerminal, "fail", "R2 stale after the one replay is terminal");
+let bridgeAttempts = 0;
+const bridgeResult = await flushProjectControlMappingsAuthorityBridge({
+  persist: async (owner) => {
+    bridgeAttempts += 1;
+    pendingRetry = { owner, fired: false };
+    if (bridgeAttempts === 2) {
+      // This is the production-only second-stale cause proven above: a
+      // separate refresh wins while R2 awaits its backend response.
+      bridgeSync = separateRefreshDuringR2.state;
+    }
+    return { kind: "retryable", authority: committedB };
+  },
+  cancelTimer: (owner) => owner === undefined
+    ? cancelFlushOwnedRetry(pendingRetry?.owner)
+    : cancelFlushOwnedRetry(owner),
+  state: () => ({
+    disposed: false,
+    authorityReady: true,
+    sync: bridgeSync,
+    mappingSyncInFlight: false,
+    timerFlushOwner: pendingRetry?.owner ?? null,
+  }),
+});
+assert.equal(bridgeAttempts, 2, "flush retries R1 once as R2 and never dispatches R3");
+assert.equal(bridgeResult.trusted, false, "R2 stale remains terminally untrusted");
+assert.equal(pendingRetry, null, "no R3 timer remains after R2 terminal failure");
+pendingRetry = { owner: null, fired: false };
+assert.equal(
+  projectControlMappingsFlushTimerAction(r2StaleTerminal === "fail", pendingRetry.owner, flushTimerOwner),
+  "preserve",
+  "a normal autosave timer is not owned by the explicit flush",
+);
+assert.notEqual(pendingRetry, null, "normal autosave remains available after flush failure");
 
 // A poll can arrive after an identity/Undo replacement event was lost. These
 // publications own their mapping arrays, so a dirty A debounce must not be

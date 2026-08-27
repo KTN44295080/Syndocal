@@ -133,6 +133,21 @@ export const projectAuthorityTokenIsCurrent = (
   && captured.checkpoint_hash === current.checkpoint_hash;
 
 /**
+ * A successful mapping RPC may return after a poll has already adopted that
+ * exact committed token. This is retryable only inside the same identity; a
+ * replacement or foreign authority always remains fail-closed.
+ */
+export const successfulStaleProjectControlMappingsReplyIsRetryable = (
+  sync: ProjectAuthoritySyncState,
+  request: ProjectAuthorityRequest,
+  returnedAuthority: ProjectAuthorityToken,
+  currentAuthority: ProjectAuthorityToken,
+  disposed: boolean,
+): boolean => !disposed
+  && sync.identityGeneration === request.identityGeneration
+  && projectAuthorityTokenIsCurrent(returnedAuthority, currentAuthority);
+
+/**
  * Recovery intent delivery is a side effect of an accepted current bundle,
  * never of a rejected or exact-duplicate poll/reply. Keep this gate beside
  * the token predicate so all production entry points use the same ownership

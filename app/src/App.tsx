@@ -857,6 +857,7 @@ import {
   projectRecoveryCaptureIsCurrent,
   projectRecoveryAuthoritySignature,
   projectAuthorityShouldRetryPersist,
+  successfulStaleProjectControlMappingsReplyIsRetryable,
   projectAuthorityTokenIsCurrent,
   rebaseDirtyProjectAuthorityMappings,
   type ProjectAuthorityToken,
@@ -2276,11 +2277,9 @@ const isVisualMediaFilePath = (path: string) => {
 };
 
 type ProjectControlMappingsPersistResult =
-  | { kind: "acknowledged"; authority: ProjectAuthorityToken }
-  | { kind: "untrusted"; authority: ProjectAuthorityToken };
+  | { kind: "acknowledged" | "retryable" | "untrusted"; authority: ProjectAuthorityToken };
 
 type ProjectControlMappingsFlushResult = {
-  authority: ProjectAuthorityToken;
   /** Exact terminal E/R/H values returned by successful local CAS writes. */
   ownAcknowledgements: ProjectAuthorityToken[];
   /** False after CAS recovery/read, a stale request, or an incomplete flush. */
@@ -2962,6 +2961,12 @@ export default function App() {
   >({ project_epoch: 0, project_revision: 0, checkpoint_hash: "" });
   const [projectMappingsAuthorityReady, setProjectMappingsAuthorityReady] = createSignal(false);
   let mappingSyncTimer: number | null = null;
+  // A flush may create one immediate retry while it resolves a stale success
+  // reply. Keep that retry distinguishable from an ordinary edit debounce.
+  let mappingSyncTimerFlushOwner: symbol | null = null;
+  // This is a synchronous call-context only. A persist captures its owner
+  // before its first await so concurrent/background requests cannot inherit it.
+  let mappingPersistFlushOwner: symbol | null = null;
   let mappingSyncInFlight = false;
   let mappingSyncDisposed = false;
   // Every identity replacement invalidates all earlier refresh/persist replies.
@@ -12758,6 +12763,7 @@ export default function App() {
     if (mappingSyncTimer !== null) {
       window.clearTimeout(mappingSyncTimer);
       mappingSyncTimer = null;
+      mappingSyncTimerFlushOwner = null;
     }
     if (snapshotPollTimer !== null) {
       window.clearTimeout(snapshotPollTimer);
@@ -15070,6 +15076,7 @@ export default function App() {
     if (mappingSyncTimer !== null) {
       window.clearTimeout(mappingSyncTimer);
       mappingSyncTimer = null;
+      mappingSyncTimerFlushOwner = null;
     }
     mappingObservedSignature = null;
   };
@@ -15144,7 +15151,18 @@ export default function App() {
     dj: djTrackTriggers(),
   });
 
-  const scheduleProjectControlMappingsPersist = (delayMs = 180) => {
+  const cancelProjectControlMappingsPersistTimer = (flushOwner?: symbol): boolean => {
+    if (mappingSyncTimer === null
+      || (flushOwner !== undefined && mappingSyncTimerFlushOwner !== flushOwner)) {
+      return false;
+    }
+    window.clearTimeout(mappingSyncTimer);
+    mappingSyncTimer = null;
+    mappingSyncTimerFlushOwner = null;
+    return true;
+  };
+
+  const scheduleProjectControlMappingsPersist = (delayMs = 180, flushOwner?: symbol) => {
     if (
       mappingSyncDisposed
       || !isTauriRuntime()
@@ -15152,11 +15170,16 @@ export default function App() {
     ) {
       return;
     }
-    if (mappingSyncTimer !== null) window.clearTimeout(mappingSyncTimer);
-    mappingSyncTimer = window.setTimeout(() => {
-      mappingSyncTimer = null;
+    cancelProjectControlMappingsPersistTimer();
+    const timer = window.setTimeout(() => {
+      if (mappingSyncTimer === timer) {
+        mappingSyncTimer = null;
+        mappingSyncTimerFlushOwner = null;
+      }
       void persistProjectControlMappings();
     }, delayMs);
+    mappingSyncTimer = timer;
+    mappingSyncTimerFlushOwner = flushOwner ?? null;
   };
 
   const refreshProjectControlMappings = async (identityReplacement = false) => {
@@ -15216,6 +15239,7 @@ export default function App() {
     }
 
     const sentGeneration = projectAuthoritySync.localGeneration;
+    const requestFlushOwner = mappingPersistFlushOwner;
     const started = beginProjectAuthorityRequest(projectAuthoritySync);
     projectAuthoritySync = started.state;
     const authority = projectMappingsAuthority();
@@ -15233,7 +15257,24 @@ export default function App() {
           dmxMappings: sentMappings.dmx,
           djTrackTriggers: sentMappings.dj,
         });
-        if (mappingResponseIsCurrent(started.request) && adoptProjectMappingsAuthority(next)) {
+        const returnedAuthority = authorityToken(next);
+        if (!mappingResponseIsCurrent(started.request)) {
+          // A poll may observe this exact backend-committed B mapping before
+          // B's IPC reply returns. Preserve the local image, then issue one
+          // exact B ACK request in the flush loop. Identity replacement or a
+          // different C token remains untrusted and cannot be replayed.
+          if (successfulStaleProjectControlMappingsReplyIsRetryable(
+            projectAuthoritySync,
+            started.request,
+            returnedAuthority,
+            projectMappingsAuthority(),
+            mappingSyncDisposed,
+          )) {
+            return { kind: "retryable", authority: returnedAuthority };
+          }
+          return untrusted();
+        }
+        if (adoptProjectMappingsAuthority(next)) {
           // Only the request that still owns this identity may acknowledge a
           // local generation. A newer local edit remains dirty and is sent
           // with this new CAS token below.
@@ -15251,7 +15292,7 @@ export default function App() {
             // MIDI Clock visible because it remains live by design.
             resetRetiredMappingDrivenProjectControlInputUi();
           }
-          const acknowledged = authorityToken(next);
+          const acknowledged = returnedAuthority;
           if (projectAuthorityTokenIsCurrent(acknowledged, projectMappingsAuthority())) {
             return { kind: "acknowledged", authority: acknowledged };
           }
@@ -15303,48 +15344,43 @@ export default function App() {
           started.request.identityGeneration,
         )
       ) {
-        scheduleProjectControlMappingsPersist(0);
+        scheduleProjectControlMappingsPersist(0, requestFlushOwner ?? undefined);
       }
     });
     mappingPersistPromise = settled;
     return settled;
   };
 
+  const persistProjectControlMappingsForFlush = (
+    flushOwner: symbol,
+  ): Promise<ProjectControlMappingsPersistResult> => {
+    const priorOwner = mappingPersistFlushOwner;
+    mappingPersistFlushOwner = flushOwner;
+    try {
+      return persistProjectControlMappings();
+    } finally {
+      mappingPersistFlushOwner = priorOwner;
+    }
+  };
+
   const flushProjectControlMappingsAuthority = async (): Promise<ProjectControlMappingsFlushResult> => {
-    if (mappingSyncTimer !== null) {
-      window.clearTimeout(mappingSyncTimer);
-      mappingSyncTimer = null;
-    }
-    const ownAcknowledgements: ProjectAuthorityToken[] = [];
-    let trusted = true;
-    while (
-      !mappingSyncDisposed
-      && projectMappingsAuthorityReady()
-      && projectAuthorityHasDirtyMappings(projectAuthoritySync)
-    ) {
-      const identityGeneration = projectAuthoritySync.identityGeneration;
-      const persisted = await persistProjectControlMappings();
-      if (persisted.kind === "acknowledged") {
-        ownAcknowledgements.push(persisted.authority);
-      } else {
-        trusted = false;
-        break;
-      }
-      if (identityGeneration !== projectAuthoritySync.identityGeneration || mappingSyncInFlight) {
-        trusted = false;
-        break;
-      }
-      // A rejected latest edit is hydrated above and marks itself current; a
-      // newer local edit loops with the newly adopted CAS token.
-      if (!projectAuthorityHasDirtyMappings(projectAuthoritySync)) break;
-    }
+    const { flushProjectControlMappingsAuthorityBridge } = await import(
+      "./projectControlMappingsAuthorityBridge"
+    );
+    const flushed = await flushProjectControlMappingsAuthorityBridge({
+      persist: persistProjectControlMappingsForFlush,
+      cancelTimer: cancelProjectControlMappingsPersistTimer,
+      state: () => ({
+        disposed: mappingSyncDisposed,
+        authorityReady: projectMappingsAuthorityReady(),
+        sync: projectAuthoritySync,
+        mappingSyncInFlight,
+        timerFlushOwner: mappingSyncTimerFlushOwner,
+      }),
+    });
     return {
-      authority: captureProjectAuthorityIdentity(),
-      ownAcknowledgements,
-      trusted: trusted
-        && !mappingSyncDisposed
-        && !mappingSyncInFlight
-        && !projectAuthorityHasDirtyMappings(projectAuthoritySync),
+      ownAcknowledgements: flushed.ownAcknowledgements,
+      trusted: flushed.trusted,
     };
   };
   const flushProjectControlMappingsBeforeMutation = async (): Promise<number> => {
@@ -15360,29 +15396,20 @@ export default function App() {
     expectedAuthority: ProjectAuthorityToken,
   ): Promise<{ authority: ProjectAuthorityToken; provenance: "unchanged" | "own_mapping_ack" }> => {
     const mode = operatorLockMode();
-    if (!operatorCommandAllowed(mode, "start_media_asset_operation", true)) {
-      throw new Error(
-        mode === "Full"
-          ? "Operator Full Lock allows only status reads and emergency blackout controls."
-          : "Operator Partial Lock blocks programming and project replacement commands.",
-      );
-    }
+    const operatorAllowed = operatorCommandAllowed(mode, "start_media_asset_operation", true);
     // No new Media AbortController exists yet. Publishing a dirty mapping may
     // abort older operations, but cannot self-abort the operation being started.
-    const flushed = await flushProjectControlMappingsAuthority();
-    const authority = captureProjectAuthorityIdentity();
-    if (authority.project_epoch !== expectedAuthority.project_epoch || !flushed.trusted) {
-      throw new Error("Project changed while the media operation was starting; nothing was applied.");
-    }
-    const provenance = mediaAssetMappingPreflightProvenance(
-      expectedAuthority,
-      authority,
-      flushed.ownAcknowledgements,
+    const { prepareMediaAssetOperationStartBridge } = await import(
+      "./projectControlMappingsAuthorityBridge"
     );
-    if (!provenance) {
-      throw new Error("Project control mappings changed outside this media operation; choose the media action again.");
-    }
-    return { authority, provenance };
+    return prepareMediaAssetOperationStartBridge({
+      expectedAuthority,
+      operatorAllowed,
+      operatorMode: mode,
+      flush: flushProjectControlMappingsAuthority,
+      captureAuthority: captureProjectAuthorityIdentity,
+      mappingProvenance: mediaAssetMappingPreflightProvenance,
+    });
   };
   const prepareMediaAssetAvailabilityInspection = async (
     expectedAuthority: ProjectAuthorityToken,
@@ -16184,39 +16211,22 @@ export default function App() {
   };
 
   const requireTrustedProjectPublicationAuthority = async (): Promise<ProjectPublicationRequestSeedV1> => {
-    if (!projectMappingsAuthorityReady()) {
-      throw new Error("Project authority is still initializing; wait before saving.");
-    }
-    const beforeFlush = captureProjectAuthorityIdentity();
-    const beforeIdentityGeneration = projectAuthoritySync.identityGeneration;
-    const flushed = await flushProjectControlMappingsAuthority();
-    const authority = captureProjectAuthorityIdentity();
-    const provenance = mediaAssetMappingPreflightProvenance(
-      beforeFlush,
-      authority,
-      flushed.ownAcknowledgements,
+    const { requireTrustedProjectPublicationAuthorityBridge } = await import(
+      "./projectControlMappingsAuthorityBridge"
     );
-    if (!flushed.trusted
-      || !provenance
-      || beforeIdentityGeneration !== projectAuthoritySync.identityGeneration
-      || !projectMappingsAuthorityReady()
-      || !/^[0-9a-f]{64}$/.test(authority.checkpoint_hash)) {
-      throw new Error("Project control mappings could not be durably synchronized; save was not started.");
-    }
-    return {
-      surface: "save",
+    return requireTrustedProjectPublicationAuthorityBridge({
+      authorityReady: projectMappingsAuthorityReady,
+      captureAuthority: captureProjectAuthorityIdentity,
+      identityGeneration: () => projectAuthoritySync.identityGeneration,
+      flush: flushProjectControlMappingsAuthority,
+      mappingProvenance: (expected, current, flushed) => mediaAssetMappingPreflightProvenance(
+        expected,
+        current,
+        flushed.ownAcknowledgements,
+      ),
       ownerId: projectTransactionOwnerId,
-      expectedProjectEpoch: authority.project_epoch,
-      expectedProjectRevision: authority.project_revision,
-      expectedCheckpointHash: authority.checkpoint_hash,
-      // The backend's canonical checkpoint hash includes the authoritative
-      // control mappings. Bind the same exact persistence image twice rather
-      // than sending renderer copies of any mapping arrays.
-      mappingAuthorityHash: authority.checkpoint_hash,
       sourcePath: currentProjectPath(),
-      reason: null,
-      targetPolicy: "current_or_dialog",
-    };
+    });
   };
 
   const projectPublicationPendingMessage = (status: ProjectPublicationStatusV1) => {
@@ -16232,56 +16242,17 @@ export default function App() {
 
   const applyProjectPublicationTerminal = async (
     status: ProjectPublicationStatusV1,
-  ): Promise<void> => {
-    if (status.state === "indeterminate") {
-      setMessage(`Project publication outcome is indeterminate: ${status.error ?? "restart to reconcile the durable receipt"}`);
-      return;
-    }
-    if (status.state === "cancelled") {
-      setMessage(
-        status.surface === "user_template" ? "Template save canceled." : "Project publication canceled.",
-      );
-      return;
-    }
-    if (status.state === "abandoned") {
-      setMessage("The pending project publication was abandoned.");
-      return;
-    }
-    if (status.state === "failed") {
-      setMessage(`Project publication failed: ${status.error ?? "unknown durable failure"}`);
-      return;
-    }
-    if (status.state !== "succeeded") return;
-
-    if (status.surface === "backup") {
-      await refreshProjectBackups();
-      if (status.warning) {
-        setMessage(`Backup completed, but retention cleanup needs attention: ${status.warning}`);
-      }
-      return;
-    }
-    if (status.surface === "user_template") {
-      setMessage(status.targetPath ? `Saved user template ${status.targetPath}` : "Saved user template.");
-      return;
-    }
-
-    const saved = status.authority;
-    if (saved && projectAuthorityTokenIsCurrent(authorityToken(saved), projectMappingsAuthority())) {
-      // Save changes durable disposition/path, but never rewinds a newer
-      // mapping/input runtime signal that won while the file I/O was pending.
-      applyProjectAuthorityRuntimeStatus(saved, false);
-      if (projectAuthorityTokenIsCurrent(authorityToken(saved), projectMappingsAuthority())) {
-        if (status.targetPath) rememberRecentProjectPath(status.targetPath);
-        setMessage(status.targetPath ? `Saved project ${status.targetPath}` : "Saved project.");
-        return;
-      }
-    }
-    setMessage(
-      status.targetPath
-        ? `Saved an earlier project image to ${status.targetPath}; the current project changed before the acknowledgement arrived.`
-        : "Saved an earlier project image; the current project changed before the acknowledgement arrived.",
-    );
-  };
+  ): Promise<void> => import("./projectControlMappingsAuthorityBridge").then(
+    ({ applyProjectPublicationTerminalBridge }) => applyProjectPublicationTerminalBridge({
+      status,
+      currentAuthority: projectMappingsAuthority,
+      authorityIsCurrent: projectAuthorityTokenIsCurrent,
+      applyRuntimeStatus: (bundle) => { applyProjectAuthorityRuntimeStatus(bundle, false); },
+      refreshBackups: refreshProjectBackups,
+      rememberRecentPath: rememberRecentProjectPath,
+      setMessage,
+    }),
+  );
 
   const settleProjectPublicationTerminal = async (status: ProjectPublicationStatusV1) =>
     settleProjectPublicationStatusV1(
