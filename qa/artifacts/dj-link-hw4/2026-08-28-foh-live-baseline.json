@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-28T02:22:13.3046110+09:00",
+  "classification": "partial_connectivity_baseline_only",
+  "source": {
+    "branch": "codex/syndocal-v1.2",
+    "head": "2d848d40bb3f91f7715fe72a1a85d86e6b2b68ef",
+    "upstream": "2d848d40bb3f91f7715fe72a1a85d86e6b2b68ef",
+    "clean": true
+  },
+  "artifact": {
+    "path": "C:\\Users\\kouty\\Documents\\KDMX\\target\\release\\syndocal.exe",
+    "length": 58778112,
+    "productVersion": "1.2.0-alpha.21",
+    "fileVersion": "1.2.0-alpha.21",
+    "sha256": "F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3"
+  },
+  "process": {
+    "pid": 41912,
+    "responding": true,
+    "windowTitle": "Syndocal",
+    "startedAt": "2026-08-28T01:00:32.0394223+09:00"
+  },
+  "network": {
+    "listener": {
+      "localAddress": "192.168.50.1",
+      "localPort": 9100,
+      "state": "Listen"
+    },
+    "peer": {
+      "remoteAddress": "192.168.50.2",
+      "remotePort": 58618,
+      "state": "Established"
+    }
+  },
+  "djPcProjectedStatus": {
+    "observedAt": "2026-08-28T02:33:28.5181110+09:00",
+    "source": "GET http://192.168.50.2:8787/api/dj-agent/status with local allowlisted projection",
+    "enabled": true,
+    "agentState": "connected",
+    "syndocalState": "connected",
+    "stateSync": "sent",
+    "connectionGeneration": 61,
+    "lastAckAt": "2026-08-27T16:00:58.554Z",
+    "timelineSnapshotReady": false,
+    "timelineId": "1",
+    "playSessionId": null,
+    "pedalOwner": null,
+    "ownerDeck": null,
+    "interpretation": "The transport is connected, but no authoritative Timeline snapshot is ready. timelineId is retained only as an untrusted projection and authorizes no action."
+  },
+  "nativeUiObservation": {
+    "windowMaximized": true,
+    "projectLabel": "Untitled.sdc",
+    "djLinkCardState": "connected",
+    "selectedWorkbench": "osc",
+    "djLinkWorkbenchOpened": false,
+    "note": "DJ Link card navigation was not accepted because Windows UI Automation rejected the cached WebView element and coordinate actions. No inferred workbench state is recorded."
+  },
+  "redaction": {
+    "tokenIncluded": false,
+    "credentialIncluded": false
+  },
+  "limitations": [
+    "No HELLO or ACK frame was captured.",
+    "DJ-PC status reported State Sync sent but TimelineSnapshotReady=false; no authoritative DJ_TIMELINE_STATE exchange was captured.",
+    "The active project was Untitled.sdc, not the authored performance project.",
+    "No Rekordbox, MIDI, pedal, loop, release, reconnect, restart, or concurrent lighting observation was captured.",
+    "This file advances no HW-4 row; HW-4 remains 0/12."
+  ]
+}

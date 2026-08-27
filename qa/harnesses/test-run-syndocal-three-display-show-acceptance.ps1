@@ -15,12 +15,19 @@ $script:CheckoutRoot = Join-Path $script:SandboxRoot "checkout"
 $script:ExpectedPath = Join-Path $script:CheckoutRoot "target\release\syndocal.exe"
 $script:GoodPid = [uint32]4242
 $script:WrongPid = [uint32]4243
-$script:GoodHash = ("ab" * 32)
+$script:GoodHash = "f73f1ad8f9e8229b8acb713ae0c10c36e199c878d869a2e98b554190fc908fa3"
 $script:WrongHash = ("cd" * 32)
-$script:GoodVersion = "1.2.0-alpha.17"
+$script:GoodSize = [uint64]58778112
+$script:WrongSize = [uint64]58778113
+$script:GoodVersion = "1.2.0-alpha.21"
+$script:StaleVersion = "1.2.0-alpha.17"
 $script:WrongVersion = "9.9.9-wrong"
-$script:GoodHead = ("face" * 10)
+$script:GoodArtifactHead = "536742db968b242164349c34dd6940fe3ced8e92"
+$script:GoodHead = "2d848d40bb3f91f7715fe72a1a85d86e6b2b68ef"
 $script:WrongHead = ("dead" * 10)
+$script:GoodBranch = "codex/syndocal-v1.2"
+$script:WrongBranch = "codex/wrong-current-branch"
+$script:SourceAncestorResult = $true
 $script:DelayCalls = [System.Collections.Generic.List[int]]::new()
 $script:EditorIdentity = "\\?\DISPLAY#TEST_EDITOR#A#{11111111-1111-1111-1111-111111111111}"
 $script:LedIdentity = "\\?\DISPLAY#TEST_LED#B#{22222222-2222-2222-2222-222222222222}"
@@ -30,8 +37,11 @@ $script:StaleIdentity = "\\?\DISPLAY#TEST_STALE#Z#{44444444-4444-4444-4444-44444
 $script:SeamNames = @(
   "Get-SyndocalCandidateProcesses",
   "Get-ExecutableSha256",
+  "Get-ExecutableByteSize",
   "Get-ExecutableProductVersion",
   "Resolve-ThreeDisplayGitHead",
+  "Resolve-ThreeDisplayGitBranch",
+  "Test-ThreeDisplayGitAncestor",
   "Test-ThreeDisplayCheckoutClean",
   "Get-ThreeDisplayMonitorInventory",
   "Get-ThreeDisplayTopLevelWindows",
@@ -183,8 +193,17 @@ function Install-GoodWorldSeams {
     @($script:World.candidate)
   }
   Set-TestSeam "Get-ExecutableSha256" { param($Path) $script:CurrentHash }
+  Set-TestSeam "Get-ExecutableByteSize" { param($Path) $script:CurrentSize }
   Set-TestSeam "Get-ExecutableProductVersion" { param($Path) $script:CurrentVersion }
   Set-TestSeam "Resolve-ThreeDisplayGitHead" { param($CheckoutRootPath) $script:CurrentHead }
+  Set-TestSeam "Resolve-ThreeDisplayGitBranch" { param($CheckoutRootPath) $script:CurrentBranch }
+  Set-TestSeam "Test-ThreeDisplayGitAncestor" {
+    param($AncestorHead, $DescendantHead, $CheckoutRootPath)
+    if (-not $script:SourceAncestorResult) {
+      throw "Fail closed: artifact source HEAD '$AncestorHead' is not an ancestor of current harness HEAD '$DescendantHead'."
+    }
+    return $true
+  }
   Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) $true }
   Set-TestSeam "Get-ThreeDisplayMonitorInventory" { @($script:World.monitors) }
   Set-TestSeam "Get-ThreeDisplayTopLevelWindows" { param($OwnerPid) @($script:World.windows) }
@@ -209,7 +228,7 @@ function New-GoodConfiguration {
 
 # ---- ShowAsioLocal authority-mode fixtures -------------------------------
 
-$script:GoodCommit12 = "facefaceface"
+$script:GoodCommit12 = $script:GoodHead.Substring(0, 12)
 $script:WrongCommit12 = "deaddeaddead"
 $script:ShowCheckerSha = ("ef" * 32)
 
@@ -311,10 +330,25 @@ function Invoke-FocusedChecks {
   $checks = [System.Collections.Generic.List[object]]::new()
   try {
     $script:World = New-GoodWorld
-    $script:CurrentHash = $script:GoodHash; $script:CurrentVersion = $script:GoodVersion; $script:CurrentHead = $script:GoodHead
+    $script:CurrentHash = $script:GoodHash; $script:CurrentSize = $script:GoodSize; $script:CurrentVersion = $script:GoodVersion; $script:CurrentHead = $script:GoodHead; $script:CurrentBranch = $script:GoodBranch; $script:SourceAncestorResult = $true
     Install-GoodWorldSeams -World $script:World
     $config = New-GoodConfiguration
 
+    $checks.Add([pscustomobject]@{ Name = "alpha.21 authority binds exact artifact metadata"; Run = {
+      $authority = $config.artifact_authority
+      $passed =
+        ([string]$authority.product_version -ceq $script:GoodVersion) -and
+        ([uint64]$authority.byte_size -eq $script:GoodSize) -and
+        ([string]$authority.sha256 -ceq $script:GoodHash) -and
+        ([string]$authority.source_branch -ceq "codex/syndocal-v1.2") -and
+        ([string]$authority.source_head -ceq $script:GoodArtifactHead) -and
+        ([uint64]$config.expected_byte_size -eq $script:GoodSize) -and
+        ([string]$config.artifact_source_head -ceq $script:GoodArtifactHead) -and
+        ([string]$config.artifact_source_branch -ceq $script:GoodBranch) -and
+        ([string]$config.expected_git_head -ceq $script:GoodHead) -and
+        ([string]$config.expected_git_head -cne [string]$config.artifact_source_head)
+      New-Check -Passed $passed -Detail "StandardRelease binds artifact metadata to source HEAD while retaining a distinct current harness HEAD"
+    } })
     $checks.Add([pscustomobject]@{ Name = "five-display inventory proves same-resolution roles require exact identities"; Run = {
       $sample = Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true
       New-Check -Passed ((@($sample.monitors).Count -eq 5 -and $sample.windows.Count -eq 3)) -Detail "five monitors and three role windows proved"
@@ -396,6 +430,9 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "wrong executable hash is rejected"; Run = {
       $prior = $script:CurrentHash; $script:CurrentHash = $script:WrongHash; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "SHA256 mismatch" } finally { $script:CurrentHash = $prior }
     } })
+    $checks.Add([pscustomobject]@{ Name = "wrong executable byte size is rejected"; Run = {
+      $prior = $script:CurrentSize; $script:CurrentSize = $script:WrongSize; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "byte size mismatch" } finally { $script:CurrentSize = $prior }
+    } })
     $checks.Add([pscustomobject]@{ Name = "wrong product version is rejected"; Run = {
       $prior = $script:CurrentVersion; $script:CurrentVersion = $script:WrongVersion; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "ProductVersion mismatch" } finally { $script:CurrentVersion = $prior }
     } })
@@ -403,11 +440,26 @@ function Invoke-FocusedChecks {
       $prior = $script:CurrentHead; $script:CurrentHead = $script:WrongHead; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "git HEAD mismatch" } finally { $script:CurrentHead = $prior }
     } })
     $checks.Add([pscustomobject]@{ Name = "dirty checkout is rejected before display acceptance"; Run = {
-      Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) throw "Fail closed: exact alpha.17 artifact acceptance requires a clean checkout; git status reported 1 change(s)." }
+      Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) throw "Fail closed: exact $($script:GoodVersion) artifact acceptance requires a clean checkout; git status reported 1 change(s)." }
       try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "requires a clean checkout" } finally { Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) $true } }
     } })
-    $checks.Add([pscustomobject]@{ Name = "non-alpha.17 configuration is rejected"; Run = {
-      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.17"
+    $checks.Add([pscustomobject]@{ Name = "stale alpha.17 configuration is rejected"; Run = {
+      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:StaleVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.21"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "wrong alpha.21 hash authority is rejected"; Run = {
+      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:WrongHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exact 1.2.0-alpha.21 artifact authority"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "current harness HEAD is distinct from alpha.21 artifact source HEAD"; Run = {
+      $passed = ([string]$config.expected_git_head -ceq $script:GoodHead) -and ([string]$config.artifact_source_head -ceq $script:GoodArtifactHead) -and ([string]$config.expected_git_head -cne [string]$config.artifact_source_head)
+      New-Check -Passed $passed -Detail "current harness HEAD is recorded independently; source HEAD equality is not required"
+    } })
+    $checks.Add([pscustomobject]@{ Name = "current harness branch mismatch is rejected"; Run = {
+      $prior = $script:CurrentBranch; $script:CurrentBranch = $script:WrongBranch
+      try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "differs from required StandardRelease source branch" } finally { $script:CurrentBranch = $prior }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "alpha.21 artifact source HEAD not ancestor is rejected"; Run = {
+      $prior = $script:SourceAncestorResult; $script:SourceAncestorResult = $false
+      try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "not an ancestor" } finally { $script:SourceAncestorResult = $prior }
     } })
     $checks.Add([pscustomobject]@{ Name = "GDI renumbering of the same stable identity is accepted"; Run = {
       $priorName = $script:World.monitors[1].device_name
@@ -655,6 +707,11 @@ function Invoke-FocusedChecks {
       $r = Assert-Throws { New-ShowConfiguration -ExecutablePath $foreignLeaf } "must end in exactly syndocal-show-asio.exe"
       New-Check -Passed ($r.Passed) -Detail $r.Detail
     } })
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal does not inherit StandardRelease alpha.21 product lock"; Run = {
+      $showAlpha14 = New-ThreeDisplayConfiguration -IsApply $false -AuthorityMode ShowAsioLocal -ExecutablePath "" -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
+      $passed = ([string]$showAlpha14.expected_product_version -ceq "1.2.0-alpha.14") -and ($null -eq $showAlpha14.artifact_authority) -and ([uint64]$showAlpha14.expected_byte_size -eq 0)
+      New-Check -Passed $passed -Detail "ShowAsioLocal retains checker/manifest-bound product/version authority; StandardRelease alpha.21 metadata is not applied"
+    } })
     $checks.Add([pscustomobject]@{ Name = "nonzero Show-ASIO checker exit fails closed before any derivation"; Run = {
       [void](New-ShowArtifactFixture)
       Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
@@ -676,7 +733,7 @@ function Invoke-FocusedChecks {
         @{ name = "empty stdout"; stdout = ""; stderr = ""; exit = 0; expect = "not exactly one line" },
         @{ name = "padded line"; stdout = " $validLine"; stderr = ""; exit = 0; expect = "leading or trailing whitespace" },
         @{ name = "stderr noise"; stdout = $validLine; stderr = "[show-asio-check] hint"; exit = 0; expect = "unexpected stderr" },
-        @{ name = "relative directory"; stdout = "Show-ASIO local artifact PASS: target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.17_facefaceface_x64 files=3 distributionApproved=false"; stderr = ""; exit = 0; expect = "plain rooted Windows path" }
+        @{ name = "relative directory"; stdout = "Show-ASIO local artifact PASS: target\show-asio-local\Syndocal_Show_ASIO_$($script:GoodVersion)_facefaceface_x64 files=3 distributionApproved=false"; stderr = ""; exit = 0; expect = "plain rooted Windows path" }
       )
       $allRejected = $true
       foreach ($hostile in $hostileLines) {
@@ -691,7 +748,7 @@ function Invoke-FocusedChecks {
     } })
     $checks.Add([pscustomobject]@{ Name = "checker-derived directory outside this checkout is rejected"; Run = {
       [void](New-ShowArtifactFixture)
-      Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_1.2.0-alpha.17_facefaceface_x64")
+      Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_$($script:GoodVersion)_facefaceface_x64")
       try {
         $config = New-ShowConfiguration
         $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "outside this checkout"
@@ -799,6 +856,7 @@ function Invoke-FocusedChecks {
           ($script:ShowCheckerInvocations.Count -eq 2) -and
           (@($script:CandidateProcessNameCalls | Where-Object { $_ -cne "syndocal-show-asio" })).Count -eq 0 -and          ([string]$verifications[0].executable_path -ieq $showExecutable) -and
           ([string]$verifications[1].executable_sha256 -ceq $script:GoodHash) -and
+          ([uint64]$verifications[1].executable_byte_size -eq $script:GoodSize) -and
           ([string]$verifications[1].executable_product_version -ceq $script:GoodVersion) -and
           ([string]$verifications[1].checkout_git_head -ceq $script:GoodHead) -and
           ([string]$verifications[1].checker_sha256 -ceq $script:ShowCheckerSha) -and
@@ -808,7 +866,7 @@ function Invoke-FocusedChecks {
           ([long]$verifications[1].files_verified -gt 0) -and
           (-not [string]::IsNullOrWhiteSpace([string]$verifications[1].verified_at_utc)) -and
           ([string]$config.expected_executable_path -ieq $showExecutable)
-        New-Check -Passed $passed -Detail "two-phase authority verifications bound flavor/checker/path/hash/version/HEAD and both times"
+        New-Check -Passed $passed -Detail "two-phase authority verifications bound flavor/checker/path/hash/byte-size/version/HEAD and both times"
       } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal Apply maximize path re-verifies immediately before the UI mutation"; Run = {
@@ -888,7 +946,8 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "runner static contract forbids process and output mutations"; Run = {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.17", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
+      if ($text.Contains("1.2.0-alpha.17")) { return New-Check $false "stale alpha.17 authority remains in the runner" }
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.21", "f73f1ad8f9e8229b8acb713ae0c10c36e199c878d869a2e98b554190fc908fa3", "58778112", "536742db968b242164349c34dd6940fe3ced8e92", "source_provenance", "artifact_source_head", "artifact_source_branch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
       $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }

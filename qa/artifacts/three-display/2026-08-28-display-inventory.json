@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-28T02:32:15.5619779+09:00",
+  "classification": "read_only_display_inventory_only",
+  "activeDisplayCount": 5,
+  "displays": [
+    {
+      "deviceName": "\\\\.\\DISPLAY1",
+      "primary": false,
+      "bounds": { "x": 1920, "y": -364, "width": 2048, "height": 1152 }
+    },
+    {
+      "deviceName": "\\\\.\\DISPLAY2",
+      "primary": true,
+      "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 }
+    },
+    {
+      "deviceName": "\\\\.\\DISPLAY3",
+      "primary": false,
+      "bounds": { "x": -3840, "y": -429, "width": 2560, "height": 1440 }
+    },
+    {
+      "deviceName": "\\\\.\\DISPLAY5",
+      "primary": false,
+      "bounds": { "x": -2465, "y": 1731, "width": 1280, "height": 720 }
+    },
+    {
+      "deviceName": "\\\\.\\DISPLAY6",
+      "primary": false,
+      "bounds": { "x": 1598, "y": 1080, "width": 2560, "height": 720 }
+    }
+  ],
+  "requiredShowRoles": [
+    { "role": "operator", "requiredWidth": 1920, "requiredHeight": 1080 },
+    { "role": "led_panel", "requiredWidth": 1920, "requiredHeight": 1080 },
+    { "role": "projector", "requiredWidth": 3840, "requiredHeight": 2160 }
+  ],
+  "temporaryQaMedia": {
+    "purpose": "Temporary deterministic routing media; not final show artwork",
+    "manifestPath": "C:\\Users\\kouty\\Documents\\KDMX\\target\\qa\\near-show-media\\manifest.json",
+    "clips": [
+      {
+        "role": "led_panel",
+        "path": "C:\\Users\\kouty\\Documents\\KDMX\\target\\qa\\near-show-media\\syndocal-near-show-led-1920x1080.mp4",
+        "length": 11479089,
+        "sha256": "BCA2D8E70C142E2B4840C14424DA497ECDAE61DB255B43216CA320BE04D48E41",
+        "width": 1920,
+        "height": 1080,
+        "frameRate": "30/1",
+        "durationSeconds": 8.0
+      },
+      {
+        "role": "projector",
+        "path": "C:\\Users\\kouty\\Documents\\KDMX\\target\\qa\\near-show-media\\syndocal-near-show-projector-3840x2160.mp4",
+        "length": 43807726,
+        "sha256": "D51DCD2B4F55CB7A6FAE3F34E9B4D93E6BAC24B0B29A6BE500AB4B848D323E29",
+        "width": 3840,
+        "height": 2160,
+        "frameRate": "30/1",
+        "durationSeconds": 8.0
+      }
+    ],
+    "referencedByCurrentSdc": false
+  },
+  "limitations": [
+    "No Syndocal output role was assigned or applied.",
+    "No output window, decoded media, placement, physical pixel, save, or restart observation was made.",
+    "No active display currently reports 3840x2160 bounds, so the required projector-native-resolution row cannot be accepted from this inventory.",
+    "This inventory advances no three-display physical acceptance row."
+  ]
+}

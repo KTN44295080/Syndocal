@@ -148,7 +148,15 @@ $script:ThreeDisplayOutputTitlePrefix = "Syndocal Output - "
 $script:ThreeDisplayRequiredSamples = 3
 $script:ThreeDisplayMinimumSampleIntervalMs = 200
 $script:ThreeDisplaySchemaVersion = 1
-$script:ThreeDisplayRequiredProductVersion = "1.2.0-alpha.17"
+$script:ThreeDisplayStandardReleaseArtifactAuthority = [ordered]@{
+  product_version = "1.2.0-alpha.21"
+  byte_size = [uint64]58778112
+  sha256 = "f73f1ad8f9e8229b8acb713ae0c10c36e199c878d869a2e98b554190fc908fa3"
+  source_branch = "codex/syndocal-v1.2"
+  source_head = "536742db968b242164349c34dd6940fe3ced8e92"
+  source_provenance = "qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md#1.2"
+}
+$script:ThreeDisplayRequiredProductVersion = [string]$script:ThreeDisplayStandardReleaseArtifactAuthority.product_version
 $script:ThreeDisplaySwMaximize = 3
 $script:ThreeDisplayMaximumDiagnosticLength = 400
 $script:ThreeDisplayAuthorityStandardRelease = "StandardRelease"
@@ -426,6 +434,15 @@ function Get-ExecutableSha256 {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-ExecutableByteSize {
+  # SEAM
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Fail closed: exact executable '$Path' does not exist." }
+  $length = [uint64](Get-Item -LiteralPath $Path -Force).Length
+  if ($length -eq 0) { throw "Fail closed: exact executable '$Path' has zero bytes." }
+  return $length
+}
+
 function Get-ExecutableProductVersion {
   # SEAM
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -445,6 +462,36 @@ function Resolve-ThreeDisplayGitHead {
   return $head.ToLowerInvariant()
 }
 
+function Resolve-ThreeDisplayGitBranch {
+  # SEAM: read-only git query only.
+  param([Parameter(Mandatory = $true)][string]$CheckoutRootPath)
+  $answer = & git -C $CheckoutRootPath branch --show-current 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Fail closed: git branch --show-current failed for '$CheckoutRootPath'." }
+  $branch = ([string]@($answer)[0]).Trim()
+  if ([string]::IsNullOrWhiteSpace($branch) -or $branch -match "[\r\n]") {
+    throw "Fail closed: current harness checkout branch is unavailable or detached."
+  }
+  return $branch
+}
+
+function Test-ThreeDisplayGitAncestor {
+  # SEAM: read-only ancestry query only.
+  param(
+    [Parameter(Mandatory = $true)][string]$AncestorHead,
+    [Parameter(Mandatory = $true)][string]$DescendantHead,
+    [Parameter(Mandatory = $true)][string]$CheckoutRootPath
+  )
+  if (-not (Test-ThreeDisplayGitHeadFormat $AncestorHead) -or -not (Test-ThreeDisplayGitHeadFormat $DescendantHead)) {
+    throw "Fail closed: source and harness Git HEADs must both be full 40-hex commits before ancestry is checked."
+  }
+  & git -C $CheckoutRootPath merge-base --is-ancestor $AncestorHead $DescendantHead 2>&1 | Out-Null
+  if ($LASTEXITCODE -eq 0) { return $true }
+  if ($LASTEXITCODE -eq 1) {
+    throw "Fail closed: artifact source HEAD '$AncestorHead' is not an ancestor of current harness HEAD '$DescendantHead'."
+  }
+  throw "Fail closed: git merge-base --is-ancestor failed for artifact source HEAD '$AncestorHead' and current harness HEAD '$DescendantHead'."
+}
+
 function Test-ThreeDisplayCheckoutClean {
   # SEAM: exact artifact acceptance cannot treat an uncommitted working tree
   # as the supplied Git HEAD.
@@ -453,7 +500,7 @@ function Test-ThreeDisplayCheckoutClean {
   if ($LASTEXITCODE -ne 0) { throw "Fail closed: git status --porcelain=v1 failed for '$CheckoutRootPath'." }
   $entries = @($answer | ForEach-Object { ([string]$_).TrimEnd() } | Where-Object { $_ -ne "" })
   if ($entries.Count -ne 0) {
-    throw "Fail closed: exact alpha.17 artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
+    throw "Fail closed: exact artifact acceptance requires a clean checkout; git status reported $($entries.Count) change(s)."
   }
   return $true
 }
@@ -690,6 +737,7 @@ function Get-ThreeDisplayShowAsioAuthorityRecord {
   if (-not [string]::Equals($executableSha256, [string]$Configuration.expected_sha256, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Fail closed: Show-ASIO executable SHA-256 mismatch between checks or versus caller expectation (actual '$executableSha256')."
   }
+  $executableByteSize = Get-ExecutableByteSize -Path $canonicalExecutable
   $executableVersion = Get-ExecutableProductVersion -Path $canonicalExecutable
   if (-not [string]::Equals($executableVersion, [string]$Configuration.expected_product_version, [StringComparison]::Ordinal)) {
     throw "Fail closed: Show-ASIO executable ProductVersion mismatch (actual '$executableVersion')."
@@ -713,6 +761,7 @@ function Get-ThreeDisplayShowAsioAuthorityRecord {
     artifact_directory = $artifactDirectory
     executable_path = $canonicalExecutable
     executable_sha256 = $executableSha256
+    executable_byte_size = [uint64]$executableByteSize
     executable_product_version = $executableVersion
     checkout_git_head = $checkoutHead
     verified_at_utc = [string]$Verification.invoked_at_utc
@@ -733,6 +782,7 @@ function Invoke-ThreeDisplayShowAsioAuthorityGate {
   $parsedPass = ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification $verification
   $record = Get-ThreeDisplayShowAsioAuthorityRecord -Configuration $Configuration -ParsedPass $parsedPass -Verification $verification -Phase $Phase
   $Configuration.expected_executable_path = [string]$record.executable_path
+  $Configuration.expected_byte_size = [uint64]$record.executable_byte_size
   return [pscustomobject]$record
 }
 
@@ -984,6 +1034,11 @@ function Test-ThreeDisplayIdentityFormat {
   )
 }
 
+function Test-ThreeDisplayProductVersionFormat {
+  param([AllowEmptyString()][string]$Value)
+  return $Value -match '^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+}
+
 function New-ThreeDisplayConfiguration {
   param(
     [Parameter(Mandatory = $true)][bool]$IsApply,
@@ -1016,6 +1071,8 @@ function New-ThreeDisplayConfiguration {
   }
   if ($ShowAsioNodeExecutablePath -match "[\r\n]") { throw "Fail closed: ShowAsioNodeExecutablePath contains a line break." }
   $checkoutRoot = [IO.Path]::GetFullPath($CheckoutRootPath)
+  $isStandardRelease = [string]::Equals($AuthorityMode, $script:ThreeDisplayAuthorityStandardRelease, [StringComparison]::Ordinal)
+  $artifactAuthority = if ($isStandardRelease) { $script:ThreeDisplayStandardReleaseArtifactAuthority } else { $null }
   $defaultExecutablePath = [IO.Path]::GetFullPath((Join-Path $checkoutRoot "target\release\syndocal.exe"))
   $showAsioArtifactParent = [IO.Path]::GetFullPath((Join-Path $checkoutRoot ($script:ThreeDisplayShowAsioArtifactRelativeParent + "\")))
   $callerExpectedExecutablePath = $null
@@ -1054,8 +1111,16 @@ function New-ThreeDisplayConfiguration {
   }
   if ($Sha256 -ne "" -and -not (Test-ThreeDisplaySha256Format $Sha256)) { throw "Fail closed: ExpectedSha256 must be exactly 64 hexadecimal characters." }
   if ($GitHead -ne "" -and -not (Test-ThreeDisplayGitHeadFormat $GitHead)) { throw "Fail closed: ExpectedGitHead must be exactly 40 hexadecimal characters." }
-  if ($ProductVersion -ne "" -and -not [string]::Equals($ProductVersion, $script:ThreeDisplayRequiredProductVersion, [StringComparison]::Ordinal)) {
-    throw "Fail closed: ExpectedProductVersion must be exactly $($script:ThreeDisplayRequiredProductVersion) for this final show harness."
+  if ($ProductVersion -ne "" -and -not (Test-ThreeDisplayProductVersionFormat $ProductVersion)) {
+    throw "Fail closed: ExpectedProductVersion must be a canonical SemVer value."
+  }
+  if ($null -ne $artifactAuthority) {
+    if ($ProductVersion -ne "" -and -not [string]::Equals($ProductVersion, [string]$artifactAuthority.product_version, [StringComparison]::Ordinal)) {
+      throw "Fail closed: StandardRelease ExpectedProductVersion must be exactly $($artifactAuthority.product_version) for the recorded artifact authority."
+    }
+    if ($Sha256 -ne "" -and -not [string]::Equals($Sha256, [string]$artifactAuthority.sha256, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Fail closed: StandardRelease ExpectedSha256 must match the exact $($artifactAuthority.product_version) artifact authority recorded at $($artifactAuthority.source_provenance)."
+    }
   }
   foreach ($identity in @($EditorIdentity, $LedIdentity, $ProjectorIdentity)) {
     if ($identity -ne "" -and -not (Test-ThreeDisplayIdentityFormat $identity)) { throw "Fail closed: every monitor identity must be one raw stable DisplayConfig monitor-device path (\\?\DISPLAY#...) without line breaks." }
@@ -1071,7 +1136,12 @@ function New-ThreeDisplayConfiguration {
     ($ProjectorId -gt 0) -and (-not [string]::IsNullOrWhiteSpace($ProjectorLabel)) -and
     ($CdpPort -gt 0)
   if ($IsApply -and -not $fullyConfigured) {
-    throw "Fail closed: -Apply requires exact alpha.17 hash/version/HEAD, all three stable monitor identities, both explicit live output IDs/labels, and one explicit loopback CDP port."
+    $authorityRequirement = if ($isStandardRelease) {
+      "exact $($artifactAuthority.product_version) hash/version/byte-size with recorded artifact source HEAD ancestry"
+    } else {
+      "exact checker/manifest-bound hash/version/byte-size/current checkout HEAD"
+    }
+    throw "Fail closed: -Apply requires $authorityRequirement, all three stable monitor identities, both explicit live output IDs/labels, and one explicit loopback CDP port."
   }
   if ($fullyConfigured) {
     if ($EditorIdentity -eq $LedIdentity -or $EditorIdentity -eq $ProjectorIdentity -or $LedIdentity -eq $ProjectorIdentity) {
@@ -1083,10 +1153,14 @@ function New-ThreeDisplayConfiguration {
   [pscustomobject]@{
     apply = $IsApply; fully_configured = $fullyConfigured; checkout_root = [IO.Path]::GetFullPath($CheckoutRootPath)
     authority_mode = [string]$AuthorityMode
+    artifact_authority = $(if ($null -eq $artifactAuthority) { $null } else { [pscustomobject]$artifactAuthority })
     caller_expected_executable_path = $callerExpectedExecutablePath
     show_asio_node_executable_path = $(if ([string]::IsNullOrWhiteSpace($ShowAsioNodeExecutablePath)) { "" } else { [IO.Path]::GetFullPath($ShowAsioNodeExecutablePath) })
     expected_executable_path = $effectiveExecutablePath; expected_sha256 = $Sha256.ToLowerInvariant()
+    expected_byte_size = $(if ($null -eq $artifactAuthority) { [uint64]0 } else { [uint64]$artifactAuthority.byte_size })
     expected_product_version = $ProductVersion; expected_git_head = $GitHead.ToLowerInvariant()
+    artifact_source_head = $(if ($null -eq $artifactAuthority) { $null } else { [string]$artifactAuthority.source_head.ToLowerInvariant() })
+    artifact_source_branch = $(if ($null -eq $artifactAuthority) { $null } else { [string]$artifactAuthority.source_branch })
     sample_interval_ms = $IntervalMs; max_sample_attempts = $Attempts; cdp_port = $CdpPort
     roles = @(
       [pscustomobject]@{ role = "editor"; output_id = $null; stable_identity = $EditorIdentity; expected_effective_dpi = $script:ThreeDisplayRoleContracts.editor.effective_dpi; physical_width = $script:ThreeDisplayRoleContracts.editor.physical_width; physical_height = $script:ThreeDisplayRoleContracts.editor.physical_height; native_window_label = "main"; exact_title = $script:ThreeDisplayMainTitle },
@@ -1614,8 +1688,9 @@ function Assert-ThreeDisplayWindowState {
 
 function Get-ThreeDisplayStrictSample {
   # Full sample seam composition.  Every invocation independently re-proves
-  # current process path/hash/version/HEAD, monitor identities, title counts,
-  # PID ownership, window health, placement, and physical client size.
+  # current process path/hash/version/checkout HEAD/branch, StandardRelease
+  # artifact-source ancestry, monitor identities, title counts, PID ownership,
+  # window health, placement, and physical client size.
   param(
     [Parameter(Mandatory = $true)]$Configuration,
     [Parameter(Mandatory = $true)][bool]$RequireEditorMaximized
@@ -1641,11 +1716,29 @@ function Get-ThreeDisplayStrictSample {
   $process = Get-ThreeDisplayExactCheckoutProcess -Configuration $Configuration
   $actualHash = Get-ExecutableSha256 -Path $Configuration.expected_executable_path
   if (-not [string]::Equals($actualHash, $Configuration.expected_sha256, [StringComparison]::OrdinalIgnoreCase)) { throw "Fail closed: executable SHA256 mismatch (actual '$actualHash')." }
+  $actualByteSize = Get-ExecutableByteSize -Path $Configuration.expected_executable_path
+  if ([uint64]$Configuration.expected_byte_size -le 0) { throw "Fail closed: exact executable byte-size authority was not established before strict sampling." }
+  if ([uint64]$actualByteSize -ne [uint64]$Configuration.expected_byte_size) { throw "Fail closed: executable byte size mismatch (actual '$actualByteSize', expected '$($Configuration.expected_byte_size)')." }
   $actualVersion = Get-ExecutableProductVersion -Path $Configuration.expected_executable_path
   if (-not [string]::Equals($actualVersion, $Configuration.expected_product_version, [StringComparison]::Ordinal)) { throw "Fail closed: executable ProductVersion mismatch (actual '$actualVersion')." }
+  $currentBranch = $null
+  $artifactSourceHead = $null
+  $artifactSourceBranch = $null
+  if ($null -ne $Configuration.artifact_authority) {
+    $artifactSourceHead = [string]$Configuration.artifact_source_head
+    $artifactSourceBranch = [string]$Configuration.artifact_source_branch
+    $currentBranch = Resolve-ThreeDisplayGitBranch -CheckoutRootPath $Configuration.checkout_root
+    if (-not [string]::Equals($currentBranch, $artifactSourceBranch, [StringComparison]::Ordinal)) {
+      throw "Fail closed: current harness checkout branch '$currentBranch' differs from required StandardRelease source branch '$artifactSourceBranch'."
+    }
+  }
   $actualHead = Resolve-ThreeDisplayGitHead -CheckoutRootPath $Configuration.checkout_root
   if (-not [string]::Equals($actualHead, $Configuration.expected_git_head, [StringComparison]::OrdinalIgnoreCase)) { throw "Fail closed: checkout git HEAD mismatch (actual '$actualHead')." }
-  [void](Test-ThreeDisplayCheckoutClean -CheckoutRootPath $Configuration.checkout_root)
+  $checkoutClean = Test-ThreeDisplayCheckoutClean -CheckoutRootPath $Configuration.checkout_root
+  if (-not [bool]$checkoutClean) { throw "Fail closed: checkout clean-state proof returned false." }
+  if ($null -ne $Configuration.artifact_authority) {
+    [void](Test-ThreeDisplayGitAncestor -AncestorHead $artifactSourceHead -DescendantHead $actualHead -CheckoutRootPath $Configuration.checkout_root)
+  }
 
   $inventory = @(Get-ThreeDisplayMonitorInventory)
   if ($inventory.Count -eq 0) { throw "Fail closed: monitor inventory is empty." }
@@ -1690,7 +1783,19 @@ function Get-ThreeDisplayStrictSample {
   Assert-ThreeDisplayExactOutputWindowObservation -Configuration $Configuration -Observation $outputObservation -Selected $selected
   [pscustomobject]@{
     observed_at_utc = [DateTime]::UtcNow.ToString("o")
-    process = [pscustomobject]@{ process_id = [uint32]$process.process_id; native_image_path = [string]$process.native_image_path; sha256 = $actualHash; product_version = $actualVersion; git_head = $actualHead }
+    process = [pscustomobject]@{
+      process_id = [uint32]$process.process_id
+      native_image_path = [string]$process.native_image_path
+      sha256 = $actualHash
+      byte_size = [uint64]$actualByteSize
+      product_version = $actualVersion
+      git_head = $actualHead
+      current_harness_head = $actualHead
+      current_harness_branch = $currentBranch
+      checkout_clean = [bool]$checkoutClean
+      artifact_source_head = $artifactSourceHead
+      artifact_source_branch = $artifactSourceBranch
+    }
     monitors = @($inventory)
     output_window_observation = $outputObservation
     windows = @($windowEvidence)
@@ -1823,10 +1928,16 @@ function Invoke-ThreeDisplayAcceptance {
         distribution_approved = $false
       }
     })
+    artifact_authority = $Configuration.artifact_authority
     expectations = [ordered]@{
       sha256 = if ($Configuration.expected_sha256) { $Configuration.expected_sha256 } else { $null }
+      byte_size = if ([uint64]$Configuration.expected_byte_size -gt 0) { [uint64]$Configuration.expected_byte_size } else { $null }
       product_version = if ($Configuration.expected_product_version) { $Configuration.expected_product_version } else { $null }
       git_head = if ($Configuration.expected_git_head) { $Configuration.expected_git_head } else { $null }
+      current_harness_head = if ($Configuration.expected_git_head) { $Configuration.expected_git_head } else { $null }
+      current_harness_branch = if ($Configuration.artifact_source_branch) { $Configuration.artifact_source_branch } else { $null }
+      artifact_source_head = if ($Configuration.artifact_source_head) { $Configuration.artifact_source_head } else { $null }
+      artifact_source_branch = if ($Configuration.artifact_source_branch) { $Configuration.artifact_source_branch } else { $null }
       cdp_port = if ($Configuration.cdp_port -gt 0) { $Configuration.cdp_port } else { $null }
       roles = @($Configuration.roles)
     }
