@@ -1970,3 +1970,55 @@ Deck 1 owner fallback reached the fail-closed mapping boundary, but it does not
 promote any HW-4 row. HW-4 remains exactly **0/12**. The next non-destructive
 hardware action is to load the existing mapped `Demo Track 2` on Deck 1 and
 observe Track Active/Timeline ownership before touching the pedal.
+
+## 37. 2026-08-28 current alpha.26 UI source-only fence checkpoint
+
+This source/UI tranche started from
+`fbeee4209d53c63b4cbd67527e49d8bf911acfaa` and is committed and pushed on
+`codex/syndocal-v1.2` at
+`0f1f9eec57f61d952da028af8ab2658ef6734745`. The committed paths are
+`app/src/App.tsx`, `app/src/mediaAssetUiFences.ts`,
+`app/src/components/MappingSelectionSidebarPanel.tsx`,
+`app/scripts/check-media-asset-authority.mjs`,
+`app/scripts/check-vj-first-run.mjs`, and
+`app/scripts/check-mapping-empty-context.mjs`.
+
+The media/VJ UI fence helpers were extracted from `App.tsx` into the focused
+`mediaAssetUiFences.ts` module, and the media-authority and VJ first-run
+checkers now import the production helper rather than extracting balanced
+function bodies from `App.tsx`. Independent Terra review is **GO** with no
+P0/P1/P2 findings. The empty Mapping setup context keeps the fixture-selection,
+stage-object, and selection-action surfaces available, while mounting the
+fixture inspector only after a fixture is selected and the projector-selection
+panel only when at least one output exists. Its focused checker preserves the
+selected/non-empty editor branches; independent Terra review is **GO** with no
+P0/P1/P2 findings.
+
+The Timeline context-menu, Setup I/O containment, and `New Scene` localization
+source audits are **GO**. Focused source/UI gates passed with first-party
+warnings `0`: media authority, VJ first-run, Mapping empty context, TypeScript,
+the 298-module Vite build, `3578/3578` localization coverage with zero
+unprotected user-data labels, DJ Link, the four-viewport Timeline performance
+matrix, Setup I/O at five viewports, and Web Remote scroll at five viewports.
+These are source/browser/checker results only; they do not promote native or
+physical acceptance.
+
+Checkpoint cleanup inventory was read-only. Logical file-length totals are
+`target` `303,759,970,127` bytes (`282.90 GiB`), `target/debug`
+`286,339,028,471` bytes (`266.67 GiB`), `target/debug/incremental`
+`141,958,486,319` bytes (`132.21 GiB`), `target/debug/deps`
+`127,609,542,479` bytes (`118.85 GiB`), `app/node_modules` `545,338,492`
+bytes, and `app/dist` `5,122,149` bytes. No cleanup Apply or ad-hoc deletion was
+performed; reclaimed bytes remain `0`. The reviewed harness is still limited
+to Plan/its exact allowlist and the prior writer-topology, age, and hard-link
+blockers must not be bypassed.
+
+Alpha.26 native build, artifact identity, launch, maximized-window verification,
+and native UI QA were deliberately **not run**. The historical alpha.25 live DJ
+session, exact release executable PID `83252`, is intentionally preserved and
+must not be terminated for this source-only checkpoint. The first safe native
+action remains: stop or explicitly finish that preserved session, apply the
+exact MSVC 14.44 native build gate, launch exactly one responsive maximized
+alpha.26 Syndocal window, and repeat the relevant UI observations. DJ/MIDI/
+pedal hardware, target-DJ-PC restart, LAN/reconnect, real output, and HW-4
+remain unverified; HW-4 remains **0/12**.
