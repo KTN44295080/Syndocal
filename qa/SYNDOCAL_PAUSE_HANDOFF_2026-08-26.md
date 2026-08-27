@@ -1131,3 +1131,41 @@ reviewer baseline
 is now `49,009,359` bytes after `885.6 MiB` was reclaimed by `cargo clean`;
 direct cleanup remains policy-blocked. HW-4 remains **0/12**; this continuation
 does not claim native or physical acceptance.
+
+## 22. 2026-08-27 Stage 2 / Release worker-TOCTOU checkpoint
+
+This checkpoint starts from branch `codex/syndocal-v1.2`, exact base
+`HEAD`/upstream `7196390fa3b4a9d923f2d8e244b187a8096855dc`. The owned source
+set is limited to `crates/engine/src/lib.rs`,
+`crates/engine/src/tests/dj_link_release.rs`,
+`app/src-tauri/src/main.rs`, `app/src-tauri/src/dj_track_runtime.rs`, and
+`app/src-tauri/src/tests/dj_track_runtime_tests.rs`. Other UI and mapping-
+authority changes remain separate dirty work and are not part of this
+checkpoint.
+
+`EngineCommand::DjLinkRelease` and the absolute Stage 2 loop command now carry
+the exact expected Timeline identity. The single engine worker revalidates that
+identity and `timeline_playing` immediately before mutation, so a queued stop or
+Timeline restart/swap cannot release, loop, or beat-jump a replacement Timeline.
+The app boundary independently requires an active admitted track, authoritative
+Running state, DJ pedal ownership, exact Timeline/play-session correlation, and
+a non-released runtime before enqueue. Only an exact prior Timeline-owned,
+loop-off Release receipt is an idempotent replay; foreign or incomplete replay
+state fails closed.
+
+The exact MSVC 14.44 Community linker was pinned and first in `where.exe`.
+`cargo test -p engine dj_link_ -- --nocapture --test-threads=1` passed
+**27/27**, `cargo test -p syndocal dj_link_ -- --nocapture` passed
+**118**, failed **0**, ignored the one intentional live-network test, and both
+configurations emitted **0 first-party warnings**. `cargo fmt --all -- --check`
+and `git diff --check` passed; the latter emitted only Git LF-to-CRLF notices.
+Independent Terra xHigh adversarial review is **GO**. Ox was unavailable, so
+this is the recorded narrow review exception.
+
+No native release build or deployed Syndocal process contains this checkpoint
+yet. The currently running alpha.18 hardware observation proves only the Stage 1
+track-admit and F13 Release path; it does not accept Stage 2, the new worker
+TOCTOU fence, project-mapping persistence, or the requested `title contains`
+show selector. The next safe action is to finish those separate source tranches,
+advance the prerelease version, then run the exact native build/launch/maximized
+window gate before Stage 2 hardware testing.

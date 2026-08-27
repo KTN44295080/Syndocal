@@ -1095,10 +1095,13 @@ fn dj_link_timeline_state_from_snapshot(
     let position_bars = dj_link_engine_position_bars(snapshot);
     let state = if runtime.timeline_id.is_none() {
         protocol::DjLinkTimelineStateValue::Idle
-    } else if snapshot.timeline.playing
-        || runtime.authoritative_state == protocol::DjLinkTimelineStateValue::Running
-    {
+    } else if snapshot.timeline.playing {
         protocol::DjLinkTimelineStateValue::Running
+    } else if runtime.authoritative_state == protocol::DjLinkTimelineStateValue::Running {
+        // A stale runtime latch must never make a stopped Timeline look
+        // running to the peer. `Stopped` is terminal for this snapshot and
+        // causes the peer to leave timeline-control.
+        protocol::DjLinkTimelineStateValue::Stopped
     } else {
         runtime.authoritative_state
     };
@@ -1462,11 +1465,15 @@ fn dispatch_dj_link_event(
             if runtime.unmapped_active_blocked {
                 return dj_link_rejected("dj_link_unmapped_active", current_generation);
             }
-            if payload.state != "released"
-                || runtime.timeline_id.as_deref() != Some(payload.timeline_id.as_str())
-                || runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str())
-            {
+            if payload.state != "released" {
                 return dj_link_rejected("release_context_mismatch", current_generation);
+            }
+            if let Some(code) = dj_track_runtime::release_authority_rejection(
+                &runtime,
+                &payload.timeline_id,
+                &payload.play_session_id,
+            ) {
+                return dj_link_rejected(code, current_generation);
             }
             if runtime.released {
                 // Release fencing: the first canonical correlated RELEASE owns
@@ -1487,13 +1494,18 @@ fn dispatch_dj_link_event(
                     ),
                 };
             }
+            let Ok(expected_timeline_id) = payload.timeline_id.parse::<u64>() else {
+                return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            };
             let next = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
                 Err(_) => {
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            let snapshot = match engine.dj_link_release_with_canonical_snapshot() {
+            let snapshot = match engine
+                .dj_link_release_with_canonical_snapshot(TimelineId(expected_timeline_id))
+            {
                 Ok(snapshot) => snapshot,
                 Err(_) => {
                     return dj_link_rejected("engine_publication_rejected", current_generation)
@@ -1574,20 +1586,22 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
-            if runtime.unmapped_active_blocked {
-                return dj_link_rejected("dj_link_unmapped_active", current_generation);
-            }
-            if runtime.released {
-                return dj_link_rejected("dj_link_released", current_generation);
-            }
-            let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
-                return dj_link_rejected("timeline_not_active", current_generation);
+            // The dispatcher keeps the runtime mutex through the synchronous
+            // canonical ACK, so no concurrent app projection can advance its
+            // generation while the worker repeats the authority check.
+            let Some(snapshot) = engine.try_snapshot() else {
+                return DjLinkDispatchOutcome::Busy {
+                    code: "engine_snapshot_busy".to_string(),
+                    state_generation: current_generation,
+                };
             };
-            if current_timeline_id != payload.timeline_id {
-                return dj_link_rejected("timeline_identity_mismatch", current_generation);
-            }
-            if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
-                return dj_link_rejected("timeline_play_session_mismatch", current_generation);
+            if let Some(code) = dj_track_runtime::stage2_authority_rejection(
+                &runtime,
+                &payload.timeline_id,
+                &payload.play_session_id,
+                &snapshot,
+            ) {
+                return dj_link_rejected(code, current_generation);
             }
             let Ok(timeline_id) = payload.timeline_id.parse::<u64>() else {
                 return dj_link_rejected("invalid_timeline_id", current_generation);
@@ -1595,6 +1609,12 @@ fn dispatch_dj_link_event(
             if timeline_id == 0 {
                 return dj_link_rejected("invalid_timeline_id", current_generation);
             }
+            let next_generation = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
             let snapshot = match engine.dj_link_timeline_beat_jump_with_canonical_snapshot(
                 TimelineId(timeline_id),
                 payload.bars,
@@ -1610,8 +1630,9 @@ fn dispatch_dj_link_event(
             // metadata after a successful mutation.
             runtime.position_bars = dj_link_engine_position_bars(&snapshot);
             runtime.last_event_id = Some(event_id.clone());
+            runtime.state_generation = next_generation;
             DjLinkDispatchOutcome::TimelineState {
-                state_generation: current_generation,
+                state_generation: next_generation,
                 state: dj_link_timeline_state_from_snapshot(
                     &runtime, &snapshot, &event_id, sequence,
                 ),
@@ -1629,23 +1650,38 @@ fn dispatch_dj_link_event(
                     )
                 }
             };
-            if runtime.unmapped_active_blocked {
-                return dj_link_rejected("dj_link_unmapped_active", current_generation);
-            }
-            if runtime.released {
-                return dj_link_rejected("dj_link_released", current_generation);
-            }
-            let Some(current_timeline_id) = runtime.timeline_id.as_deref() else {
-                return dj_link_rejected("timeline_not_active", current_generation);
+            // The dispatcher keeps the runtime mutex through the synchronous
+            // canonical ACK, so no concurrent app projection can advance its
+            // generation while the worker repeats the authority check.
+            let Some(snapshot) = engine.try_snapshot() else {
+                return DjLinkDispatchOutcome::Busy {
+                    code: "engine_snapshot_busy".to_string(),
+                    state_generation: current_generation,
+                };
             };
-            if current_timeline_id != payload.timeline_id {
-                return dj_link_rejected("timeline_identity_mismatch", current_generation);
+            if let Some(code) = dj_track_runtime::stage2_authority_rejection(
+                &runtime,
+                &payload.timeline_id,
+                &payload.play_session_id,
+                &snapshot,
+            ) {
+                return dj_link_rejected(code, current_generation);
             }
-            if runtime.play_session_id.as_deref() != Some(payload.play_session_id.as_str()) {
-                return dj_link_rejected("timeline_play_session_mismatch", current_generation);
+            let Ok(timeline_id) = payload.timeline_id.parse::<u64>() else {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            };
+            if timeline_id == 0 {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
             }
             let division = runtime.loop_division.unwrap_or(0);
+            let next_generation = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
             let snapshot = match engine.dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
+                TimelineId(timeline_id),
                 division,
                 payload.active,
             ) {
@@ -1656,9 +1692,11 @@ fn dispatch_dj_link_event(
             };
             // The ACK is based on the engine publication.  The returned state
             // is built from the post-ACK snapshot, never from the request.
+            runtime.loop_active = payload.active;
             runtime.last_event_id = Some(event_id.clone());
+            runtime.state_generation = next_generation;
             DjLinkDispatchOutcome::TimelineState {
-                state_generation: current_generation,
+                state_generation: next_generation,
                 state: dj_link_timeline_state_from_snapshot(
                     &runtime, &snapshot, &event_id, sequence,
                 ),
@@ -113623,6 +113661,30 @@ f 1 2 3
             assert_eq!(*runtime.lock().unwrap(), runtime_before);
         };
 
+        // Stage 2 commands now fail at their explicit pre-release authority
+        // fence.  This is intentionally earlier than the old engine-error
+        // path: a command without a canonical Release must never reach the
+        // Timeline engine, and both engine/runtime images remain unchanged.
+        let assert_pre_release_stage2_rejection_preserves_runtime =
+            |event: protocol::DjLinkEnvelope| {
+                let engine_before = engine.snapshot();
+                let runtime_before = runtime.lock().unwrap().clone();
+                assert!(matches!(
+                    dispatch_dj_link_event(
+                        event,
+                        &engine,
+                        &coordinator,
+                        &runtime,
+                        &admission,
+                        &transaction_active,
+                    ),
+                    DjLinkDispatchOutcome::Rejected { code, .. }
+                        if code == "timeline_stage2_not_authorized"
+                ));
+                assert_eq!(engine.snapshot(), engine_before);
+                assert_eq!(*runtime.lock().unwrap(), runtime_before);
+            };
+
         assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
             protocol::DjLinkMessageType::TrackSync,
             2,
@@ -113677,20 +113739,20 @@ f 1 2 3
                 "source": "pedal-no-response-predicted"
             }),
         ));
-        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+        assert_pre_release_stage2_rejection_preserves_runtime(dj_link_test_envelope(
             protocol::DjLinkMessageType::TimelineBeatJump,
             4,
-            "beat-engine-error",
+            "beat-pre-release",
             json!({
                 "timelineId": timeline_id,
                 "playSessionId": "play-error",
                 "bars": 3
             }),
         ));
-        assert_engine_rejection_preserves_runtime(dj_link_test_envelope(
+        assert_pre_release_stage2_rejection_preserves_runtime(dj_link_test_envelope(
             protocol::DjLinkMessageType::TimelineLoopSet,
             5,
-            "timeline-loop-engine-error",
+            "timeline-loop-pre-release",
             json!({
                 "timelineId": engine.snapshot().timeline.id.0.to_string(),
                 "playSessionId": "play-error",

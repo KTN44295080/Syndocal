@@ -232,6 +232,111 @@ pub(super) fn owner_matches(
         && runtime.play_session_id.as_deref() == Some(play_session_id)
 }
 
+/// Return the fail-closed reason for a post-release Timeline command, if the
+/// runtime has not established the exact Stage 2 authority fence yet.
+///
+/// Stage 1 `DJ_RELEASE` is the handoff edge: it turns the DJ loop off and
+/// gives the already-running Timeline clock back to Syndocal.  Beat jumps and
+/// absolute loop requests are therefore only valid after that edge, while the
+/// authoritative running snapshot, Timeline pedal owner, and release receipt
+/// all remain present.  Keep the identity checks in this same helper so a
+/// command can never pass the authority gate with a stale Timeline/session.
+pub(super) fn stage2_authority_rejection(
+    runtime: &DjLinkRuntime,
+    timeline_id: &str,
+    play_session_id: &str,
+    snapshot: &EngineSnapshot,
+) -> Option<&'static str> {
+    if runtime.unmapped_active_blocked {
+        return Some("dj_link_unmapped_active");
+    }
+    if !runtime.released {
+        return Some("timeline_stage2_not_authorized");
+    }
+    if !runtime.track_active || runtime.timeline_id.is_none() {
+        return Some("timeline_not_active");
+    }
+    if runtime.authoritative_state != protocol::DjLinkTimelineStateValue::Running {
+        return Some("timeline_state_not_running");
+    }
+    if !snapshot.timeline.playing {
+        return Some("timeline_not_playing");
+    }
+    if snapshot.timeline.id.0.to_string() != timeline_id {
+        return Some("timeline_identity_mismatch");
+    }
+    if runtime.pedal_owner.as_deref() != Some("timeline") {
+        return Some("timeline_pedal_owner_mismatch");
+    }
+    if runtime
+        .release_event_id
+        .as_deref()
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        return Some("timeline_release_missing");
+    }
+    if runtime.timeline_id.as_deref() != Some(timeline_id) {
+        return Some("timeline_identity_mismatch");
+    }
+    if runtime.play_session_id.as_deref() != Some(play_session_id) {
+        return Some("timeline_play_session_mismatch");
+    }
+    None
+}
+
+/// Return the fail-closed reason for a correlated DJ Link RELEASE before it
+/// may enqueue the engine mutation.  A fresh RELEASE must still be owned by
+/// the DJ and must describe the currently active/running play session.  An
+/// already released runtime is a separate, terminal replay path: it may only
+/// be observed when the prior handoff left the exact Timeline-owned receipt
+/// state intact, and it never reaches the engine again.
+pub(super) fn release_authority_rejection(
+    runtime: &DjLinkRuntime,
+    timeline_id: &str,
+    play_session_id: &str,
+) -> Option<&'static str> {
+    if runtime.unmapped_active_blocked {
+        return Some("dj_link_unmapped_active");
+    }
+    if !runtime.track_active || runtime.timeline_id.is_none() {
+        return Some("timeline_not_active");
+    }
+    if runtime.authoritative_state != protocol::DjLinkTimelineStateValue::Running {
+        return Some("timeline_state_not_running");
+    }
+    if runtime.timeline_id.as_deref() != Some(timeline_id) {
+        return Some("release_context_mismatch");
+    }
+    if runtime.play_session_id.as_deref() != Some(play_session_id) {
+        return Some("release_context_mismatch");
+    }
+    if runtime.released {
+        if runtime.pedal_owner.as_deref() != Some("timeline") {
+            return Some("timeline_pedal_owner_mismatch");
+        }
+        if runtime.loop_active {
+            return Some("timeline_release_state_invalid");
+        }
+        if runtime
+            .release_event_id
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            return Some("timeline_release_missing");
+        }
+    } else {
+        if runtime.pedal_owner.as_deref() != Some("dj") {
+            return Some("dj_link_pedal_owner_mismatch");
+        }
+        if runtime.release_event_id.is_some() {
+            return Some("release_state_invalid");
+        }
+    }
+    None
+}
+
 pub(super) fn dispatch_loop_state(
     payload: protocol::DjLinkTrackLoopStatePayload,
     engine: &EngineHandle,
@@ -309,8 +414,16 @@ pub(super) fn dispatch_loop_state(
         Ok(next) => next,
         Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
     };
+    let Some(timeline_id) = runtime
+        .timeline_id
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(TimelineId)
+    else {
+        return dj_link_rejected("invalid_timeline_id", current_generation);
+    };
     if engine
-        .dj_link_set_timeline_loop_absolute(division, payload.loop_state.active)
+        .dj_link_set_timeline_loop_absolute(timeline_id, division, payload.loop_state.active)
         .is_err()
     {
         return dj_link_rejected("engine_publication_rejected", current_generation);
@@ -381,6 +494,14 @@ pub(super) fn dispatch_loop_fallback(
         Ok(next) => next,
         Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
     };
+    let Some(timeline_id) = runtime
+        .timeline_id
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(TimelineId)
+    else {
+        return dj_link_rejected("invalid_timeline_id", current_generation);
+    };
     if runtime.loop_active && runtime.loop_division == Some(division) {
         runtime.last_loop_fallback_intent_id = Some(payload.pedal_intent_id);
         runtime.last_event_id = Some(event_id.to_string());
@@ -388,7 +509,7 @@ pub(super) fn dispatch_loop_fallback(
         return dj_link_accepted(next);
     }
     if engine
-        .dj_link_set_timeline_loop_absolute(division, true)
+        .dj_link_set_timeline_loop_absolute(timeline_id, division, true)
         .is_err()
     {
         return dj_link_rejected("engine_publication_rejected", current_generation);

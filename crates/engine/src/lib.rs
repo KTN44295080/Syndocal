@@ -4583,6 +4583,12 @@ define_engine_command! {
     },
     /// Acknowledgement-bearing absolute DJ Link loop convergence.
     DjLinkSetTimelineLoopAbsolute {
+        /// Identity captured by the caller and revalidated in the worker.
+        expected_timeline_id: TimelineId,
+        /// Stage 2 Timeline control requires a playing Timeline. The
+        /// measured Deck loop convergence path deliberately leaves this false
+        /// so it can retain its pre-existing stopped-deck semantics.
+        require_playing: bool,
         division: u8,
         enabled: bool,
         expires_at: Instant,
@@ -4602,6 +4608,7 @@ define_engine_command! {
     /// One queue item for DJ Link RELEASE: disable the loop and relinquish DJ
     /// Link clock ownership without starting or seeking the Timeline.
     DjLinkRelease {
+        expected_timeline_id: TimelineId,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -6589,10 +6596,12 @@ impl EngineHandle {
     /// Submit an absolute authored-loop convergence and wait for its result.
     pub fn dj_link_set_timeline_loop_absolute(
         &self,
+        expected_timeline_id: TimelineId,
         division: u8,
         enabled: bool,
     ) -> Result<(), String> {
         self.dj_link_set_timeline_loop_absolute_with_timeout(
+            expected_timeline_id,
             division,
             enabled,
             DJ_LINK_ENGINE_ACK_TIMEOUT,
@@ -6602,21 +6611,31 @@ impl EngineHandle {
     #[doc(hidden)]
     pub fn dj_link_set_timeline_loop_absolute_with_timeout(
         &self,
+        expected_timeline_id: TimelineId,
         division: u8,
         enabled: bool,
         timeout: Duration,
     ) -> Result<(), String> {
-        self.dj_link_set_timeline_loop_absolute_with_snapshot_timeout(division, enabled, timeout)
-            .map(|_| ())
+        self.dj_link_set_timeline_loop_absolute_with_snapshot_timeout(
+            expected_timeline_id,
+            false,
+            division,
+            enabled,
+            timeout,
+        )
+        .map(|_| ())
     }
 
     #[doc(hidden)]
     pub fn dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
         &self,
+        expected_timeline_id: TimelineId,
         division: u8,
         enabled: bool,
     ) -> Result<Arc<EngineSnapshot>, String> {
         self.dj_link_set_timeline_loop_absolute_with_snapshot_timeout(
+            expected_timeline_id,
+            true,
             division,
             enabled,
             DJ_LINK_ENGINE_ACK_TIMEOUT,
@@ -6625,6 +6644,8 @@ impl EngineHandle {
 
     fn dj_link_set_timeline_loop_absolute_with_snapshot_timeout(
         &self,
+        expected_timeline_id: TimelineId,
+        require_playing: bool,
         division: u8,
         enabled: bool,
         timeout: Duration,
@@ -6633,6 +6654,8 @@ impl EngineHandle {
             timeout,
             "DJ Link absolute loop",
             |expires_at, admission, ack| EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                expected_timeline_id,
+                require_playing,
                 division,
                 enabled,
                 expires_at,
@@ -6700,27 +6723,36 @@ impl EngineHandle {
     /// handing an already-running playhead from DJ Link back to the local
     /// clock are one queue item and are rolled back together if either side
     /// rejects the transition. RELEASE never starts or seeks a Timeline.
-    pub fn dj_link_release(&self) -> Result<(), String> {
-        self.dj_link_release_with_timeout(DJ_LINK_ENGINE_ACK_TIMEOUT)
+    pub fn dj_link_release(&self, expected_timeline_id: TimelineId) -> Result<(), String> {
+        self.dj_link_release_with_timeout(expected_timeline_id, DJ_LINK_ENGINE_ACK_TIMEOUT)
     }
 
     #[doc(hidden)]
-    pub fn dj_link_release_with_timeout(&self, timeout: Duration) -> Result<(), String> {
-        self.dj_link_release_with_snapshot_timeout(timeout)
+    pub fn dj_link_release_with_timeout(
+        &self,
+        expected_timeline_id: TimelineId,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.dj_link_release_with_snapshot_timeout(expected_timeline_id, timeout)
             .map(|_| ())
     }
 
     #[doc(hidden)]
-    pub fn dj_link_release_with_canonical_snapshot(&self) -> Result<Arc<EngineSnapshot>, String> {
-        self.dj_link_release_with_snapshot_timeout(DJ_LINK_ENGINE_ACK_TIMEOUT)
+    pub fn dj_link_release_with_canonical_snapshot(
+        &self,
+        expected_timeline_id: TimelineId,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.dj_link_release_with_snapshot_timeout(expected_timeline_id, DJ_LINK_ENGINE_ACK_TIMEOUT)
     }
 
     fn dj_link_release_with_snapshot_timeout(
         &self,
+        expected_timeline_id: TimelineId,
         timeout: Duration,
     ) -> Result<Arc<EngineSnapshot>, String> {
         self.submit_dj_link_command(timeout, "DJ Link release", |expires_at, admission, ack| {
             EngineCommand::DjLinkRelease {
+                expected_timeline_id,
                 expires_at,
                 admission,
                 ack,
@@ -25796,6 +25828,8 @@ impl EngineRuntime {
                     .err();
             }
             EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                expected_timeline_id,
+                require_playing,
                 division,
                 enabled,
                 expires_at,
@@ -25814,7 +25848,12 @@ impl EngineRuntime {
                 }
                 let planning = admitted && admission.begin_dj_link_planning();
                 let result = if planning {
-                    self.set_timeline_loop_absolute_state(division, enabled)
+                    self.require_dj_link_timeline(
+                        expected_timeline_id,
+                        require_playing,
+                        "DJ Link Timeline identity is stale",
+                    )
+                    .and_then(|_| self.set_timeline_loop_absolute_state(division, enabled))
                 } else {
                     Err("DJ Link absolute loop expired or was cancelled before commit".to_string())
                 };
@@ -25880,6 +25919,7 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::DjLinkRelease {
+                expected_timeline_id,
                 expires_at,
                 admission,
                 ack,
@@ -25896,7 +25936,13 @@ impl EngineRuntime {
                 }
                 let planning = admitted && admission.begin_dj_link_planning();
                 let result = if planning {
-                    self.apply_dj_link_release_without_transport_change()
+                    // The app-side snapshot is only an admission proof.  The
+                    // worker must revalidate the same authored Timeline and
+                    // its playing state immediately before changing loop/clock
+                    // ownership, so a queued stop or Timeline swap cannot
+                    // release a stale target.
+                    self.require_dj_link_release_timeline(expected_timeline_id)
+                        .and_then(|()| self.apply_dj_link_release_without_transport_change())
                 } else {
                     Err("DJ Link release expired or was cancelled before commit".to_string())
                 };
@@ -41699,6 +41745,34 @@ impl EngineRuntime {
         }
     }
 
+    fn require_dj_link_timeline(
+        &self,
+        expected_timeline_id: TimelineId,
+        require_playing: bool,
+        identity_error: &'static str,
+    ) -> Result<(), String> {
+        if expected_timeline_id != self.timeline_id {
+            return Err(identity_error.to_string());
+        }
+        if require_playing && !self.timeline_playing {
+            return Err("DJ Link command requires an already-playing Timeline".to_string());
+        }
+        Ok(())
+    }
+
+    fn require_dj_link_release_timeline(
+        &self,
+        expected_timeline_id: TimelineId,
+    ) -> Result<(), String> {
+        if expected_timeline_id != self.timeline_id {
+            return Err("DJ Link release timeline identity is stale".to_string());
+        }
+        if !self.timeline_playing {
+            return Err("DJ Link release requires an already-playing Timeline".to_string());
+        }
+        Ok(())
+    }
+
     fn set_timeline_loop_absolute_state(
         &mut self,
         division: u8,
@@ -41744,9 +41818,11 @@ impl EngineRuntime {
         timeline_id: TimelineId,
         bars: i8,
     ) -> Result<(), String> {
-        if timeline_id != self.timeline_id {
-            return Err("DJ Link beat jump timeline identity is stale".to_string());
-        }
+        self.require_dj_link_timeline(
+            timeline_id,
+            true,
+            "DJ Link beat jump timeline identity is stale",
+        )?;
         if !matches!(bars, -4 | 4) {
             return Err("DJ Link beat jump must be exactly -4 or 4 bars".to_string());
         }
@@ -78831,7 +78907,7 @@ mod tests {
         assert_eq!(shared_telemetry.queue_push_failure_count(), 1);
         let before_dj = handle.snapshot();
         let dj_error = handle
-            .dj_link_release_with_timeout(Duration::from_millis(25))
+            .dj_link_release_with_timeout(before_dj.timeline.id, Duration::from_millis(25))
             .expect_err("a full queue must reject DJ Link before admission");
         assert!(dj_error.to_ascii_lowercase().contains("full"));
         assert_eq!(handle.snapshot().timeline, before_dj.timeline);
@@ -108518,9 +108594,14 @@ mod tests {
     }
 
     fn prepare_dj_link_transaction_test_operation(engine: &EngineHandle, operation: &str) {
-        if operation == "release" {
+        let timeline_id = match operation {
+            "loop" | "beat jump" => Some(TimelineId(1)),
+            "release" => Some(TimelineId(2)),
+            _ => None,
+        };
+        if let Some(timeline_id) = timeline_id {
             engine
-                .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+                .dj_link_start_timeline_at_with_canonical_snapshot(timeline_id, 3_500)
                 .unwrap();
         }
     }
@@ -108540,6 +108621,8 @@ mod tests {
                 ack,
             },
             "loop" => EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                expected_timeline_id: TimelineId(1),
+                require_playing: false,
                 division: 0,
                 enabled: false,
                 expires_at,
@@ -108554,6 +108637,7 @@ mod tests {
                 ack,
             },
             "release" => EngineCommand::DjLinkRelease {
+                expected_timeline_id: TimelineId(2),
                 expires_at,
                 admission,
                 ack,
@@ -108903,7 +108987,9 @@ mod tests {
             .is_err());
         assert_eq!(engine.snapshot().timeline.position_ms, 4_800);
 
-        let released = engine.dj_link_release_with_canonical_snapshot().unwrap();
+        let released = engine
+            .dj_link_release_with_canonical_snapshot(TimelineId(2))
+            .unwrap();
         assert_eq!(
             released.timeline.position_ms, 4_800,
             "RELEASE must not seek or advance the externally-owned playhead"
@@ -109282,13 +109368,126 @@ mod tests {
             ..DmxOutputConfig::default()
         });
         assert!(engine.dj_link_start_timeline(TimelineId(u64::MAX)).is_err());
-        assert!(engine.dj_link_set_timeline_loop_absolute(1, true).is_err());
+        assert!(engine
+            .dj_link_set_timeline_loop_absolute(TimelineId(1), 1, true)
+            .is_err());
         let before_release = engine.snapshot();
         assert_eq!(
-            engine.dj_link_release().unwrap_err(),
+            engine.dj_link_release(TimelineId(1)).unwrap_err(),
             "DJ Link release requires an already-playing Timeline"
         );
         assert_eq!(engine.snapshot(), before_release);
+    }
+
+    #[test]
+    fn dj_link_stage2_worker_revalidates_playing_and_timeline_identity() {
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
+        let outer_playing_snapshot = engine.snapshot();
+        assert_eq!(outer_playing_snapshot.timeline.id, TimelineId(2));
+        assert!(outer_playing_snapshot.timeline.playing);
+
+        // Model a stale outer authority proof: the caller observed a playing
+        // Timeline, but the worker receives the command after the playhead has
+        // stopped. Both Stage 2 mutations must reject before touching state.
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        let stopped_before = engine.snapshot();
+        assert!(!stopped_before.timeline.playing);
+        assert!(engine
+            .dj_link_timeline_beat_jump_with_canonical_snapshot(TimelineId(2), 4)
+            .unwrap_err()
+            .contains("already-playing Timeline"));
+        assert!(engine
+            .dj_link_set_timeline_loop_absolute_with_canonical_snapshot(TimelineId(2), 0, true,)
+            .unwrap_err()
+            .contains("already-playing Timeline"));
+        assert_eq!(engine.snapshot(), stopped_before);
+
+        // Model the second stale proof: playback remains active, but the
+        // authored Timeline was swapped before the queued command committed.
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
+        assert!(engine.snapshot().timeline.playing);
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(1), 3_500)
+            .unwrap();
+        let swapped_before = engine.snapshot();
+        assert_eq!(swapped_before.timeline.id, TimelineId(1));
+        assert!(swapped_before.timeline.playing);
+        assert!(engine
+            .dj_link_timeline_beat_jump_with_canonical_snapshot(TimelineId(2), 4)
+            .unwrap_err()
+            .contains("identity is stale"));
+        assert!(engine
+            .dj_link_set_timeline_loop_absolute_with_canonical_snapshot(TimelineId(2), 0, true,)
+            .unwrap_err()
+            .contains("identity is stale"));
+        assert_eq!(engine.snapshot(), swapped_before);
+    }
+
+    #[test]
+    fn dj_link_release_worker_revalidates_playing_and_timeline_identity() {
+        let engine = dj_link_transaction_test_engine();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
+        let old_authorized = engine.snapshot();
+        assert_eq!(old_authorized.timeline.id, TimelineId(2));
+        assert!(old_authorized.timeline.playing);
+
+        // Queue a stop after the outer authority proof and let it commit
+        // before RELEASE.  The worker must reject before changing either the
+        // loop or DJ clock ownership.
+        engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .unwrap();
+        let stopped_before = {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let snapshot = engine.snapshot();
+                if !snapshot.timeline.playing {
+                    break snapshot;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "queued Timeline stop did not commit"
+                );
+                std::thread::sleep(DMX_TICK_INTERVAL);
+            }
+        };
+        assert!(engine
+            .dj_link_release_with_canonical_snapshot(old_authorized.timeline.id)
+            .unwrap_err()
+            .contains("already-playing Timeline"));
+        let stopped_after = engine.snapshot();
+        assert_eq!(stopped_after.timeline, stopped_before.timeline);
+        assert_eq!(stopped_after.clock.source, stopped_before.clock.source);
+
+        // Restart and then swap the authored Timeline before sending the
+        // stale release proof.  The identity check must fail before the
+        // release mutation, preserving the swapped engine state exactly.
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
+            .unwrap();
+        engine
+            .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(1), 3_500)
+            .unwrap();
+        let swapped_before = engine.snapshot();
+        assert_eq!(swapped_before.timeline.id, TimelineId(1));
+        assert!(swapped_before.timeline.playing);
+        assert!(engine
+            .dj_link_release_with_canonical_snapshot(old_authorized.timeline.id)
+            .unwrap_err()
+            .contains("identity is stale"));
+        let swapped_after = engine.snapshot();
+        assert_eq!(swapped_after.timeline, swapped_before.timeline);
+        assert_eq!(swapped_after.clock.source, swapped_before.clock.source);
     }
 
     #[test]
@@ -109328,6 +109527,7 @@ mod tests {
             }),
             ("loop", |engine| {
                 engine.dj_link_set_timeline_loop_absolute_with_timeout(
+                    TimelineId(1),
                     0,
                     true,
                     Duration::from_millis(5),
@@ -109341,7 +109541,7 @@ mod tests {
                 )
             }),
             ("release", |engine| {
-                engine.dj_link_release_with_timeout(Duration::from_millis(5))
+                engine.dj_link_release_with_timeout(TimelineId(1), Duration::from_millis(5))
             }),
         ];
         for (name, operation) in operations {
@@ -109409,6 +109609,8 @@ mod tests {
                     ack,
                 },
                 "loop" => EngineCommand::DjLinkSetTimelineLoopAbsolute {
+                    expected_timeline_id: TimelineId(1),
+                    require_playing: false,
                     division: 0,
                     enabled: true,
                     expires_at,
@@ -109423,6 +109625,7 @@ mod tests {
                     ack,
                 },
                 "release" => EngineCommand::DjLinkRelease {
+                    expected_timeline_id: TimelineId(1),
                     expires_at,
                     admission: admission.clone(),
                     ack,
@@ -109527,6 +109730,7 @@ mod tests {
         let worker_deadline = Instant::now() + Duration::from_secs(1);
         engine
             .send(EngineCommand::DjLinkRelease {
+                expected_timeline_id: before.id,
                 expires_at: worker_deadline,
                 admission: admission.clone(),
                 ack,
@@ -109596,7 +109800,7 @@ mod tests {
         let read_guard = engine.snapshot.read().unwrap();
         let started = Instant::now();
         let error = engine
-            .dj_link_release_with_timeout(Duration::from_secs(3))
+            .dj_link_release_with_timeout(before.id, Duration::from_secs(3))
             .expect_err("held snapshot guard must force a definitive DJ rollback");
         assert!(error.contains("rolled back"), "unexpected error: {error}");
         assert!(
@@ -109656,7 +109860,7 @@ mod tests {
             .unwrap();
 
         let error = engine
-            .dj_link_release_with_timeout(Duration::from_millis(25))
+            .dj_link_release_with_timeout(before.id, Duration::from_millis(25))
             .expect_err("DJ Link must cancel while priority publication owns the barrier");
         assert!(error.contains("timed out"), "unexpected DJ result: {error}");
         drop(read_guard);
@@ -109687,7 +109891,7 @@ mod tests {
         }
         engine.force_next_pending_publication_failure_for_tests();
         let error = engine
-            .dj_link_release()
+            .dj_link_release(TimelineId(2))
             .expect_err("forced DJ Link publication failure must be definitive");
         assert!(error.contains("rolled back"), "unexpected error: {error}");
         assert_eq!(engine.snapshot().timeline, before);

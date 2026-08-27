@@ -348,18 +348,27 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         "state": "released", "timelineId": timeline_id, "playSessionId": "foreign-session"
     });
     let engine_before_wrong_release = engine.snapshot();
-    assert!(matches!(
-        dispatch_dj_link_event(
-            dj_link_test_envelope(
-                protocol::DjLinkMessageType::Release,
-                13,
-                "foreign-release",
-                wrong_release,
-            ),
-            &engine, &coordinator, &runtime, &admission, &transaction_active,
+    let wrong_release_outcome = dispatch_dj_link_event(
+        dj_link_test_envelope(
+            protocol::DjLinkMessageType::Release,
+            13,
+            "foreign-release",
+            wrong_release,
         ),
-        DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "release_context_mismatch"
-    ));
+        &engine,
+        &coordinator,
+        &runtime,
+        &admission,
+        &transaction_active,
+    );
+    assert!(
+        matches!(
+            wrong_release_outcome,
+            DjLinkDispatchOutcome::Rejected { ref code, .. }
+                if code == "release_context_mismatch"
+        ),
+        "unexpected wrong-release outcome: {wrong_release_outcome:?}"
+    );
     assert_eq!(engine.snapshot(), engine_before_wrong_release);
     assert!(matches!(
         dispatch_dj_link_event(
@@ -1012,4 +1021,605 @@ fn dj_link_generic_engine_rejection_preserves_runtime_authority_atomically() {
     ));
     assert_eq!(engine.snapshot(), engine_before);
     assert_eq!(*runtime.lock().unwrap(), runtime_before);
+}
+
+#[test]
+fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut initial_snapshot = engine.snapshot();
+    initial_snapshot.timeline.phases = vec![TimelinePhaseSummary {
+        id: protocol::TimelinePhaseId(1),
+        label: "DJ Link Stage 2 authority test phase".to_string(),
+        role: protocol::TimelinePhaseRole::Intro,
+        start_ms: 0,
+        end_ms: 16_000,
+    }];
+    initial_snapshot.timeline.loop_region = Some(TimelineLoopRegionSummary {
+        a_ms: 0,
+        b_ms: 16_000,
+        enabled: false,
+        musical_length_beats: None,
+    });
+    engine
+        .apply_timeline_bank_published(
+            vec![initial_snapshot.timeline.clone()],
+            initial_snapshot.timeline.id,
+            false,
+        )
+        .unwrap();
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let timeline_id = engine.snapshot().timeline.id.0.to_string();
+    let play_session_id = "stage2-play-session";
+    let mut mapping = dj_link_test_mapping(
+        "stage2-mapping",
+        protocol::DjTrackSelector {
+            content_id: Some("stage2-content".to_string()),
+            title: None,
+            artist: None,
+        },
+    );
+    mapping.timeline_id = engine.snapshot().timeline.id;
+    coordinator.mappings.dj_track_triggers = vec![mapping];
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+    let coordinator = Mutex::new(coordinator);
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    let active_payload = json!({
+        "deck": 2,
+        "deckId": "rekordbox-deck-2",
+        "contentId": "stage2-content",
+        "positionAtSendSec": 1.0,
+        "effectiveBpm": 120.0,
+        "positionRevision": 1,
+        "sampleAgeMs": 0,
+        "isPlaying": true,
+        "startedAt": "2026-08-27T00:00:00Z",
+        "playSessionId": play_session_id,
+        "loop": null
+    });
+    let stage2_payload = |timeline_id: &str, play_session_id: &str| {
+        json!({
+            "timelineId": timeline_id,
+            "playSessionId": play_session_id,
+            "bars": 4
+        })
+    };
+    let stage2_command_payload =
+        |message_type: protocol::DjLinkMessageType, timeline_id: &str, play_session_id: &str| {
+            match message_type {
+                protocol::DjLinkMessageType::TimelineBeatJump => {
+                    stage2_payload(timeline_id, play_session_id)
+                }
+                protocol::DjLinkMessageType::TimelineLoopSet => json!({
+                    "timelineId": timeline_id,
+                    "playSessionId": play_session_id,
+                    "active": true
+                }),
+                _ => unreachable!("not a Stage 2 command"),
+            }
+        };
+    let stage2_command_types = [
+        protocol::DjLinkMessageType::TimelineBeatJump,
+        protocol::DjLinkMessageType::TimelineLoopSet,
+    ];
+    let dispatch = |runtime: &Mutex<DjLinkRuntime>, message_type, sequence, event_id, payload| {
+        dispatch_dj_link_event(
+            dj_link_test_envelope(message_type, sequence, event_id, payload),
+            &engine,
+            &coordinator,
+            runtime,
+            &admission,
+            &transaction_active,
+        )
+    };
+
+    assert!(matches!(
+        dispatch(
+            &runtime,
+            protocol::DjLinkMessageType::TrackActive,
+            1,
+            "stage2-active",
+            active_payload,
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    let active_runtime = runtime.lock().unwrap().clone();
+    assert!(!active_runtime.released);
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(
+            &active_runtime,
+            &timeline_id,
+            play_session_id,
+            &engine.snapshot(),
+        ),
+        Some("timeline_stage2_not_authorized")
+    );
+    for (sequence, message_type, payload) in [
+        (
+            2,
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            stage2_payload(&timeline_id, play_session_id),
+        ),
+        (
+            3,
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id,
+                "active": true
+            }),
+        ),
+    ] {
+        let before = engine.snapshot();
+        assert!(matches!(
+            dispatch(
+                &runtime,
+                message_type,
+                sequence,
+                "stage2-pre-release",
+                payload,
+            ),
+            DjLinkDispatchOutcome::Rejected { ref code, .. }
+                if code == "timeline_stage2_not_authorized"
+        ));
+        assert_eq!(engine.snapshot(), before);
+    }
+
+    // RELEASE itself is admitted only from the exact active DJ-owned
+    // running session.  These boundary failures must not enqueue an engine
+    // command or mutate the candidate runtime projection.
+    let release_rejection_cases: [(&str, fn(&mut DjLinkRuntime), &str, &str); 3] = [
+        (
+            "inactive-track",
+            |candidate: &mut DjLinkRuntime| candidate.track_active = false,
+            timeline_id.as_str(),
+            "timeline_not_active",
+        ),
+        (
+            "non-running",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.authoritative_state = protocol::DjLinkTimelineStateValue::Idle
+            },
+            timeline_id.as_str(),
+            "timeline_state_not_running",
+        ),
+        (
+            "wrong-owner",
+            |candidate: &mut DjLinkRuntime| candidate.pedal_owner = Some("timeline".to_string()),
+            timeline_id.as_str(),
+            "dj_link_pedal_owner_mismatch",
+        ),
+    ];
+    for (case_name, mutate, release_timeline_id, expected_code) in release_rejection_cases {
+        let mut candidate_runtime = active_runtime.clone();
+        mutate(&mut candidate_runtime);
+        let candidate = Mutex::new(candidate_runtime);
+        let before_engine = engine.snapshot();
+        let before_runtime = candidate.lock().unwrap().clone();
+        let release_event_id = match case_name {
+            "inactive-track" => "stage2-release-inactive",
+            "non-running" => "stage2-release-non-running",
+            "wrong-owner" => "stage2-release-wrong-owner",
+            _ => unreachable!("unknown release rejection case"),
+        };
+        assert!(matches!(
+            dispatch(
+                &candidate,
+                protocol::DjLinkMessageType::Release,
+                4,
+                &release_event_id,
+                json!({
+                    "state": "released",
+                    "timelineId": release_timeline_id,
+                    "playSessionId": play_session_id
+                }),
+            ),
+            DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
+        ));
+        assert_eq!(
+            engine.snapshot(),
+            before_engine,
+            "{case_name} engine mutation"
+        );
+        assert_eq!(
+            *candidate.lock().unwrap(),
+            before_runtime,
+            "{case_name} runtime mutation"
+        );
+    }
+    for (case_name, release_timeline_id, release_play_session_id) in [
+        ("wrong-timeline", "999999", play_session_id),
+        ("wrong-session", timeline_id.as_str(), "other-play-session"),
+    ] {
+        let candidate = Mutex::new(active_runtime.clone());
+        let before_engine = engine.snapshot();
+        let before_runtime = candidate.lock().unwrap().clone();
+        let release_event_id = match case_name {
+            "wrong-timeline" => "stage2-release-wrong-timeline",
+            "wrong-session" => "stage2-release-wrong-session",
+            _ => unreachable!("unknown release rejection case"),
+        };
+        let outcome = dispatch(
+            &candidate,
+            protocol::DjLinkMessageType::Release,
+            4,
+            &release_event_id,
+            json!({
+                "state": "released",
+                "timelineId": release_timeline_id,
+                "playSessionId": release_play_session_id
+            }),
+        );
+        assert!(
+            matches!(
+                outcome,
+                DjLinkDispatchOutcome::Rejected { ref code, .. }
+                    if code == "release_context_mismatch"
+            ),
+            "{case_name} outcome: {outcome:?}"
+        );
+        assert_eq!(
+            engine.snapshot(),
+            before_engine,
+            "{case_name} engine mutation"
+        );
+        assert_eq!(
+            *candidate.lock().unwrap(),
+            before_runtime,
+            "{case_name} runtime mutation"
+        );
+    }
+
+    assert!(matches!(
+        dispatch(
+            &runtime,
+            protocol::DjLinkMessageType::Release,
+            4,
+            "stage2-release",
+            json!({
+                "state": "released",
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    let released_runtime = runtime.lock().unwrap().clone();
+    assert!(released_runtime.released);
+    assert_eq!(
+        released_runtime.authoritative_state,
+        protocol::DjLinkTimelineStateValue::Running
+    );
+    assert_eq!(released_runtime.pedal_owner.as_deref(), Some("timeline"));
+    assert_eq!(
+        released_runtime.release_event_id.as_deref(),
+        Some("stage2-release")
+    );
+    assert_eq!(
+        dj_track_runtime::stage2_authority_rejection(
+            &released_runtime,
+            &timeline_id,
+            play_session_id,
+            &engine.snapshot(),
+        ),
+        None
+    );
+
+    let before_replay = engine.snapshot();
+    let before_replay_runtime = released_runtime.clone();
+    assert!(matches!(
+        dispatch(
+            &runtime,
+            protocol::DjLinkMessageType::Release,
+            5,
+            "stage2-release-replay",
+            json!({
+                "state": "released",
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    assert_eq!(engine.snapshot(), before_replay);
+    assert_eq!(
+        runtime.lock().unwrap().release_event_id,
+        before_replay_runtime.release_event_id
+    );
+
+    let mut invalid_replay_runtime = released_runtime.clone();
+    invalid_replay_runtime.loop_active = true;
+    let invalid_replay_runtime = Mutex::new(invalid_replay_runtime);
+    let before_invalid_replay_engine = engine.snapshot();
+    assert!(matches!(
+        dispatch(
+            &invalid_replay_runtime,
+            protocol::DjLinkMessageType::Release,
+            6,
+            "stage2-release-invalid-replay",
+            json!({
+                "state": "released",
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "timeline_release_state_invalid"
+    ));
+    assert_eq!(engine.snapshot(), before_invalid_replay_engine);
+
+    let released_generation = released_runtime.state_generation;
+    let before_jump = engine.snapshot();
+    let beat_jump_generation = match dispatch(
+        &runtime,
+        protocol::DjLinkMessageType::TimelineBeatJump,
+        6,
+        "stage2-beat-jump",
+        stage2_payload(&timeline_id, play_session_id),
+    ) {
+        DjLinkDispatchOutcome::TimelineState {
+            state_generation, ..
+        } => state_generation,
+        outcome => panic!("Stage 2 beat jump should be accepted after release: {outcome:?}"),
+    };
+    assert_eq!(beat_jump_generation, released_generation + 1);
+    assert_eq!(
+        runtime.lock().unwrap().state_generation,
+        beat_jump_generation
+    );
+    assert_ne!(
+        engine.snapshot().timeline.position_ms,
+        before_jump.timeline.position_ms
+    );
+
+    // Authority admission must not turn an engine-side validation failure
+    // into a runtime projection.  A valid Release is present here, but the
+    // authored beat-grid rejects any bar count other than +/-4.
+    let before_engine_rejection = engine.snapshot();
+    let before_runtime_rejection = runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch(
+            &runtime,
+            protocol::DjLinkMessageType::TimelineBeatJump,
+            7,
+            "stage2-engine-rejected-beat",
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id,
+                "bars": 3
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "engine_publication_rejected"
+    ));
+    assert_eq!(engine.snapshot(), before_engine_rejection);
+    assert_eq!(*runtime.lock().unwrap(), before_runtime_rejection);
+
+    // Exercise the same post-release fence for an authorized loop request,
+    // while forcing the canonical engine preflight to reject an unsafe
+    // division.  Neither side may be projected on that error.
+    let mut invalid_loop_runtime = released_runtime.clone();
+    invalid_loop_runtime.loop_division = Some(64);
+    let invalid_loop_runtime = Mutex::new(invalid_loop_runtime);
+    let before_engine_loop_rejection = engine.snapshot();
+    let before_runtime_loop_rejection = invalid_loop_runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch(
+            &invalid_loop_runtime,
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            8,
+            "stage2-engine-rejected-loop",
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id,
+                "active": true
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "engine_publication_rejected"
+    ));
+    assert_eq!(engine.snapshot(), before_engine_loop_rejection);
+    assert_eq!(
+        *invalid_loop_runtime.lock().unwrap(),
+        before_runtime_loop_rejection
+    );
+
+    let loop_set = json!({
+        "timelineId": timeline_id,
+        "playSessionId": play_session_id,
+        "active": true
+    });
+    let loop_outcome = dispatch(
+        &runtime,
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        7,
+        "stage2-loop-set",
+        loop_set,
+    );
+    let (loop_state, loop_generation) = match loop_outcome {
+        DjLinkDispatchOutcome::TimelineState {
+            state,
+            state_generation,
+        } => (state, state_generation),
+        outcome => panic!("Stage 2 loop set should be accepted after release: {outcome:?}"),
+    };
+    assert_eq!(loop_generation, beat_jump_generation + 1);
+    assert_eq!(runtime.lock().unwrap().state_generation, loop_generation);
+    assert!(runtime.lock().unwrap().loop_active);
+    assert!(loop_state.loop_active);
+
+    let loop_off_outcome = dispatch(
+        &runtime,
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        10,
+        "stage2-loop-clear",
+        json!({
+            "timelineId": timeline_id,
+            "playSessionId": play_session_id,
+            "active": false
+        }),
+    );
+    let (loop_off_state, loop_off_generation) = match loop_off_outcome {
+        DjLinkDispatchOutcome::TimelineState {
+            state,
+            state_generation,
+        } => (state, state_generation),
+        outcome => panic!("Stage 2 loop clear should be accepted: {outcome:?}"),
+    };
+    assert_eq!(loop_off_generation, loop_generation + 1);
+    assert_eq!(
+        runtime.lock().unwrap().state_generation,
+        loop_off_generation
+    );
+    assert!(!runtime.lock().unwrap().loop_active);
+    assert!(!loop_off_state.loop_active);
+
+    let rejection_cases: [(&str, fn(&mut DjLinkRuntime), &str); 6] = [
+        (
+            "inactive-track",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.track_active = false;
+            },
+            "timeline_not_active",
+        ),
+        (
+            "unmapped",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.unmapped_active_blocked = true;
+            },
+            "dj_link_unmapped_active",
+        ),
+        (
+            "wrong-owner",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.pedal_owner = Some("dj".to_string());
+            },
+            "timeline_pedal_owner_mismatch",
+        ),
+        (
+            "non-running",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
+            },
+            "timeline_state_not_running",
+        ),
+        (
+            "missing-release",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.release_event_id = None;
+            },
+            "timeline_release_missing",
+        ),
+        (
+            "empty-release",
+            |candidate: &mut DjLinkRuntime| {
+                candidate.release_event_id = Some(String::new());
+            },
+            "timeline_release_missing",
+        ),
+    ];
+    for (index, (_case_name, mutate, expected_code)) in rejection_cases.into_iter().enumerate() {
+        let candidate = released_runtime.clone();
+        let mut candidate = candidate;
+        mutate(&mut candidate);
+        let candidate = Mutex::new(candidate);
+        for (command_index, message_type) in stage2_command_types.iter().copied().enumerate() {
+            let before = engine.snapshot();
+            let command_event_id = match message_type {
+                protocol::DjLinkMessageType::TimelineBeatJump => "stage2-rejection-beat",
+                protocol::DjLinkMessageType::TimelineLoopSet => "stage2-rejection-loop",
+                _ => unreachable!("not a Stage 2 command"),
+            };
+            assert!(matches!(
+                dispatch(
+                    &candidate,
+                    message_type,
+                    u64::try_from(8 + index * 2 + command_index).unwrap(),
+                    command_event_id,
+                    stage2_command_payload(message_type, &timeline_id, play_session_id),
+                ),
+                DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
+            ));
+            assert_eq!(engine.snapshot(), before);
+        }
+    }
+
+    for (index, (_case_name, wrong_timeline_id, wrong_session_id, expected_code)) in [
+        (
+            "wrong-timeline",
+            "999999",
+            play_session_id,
+            "timeline_identity_mismatch",
+        ),
+        (
+            "wrong-session",
+            timeline_id.as_str(),
+            "other-play-session",
+            "timeline_play_session_mismatch",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let candidate = Mutex::new(released_runtime.clone());
+        for (command_index, message_type) in stage2_command_types.iter().copied().enumerate() {
+            let before = engine.snapshot();
+            let command_event_id = match message_type {
+                protocol::DjLinkMessageType::TimelineBeatJump => {
+                    "stage2-correlation-rejection-beat"
+                }
+                protocol::DjLinkMessageType::TimelineLoopSet => "stage2-correlation-rejection-loop",
+                _ => unreachable!("not a Stage 2 command"),
+            };
+            assert!(matches!(
+                dispatch(
+                    &candidate,
+                    message_type,
+                    u64::try_from(20 + index * 2 + command_index).unwrap(),
+                    command_event_id,
+                    stage2_command_payload(message_type, wrong_timeline_id, wrong_session_id),
+                ),
+                DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
+            ));
+            assert_eq!(engine.snapshot(), before);
+        }
+    }
+
+    engine
+        .send(EngineCommand::SetTimelinePlaying(false))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(25));
+    let stopped_state = match dispatch(
+        &runtime,
+        protocol::DjLinkMessageType::TimelineStateRequest,
+        30,
+        "stage2-stopped-state-request",
+        json!({}),
+    ) {
+        DjLinkDispatchOutcome::TimelineState { state, .. } => state,
+        outcome => panic!("stopped Timeline state request should return a state: {outcome:?}"),
+    };
+    assert_eq!(
+        stopped_state.state,
+        protocol::DjLinkTimelineStateValue::Stopped
+    );
+    for (command_index, message_type) in stage2_command_types.iter().copied().enumerate() {
+        let before_engine = engine.snapshot();
+        let before_runtime = runtime.lock().unwrap().clone();
+        assert!(matches!(
+            dispatch(
+                &runtime,
+                message_type,
+                u64::try_from(31 + command_index).unwrap(),
+                "stage2-stopped-command",
+                stage2_command_payload(message_type, &timeline_id, play_session_id),
+            ),
+            DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "timeline_not_playing"
+        ));
+        assert_eq!(engine.snapshot(), before_engine);
+        assert_eq!(*runtime.lock().unwrap(), before_runtime);
+    }
 }

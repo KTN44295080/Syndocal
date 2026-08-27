@@ -21,6 +21,7 @@ fn dj_link_release_clock_handoff_preserves_position_and_fails_closed_off_contrac
         let admission = ProjectSnapshotLoadAdmission::new_dj_link();
         let (ack, _receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::DjLinkRelease {
+            expected_timeline_id: TimelineId(7_701),
             expires_at: Instant::now() + Duration::from_secs(1),
             admission,
             ack,
