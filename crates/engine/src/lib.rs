@@ -40071,6 +40071,42 @@ impl EngineRuntime {
             self.timeline_dj_link_observation = None;
         }
         self.set_timeline_loop_enabled_state(false);
+        if relinquish_dj_clock
+            && self
+                .timeline_follow
+                .as_ref()
+                .is_some_and(|follow| follow.enabled)
+            && !self.timeline_follow_abort_fence_pending()
+            && matches!(
+                self.timeline_follow_runtime.status,
+                protocol::TimelineFollowRuntimeStatus::Idle
+                    | protocol::TimelineFollowRuntimeStatus::Held
+                    | protocol::TimelineFollowRuntimeStatus::Fault
+            )
+        {
+            // RELEASE returns DJ Link's clock without changing the playhead.
+            // Treat that successful handoff like the existing internal-play
+            // rearm path, so only the next genuine natural boundary may
+            // admit Follow. A no-op release deliberately cannot mint this
+            // new natural-playback generation.
+            self.timeline_follow_natural_boundary_armed =
+                self.timeline_position_ms < self.timeline_duration_ms();
+            if let Some(follow) = self.timeline_follow.as_ref().filter(|follow| {
+                follow.enabled
+                    && self.timeline_follow_natural_boundary_armed
+                    && !self.timeline_follow_abort_fence_pending()
+            }) {
+                self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
+                    generation: next_timeline_runtime_generation(
+                        self.timeline_follow_runtime.generation,
+                    ),
+                    status: protocol::TimelineFollowRuntimeStatus::Armed,
+                    source_timeline_id: Some(self.timeline_id),
+                    target_timeline_id: Some(follow.next_timeline_id),
+                    ..TimelineFollowRuntimeSummary::default()
+                };
+            }
+        }
         Ok(())
     }
 

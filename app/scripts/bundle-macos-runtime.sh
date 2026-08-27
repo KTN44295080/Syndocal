@@ -76,13 +76,13 @@ codesign --force --deep --sign - "$app_path"
 codesign --verify --deep --strict "$app_path"
 
 mkdir -p "$dmg_dir"
-dmg_path="$dmg_dir/Syndocal_1.2.0-alpha.23_$(uname -m).dmg"
+dmg_path="$dmg_dir/Syndocal_1.2.0-alpha.24_$(uname -m).dmg"
 dmg_stage=$(mktemp -d)
 trap 'rm -rf "$dmg_stage"' EXIT
 ditto "$app_path" "$dmg_stage/Syndocal.app"
 ln -s /Applications "$dmg_stage/Applications"
 hdiutil create \
-  -volname 'Syndocal 1.2.0-alpha.23' \
+  -volname 'Syndocal 1.2.0-alpha.24' \
   -srcfolder "$dmg_stage" \
   -ov \
   -format UDZO \
