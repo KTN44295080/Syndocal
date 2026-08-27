@@ -1,9 +1,9 @@
 # Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.24 TIMELINE FOLLOW REARM SOURCE CHECKPOINT VERIFIED; ALPHA.23 OUTPUT-ROUTING / SETUP-I/O / FRONTEND CHECKPOINT IS HISTORICAL; ALPHA.21 REMAINS THE CURRENT RUNNING NATIVE ARTIFACT; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **ALPHA.24 TIMELINE FOLLOW REARM SOURCE/NATIVE CHECKPOINT VERIFIED; ALPHA.23 OUTPUT-ROUTING / SETUP-I/O / FRONTEND CHECKPOINT IS HISTORICAL; ALPHA.21 IS HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
 This is the current resumption contract for the 2026-08-30 performance. Section
-34 is the current alpha.24 rearm source checkpoint; section 33 preserves the
+34 is the current alpha.24 rearm source/native checkpoint; section 33 preserves the
 historical alpha.23 source checkpoint and
 section 31 preserves the historical alpha.21 native-artifact authority. Section
 32 is preserved as the historical alpha.22 Scene-authority source checkpoint,
@@ -60,7 +60,7 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.24 Timeline Follow rearm source | Product metadata is `1.2.0-alpha.24`; committed/pushed, upstream-equal source is `8367bdf50a49fe130e3619eaf29ca410b61d2cd9`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); no alpha.24 native artifact exists |
+| Current alpha.24 Timeline Follow source/native | Product metadata is `1.2.0-alpha.24`; committed/pushed, upstream-equal source is `5eb1888906613851c4c49e66717a270f13bbd7b5`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); `target/release/syndocal.exe` is `59,803,136` bytes, SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, PID `63016`, exactly one responsive maximized window; physical acceptance remains open |
 | Historical alpha.23 output-routing / Setup I/O / frontend source | Product metadata was `1.2.0-alpha.23`; committed/pushed, upstream-equal source is `5e7d27df7f5864449d4838782f6eca2f9b81d360`; no alpha.23 native artifact was built |
 | Historical alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact was built |
 | Historical alpha.21 Setup-I/O native artifact | Authoritative I/O/native source is `536742db968b242164349c34dd6940fe3ced8e92`; Product/FileVersion at that checkpoint was `1.2.0-alpha.21`; local artifact SHA-256 is `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`; public release and HW-4 remain open |
@@ -84,8 +84,8 @@ commit as the source identity of an already-built binary.
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
 Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.24`;
-the current alpha.24 source authority is section 34 at exact committed,
-pushed, upstream-equal commit `8367bdf50a49fe130e3619eaf29ca410b61d2cd9`.
+the current alpha.24 source/native authority is section 34 at exact committed,
+pushed, upstream-equal commit `5eb1888906613851c4c49e66717a270f13bbd7b5`.
 The historical alpha.23 source authority is
 section 33 at exact commit `5e7d27df7f5864449d4838782f6eca2f9b81d360`. The
 preceding alpha.22 Scene-authority source remains section 32 at exact commit
@@ -1760,14 +1760,14 @@ PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
 reconnect, and three-display evidence remain unverified; this checkpoint does
-not claim final completion. The next action is the alpha.24 native build and
-launch gate; no alpha.24 native artifact exists yet.
+not claim final completion. The alpha.24 native build and maximized-window
+gate are complete, but the remaining physical/show gates are open.
 
-## 34. 2026-08-28 current alpha.24 Timeline Follow rearm source checkpoint
+## 34. 2026-08-28 current alpha.24 Timeline Follow rearm source/native checkpoint
 
 Current product metadata is `1.2.0-alpha.24`. The current source authority is
 exact committed, pushed, and upstream-equal
-`8367bdf50a49fe130e3619eaf29ca410b61d2cd9`. Alpha.23 remains historical at
+`5eb1888906613851c4c49e66717a270f13bbd7b5`. Alpha.23 remains historical at
 exact pushed commit `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not
 relabeled as alpha.24. The release path performs the actual DjLink clock
 handoff only, arms an enabled, unfenced, eligible Follow, performs no
@@ -1775,19 +1775,39 @@ seek/play/jump or authored-state mutation, and admits exactly one Follow
 transition at the next natural boundary. For an authored non-Cut first-measure
 hold, settlement uses one source measure and installs the destination's first
 meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate
-authored state. No alpha.24 native artifact exists yet.
+authored state. The alpha.24 native build is complete; its evidence is recorded
+below.
 
 The exact supervisor gate passed `29/29` engine `dj_link` with warnings `0`.
 The MSVC 14.44 linker
 `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
 was pinned and verified first in `where.exe link.exe`, ahead of Git.
 `check:release` and `check:release:self-test` passed. Independent Terra xHigh
-source review was GO.
+source review was GO. The required `pnpm --dir app tauri build --no-bundle`
+passed in `2m35s` with Vite/Rust first-party warnings `0`. Product/FileVersion
+is `1.2.0-alpha.24`; `target/release/syndocal.exe` is `59,803,136` bytes,
+SHA-256
+`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and
+LastWrite `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive process
+and window was verified: PID `63016`, title `Syndocal`, responsive `true`,
+handle `66658934`. Computer Use verified the unique process/window and the
+accessibility system button `元のサイズに戻す`, proving maximized state. The
+frontend build transformed `296` modules and emitted `App-CNx-MFOg.js` at
+`499.68 kB` plus lazy `phase1Actions` at `2.84 kB`.
 
-The current running native process remains the historical alpha.21 artifact;
-Product/FileVersion at that checkpoint was `1.2.0-alpha.21`, PID `41912`,
-`58,778,112` bytes, SHA-256
+The StandardRelease three-display acceptance runner is pinned to the exact
+alpha.24 Product/FileVersion, `59,803,136`-byte size, SHA-256, and source commit
+above; Show-ASIO remains a separately licensed, independent authority. Its
+deterministic self-test passed `88/88` with warnings `0`, including clean
+equal-HEAD and valid clean descendant-HEAD cases while retaining the artifact
+source identity. Physical Apply was not run because the loaded project is
+`Untitled.sdc` and no real output IDs/labels are configured. The first safe
+resume action is to load the real show project, resolve the stable editor/LED/
+projector identities and exact output IDs/labels, then run the physical Apply.
+
+The alpha.21 artifact remains historical: Product/FileVersion at that
+checkpoint was `1.2.0-alpha.21`, PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
-unverified. This is not a final-completion claim; the next action is the
-alpha.24 native build/launch gate.
+unverified. This is not a final-completion claim; the remaining physical/show
+gates are open.

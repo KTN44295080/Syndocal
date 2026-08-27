@@ -356,7 +356,7 @@ evidence. No unavailable physical device is a passing hardware result.
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; current product metadata is `1.2.0-alpha.24`. The current
 source checkpoint is exact committed, pushed, and upstream-equal
-`8367bdf50a49fe130e3619eaf29ca410b61d2cd9` on branch `codex/syndocal-v1.2`.
+`5eb1888906613851c4c49e66717a270f13bbd7b5` on branch `codex/syndocal-v1.2`.
 The completed alpha.23 source checkpoint remains historical at exact
 committed/pushed, upstream-equal source
 `5e7d27df7f5864449d4838782f6eca2f9b81d360`. Alpha.24's Timeline Follow rearm
@@ -365,15 +365,20 @@ Follow, performs no seek/play/jump or authored-state mutation, and admits
 exactly one Follow transition at the next natural boundary. For an authored
 non-Cut first-measure hold, settlement uses one source measure and installs the
 destination's first meter-aware measure as a runtime-only hold; the 5/4 proof
-does not mutate authored state. The current running native
-process remains the historical
-`1.2.0-alpha.21` artifact, built from exact I/O/native source
-`536742db968b242164349c34dd6940fe3ced8e92`; its launch and maximized-window
-I/O layout are verified within the native/browser boundary in historical
-section 54; Product/FileVersion at that checkpoint was `1.2.0-alpha.21`.
+does not mutate authored state. The current running native process is the
+alpha.24 artifact from `target/release/syndocal.exe`, built from the exact
+source above. Its Product/FileVersion is `1.2.0-alpha.24`, size is
+`59,803,136` bytes, SHA-256 is
+`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and
+LastWrite is `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive
+`Syndocal` process/window was observed (PID `63016`, handle `66658934`), and
+Computer Use verified the unique process/window plus accessibility button
+`元のサイズに戻す`, proving maximized state. The historical alpha.21
+Product/FileVersion was `1.2.0-alpha.21`, with its I/O/native source retained
+in historical section 54.
 The preceding alpha.22 authoritative Scene source evidence remains preserved in
-historical section 55; alpha.23 has no native artifact claim and alpha.24 has
-no native artifact yet.
+historical section 55; alpha.23 has no native artifact claim, while alpha.24's
+native evidence is recorded in section 57.
 The separate read-only show structural preflight is committed and pushed at
 `b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
 `1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
@@ -2622,19 +2627,19 @@ frontend build transformed `296` modules and emitted `App-CNx-MFOg.js` at
 warnings. `check:release` and `check:release:self-test`, format, and
 `git diff --check` passed. Independent Terra xHigh source review was GO.
 
-The current running native process remains the historical alpha.21 artifact:
-PID `41912`, `58,778,112` bytes, SHA-256
+At this historical alpha.23 checkpoint the running native process was the
+alpha.21 artifact: PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 Physical DJ/MIDI/pedal acceptance, HW-4, real output, target-DJ-PC, LAN,
 reconnect, and three-display evidence remain unverified; this checkpoint does
-not claim final completion. The next action is the alpha.24 native build and
-launch gate.
+not claim final completion. Current alpha.24 native evidence is recorded in
+section 57.
 
-## 57. 2026-08-28 current alpha.24 Timeline Follow rearm source checkpoint
+## 57. 2026-08-28 current alpha.24 Timeline Follow rearm source/native checkpoint
 
 Current product metadata is `1.2.0-alpha.24`. The current source authority is
 exact committed, pushed, and upstream-equal
-`8367bdf50a49fe130e3619eaf29ca410b61d2cd9`. Alpha.23 remains historical at
+`5eb1888906613851c4c49e66717a270f13bbd7b5`. Alpha.23 remains historical at
 exact pushed commit `5e7d27df7f5864449d4838782f6eca2f9b81d360` and is not
 relabelled as alpha.24. The release path performs the actual DjLink clock
 handoff only, arms an enabled, unfenced, eligible Follow, performs no
@@ -2642,19 +2647,37 @@ seek/play/jump or authored-state mutation, and admits exactly one Follow
 transition at the next natural boundary. For an authored non-Cut first-measure
 hold, settlement uses one source measure and installs the destination's first
 meter-aware measure as a runtime-only hold; the 5/4 proof does not mutate
-authored state. No alpha.24 native artifact exists yet.
+authored state. The alpha.24 native build is complete; its evidence is recorded
+below.
 
 The exact supervisor gate passed `29/29` engine `dj_link` with warnings `0`.
 The MSVC 14.44 linker
 `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`
 was pinned and verified first in `where.exe link.exe`, ahead of Git.
 `check:release` and `check:release:self-test` passed. Independent Terra xHigh
-source review was GO.
+source review was GO. The required `pnpm --dir app tauri build --no-bundle`
+passed in `2m35s` with Vite/Rust first-party warnings `0`. Product/FileVersion
+is `1.2.0-alpha.24`; `target/release/syndocal.exe` is `59,803,136` bytes,
+SHA-256
+`8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, and
+LastWrite `2026-08-28T05:07:33.7560788+09:00`. Exactly one responsive process
+and window was verified: PID `63016`, title `Syndocal`, responsive `true`,
+handle `66658934`. Computer Use verified the unique process/window and the
+accessibility system button `元のサイズに戻す`, proving maximized state. The
+frontend build transformed `296` modules and emitted `App-CNx-MFOg.js` at
+`499.68 kB` plus lazy `phase1Actions` at `2.84 kB`.
 
-The current running native process remains the historical alpha.21 artifact;
-Product/FileVersion at that checkpoint was `1.2.0-alpha.21`, PID `41912`,
-`58,778,112` bytes, SHA-256
+The StandardRelease three-display acceptance runner is pinned to the exact
+alpha.24 Product/FileVersion, `59,803,136`-byte size, SHA-256, and source commit
+above; Show-ASIO remains a separately licensed, independent authority. The
+runner's deterministic self-test passed `88/88` with warnings `0`, covering
+clean equal-HEAD and valid clean descendant-HEAD operation while retaining the
+artifact source identity. Physical Apply was not run because the loaded project
+is `Untitled.sdc` and no real output IDs/labels are configured.
+
+The alpha.21 artifact remains historical: Product/FileVersion at that
+checkpoint was `1.2.0-alpha.21`, PID `41912`, `58,778,112` bytes, SHA-256
 `F73F1AD8F9E8229B8ACB713AE0C10C36E199C878D869A2E98B554190FC908FA3`.
 Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
-unverified. This is not a final-completion claim; the next action is the
-alpha.24 native build/launch gate.
+unverified. This is not a final-completion claim; the remaining physical/show
+gates are open.

@@ -149,12 +149,12 @@ $script:ThreeDisplayRequiredSamples = 3
 $script:ThreeDisplayMinimumSampleIntervalMs = 200
 $script:ThreeDisplaySchemaVersion = 1
 $script:ThreeDisplayStandardReleaseArtifactAuthority = [ordered]@{
-  product_version = "1.2.0-alpha.21"
-  byte_size = [uint64]58778112
-  sha256 = "f73f1ad8f9e8229b8acb713ae0c10c36e199c878d869a2e98b554190fc908fa3"
+  product_version = "1.2.0-alpha.24"
+  byte_size = [uint64]59803136
+  sha256 = "8ff5cf6670f592dffe53477e8e14bf95cd3fcf81916fc23cad58e7354763874d"
   source_branch = "codex/syndocal-v1.2"
-  source_head = "536742db968b242164349c34dd6940fe3ced8e92"
-  source_provenance = "qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md#1.2"
+  source_head = "5eb1888906613851c4c49e66717a270f13bbd7b5"
+  source_provenance = "post-build StandardRelease artifact identity, source 5eb1888906613851c4c49e66717a270f13bbd7b5"
 }
 $script:ThreeDisplayRequiredProductVersion = [string]$script:ThreeDisplayStandardReleaseArtifactAuthority.product_version
 $script:ThreeDisplaySwMaximize = 3
