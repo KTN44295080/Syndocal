@@ -11,67 +11,6 @@
   text-rendering: optimizeLegibility;
 }
 
-/* Setup I/O: one connection-first surface with local zone scrolling. */
-.layoutSetup.setupMode-io > .setupIoPanel {
-  display: block;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.layoutSetup .setupIoPanel > .ioUnifiedSurface {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.ioUnifiedZone {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* The wrapper stays in the DOM for the zone contract but must not create a
-   box: display contents lets DMX/MIDI/OSC/Remote sit as four equal quadrants
-   of the parent 2x2 grid. */
-.ioCompactZoneGrid {
-  display: contents;
-}
-
-.layoutSetup .ioUnifiedZone > .ioOperatorSurface {
-  display: grid;
-  align-content: start;
-  gap: 6px;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden auto;
-  padding-right: 2px;
-}
-
-.layoutSetup.setupMode-io .midiClock,
-.layoutSetup.setupMode-io .oscInput,
-.layoutSetup.setupMode-io .remoteControl {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: none;
-  height: 100%;
-  border: 0;
-  padding: 0 2px 0 0;
-  overflow: hidden auto;
-}
-
-.layoutSetup.setupMode-io .ioCompactZone .ioConnectionControls,
-.layoutSetup.setupMode-io .ioCompactZone .remoteConnectionControls {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 /* Timeline operator hard invariant (final cascade): only the shared Control
    header is persistent. All secondary Timeline/Mixer controls remain
    reachable from disclosures without reducing their control sizes. */
@@ -21876,33 +21815,6 @@ h3 {
   max-height: none;
 }
 
-.layoutSetup.setupMode-io > .setupIoPanel {
-  display: grid;
-  grid-template-columns:
-    minmax(250px, 0.8fr)
-    minmax(230px, 0.8fr)
-    minmax(420px, 1.45fr)
-    minmax(260px, 0.8fr);
-  gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.layoutSetup.setupMode-io > .setupIoPanel > .rawMonitor {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  height: 100%;
-  overflow: hidden;
-  border-top: 0;
-  border-right: 1px solid #39342f;
-  padding: 0 5px 0 0;
-}
-
-.layoutSetup.setupMode-io > .setupIoPanel > .rawMonitor > .rawGrid {
-  max-height: none;
-  overflow: auto;
-}
-
 .dmxEndpointDesk,
 .dmxOutputConfigPanel,
 .dmxInputPanel,
@@ -21989,18 +21901,6 @@ h3 {
   white-space: nowrap;
 }
 
-.layoutSetup.setupMode-io .dmxEndpointDesk,
-.layoutSetup.setupMode-io .outputDiagnosticsDesk {
-  border-right: 1px solid #39342f;
-  padding-right: 5px;
-}
-
-.layoutSetup.setupMode-io .dmxOutputConfigPanel,
-.layoutSetup.setupMode-io .outputDiagnosticsDesk,
-.layoutSetup.setupMode-io .lightingRuntimeDesk {
-  overflow: auto;
-}
-
 .ioDeskHeader {
   display: flex;
   align-items: baseline;
@@ -22019,36 +21919,6 @@ h3 {
   color: #8f8780;
   font-size: 11px;
   white-space: nowrap;
-}
-
-.layoutSetup.setupMode-io .dmxTestFramePanel,
-.layoutSetup.setupMode-io .dmxRoutesPanel,
-.layoutSetup.setupMode-io .phase1SmokeReport,
-.layoutSetup.setupMode-io .telemetry {
-  margin: 0;
-}
-
-.layoutSetup.setupMode-io .blackout {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.layoutSetup.setupMode-io > .setupIoPanel {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.layoutSetup.setupMode-io .midiClock,
-.layoutSetup.setupMode-io .oscInput {
-  display: grid;
-  grid-template-columns: minmax(430px, 0.9fr) minmax(430px, 1.1fr);
-  gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  border-top: 0;
-  padding-top: 0;
-  overflow: hidden;
 }
 
 .mappingEditorDesk,
@@ -22132,23 +22002,6 @@ h3 {
   width: 100%;
 }
 
-.layoutSetup.setupMode-io > .setupIoPanel {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.layoutSetup.setupMode-io .remoteControl {
-  display: grid;
-  grid-template-columns: minmax(360px, 0.75fr) minmax(500px, 1.25fr);
-  grid-template-rows: minmax(0, 0.75fr) minmax(0, 1.25fr);
-  gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
 .remoteServerDesk,
 .remoteEndpointDesk,
 .standbySyncDesk {
@@ -22174,16 +22027,6 @@ h3 {
   border-right: 1px solid #39342f;
   padding-top: 6px;
   padding-right: 5px;
-}
-
-.remoteControl > .remoteEndpointDesk:not(.remoteClientDesk) {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.remoteControl > .remoteClientDesk {
-  grid-column: 2;
-  grid-row: 2;
 }
 
 .standbyIntro {
@@ -22671,10 +22514,6 @@ h3 {
 
 .dmxPatchFixtureBlock.tiny strong::first-letter {
   font-size: clamp(11px, calc(var(--dmx-cell-size) * 0.45), 14px);
-}
-
-.layoutSetup .setupIoPanel {
-  overflow: auto;
 }
 
 .layout {
@@ -36247,54 +36086,6 @@ a[href]:focus-visible,
 .liveDeskToolbarActions .liveStatusToggle svg {
   width: var(--ui-icon-size);
   height: var(--ui-icon-size);
-}
-
-/* Keep the unified Setup I/O connection-first structure authoritative over legacy desks. */
-.layoutSetup.setupMode-io > .setupIoPanel {
-  display: block;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.layoutSetup .setupIoPanel > .ioUnifiedSurface {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* No box of its own: the four zones flow directly into the 2x2 parent grid. */
-.layoutSetup .ioCompactZoneGrid {
-  display: contents;
-}
-
-.layoutSetup .ioUnifiedZone > .ioOperatorSurface,
-.layoutSetup.setupMode-io .midiClock,
-.layoutSetup.setupMode-io .oscInput,
-.layoutSetup.setupMode-io .remoteControl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: none;
-  align-content: start;
-  gap: 6px;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  border: 0;
-  padding: 0 2px 0 0;
-  overflow: hidden auto;
-}
-
-.layoutSetup.setupMode-io .ioCompactZone .ioConnectionControls,
-.layoutSetup.setupMode-io .ioCompactZone .remoteConnectionControls {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 /* Remote connection surfaces share one contained disclosure scrollport.

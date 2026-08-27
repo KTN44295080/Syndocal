@@ -3,7 +3,7 @@
  * rules give the operator a stable connection picker and one full-width local
  * workbench while retaining the established controls and their hit targets.
  */
-.setupIoPanel[data-io-layout="operator"] {
+.layoutSetup .setupIoPanel[data-io-layout="operator"] {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -42,10 +42,16 @@
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionSelect {
   display: grid;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 48px;
   align-content: center;
+  align-self: stretch;
   gap: 2px;
+  justify-self: stretch;
+  position: relative;
+  z-index: 1;
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -132,12 +138,7 @@
   padding: 8px 10px;
 }
 
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader > div {
-  min-width: 0;
-}
-
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2,
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader p {
+.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2 {
   overflow: hidden;
   margin: 0;
   text-overflow: ellipsis;
@@ -148,17 +149,128 @@
   font-size: 14px;
 }
 
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader p {
-  margin-top: 2px;
-  color: #aeb8c5;
-  font-size: 12px;
-}
-
 .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 8px;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .ioUnifiedZone {
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .ioUnifiedZone > .ioOperatorSurface {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .dmxTestFramePanel,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .dmxRoutesPanel,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .phase1SmokeReport,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .telemetry {
+  margin: 0;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .blackout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* The workbench body is the only vertical scroll owner for the operator deck.
+   Descendant desks retain their layout and hit targets but grow with their
+   content instead of introducing a second, hidden scrollport. */
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody > [data-io-zone],
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioOperatorSurface,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .midiClock,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .oscInput,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteControl,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioDisclosureStack,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxOutputConfigPanel,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxEndpointDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .rawMonitor,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .outputDiagnosticsDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .lightingRuntimeDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .mappingEditorDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .mappingListDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .mappingListDesk > .timelineList,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteServerDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteEndpointDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .standbySyncDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .rawGrid {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody > [data-io-zone],
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioOperatorSurface,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .midiClock,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .oscInput,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteControl {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioOperatorSurface,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .midiClock,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .oscInput,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  border-top: 0;
+  padding: 0 2px 0 0;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteControl {
+  grid-template-rows: auto;
+  overflow: hidden;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteControl > .ioDisclosureStack {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .rawMonitor,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .outputDiagnosticsDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .lightingRuntimeDesk,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxEndpointDesk {
+  border-right: 1px solid #39342f;
+  padding-right: 6px;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .lightingRuntimeDesk {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .mappingListDesk {
+  grid-template-rows: auto;
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioMappingWorkbench {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteEndpointGrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .ioConnectionControls,
+.layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .remoteConnectionControls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .setupIoPanel[data-io-layout="operator"] .ioDisclosureDescription {

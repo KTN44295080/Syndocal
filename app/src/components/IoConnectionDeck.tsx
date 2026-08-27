@@ -76,10 +76,11 @@ export function IoDisclosure(props: IoDisclosureProps) {
 export function IoConnectionDeck(props: IoConnectionDeckProps) {
   const workbenchId = () => props.workbenchId ?? "setup-io-connection-workbench";
   const activeItem = () => props.items.find((item) => item.id === props.activeId) ?? props.items[0];
+  const tabId = (id: IoConnectionId) => `${workbenchId()}-tab-${id}`;
 
   return (
     <section class="setupIoConnectionDeck" data-io-connection-deck aria-label={props.ariaLabel ?? "I/O connections"}>
-      <div class="setupIoConnectionCards" role="list">
+      <div class="setupIoConnectionCards" role="tablist" aria-label="I/O connection selectors">
         <For each={props.items}>
           {(item) => {
             const selected = () => item.id === activeItem()?.id;
@@ -91,13 +92,38 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
                 }}
                 data-io-connection={item.id}
                 data-io-primary-connection={item.id}
-                role="listitem"
+                role="presentation"
               >
                 <button
                   type="button"
                   class="setupIoConnectionSelect"
-                  aria-pressed={selected()}
+                  id={tabId(item.id)}
+                  role="tab"
+                  aria-selected={selected()}
                   aria-controls={workbenchId()}
+                  tabIndex={selected() ? 0 : -1}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      props.onActiveId(item.id);
+                      return;
+                    }
+                    const currentIndex = props.items.findIndex((candidate) => candidate.id === item.id);
+                    const nextIndex = event.key === "ArrowLeft" || event.key === "ArrowUp"
+                      ? Math.max(0, currentIndex - 1)
+                      : event.key === "ArrowRight" || event.key === "ArrowDown"
+                        ? Math.min(props.items.length - 1, currentIndex + 1)
+                        : event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? props.items.length - 1
+                            : -1;
+                    if (nextIndex < 0 || nextIndex === currentIndex || !props.items[nextIndex]) return;
+                    event.preventDefault();
+                    const nextId = props.items[nextIndex].id;
+                    props.onActiveId(nextId);
+                    document.getElementById(tabId(nextId))?.focus();
+                  }}
                   onClick={() => props.onActiveId(item.id)}
                 >
                   <span class="setupIoConnectionLabel">{item.label}</span>
@@ -121,16 +147,15 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
         id={workbenchId()}
         class="setupIoConnectionWorkbench"
         data-io-connection-workbench={activeItem()?.id}
+        role="tabpanel"
+        aria-labelledby={activeItem() ? tabId(activeItem()!.id) : undefined}
         aria-live="polite"
       >
         <Show when={activeItem()}>
           {(item) => (
             <>
               <header class="setupIoWorkbenchHeader">
-                <div>
-                  <h2>{item().label}</h2>
-                  <p>{item().summary}</p>
-                </div>
+                <h2>{item().label}</h2>
                 <span class={`setupIoConnectionState ${item().stateTone ?? "idle"}`}>
                   <i aria-hidden="true" />{item().state}
                 </span>

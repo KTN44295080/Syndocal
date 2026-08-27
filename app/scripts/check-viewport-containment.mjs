@@ -10,6 +10,10 @@ import ts from "typescript";
 import { runPaneBrowserFallbackRuntimeProof } from "./check-pane-browser-fallback-runtime.mjs";
 import { runLiveAudioBackendDisappearanceContract } from "./live-audio-backend-disappearance-contract.mjs";
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
+import {
+  exerciseSetupIoOperatorDeck,
+  selectSetupIoConnection,
+} from "./setup-io-operator-contract.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
@@ -2576,7 +2580,16 @@ async function clickVisibleByText(client, selector, text) {
 
 async function evaluatePageFunction(client, callback, ...args) {
   const serializedArgs = args.map((argument) => JSON.stringify(argument)).join(",");
-  return client.evaluate(`(${callback.toString()})(${serializedArgs})`);
+  const expression = `(${callback.toString()})(${serializedArgs})`;
+  try {
+    return await client.evaluate(expression);
+  } catch (error) {
+    // A Runtime.evaluate exception is a harness failure, never an empty
+    // measurement that may accidentally let a focused gate exit successfully.
+    process.exitCode = 1;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Viewport page evaluation failed: ${message}`);
+  }
 }
 
 async function clickVisibleSelector(client, selector) {
@@ -2656,119 +2669,17 @@ async function selectVisibleOption(client, selector, value) {
   }
 }
 
-async function selectIoConnection(client, connectionId) {
-  const selected = await client.evaluate(`(() => {
-    const card = document.querySelector('[data-io-primary-connection="${connectionId}"]');
-    const button = card?.querySelector(':scope > button[aria-controls]');
-    if (!(button instanceof HTMLElement) || button.getAttribute('aria-pressed') === 'true') return Boolean(button);
-    button.click();
-    return true;
-  })()`);
-  if (!selected) {
-    throw new Error(`Could not select Setup I/O connection card: ${connectionId}`);
-  }
-  await waitForClientCondition(
-    client,
-    `(() => {
-      const card = document.querySelector('[data-io-primary-connection="${connectionId}"]');
-      const button = card?.querySelector(':scope > button[aria-controls]');
-      const body = document.querySelector('[data-io-workbench-body]');
-      return button?.getAttribute('aria-pressed') === 'true' &&
-        body?.querySelectorAll('[data-io-zone]').length === 1;
-    })()`,
-    `Setup I/O ${connectionId} workbench selection`,
-  );
+async function exerciseIoConnectionDeck(client) {
+  return exerciseSetupIoOperatorDeck(client, {
+    evaluatePageFunction,
+    pressKey,
+    sleep,
+    waitForClientCondition,
+  });
 }
 
-async function exerciseIoConnectionDeck(client) {
-  return await evaluatePageFunction(client, async () => {
-    const expectedZoneByConnection = {
-      dmx: 'dmx',
-      midi: 'midi',
-      osc: 'osc',
-      web: 'remote',
-      dj: 'remote',
-    };
-    const visible = (element) => {
-      if (!(element instanceof HTMLElement)) return false;
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    const hitTestable = (element) => {
-      if (!visible(element)) return false;
-      const rect = element.getBoundingClientRect();
-      const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      return target === element || element.contains(target);
-    };
-    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const cardNodes = [...document.querySelectorAll('[data-io-primary-connection]')];
-    const cards = cardNodes.map((card) => {
-      const id = card.getAttribute('data-io-primary-connection') ?? '';
-      const button = card.querySelector(':scope > button[aria-controls]');
-      return { id, card, button };
-    });
-    const cardResults = [];
-    for (const { id, card, button } of cards) {
-      if (button instanceof HTMLElement && button.getAttribute('aria-pressed') !== 'true') button.click();
-      await settle();
-      const body = document.querySelector('[data-io-workbench-body]');
-      const workbench = document.querySelector(
-        '[data-io-connection-workbench], .setupIoConnectionWorkbench'
-      );
-      const zoneNodes = body ? [...body.querySelectorAll('[data-io-zone]')].filter(visible) : [];
-      const bodyRect = body?.getBoundingClientRect() ?? null;
-      const workbenchRect = workbench?.getBoundingClientRect() ?? null;
-      const zoneRect = zoneNodes[0]?.getBoundingClientRect() ?? null;
-      const bodyStyle = body ? getComputedStyle(body) : null;
-      const bodyHorizontalPadding = bodyStyle
-        ? parseFloat(bodyStyle.paddingLeft || '0') + parseFloat(bodyStyle.paddingRight || '0')
-        : 0;
-      const bodyContentWidth = bodyRect ? bodyRect.width - bodyHorizontalPadding : 0;
-      cardResults.push({
-        id,
-        visible: visible(card),
-        hitTestable: hitTestable(button),
-        focusable: (() => {
-          if (!(button instanceof HTMLElement)) return false;
-          button.focus();
-          return document.activeElement === button;
-        })(),
-        selected: button?.getAttribute('aria-pressed') === 'true',
-        zoneNames: zoneNodes.map((zone) => zone.getAttribute('data-io-zone') ?? ''),
-        expectedZone: expectedZoneByConnection[id] ?? null,
-        exactlyOneZone: zoneNodes.length === 1,
-        visibleControlCount: zoneNodes[0] ? [...zoneNodes[0].querySelectorAll('button, input, select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])')].filter(visible).length : 0,
-        disclosureCount: zoneNodes[0]?.querySelectorAll('[data-io-disclosure]').length ?? 0,
-        openDisclosureCount: zoneNodes[0] ? [...zoneNodes[0].querySelectorAll('[data-io-disclosure]')].filter((disclosure) => disclosure.open).length : 0,
-        workbenchFullWidth: Boolean(
-          bodyRect && workbenchRect && zoneRect &&
-          bodyRect.width > 0 &&
-          zoneRect.width >= bodyContentWidth - 2 &&
-          workbenchRect.width >= bodyRect.width - 2,
-        ),
-        bodyScrollable: Boolean(
-          body instanceof HTMLElement && bodyStyle &&
-          /(auto|scroll)/.test(bodyStyle.overflowY) &&
-          body.scrollHeight >= body.clientHeight,
-        ),
-      });
-    }
-    const active = cards.find(({ button }) => button?.getAttribute('aria-pressed') === 'true');
-    return {
-      cardCount: cards.length,
-      cardIds: cards.map(({ id }) => id),
-      cardResults,
-      allCardsVisible: cardResults.every((result) => result.visible),
-      allCardsHitTestable: cardResults.every((result) => result.hitTestable),
-      allCardsFocusable: cardResults.every((result) => result.focusable),
-      everyCardSelectedAndRendersOneZone: cardResults.every((result) =>
-        result.selected && result.exactlyOneZone && result.zoneNames[0] === result.expectedZone),
-      everyWorkbenchFullWidth: cardResults.every((result) => result.workbenchFullWidth),
-      everyWorkbenchHasInternalScroll: cardResults.every((result) => result.bodyScrollable),
-      activeId: active?.id ?? null,
-    };
-  });
+async function selectIoConnection(client, connectionId) {
+  return selectSetupIoConnection(client, connectionId, waitForClientCondition);
 }
 
 async function pressKey(client, code, key = code, modifiers = 0) {
@@ -5365,11 +5276,23 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       JSON.stringify(connectionDeck.cardIds) === JSON.stringify(['dmx', 'midi', 'osc', 'web', 'dj']),
     connectionCardsVisibleHitTestableAndFocusable:
       connectionDeck.allCardsVisible && connectionDeck.allCardsHitTestable && connectionDeck.allCardsFocusable,
+    connectionDeckTabpanelSemantics:
+      connectionDeck.exactTabpanelRelation && connectionDeck.tabpanelRelationPerCard,
+    connectionDeckKeyboardSelection:
+      connectionDeck.keyboardNavigatesFromDmxToMidiAndDj &&
+      connectionDeck.keyboardHomeReturnsToDmx &&
+      connectionDeck.enterSelectsExactWorkbench &&
+      connectionDeck.spaceSelectsExactWorkbench,
+    connectionDeckQuickActionIsolation: connectionDeck.inactiveQuickActionPreservesSelection,
+    connectionDeckFifthTabPointerHitTestable: connectionDeck.fifthTabPointerHitTestable,
+    activeWorkbenchLabelState: connectionDeck.activeWorkbenchLabelState,
     selectedWorkbenchMountsOneZone:
       connectionDeck.everyCardSelectedAndRendersOneZone &&
       connectionDeck.activeId === 'dj',
     selectedWorkbenchFullWidthAndScrollable:
       connectionDeck.everyWorkbenchFullWidth && connectionDeck.everyWorkbenchHasInternalScroll,
+    selectedWorkbenchStrictScrollOwner:
+      connectionDeck.everyWorkbenchHasStrictOverflowProbe && connectionDeck.everyWorkbenchOwnsOnlyScroll,
     initialDmxWorkbench:
       measurements.io.ioActiveConnectionId === 'dmx' &&
       measurements.io.ioVisibleZoneCount === 1 &&
@@ -9145,7 +9068,7 @@ async function measure(client, label) {
     const ioUnifiedSurface = ioConnectionDeck;
     const ioConnectionCards = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-primary-connection]')] : [];
     const ioActiveConnectionCard = ioConnectionCards.find((card) =>
-      card.querySelector(':scope > button[aria-pressed="true"]')
+      card.querySelector(':scope > button[role="tab"][aria-selected="true"]')
     ) ?? null;
     const ioActiveConnectionId = ioActiveConnectionCard?.getAttribute('data-io-primary-connection') ?? null;
     const ioWorkbench = setupIoPanel?.querySelector(
@@ -9156,7 +9079,7 @@ async function measure(client, label) {
     const visibleIoZones = ioWorkbenchBody ? visibleElements('[data-io-zone]', ioWorkbenchBody) : [];
     const ioDisclosures = ioWorkbenchBody ? [...ioWorkbenchBody.querySelectorAll('[data-io-disclosure]')] : [];
     const ioConnectionCardMetrics = ioConnectionCards.map((card) => {
-      const button = card.querySelector(':scope > button[aria-controls]');
+      const button = card.querySelector(':scope > button[role="tab"][aria-controls]');
       const rect = card.getBoundingClientRect();
       const buttonRect = button?.getBoundingClientRect() ?? null;
       const centerTarget = buttonRect
@@ -9168,7 +9091,7 @@ async function measure(client, label) {
         visible: visibleElements('[data-io-primary-connection]', setupIoPanel).includes(card),
         width: rect.width,
         height: rect.height,
-        selected: button?.getAttribute('aria-pressed') === 'true',
+        selected: button?.getAttribute('aria-selected') === 'true',
         focusable: button instanceof HTMLElement && document.activeElement === button,
         hitTestable: Boolean(button && centerTarget && (centerTarget === button || button.contains(centerTarget))),
       };
