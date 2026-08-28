@@ -8,7 +8,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
-- Current alpha.28 source parent HEAD and upstream: `8153ebb37a9517aad91c0da6ad06de9a80db2a1a`. The alpha.28 working-tree changes remain uncommitted at this documentation checkpoint; no commit or push is claimed here.
+- Current alpha.28 integrated source commit and upstream: `32a092267f55d32185b2cf9cc123f92067614ec1`. It was committed as `feat: integrate show ASIO program cue output` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
 - DJ Agent checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
@@ -73,9 +73,9 @@ This is the concise authoritative resume note for the final show-critical tranch
   updater inspection or the separate show-ASIO artifact.
 - No MOTU M4 stream, M32/DL16 route, or USB-DMX physical output is claimed yet.
   This machine currently exposes no MOTU M4 device and no serial port, so those
-  physical rows must be run on the equipped show system. The working tree
-  remains uncommitted and unpushed at parent
-  `8153ebb37a9517aad91c0da6ad06de9a80db2a1a`.
+  physical rows must be run on the equipped show system. The integrated source
+  checkpoint is committed and pushed at
+  `32a092267f55d32185b2cf9cc123f92067614ec1`.
 
 ## Accepted source boundaries
 
@@ -88,7 +88,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Stage 2 commands require exact Timeline/play-session/release authority and revalidate current playing Timeline identity in the engine worker before mutation.
 - Re-enabling a completed loop after position B re-enters at A; disabling does not jump.
 
-Focused source evidence on the current dirty tree:
+Focused source evidence preserved in the committed alpha.28 source checkpoint:
 
 - protocol DJ Link: 14 passed, 0 failed, first-party warnings 0.
 - engine DJ Link: 30 passed, 0 failed, first-party warnings 0.
@@ -104,7 +104,7 @@ Focused source evidence on the current dirty tree:
 - Physical-only layouts remain physical-only; the frontend does not infer color roles from control names.
 - Unknown persisted layout fields and duplicate PATCH beam indices fail closed.
 
-Focused source evidence on the current dirty tree:
+Focused source evidence preserved in the committed alpha.28 source checkpoint:
 
 - protocol stage-layout validation: 13 passed, 0 failed, first-party warnings 0.
 - DVC stage-layout unit tests: 5 passed, 0 failed, first-party warnings 0.
@@ -159,7 +159,7 @@ Focused source evidence on the current dirty tree:
 - DSF2026 acceptance mapping is MOTU M4 Output 1/2 = PROGRAM L/R and Output 3 = CUE at exact 48 kHz, with Output 4 optional Spare. This is a selectable profile, not MOTU-specific code.
 - Device/rate/mapping conflict, disconnect, XRUN, reset/resync, buffer/rate change, callback gap, or underflow must stop output without WASAPI/default-device/rate fallback. Explicit revalidation and Start are required.
 - Independent Terra xHigh review added three implementation-blocking P0 boundaries: quiesce and join the legacy `FollowProgram` CUE/normal Rodio output before v3 Start and stay silent on Start failure/Fault; freeze exact v3 callback/queue/lifetime semantics before code; and prove arbitrary non-contiguous/reordered physical mappings with all unselected channels zero. It also requires exact queue/race injection tests and updates every show-ASIO v2-only export checker to the exact v2-nine plus v3-nine set.
-- The acceptance contract was committed and pushed at `e583141cc60decff7c062db21a39f69241f894c8`. The active implementation checkpoint is `1.2.0-alpha.28` on top of the alpha.27 source/native checkpoint and remains uncommitted pending production integration and exact acceptance gates.
+- The acceptance contract was committed and pushed at `e583141cc60decff7c062db21a39f69241f894c8`. At that historical contract checkpoint, the `1.2.0-alpha.28` implementation was still uncommitted; the authoritative 2026-08-29 integrated checkpoint above supersedes that state.
 - Integrated source, independent review, and the exact normal no-bundle native/window gate are complete in the current checkpoint. Dedicated show-ASIO artifact/loader proof, normal installer/updater inspection, authoritative non-default Timeline speed synchronization, MOTU M4 output proof, and M32/DL16 routing proof remain open.
 
 ### 2026-08-28 alpha.28 ASIO implementation checkpoint (superseded source snapshot)
@@ -234,18 +234,17 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. Freeze, commit, and push the integrated `1.2.0-alpha.28` source checkpoint and this evidence. No dedicated show-ASIO artifact may use the current dirty tree as source authority.
-2. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
-3. Build and verify the exact local-only show-ASIO artifact from the clean pushed source commit: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
-4. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
-5. Pull the committed DJ Agent checkpoint on the DJ PC without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
-6. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
-7. Perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance. PROGRAM must reach only M4 1/2 -> DL16 5/6 -> M32 Ch18/19 -> Main/Broadcast; CUE must reach only M4 3 -> DL16 7 -> M32 Ch20 -> IEM 4/5/6 and remain absent from Main/Broadcast/Floor.
-8. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
+1. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
+2. Build and verify the exact local-only show-ASIO artifact from clean pushed source commit `32a092267f55d32185b2cf9cc123f92067614ec1`: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
+3. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
+4. Pull the committed DJ Agent checkpoint on the DJ PC without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
+5. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
+6. Perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance. PROGRAM must reach only M4 1/2 -> DL16 5/6 -> M32 Ch18/19 -> Main/Broadcast; CUE must reach only M4 3 -> DL16 7 -> M32 Ch20 -> IEM 4/5/6 and remain absent from Main/Broadcast/Floor.
+7. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
 
 ## First safe resume actions
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - Keep the current Syndocal/Rekordbox/DJ Link processes alive until immediately before the exact alpha.28 native release build boundary.
-- Re-run `git status --short`, verify branch/HEAD/upstream equality, and inspect every owned diff before versioning or committing.
+- Resolve artifact source `S=32a092267f55d32185b2cf9cc123f92067614ec1`, evidence HEAD `E`, and source branch `B=codex/syndocal-v1.2` immediately before the dedicated show-ASIO build; require a clean pushed evidence tree and run the v3 authority checker before native actions.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.
