@@ -2744,3 +2744,34 @@ The first safe resume action is to complete and independently review the
 alpha.28 production integration, rerun the exact gates from a stable tree,
 then perform the required native and hardware acceptance before any commit or
 push.
+
+## 60. 2026-08-29 CURRENT alpha.29 lifecycle checkpoint and hybrid-output requirement
+
+Branch `codex/syndocal-v1.2` advanced to committed and pushed source checkpoint
+`54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`; product metadata is synchronized
+at `1.2.0-alpha.29`. The checkpoint makes Ready cancellation and explicit
+Normal return authoritative, serializes ASIO lifecycle mutations, and removes
+the show-ASIO warning inventory without warning suppression. Independent
+review is GO with P0/P1 zero.
+
+Verified evidence is show-ASIO `cargo check` warnings 0, application tests
+1409 discovered / 1397 passed / 0 failed / 12 ignored, frontend contract 59
+static plus 28 runtime assertions, TypeScript/Vite 302 modules, and complete
+`check:release` including packaging 169, ABI v3 22, and Timeline bus 11.
+`pnpm --dir app tauri build --no-bundle` succeeded with the exact MSVC 14.44
+Community linker first and warnings 0. Native window acceptance remains open:
+the exact responsive process completed Tauri setup but exposed only its 16x16
+single-instance window, not a user-facing Syndocal window. No native-window GO
+is inferred from the successful build.
+
+The current show requirement is a deliberate expansion of the previous
+single-stream acceptance: logical PROGRAM and CUE must be assignable to
+separate operator-selected physical output devices. The first physical target
+is TOPPING E2x2 ASIO 1/2 for PROGRAM plus an explicit headphone/WDM endpoint
+for CUE. Same-ASIO remains the shared-clock mode. Hybrid mode must expose its
+dual-clock limitation, route every CUE source to exactly one selected endpoint,
+keep the ASIO CUE lanes silent, forbid automatic fallback, and fence CUE on
+PROGRAM stop/fault or endpoint loss. This implementation and its physical
+acceptance remain pending; the next safe action is the separately owned hybrid
+profile/runtime/UI tranche followed by independent review and exact native
+gates.

@@ -8,12 +8,50 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
-- Current alpha.28 integrated source commit and upstream: `32a092267f55d32185b2cf9cc123f92067614ec1`. It was committed as `feat: integrate show ASIO program cue output` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
+- Current alpha.29 source commit and upstream: `54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`. It was committed as `fix: stabilize ASIO output lifecycle` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
 - DJ Agent checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is synchronized at `1.2.0-alpha.28`. Source integration and the exact normal `--no-bundle` native executable/window gate are recorded below. Normal installer/updater inspection, the dedicated show-ASIO artifact, and hardware acceptance remain open.
+- KDMX product metadata is synchronized at `1.2.0-alpha.29`. Source integration and the exact normal `--no-bundle` native executable/window gate are recorded below. Normal installer/updater inspection, the dedicated show-ASIO artifact, and hardware acceptance remain open.
+
+### 2026-08-29 alpha.29 ASIO lifecycle safety checkpoint
+
+- `AsioReady` can now return explicitly to Normal or be invalidated by profile
+  reselection. The exact Ready ticket is cancelled first, leaving `Locked`
+  with no operation/session; a validated Start is then rejected until an
+  explicit revalidation. Reselect/Revalidate/Start/Stop/Normal selection are
+  serialized by one lifecycle lock. Active or otherwise ambiguous states
+  remain rejected without mutation.
+- The show-ASIO first-party warning inventory is zero without warning
+  suppression. Test-only router/result/proof helpers are compiled only for
+  tests; production generation and live-audio fences remain present.
+- Independent adversarial review returned GO with P0/P1 zero. Its only code
+  observation was a stale lock comment, corrected before this commit.
+- Exact MSVC 14.44 preflight and pinned Community linker were used. The
+  show-ASIO release check completed with first-party warnings 0. The complete
+  show-ASIO application test run discovered 1409 tests and finished 1397
+  passed / 0 failed / 12 ignored. The frontend audio-output contract passed
+  59 static assertions and 28 runtime assertions; TypeScript/Vite transformed
+  302 modules. `check:release` passed including packaging 169, ABI v3 22, and
+  Timeline output-bus 11 assertions. `cargo fmt --all -- --check` and
+  `git diff --check` passed (Git line-ending notices only).
+- `pnpm --dir app tauri build --no-bundle` completed successfully with
+  first-party warnings 0 and produced the alpha.29 release executable.
+  Native launch acceptance is still open: the exact process was responsive
+  and setup tracing reached the end of the Tauri setup callback, but only the
+  internal 16x16 single-instance window was exposed and no user-facing
+  `Syndocal` window appeared. The temporary trace instrumentation was removed.
+  This checkpoint therefore makes no native-window GO claim.
+- The user has explicitly expanded the output requirement beyond the original
+  one-device contract: PROGRAM and CUE must be independently assignable to
+  physical output devices. Immediate acceptance target is TOPPING E2x2 ASIO
+  outputs 1/2 for PROGRAM and a separately selected headphone/WDM endpoint for
+  all CUE sources. Same-ASIO shared-clock mode remains supported; hybrid mode
+  must state that it uses two clock domains, must never fall back or leak CUE
+  to PROGRAM, and must fail closed on missing or ambiguous endpoints. This
+  hybrid path is not implemented or hardware-accepted at the alpha.29
+  checkpoint.
 
 ### 2026-08-29 alpha.28 integrated source checkpoint
 
