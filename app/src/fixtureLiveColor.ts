@@ -35,6 +35,15 @@ export interface StageLiveColorViewport {
 
 type ColorRole = "red" | "green" | "blue" | "white" | "amber" | "uv";
 
+const exactStageColorRole: Record<NonNullable<PatchedFixtureSummary["stage_layout"]>["logical_segments"][number]["color_controls"][number]["role"], ColorRole> = {
+  Red: "red",
+  Green: "green",
+  Blue: "blue",
+  White: "white",
+  Amber: "amber",
+  Uv: "uv",
+};
+
 interface ControlDescriptor {
   control: AttributeControl;
   colorRole: ColorRole | null;
@@ -112,6 +121,42 @@ const describeControl = (control: AttributeControl): ControlDescriptor => ({
 
 const fixtureSegmentControlGroups = (fixture: PatchedFixtureSummary): SegmentControlGroup[] => {
   const descriptors = fixture.controls.map(describeControl);
+  const exactLayout = fixture.stage_layout;
+  const exactSegments = fixture.stage_layout?.logical_segments;
+  if (exactSegments?.length) {
+    const globalDimmer = exactLayout?.global_dimmer_control_index;
+    return [...exactSegments]
+      .sort((left, right) => left.logical_index - right.logical_index)
+      .map((segment) => {
+        const controls: ControlDescriptor[] = [];
+        for (const binding of segment.color_controls) {
+          const descriptor = descriptors[binding.control_index];
+          if (descriptor) {
+            controls.push({
+              ...descriptor,
+              colorRole: exactStageColorRole[binding.role],
+              dimmer: false,
+            });
+          }
+        }
+        if (globalDimmer !== null && globalDimmer !== undefined) {
+          const descriptor = descriptors[globalDimmer];
+          if (descriptor) controls.push({ ...descriptor, colorRole: null, dimmer: true });
+        }
+        return {
+          key: `stage-layout-${segment.logical_index}`,
+          controls,
+        };
+      });
+  }
+  if (exactLayout) {
+    const globalDimmer = exactLayout.global_dimmer_control_index;
+    const descriptor = globalDimmer === null ? undefined : descriptors[globalDimmer];
+    return [{
+      key: "stage-layout-physical-only",
+      controls: descriptor ? [{ ...descriptor, colorRole: null, dimmer: true }] : [],
+    }];
+  }
   const hasUnnumberedColor = descriptors.some((descriptor) =>
     descriptor.colorRole !== null && descriptor.segmentIndex === null);
   const numberedColorIndices = [...new Set(
@@ -327,7 +372,9 @@ export const fixtureLiveColor = (
   const readControlValue = valueSource === "preview"
     ? previewControlValueReader(fixture, universeValues)
     : attributeControlValueReader(attributeValues);
-  const hasDimmer = fixture.controls.some(controlIsDimmer);
+  const hasDimmer = fixture.stage_layout
+    ? fixture.stage_layout.global_dimmer_control_index !== null
+    : fixture.controls.some(controlIsDimmer);
   // Daslight parity for dimmerless fixtures: use the normalized maximum current
   // DMX byte in the fixture footprint, or attribute value on fallback, as a
   // surrogate dimmer so an all-zero fixture is unlit instead of assumed full.

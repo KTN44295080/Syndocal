@@ -6,6 +6,7 @@ import type {
 } from "../fixtureVisuals";
 import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
 import type { MappingStageTool } from "../mappingViewPresets";
+import type { MappingFixturePhysicalCell2d } from "../mappingRuntime";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
 import {
   stageFixtureYawHandleScreenSizePx,
@@ -39,6 +40,7 @@ export interface MappingFixture2D {
   liveColorApplied?: boolean;
   liveColorValueSource?: "preview" | "attribute";
   liveSegments?: FixtureLiveColorSegment[];
+  physicalCells?: MappingFixturePhysicalCell2d[];
   inGroupFilter: boolean;
   highlighted: boolean;
   soloed: boolean;
@@ -79,7 +81,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       viewport: props.labelViewport,
       showLabels: props.showLabels,
       pickedFixtureIds: props.selectedFixtureIds,
-      pickedFixtureId: props.selectedFixtureId,
       hoveredFixtureId: hoveredFixtureId(),
     }),
   );
@@ -130,6 +131,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   height={fixture.height}
                   color={fixture.color}
                   segments={fixture.liveSegments}
+                  physicalCells={fixture.physicalCells}
                   segmentColumns={fixture.segmentColumns}
                   segmentRows={fixture.segmentRows}
                   segmentOrder={fixture.segmentOrder}

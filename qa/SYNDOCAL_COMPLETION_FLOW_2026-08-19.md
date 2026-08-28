@@ -354,24 +354,19 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.26` on
-`codex/syndocal-v1.2`. This is a source-only checkpoint for the current App
-structural split and synchronized metadata; the alpha.26 native build, artifact
-identity, launch, and native UI acceptance are unbuilt/unverified. The running
-alpha.25 DJ session is preserved as an operational baseline only and is not
-alpha.26 evidence. The latest observation had Deck 1 playing `More One Night ×
-動く、動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID,
-position revision `149152`, BPM `140`, and `isPlaying=true`; the DJ Agent sent
-`DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was
-rejected, leaving FOH `owner— / playing No / track—`. The temporary track had no
-Timeline mapping, so the result is fail-closed. Computer Use reproduced the
-Timeline Start dropdown returning to its placeholder after selecting Timeline
-1 (UI remount bug; a separate Luna fix is in progress). This is not HW-4
-end-to-end acceptance; HW-4 remains exactly `0/12`. DJ-PC screenshot evidence
-is `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`,
-`218629` bytes, SHA-256
-`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
-LastWrite `2026-08-28 07:10:32 JST`.
+alpha checkpoints; current product metadata is `1.2.0-alpha.27` on
+`codex/syndocal-v1.2`. Alpha.27 is the active show-completion tranche: it adds
+the exact Stage 2 pedal contract, worker-side Timeline authority fences, the
+four-physical/four-logical Strongpoint layout correction, exact Mega Bar 8/8
+layout, compact I/O disclosures, and fail-closed DSF2026 show publication
+tooling. Its source-focused gates and independent reviews are recorded in
+`qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
+
+Alpha.27 native build, artifact identity, launch, maximized UI acceptance,
+fresh DVC import/save, final authored show, serial DMX, real DJ-PC ACK/reconnect,
+and physical Pedal 1/2/3 acceptance remain unverified until their explicit
+gates run. The preceding alpha.26 source checkpoint and the running alpha.25
+artifact are historical inputs only; neither is alpha.27 native evidence.
 
 The immediately preceding alpha.25 source/native checkpoint remains immutable
 historical evidence: source/native evidence was

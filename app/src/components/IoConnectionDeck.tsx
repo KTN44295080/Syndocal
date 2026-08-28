@@ -39,7 +39,6 @@ export interface SetupIoConnectionDeckProps {
   webRemoteRunning: boolean;
   djListenerRunning: boolean;
   djLinkEnabled: boolean;
-  onApplyOutput: () => unknown;
   onConnectMidiClock: () => unknown;
   onDisconnectMidiClock: () => unknown;
   onStartOsc: () => unknown;
@@ -190,7 +189,6 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Output routing and optional input",
       state: props.outputEnabled ? "Output enabled" : "Output disabled",
       stateTone: props.outputEnabled ? "ok" : "idle",
-      primaryAction: <button type="button" onClick={() => void props.onApplyOutput()}>Apply output</button>,
     },
     {
       id: "midi",

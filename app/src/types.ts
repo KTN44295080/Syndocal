@@ -182,7 +182,33 @@ export interface SerialPortSummary {
   serial_number?: string | null;
   manufacturer?: string | null;
   product?: string | null;
+  windows_device_instance_id?: string | null;
   recommended_protocol?: DmxOutputProtocol | null;
+}
+
+export type SerialDmxMachineBindingState =
+  | "missing_selection"
+  | "selected_and_present"
+  | "stale_or_missing"
+  | "ambiguous"
+  | "blocked_persistence";
+
+/** Machine-local USB interface evidence. It is deliberately not project data. */
+export interface SerialDmxMachineBindingIdentity {
+  port_name: string;
+  port_type: string;
+  usb_vid: number;
+  usb_pid: number;
+  serial_number: string;
+  manufacturer: string;
+  product: string;
+  windows_device_instance_id: string;
+}
+
+export interface SerialDmxMachineBindingStatus {
+  state: SerialDmxMachineBindingState;
+  selected: SerialDmxMachineBindingIdentity | null;
+  detail: string;
 }
 
 export interface OscInputConfig {
@@ -380,6 +406,20 @@ export interface DjLinkRuntimeStatus {
   trackPlaying?: boolean;
   trackBpm?: number | null;
   positionSec?: number | null;
+  snapshotReady?: boolean;
+  authoritativeState?: "idle" | "running" | "stopped" | "ended" | "reset" | null;
+  timelineId?: string | null;
+  playSessionId?: string | null;
+  pedalOwner?: string | null;
+  releaseEventId?: string | null;
+  positionBars?: number | null;
+  loopActive?: boolean;
+  lastOutboundEventId?: string | null;
+  lastOutboundSequence?: number | null;
+  lastOutboundDelivery?: string | null;
+  lastOperatorReturnRequestId?: string | null;
+  lastOperatorReturnSequence?: number | null;
+  lastOperatorReturnDelivery?: string | null;
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
@@ -542,6 +582,35 @@ export interface AttributeValueSummary {
   value: number;
 }
 
+export type FixtureStageColorRole = "Red" | "Green" | "Blue" | "Amber" | "White" | "Uv";
+
+export interface FixtureStageColorBinding {
+  control_index: number;
+  role: FixtureStageColorRole;
+}
+
+export interface FixtureStageLayoutCell {
+  beam_index: number;
+  offset_x: number;
+  offset_z: number;
+  logical_segment_index: number | null;
+}
+
+export interface FixtureStageLogicalSegment {
+  logical_index: number;
+  color_controls: FixtureStageColorBinding[];
+}
+
+export interface FixtureStageLayout {
+  version: number;
+  cell_width: number;
+  cell_depth: number;
+  cells: FixtureStageLayoutCell[];
+  logical_segments: FixtureStageLogicalSegment[];
+  global_dimmer_control_index: number | null;
+  global_strobe_control_index: number | null;
+}
+
 export interface PatchedFixtureSummary {
   id: number;
   label: string;
@@ -556,6 +625,7 @@ export interface PatchedFixtureSummary {
   rotation: { pitch: number; yaw: number; roll: number };
   geometries: GeometrySummary[];
   controls: AttributeControl[];
+  stage_layout?: FixtureStageLayout | null;
   attribute_values: AttributeValueSummary[];
   limits: FixtureLimits;
   highlighted: boolean;

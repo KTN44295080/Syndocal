@@ -17,6 +17,8 @@ use std::{
 
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
+#[cfg(test)]
+mod serial_show_dmx_route_tests;
 
 use base64::Engine as _;
 use dj_link_persistence_runtime::{
@@ -64,8 +66,8 @@ use protocol::{
         OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
         OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
         OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
-        OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
     validate_engine_ready_video_clip_slots, validate_engine_ready_video_effect_chains,
@@ -138,11 +140,13 @@ mod dj_loop_range;
 mod dj_track_runtime;
 mod dj_track_selector;
 mod dvc_import;
+mod dvc_stage_layout;
 mod e3_native_acceptance;
 mod live_audio_ipc_v1;
 mod ndi_transport;
 mod output_lease;
 mod scene_creation;
+mod serial_dmx_machine;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
 pub mod timeline_cue_audio;
@@ -979,6 +983,9 @@ struct DjLinkRuntime {
     play_session_id: Option<String>,
     pedal_owner: Option<String>,
     release_event_id: Option<String>,
+    /// Persists the explicit Syndocal-side return intent across DJ socket
+    /// replacement until one exact current candidate is admitted.
+    pending_operator_return_request_id: Option<String>,
     authoritative_state: protocol::DjLinkTimelineStateValue,
     timeline_id: Option<String>,
     position_bars: u64,
@@ -1018,6 +1025,7 @@ impl DjLinkRuntime {
             play_session_id: None,
             pedal_owner: None,
             release_event_id: None,
+            pending_operator_return_request_id: None,
             authoritative_state: protocol::DjLinkTimelineStateValue::Idle,
             timeline_id: None,
             position_bars: 0,
@@ -1029,6 +1037,23 @@ impl DjLinkRuntime {
     fn sync_project(&mut self, coordinator: &ProjectCoordinator) {
         let mappings = &coordinator.mappings.dj_track_triggers;
         if self.project_epoch != coordinator.epoch || self.mappings != *mappings {
+            // An explicit operator-return request is a process-local intent,
+            // not project-owned DJ state.  A project/mapping publication may
+            // retire every prior deck/session receipt, but it must not erase
+            // that intent before a current candidate is admitted.  Preserve
+            // only the already-validated Timeline correlation; admission
+            // still resolves the new mapping and rechecks the live engine
+            // Timeline before restoring DJ ownership.
+            let pending_operator_return_request_id =
+                self.pending_operator_return_request_id.clone();
+            let pending_timeline_truth = pending_operator_return_request_id.as_ref().map(|_| {
+                (
+                    self.authoritative_state,
+                    self.timeline_id.clone(),
+                    self.position_bars,
+                    self.loop_active,
+                )
+            });
             self.project_epoch = coordinator.epoch;
             self.mappings = mappings.clone();
             self.seen_play_sessions.clear();
@@ -1055,10 +1080,20 @@ impl DjLinkRuntime {
             self.play_session_id = None;
             self.pedal_owner = None;
             self.release_event_id = None;
-            self.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
-            self.timeline_id = None;
-            self.position_bars = 0;
-            self.loop_active = false;
+            self.pending_operator_return_request_id = pending_operator_return_request_id;
+            if let Some((authoritative_state, timeline_id, position_bars, loop_active)) =
+                pending_timeline_truth
+            {
+                self.authoritative_state = authoritative_state;
+                self.timeline_id = timeline_id;
+                self.position_bars = position_bars;
+                self.loop_active = loop_active;
+            } else {
+                self.authoritative_state = protocol::DjLinkTimelineStateValue::Idle;
+                self.timeline_id = None;
+                self.position_bars = 0;
+                self.loop_active = false;
+            }
             self.last_follow_rebase = None;
         }
     }
@@ -1072,6 +1107,68 @@ impl DjLinkRuntime {
         // Live entries are never evicted to make room for a new event.  A
         // full ledger fails closed in the dispatcher; only the explicit TTL
         // purge can release a once-per-session slot.
+    }
+
+    fn operator_return_candidate(&self, snapshot: &EngineSnapshot) -> Result<Self, &'static str> {
+        let has_owned_session = self.track_active
+            || self.play_session_id.is_some()
+            || self.pedal_owner.is_some()
+            || self.release_event_id.is_some();
+        let retrying_unowned_timeline = !self.track_active
+            && self.play_session_id.is_none()
+            && self.pedal_owner.is_none()
+            && self.timeline_id.is_some();
+        if !has_owned_session && !retrying_unowned_timeline {
+            return Err("dj_control_return_owner_unavailable");
+        }
+        if self.authoritative_state != protocol::DjLinkTimelineStateValue::Running
+            || !snapshot.timeline.playing
+        {
+            return Err("dj_control_return_requires_running_timeline");
+        }
+        let next_generation =
+            dj_link_next_generation(self).map_err(|_| "dj_control_return_generation_exhausted")?;
+        let mut next = self.clone();
+        next.active_dedupe_key = None;
+        next.track_active = false;
+        next.playing = snapshot.timeline.playing;
+        next.released = false;
+        next.unmapped_active_blocked = false;
+        next.loop_division = None;
+        next.loop_revision = None;
+        next.last_loop_fallback_intent_id = None;
+        next.last_event_id = None;
+        next.track_content_id = None;
+        next.track_title = None;
+        next.track_artist = None;
+        next.track_deck_id = None;
+        next.track_deck_number = None;
+        next.track_started_at = None;
+        next.track_playing = false;
+        next.track_bpm = None;
+        next.position_sec = None;
+        next.source_position_ms = None;
+        next.position_revision = None;
+        next.play_session_id = None;
+        next.pedal_owner = None;
+        next.release_event_id = None;
+        next.pending_operator_return_request_id = None;
+        next.authoritative_state = if snapshot.timeline.playing {
+            protocol::DjLinkTimelineStateValue::Running
+        } else if snapshot.timeline.position_ms == 0 {
+            protocol::DjLinkTimelineStateValue::Idle
+        } else {
+            protocol::DjLinkTimelineStateValue::Stopped
+        };
+        next.timeline_id = Some(snapshot.timeline.id.0.to_string());
+        next.position_bars = dj_link_engine_position_bars(snapshot);
+        next.loop_active = !matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        );
+        next.last_follow_rebase = None;
+        next.state_generation = next_generation;
+        Ok(next)
     }
 }
 
@@ -1133,6 +1230,7 @@ fn dj_link_timeline_state_from_snapshot(
         // identity.  Never invent one from a loop report.
         pedal_owner: runtime.pedal_owner.clone(),
         release_event_id: runtime.release_event_id.clone(),
+        operator_return_request_id: runtime.pending_operator_return_request_id.clone(),
     }
 }
 
@@ -1513,22 +1611,10 @@ fn dispatch_dj_link_event(
             if runtime.unmapped_active_blocked {
                 return dj_link_rejected("dj_link_unmapped_active", current_generation);
             }
-            if let (Some(deck), Some(deck_id), Some(play_session_id)) = (
-                payload.owner_deck,
-                payload.owner_deck_id.as_deref(),
-                payload.active_play_session_id.as_deref(),
-            ) {
-                let runtime_has_owner = runtime.track_active
-                    || runtime.timeline_id.is_some()
-                    || runtime.play_session_id.is_some();
-                if runtime_has_owner
-                    && !dj_track_runtime::owner_matches(&runtime, deck, deck_id, play_session_id)
-                {
-                    return dj_link_rejected(
-                        "state_sync_owner_context_mismatch",
-                        current_generation,
-                    );
-                }
+            if let Some(code) =
+                dj_track_runtime::state_sync_owner_context_rejection(&runtime, &payload)
+            {
+                return dj_link_rejected(code, current_generation);
             }
             runtime.last_event_id = Some(envelope.event_id);
             dj_link_accepted(current_generation)
@@ -1676,18 +1762,17 @@ fn dispatch_dj_link_event(
             if timeline_id == 0 {
                 return dj_link_rejected("invalid_timeline_id", current_generation);
             }
-            let division = runtime.loop_division.unwrap_or(0);
             let next_generation = match dj_link_next_generation(&runtime) {
                 Ok(next) => next,
                 Err(_) => {
                     return dj_link_rejected("state_generation_exhausted", current_generation)
                 }
             };
-            let snapshot = match engine.dj_link_set_timeline_loop_absolute_with_canonical_snapshot(
-                TimelineId(timeline_id),
-                division,
-                payload.active,
-            ) {
+            let snapshot = match engine
+                .dj_link_set_current_timeline_loop_enabled_with_canonical_snapshot(
+                    TimelineId(timeline_id),
+                    payload.active,
+                ) {
                 Ok(snapshot) => snapshot,
                 Err(_) => {
                     return dj_link_rejected("engine_publication_rejected", current_generation)
@@ -1695,7 +1780,81 @@ fn dispatch_dj_link_event(
             };
             // The ACK is based on the engine publication.  The returned state
             // is built from the post-ACK snapshot, never from the request.
-            runtime.loop_active = payload.active;
+            runtime.loop_active = !matches!(
+                snapshot.timeline.loop_runtime.status,
+                protocol::TimelineLoopRuntimeStatus::Disabled
+            );
+            runtime.last_event_id = Some(event_id.clone());
+            runtime.state_generation = next_generation;
+            DjLinkDispatchOutcome::TimelineState {
+                state_generation: next_generation,
+                state: dj_link_timeline_state_from_snapshot(
+                    &runtime, &snapshot, &event_id, sequence,
+                ),
+            }
+        }
+        protocol::DjLinkMessageType::TimelineLoopHalf => {
+            let payload = match serde_json::from_value::<protocol::DjLinkTimelineLoopHalfPayload>(
+                envelope.payload,
+            ) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return dj_link_rejected(
+                        "invalid_timeline_loop_half_payload",
+                        current_generation,
+                    )
+                }
+            };
+            let Some(snapshot) = engine.try_snapshot() else {
+                return DjLinkDispatchOutcome::Busy {
+                    code: "engine_snapshot_busy".to_string(),
+                    state_generation: current_generation,
+                };
+            };
+            let _ = dj_track_runtime::rebase_released_follow_completion(
+                &mut runtime,
+                &snapshot,
+                Some(&payload.timeline_id),
+                Some(&payload.play_session_id),
+            );
+            let current_generation = runtime.state_generation;
+            if let Some(code) = dj_track_runtime::stage2_authority_rejection(
+                &runtime,
+                &payload.timeline_id,
+                &payload.play_session_id,
+                &snapshot,
+            ) {
+                return dj_link_rejected(code, current_generation);
+            }
+            if let Some(code) =
+                dj_track_runtime::timeline_loop_half_authority_rejection(&runtime, &snapshot)
+            {
+                return dj_link_rejected(code, current_generation);
+            }
+            let Ok(timeline_id) = payload.timeline_id.parse::<u64>() else {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            };
+            if timeline_id == 0 {
+                return dj_link_rejected("invalid_timeline_id", current_generation);
+            }
+            let next_generation = match dj_link_next_generation(&runtime) {
+                Ok(next) => next,
+                Err(_) => {
+                    return dj_link_rejected("state_generation_exhausted", current_generation)
+                }
+            };
+            let snapshot = match engine
+                .dj_link_half_current_timeline_loop_with_canonical_snapshot(TimelineId(timeline_id))
+            {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    return dj_link_rejected("engine_publication_rejected", current_generation)
+                }
+            };
+            runtime.loop_active = !matches!(
+                snapshot.timeline.loop_runtime.status,
+                protocol::TimelineLoopRuntimeStatus::Disabled
+            );
             runtime.last_event_id = Some(event_id.clone());
             runtime.state_generation = next_generation;
             DjLinkDispatchOutcome::TimelineState {
@@ -18976,13 +19135,13 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
 const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "acquire_output_lease_v2",
     "add_display_output_v2",
-    "assign_video_output_composition_v2",
     "add_local_media_layers",
     "add_still_image_layer",
     "add_video_file_layer",
     "analyze_timeline_audio_clip_path",
     "arm_dj_link_machine",
     "arm_output_control_v2",
+    "assign_video_output_composition_v2",
     "begin_media_asset_preview",
     "bootstrap_vj_show",
     "cancel_pane_window_close",
@@ -19002,6 +19161,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_art_rdm_devices",
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
+    "enable_show_serial_dmx_route_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -19035,8 +19195,10 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "relink_media_asset",
     "relinquish_output_lease_v2",
     "renew_output_lease_v2",
+    "request_dj_link_operator_return_to_dj_control",
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
+    "select_serial_dmx_machine_binding_v1",
     "send_art_rdm_request",
     "send_dmx_routes_test_frame",
     "send_dmx_test_frame",
@@ -19542,6 +19704,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
     match command {
         EngineCommand::SetOutput(..)
         | EngineCommand::SetDmxOutputs(..)
+        | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
         | EngineCommand::SetOutputOwnershipRole { .. }
         | EngineCommand::FenceOutputOwnership { .. }
         | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -19736,6 +19899,8 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetTimelineLoopEnabled(..)
         | EngineCommand::SetTimelineLoopAbsolute { .. }
         | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+        | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+        | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
         | EngineCommand::DjLinkTimelineBeatJump { .. }
         | EngineCommand::DjLinkRelease { .. }
         | EngineCommand::ToggleTimelineLoop
@@ -19882,6 +20047,42 @@ mod legacy_output_control_route_tests {
         assert!(forbidden
             .iter()
             .all(|command| external_output_command_requires_local_r4(command).is_some()));
+    }
+
+    #[test]
+    fn show_serial_dmx_engine_command_is_not_an_external_or_remote_bypass() {
+        let (ack, _receiver) = mpsc::sync_channel(1);
+        let command = EngineCommand::EnableShowSerialDmxRoutePublished {
+            expected_disabled_output: DmxOutputConfig {
+                enabled: false,
+                protocol: DmxOutputProtocol::EnttecOpenDmx,
+                target_ip: String::new(),
+                port: 0,
+                universe: 0,
+                serial_port: String::new(),
+                serial_baud_rate: 250_000,
+            },
+            expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity {
+                port_name: "COM3".to_string(),
+                port_type: "USB 0403:6001 USB Serial Port".to_string(),
+                usb_vid: 0x0403,
+                usb_pid: 0x6001,
+                serial_number: "FTDI-SHOW-INSTANCE-1".to_string(),
+                manufacturer: "FTDI".to_string(),
+                product: "USB Serial Port".to_string(),
+                windows_device_instance_id: Some(
+                    r"FTDIBUS\VID_0403+PID_6001+FTDI-SHOW-INSTANCE-1\0000".to_string(),
+                ),
+            },
+            expected_safety_epoch: 1,
+            expected_safety_generation: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        };
+        assert!(
+            external_output_command_requires_local_r4(&command).is_some(),
+            "MIDI, OSC, DMX input, and remote callbacks cannot enqueue the local R4-only route activation"
+        );
     }
 
     #[test]
@@ -23560,6 +23761,42 @@ fn list_serial_ports() -> Result<Vec<SerialPortSummary>, String> {
     io::serial_dmx::list_serial_ports().map_err(|error| error.to_string())
 }
 
+fn serial_dmx_machine_binding_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| serial_dmx_machine::serial_dmx_machine_binding_path(&directory))
+        .map_err(|error| format!("Unable to resolve machine-local USB-DMX selection path: {error}"))
+}
+
+/// Read-only status for the one host-local USB-DMX selection. This is never
+/// loaded from, saved to, or inferred from a project/show file.
+#[tauri::command]
+fn get_serial_dmx_machine_binding_status_v1(
+    app: tauri::AppHandle,
+) -> Result<serial_dmx_machine::SerialDmxMachineBindingStatusV1, String> {
+    let ports = list_serial_ports()?;
+    Ok(serial_dmx_machine::binding_status_from_path(
+        &serial_dmx_machine_binding_path(&app)?,
+        &ports,
+    ))
+}
+
+/// The UI's explicit “confirm selected USB-DMX interface” action. The request
+/// names an already enumerated COM alias plus its Windows PnP instance; the
+/// backend re-enumerates and persists only that machine-local identity.
+#[tauri::command]
+fn select_serial_dmx_machine_binding_v1(
+    app: tauri::AppHandle,
+    request: serial_dmx_machine::SelectSerialDmxMachineBindingRequestV1,
+) -> Result<serial_dmx_machine::SerialDmxMachineBindingStatusV1, String> {
+    let ports = list_serial_ports()?;
+    serial_dmx_machine::select_binding_from_ports(
+        &serial_dmx_machine_binding_path(&app)?,
+        &request,
+        &ports,
+    )
+}
+
 #[tauri::command]
 fn connect_midi_clock(
     state: State<'_, AppState>,
@@ -26097,16 +26334,98 @@ async fn remote_control_status(app: tauri::AppHandle) -> Result<RemoteControlSta
             snapshot_ready: transport.snapshot_ready,
             authoritative_state: Some(runtime.authoritative_state),
             timeline_id: runtime.timeline_id.clone(),
+            play_session_id: runtime.play_session_id.clone(),
+            pedal_owner: runtime.pedal_owner.clone(),
+            release_event_id: runtime.release_event_id.clone(),
             position_bars: Some(runtime.position_bars),
             loop_active: runtime.loop_active,
             last_outbound_event_id: transport.last_outbound_event_id,
             last_outbound_sequence: transport.last_outbound_sequence,
             last_outbound_delivery: transport.last_outbound_delivery,
+            last_operator_return_request_id: transport.last_operator_return_request_id,
+            last_operator_return_sequence: transport.last_operator_return_sequence,
+            last_operator_return_delivery: transport.last_operator_return_delivery,
         });
         Ok(status)
     })
     .await
     .map_err(|error| format!("Remote control status query worker failed: {error}"))?
+}
+
+const DJ_LINK_OPERATOR_RETURN_CONFIRMATION: &str = "return-to-dj-control";
+
+fn queue_and_commit_dj_link_operator_return<F>(
+    runtime: &mut DjLinkRuntime,
+    next_runtime: DjLinkRuntime,
+    outbound: protocol::DjLinkTimelineState,
+    queue: F,
+) -> Result<(), String>
+where
+    F: FnOnce(protocol::DjLinkTimelineState) -> Result<Option<String>, String>,
+{
+    let Some(request_id) = queue(outbound)? else {
+        return Err(
+            "DJ Link operator return could not be queued to the current ready peer".to_string(),
+        );
+    };
+    let mut next_runtime = next_runtime;
+    next_runtime.pending_operator_return_request_id = Some(request_id);
+    *runtime = next_runtime;
+    Ok(())
+}
+
+/// Explicitly retire the stale DJ owner projection without stopping or
+/// seeking the currently running Timeline.  The connected Agent receives one
+/// correlated authoritative state frame and may then reannounce only its
+/// current fresh candidate.  The runtime mutation is committed only after
+/// that bounded frame is queued successfully.
+#[tauri::command]
+fn request_dj_link_operator_return_to_dj_control(
+    state: State<'_, AppState>,
+    confirmation: String,
+) -> Result<(), String> {
+    if confirmation != DJ_LINK_OPERATOR_RETURN_CONFIRMATION {
+        return Err("DJ control return confirmation is invalid".to_string());
+    }
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    if state.project_transaction_active.load(Ordering::Acquire) {
+        return Err(
+            "Project transaction is active; DJ control return was not requested".to_string(),
+        );
+    }
+    let coordinator = lock_project_coordinator(&state)?;
+    let remote = state
+        .remote_control
+        .lock()
+        .map_err(|_| "Remote control state lock was poisoned".to_string())?;
+    let server = remote
+        .as_ref()
+        .ok_or_else(|| "DJ Link listener is not running".to_string())?;
+    let transport = server.dj_link_status();
+    if !transport.connected || !transport.snapshot_ready {
+        return Err("DJ Link peer is not connected with a ready Timeline snapshot".to_string());
+    }
+    let mut runtime = state
+        .dj_link_runtime
+        .lock()
+        .map_err(|_| "DJ Link runtime state lock was poisoned".to_string())?;
+    runtime.sync_project(&coordinator);
+    let snapshot = state
+        .engine
+        .try_snapshot()
+        .ok_or_else(|| "Engine snapshot is temporarily unavailable; retry".to_string())?;
+    let next_runtime = runtime
+        .operator_return_candidate(&snapshot)
+        .map_err(str::to_string)?;
+    let outbound = dj_link_timeline_state_from_snapshot(
+        &next_runtime,
+        &snapshot,
+        "pending-operator-return",
+        1,
+    );
+    queue_and_commit_dj_link_operator_return(&mut runtime, next_runtime, outbound, |state| {
+        server.queue_dj_link_operator_return_state(state)
+    })
 }
 
 /// Rotate only a previously armed, fully revalidated machine binding. The
@@ -41618,6 +41937,25 @@ async fn enable_output_control_v2(
     execute_output_control_off_event_loop(app, window, OUTPUT_ENABLE_OPERATION_ID, request).await
 }
 
+/// R4-only local-confirmed activation of the already staged show serial
+/// route. This is not a generic output setter: its empty route payload is
+/// fenced and the native core accepts only Enttec Open DMX / COM3 / 250000 / U0
+/// after exact FTDI re-enumeration.
+#[tauri::command]
+async fn enable_show_serial_dmx_route_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
 #[tauri::command]
 async fn take_over_output_control_v2(
     app: tauri::AppHandle,
@@ -45705,6 +46043,35 @@ fn set_project_control_mappings(
     reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     ensure_project_operator_authoritative_mutation_allowed(&state, &coordinator, &owner_id)?;
+    publish_project_control_mappings_after_validation(
+        &state,
+        &mut coordinator,
+        expected_epoch,
+        expected_revision,
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+        dj_track_triggers,
+    )
+}
+
+/// Publish already shape-validated control mappings under the caller's held
+/// external-admission and coordinator locks.  This is deliberately the one
+/// production mutation core for `set_project_control_mappings`: it keeps the
+/// snapshot validation, callback reservation, worker retirement, authority
+/// publication, and DJ runtime reset in one rollback boundary that tests can
+/// exercise without duplicating command logic behind `cfg(test)`.
+#[allow(clippy::too_many_arguments)]
+fn publish_project_control_mappings_after_validation(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    expected_epoch: u64,
+    expected_revision: u64,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+    dj_track_triggers: Vec<protocol::DjTrackTriggerMapping>,
+) -> Result<ProjectControlMappingsStatus, String> {
     if coordinator.epoch != expected_epoch || coordinator.revision != expected_revision {
         return Err(format!(
             "Project mappings are stale (expected epoch {expected_epoch} revision {expected_revision}, current epoch {} revision {})",
@@ -45765,7 +46132,7 @@ fn set_project_control_mappings(
     coordinator.history = next_history;
     coordinator.history_generation = next_history_generation;
     commit_project_authority_publication_after_preflight(
-        &mut coordinator,
+        coordinator,
         next_publication_generation,
         ProjectAuthorityPublicationKind::Mutation,
     );
@@ -48232,6 +48599,9 @@ fn output_lease_resources_for_control_action(
             }
         },
         protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV2::EnableShowSerialDmxRoute {
+            ..
+        }
         | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
         | protocol::control_plane_command::OutputControlActionV2::AssignVideoOutputComposition {
             ..
@@ -48319,6 +48689,7 @@ pub(crate) fn build_output_lease_authorization_request(
         }
         OutputControlActionV2::Arm { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
+        | OutputControlActionV2::EnableShowSerialDmxRoute { lease }
         | OutputControlActionV2::TakeOverStandby { lease, .. }
         | OutputControlActionV2::AssignVideoOutputComposition { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
@@ -54052,8 +54423,8 @@ fn node_graph_for_persistence(mut graph: NodeGraphSummary) -> NodeGraphSummary {
     graph
 }
 
-fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
-    for event in &mut snapshot.timeline.events {
+fn normalize_project_timeline_snapshot_layers(timeline: &mut TimelineSnapshot) {
+    for event in &mut timeline.events {
         if event.duration_ms == 0 {
             event.fade_in_ms = 0;
             event.fade_out_ms = 0;
@@ -54062,7 +54433,7 @@ fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
             event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
         }
     }
-    for clip in &mut snapshot.timeline.audio_clips {
+    for clip in &mut timeline.audio_clips {
         clip.path = clip.path.trim().to_string();
         clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
         clip.gain = if clip.gain.is_finite() {
@@ -54075,29 +54446,26 @@ fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
             .fade_out_ms
             .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
     }
-    snapshot
-        .timeline
+    timeline
         .audio_clips
         .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
-    if snapshot.timeline.layers.is_empty() {
+    if timeline.layers.is_empty() {
         return;
     }
 
-    snapshot
-        .timeline
+    timeline
         .layers
         .sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
-    for (index, layer) in snapshot.timeline.layers.iter_mut().enumerate() {
+    for (index, layer) in timeline.layers.iter_mut().enumerate() {
         layer.order = u32::try_from(index).unwrap_or(u32::MAX);
     }
 
-    let layer_kinds = snapshot
-        .timeline
+    let layer_kinds = timeline
         .layers
         .iter()
         .map(|layer| (layer.id, layer.kind))
         .collect::<HashMap<_, _>>();
-    for event in &mut snapshot.timeline.events {
+    for event in &mut timeline.events {
         let Some(kind) = event
             .layer_id
             .and_then(|layer_id| layer_kinds.get(&layer_id).copied())
@@ -54109,6 +54477,13 @@ fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
             TimelineLayerKind::Video => event.track = TimelineTrackKind::Video,
             TimelineLayerKind::Audio => {}
         }
+    }
+}
+
+fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
+    normalize_project_timeline_snapshot_layers(&mut snapshot.timeline);
+    for timeline in &mut snapshot.timeline_bank {
+        normalize_project_timeline_snapshot_layers(timeline);
     }
 }
 
@@ -55372,6 +55747,14 @@ fn prepare_project_load(
         dj_track_triggers: validate_dj_track_triggers(mappings.dj_track_triggers)?,
         legacy_dj_transition_discarded,
     };
+    // Current-schema projects must already carry one exact authored image for
+    // the active Timeline and its bank entry. Run this before any canonical
+    // layer/media normalization so a hostile mismatch cannot be healed into an
+    // apparently valid project at the application ingress.
+    if !project.snapshot.timeline_bank.is_empty() {
+        protocol::validate_current_engine_snapshot_reference_integrity(&project.snapshot)
+            .map_err(|error| format!("project snapshot reference integrity: {error}"))?;
+    }
     use_authored_video_snapshot(&mut project.snapshot);
     // Legacy `.sdc` files reach backend validation before the engine receives
     // them. Normalize the selected authored image here on a local clone so a
@@ -57219,6 +57602,14 @@ fn validate_touch_surface(
 fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
     if project.version != PROJECT_FILE_VERSION {
         return Err(format!("Unsupported project version {}", project.version));
+    }
+    for fixture in &project.snapshot.fixtures {
+        protocol::validate_fixture_stage_layout(fixture).map_err(|error| {
+            format!(
+                "Project fixture {} stage layout is invalid: {error}",
+                fixture.id
+            )
+        })?;
     }
     validate_app_name("project", &project.app)?;
     if let Some(policy) = project.operator_policy.as_ref() {
@@ -65207,6 +65598,281 @@ pub(crate) fn enable_output_with_output_control_fence(
         expected_fence,
         lease_request,
         lease_now_ms,
+    )
+}
+
+const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
+const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
+
+fn is_exact_staged_show_serial_dmx_route(route: &DmxOutputConfig) -> bool {
+    !route.enabled
+        && route.protocol == DmxOutputProtocol::EnttecOpenDmx
+        // COM aliases are host-local evidence, never portable project data.
+        && route.serial_port.is_empty()
+        && route.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
+        && route.universe == SHOW_SERIAL_DMX_UNIVERSE
+}
+
+fn validate_current_staged_show_serial_dmx_route(
+    state: &AppState,
+) -> Result<DmxOutputConfig, String> {
+    let snapshot = state.engine.snapshot();
+    if snapshot.dmx_outputs.len() != 1 {
+        return Err(
+            "Show serial DMX route activation requires exactly one authored disabled route"
+                .to_string(),
+        );
+    }
+    let route = snapshot
+        .dmx_outputs
+        .first()
+        .expect("length was checked")
+        .clone();
+    if snapshot.output != route {
+        return Err(
+            "Show serial DMX route activation rejected an ambiguous primary route projection"
+                .to_string(),
+        );
+    }
+    if route.enabled {
+        return Err(
+            "Show serial DMX route is already enabled; disable/reload the staged show route before retrying"
+                .to_string(),
+        );
+    }
+    if !is_exact_staged_show_serial_dmx_route(&route) {
+        return Err(
+            "Show serial DMX route must be the staged logical Enttec Open DMX / 250000 / universe 0 route with no project COM alias"
+                .to_string(),
+        );
+    }
+    Ok(route)
+}
+
+fn validate_exact_show_serial_dmx_device_matches(
+    ports: &[SerialPortSummary],
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String> {
+    validate_exact_show_serial_dmx_device_matches_with_capture(ports, selected, |port| {
+        io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary_with_windows_com_binding(port)
+            .map_err(|error| format!("Show serial DMX device identity is incomplete: {error}"))
+    })
+}
+
+fn validate_exact_show_serial_dmx_device_matches_with_capture<F>(
+    ports: &[SerialPortSummary],
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+    capture_windows_identity: F,
+) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>
+where
+    F: FnOnce(&SerialPortSummary) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>,
+{
+    let matches = ports
+        .iter()
+        .filter(|port| selected.matches_summary(port))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [port] => {
+            let identity = capture_windows_identity(port)?;
+            let observed_matches_selection = identity.port_name == selected.port_name
+                && identity.port_type == selected.port_type
+                && identity.usb_vid == selected.usb_vid
+                && identity.usb_pid == selected.usb_pid
+                && identity.serial_number == selected.serial_number
+                && identity.manufacturer == selected.manufacturer
+                && identity.product == selected.product
+                && identity.windows_device_instance_id.as_deref()
+                    == Some(selected.windows_device_instance_id.as_str());
+            if !observed_matches_selection {
+                return Err(format!(
+                    "Show serial DMX hardware identity changed after selection; expected {}, observed {:?}. Output remains disabled.",
+                    selected.label(), identity,
+                ));
+            }
+            Ok(identity)
+        }
+        [] => Err(
+            "Selected machine-local USB-DMX interface is absent or stale; refresh and explicitly reselect it. No interface was substituted."
+                .to_string(),
+        ),
+        _ => Err(
+            "Selected machine-local USB-DMX interface is ambiguous; output remains disabled until explicit reselection"
+            .to_string(),
+        ),
+    }
+}
+
+fn verify_current_show_serial_dmx_device(
+    app: &tauri::AppHandle,
+) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String> {
+    let ports = io::serial_dmx::list_serial_ports()
+        .map_err(|error| format!("Show serial DMX device enumeration failed: {error}"))?;
+    let selected = serial_dmx_machine::resolve_selected_identity_from_path(
+        &serial_dmx_machine_binding_path(app)?,
+        &ports,
+    )?;
+    validate_exact_show_serial_dmx_device_matches(&ports, &selected)
+}
+
+/// The single local R4 path that can enable the pre-authored show DMX route.
+/// It accepts no route data, mutates only `enabled`, and holds the same output
+/// transition/project fence through the final serial enumeration and engine
+/// publication. All generic output editing remains unavailable.
+fn enable_show_serial_dmx_route_with_output_control_fence(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        "Standby synchronization lifecycle lock was poisoned before show serial DMX activation"
+            .to_string()
+    })?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    // The transition helper invokes its two closures serially while retaining
+    // the same guard. Keep the coordinator behind a local RefCell so each
+    // closure borrows it only for its revalidation; no mutable borrow crosses
+    // the selected physical-interface publication boundary.
+    let coordinator = RefCell::new(lock_project_coordinator(state)?);
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            {
+                let mut coordinator = coordinator.borrow_mut();
+                if reconcile_project_checkpoint_for_coordinator(state, &mut *coordinator).is_err()
+                    || !control_plane_runtime::exact_output_control_fence_matches(
+                        state,
+                        &*coordinator,
+                        expected_fence,
+                    )
+                    || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                {
+                    return Err(
+                        "Output control fence changed before show serial DMX activation"
+                            .to_string(),
+                    );
+                }
+            }
+            let ownership = state.engine.output_ownership_status();
+            if ownership.state != protocol::OutputOwnershipState::Ready
+                || ownership.effective_role != MachineOutputRole::Both
+                || ownership.desired_role != MachineOutputRole::Both
+                || !ownership.lighting_allowed
+            {
+                return Err(
+                    "Show serial DMX activation requires the active local Both output authority"
+                        .to_string(),
+                );
+            }
+            let safety = state.engine.safety_blackout_authority();
+            if safety.engaged
+                || safety.epoch != expected_fence.safety_blackout_epoch
+                || safety.generation != expected_fence.safety_blackout_generation
+            {
+                return Err(
+                    "Show serial DMX activation requires the exact currently-clear safety blackout authority"
+                        .to_string(),
+                );
+            }
+            let route = validate_current_staged_show_serial_dmx_route(state)?;
+            let device = verify_current_show_serial_dmx_device(app)?;
+            Ok((route, device))
+        },
+        |_transition_guard, (route, device)| {
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before show serial DMX activation"
+                    .to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "show serial DMX route activation",
+                || {
+                    // Recheck all mutable and physical truth immediately
+                    // before the engine opens the selected interface. A stale/removed/duplicated
+                    // device or project leaves the engine and lease registry at A.
+                    {
+                        let mut coordinator = coordinator.borrow_mut();
+                        if reconcile_project_checkpoint_for_coordinator(state, &mut *coordinator)
+                            .is_err()
+                            || !control_plane_runtime::exact_output_control_fence_matches(
+                                state,
+                                &*coordinator,
+                                expected_fence,
+                            )
+                            || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                        {
+                            return Err(
+                                "Output control fence changed before show serial DMX publication"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    let ownership = state.engine.output_ownership_status();
+                    if ownership.state != protocol::OutputOwnershipState::Ready
+                        || ownership.effective_role != MachineOutputRole::Both
+                        || ownership.desired_role != MachineOutputRole::Both
+                        || !ownership.lighting_allowed
+                    {
+                        return Err(
+                            "Show serial DMX activation lost its local Both output authority"
+                                .to_string(),
+                        );
+                    }
+                    let safety = state.engine.safety_blackout_authority();
+                    if safety.engaged
+                        || safety.epoch != expected_fence.safety_blackout_epoch
+                        || safety.generation != expected_fence.safety_blackout_generation
+                    {
+                        return Err(
+                            "Show serial DMX activation was superseded by an emergency blackout authority change"
+                                .to_string(),
+                        );
+                    }
+                    let current = validate_current_staged_show_serial_dmx_route(state)?;
+                    if current != route {
+                        return Err(
+                            "Show serial DMX route changed before final publication".to_string()
+                        );
+                    }
+                    let current_device = verify_current_show_serial_dmx_device(app)?;
+                    if current_device != device {
+                        return Err(
+                            "Show serial DMX hardware instance changed before final publication"
+                                .to_string(),
+                        );
+                    }
+                    state
+                        .engine
+                        .enable_show_serial_dmx_route_published(
+                            current,
+                            device,
+                            expected_fence.safety_blackout_epoch,
+                            expected_fence.safety_blackout_generation,
+                            Instant::now() + Duration::from_secs(2),
+                        )
+                        .map_err(|error| {
+                            format!("Show serial DMX route activation failed: {error}")
+                        })?;
+                    Ok(true)
+                },
+            )?;
+            // This route is a physical activation only: no project or output
+            // ownership authority changed, so its terminal fence is exactly
+            // the admitted fence. The immutable R4 receipt identifies it.
+            Ok((applied, expected_fence.clone(), lease_receipt))
+        },
     )
 }
 
@@ -80399,7 +81065,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 145);
+        assert_eq!(runtime_routes.len(), 149);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -91532,6 +92198,7 @@ pub(crate) mod tests {
                     default_value: 0,
                     functions: Vec::new(),
                 }],
+                stage_layout: None,
                 attribute_values: Vec::new(),
                 limits: FixtureLimits::default(),
                 highlighted: false,
@@ -104013,6 +104680,7 @@ f 1 2 3
                     functions: Vec::new(),
                 },
             ],
+            stage_layout: None,
             attribute_values: Vec::new(),
             limits: FixtureLimits::default(),
             highlighted: false,
@@ -105134,6 +105802,66 @@ f 1 2 3
             expanded: false,
             kind,
         }
+    }
+
+    #[test]
+    fn project_timeline_layer_normalization_preserves_active_bank_authored_projection() {
+        let mut active = TimelineSnapshot {
+            id: TimelineId(1),
+            label: "Active".to_string(),
+            layers: vec![
+                project_timeline_layer(1, "Lighting", 0, TimelineLayerKind::Lighting),
+                project_timeline_layer(2, "Reference Audio", 1, TimelineLayerKind::Audio),
+            ],
+            events: vec![protocol::TimelineCueEventSummary {
+                id: 1,
+                cue_id: 1,
+                track: TimelineTrackKind::Lighting,
+                layer_id: Some(1),
+                ..protocol::TimelineCueEventSummary::default()
+            }],
+            ..TimelineSnapshot::default()
+        };
+        active.audio_transport_revision = 7;
+        let mut snapshot = EngineSnapshot {
+            timeline: active.clone(),
+            timeline_bank: vec![active],
+            ..EngineSnapshot::default()
+        };
+
+        normalize_project_timeline_layers(&mut snapshot);
+
+        assert_eq!(snapshot.timeline.layers[0].id, 2);
+        assert_eq!(snapshot.timeline.layers[0].order, 0);
+        assert_eq!(snapshot.timeline.layers[1].id, 1);
+        assert_eq!(snapshot.timeline.layers[1].order, 1);
+        assert_eq!(snapshot.timeline, snapshot.timeline_bank[0]);
+    }
+
+    #[test]
+    fn project_timeline_layer_load_rejects_active_bank_mismatch_before_canonical_normalization() {
+        let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        project.snapshot.timeline.layers = vec![
+            project_timeline_layer(1, "Lighting", 0, TimelineLayerKind::Lighting),
+            project_timeline_layer(2, "Reference Audio", 1, TimelineLayerKind::Audio),
+        ];
+        let mut bank = project.snapshot.timeline.clone();
+        bank.layers.reverse();
+        project.snapshot.timeline_bank = vec![bank];
+
+        let result = prepare_project_load(
+            project,
+            ProjectControlMappings::default(),
+            "hostile-current-schema.sdc".to_string(),
+            None,
+        );
+        let error = match result {
+            Ok(_) => panic!("a raw active-bank mismatch must fail before normalization"),
+            Err(error) => error,
+        };
+        assert!(error.contains("project snapshot reference integrity"));
+        assert!(error.contains("active Timeline"));
+        assert!(error.contains("authored fields differ"));
     }
 
     #[test]
@@ -106334,6 +107062,7 @@ f 1 2 3
             rotation: Rotation3::default(),
             geometries: Vec::new(),
             controls: Vec::new(),
+            stage_layout: None,
             attribute_values: vec![protocol::AttributeValueSummary {
                 attribute: "Dimmer".to_string(),
                 value: 10_000,
@@ -106357,6 +107086,7 @@ f 1 2 3
             rotation: Rotation3::default(),
             geometries: Vec::new(),
             controls: Vec::new(),
+            stage_layout: None,
             attribute_values: vec![protocol::AttributeValueSummary {
                 attribute: "Dimmer".to_string(),
                 value: 20_000,
@@ -106642,6 +107372,7 @@ f 1 2 3
             rotation: Rotation3::default(),
             geometries: Vec::new(),
             controls: Vec::new(),
+            stage_layout: None,
             attribute_values: vec![protocol::AttributeValueSummary {
                 attribute: "Dimmer".to_string(),
                 value: 30_000,
@@ -106665,6 +107396,7 @@ f 1 2 3
             rotation: Rotation3::default(),
             geometries: Vec::new(),
             controls: Vec::new(),
+            stage_layout: None,
             attribute_values: vec![protocol::AttributeValueSummary {
                 attribute: "Dimmer".to_string(),
                 value: 40_000,
@@ -107227,6 +107959,7 @@ f 1 2 3
             rotation: Rotation3::default(),
             geometries: profile.geometries.clone(),
             controls: profile.dmx_modes[0].controls.clone(),
+            stage_layout: None,
             attribute_values: Vec::new(),
             limits: FixtureLimits::default(),
             highlighted: false,
@@ -126179,6 +126912,8 @@ fn main() {
             list_midi_inputs,
             list_midi_outputs,
             list_serial_ports,
+            get_serial_dmx_machine_binding_status_v1,
+            select_serial_dmx_machine_binding_v1,
             connect_midi_clock,
             disconnect_midi_clock,
             connect_midi_control,
@@ -126203,6 +126938,7 @@ fn main() {
             disarm_dj_link_machine,
             start_remote_control,
             remote_control_status,
+            request_dj_link_operator_return_to_dj_control,
             rotate_dj_link_token,
             disconnect_remote_client,
             stop_remote_control,
@@ -126435,6 +127171,7 @@ fn main() {
             query_output_control_authority_v1,
             release_blackout_output_control_v2,
             arm_output_control_v2,
+            enable_show_serial_dmx_route_v1,
             enable_output_control_v2,
             take_over_output_control_v2,
             add_display_output_v2,

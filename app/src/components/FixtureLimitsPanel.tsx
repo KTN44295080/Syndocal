@@ -1,4 +1,10 @@
 import type { JSX } from "solid-js";
+import {
+  fixturePhysicalAxisRange,
+  fixturePhysicalDegreesForDmxValue,
+  formatFixturePhysicalDegrees,
+  type FixtureMovementAxis,
+} from "../fixtureLimits";
 import { handleMovementLimitKey } from "../fixtureLimitKeyboard";
 import type { FixtureLimits, PatchedFixtureSummary } from "../types";
 import { DimmerLimitMeter } from "./FixtureLimitVisuals";
@@ -27,6 +33,10 @@ export interface FixtureLimitsPanelProps {
 }
 
 export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
+  const movementLimitDegrees = (axis: FixtureMovementAxis, value: number) =>
+    formatFixturePhysicalDegrees(
+      fixturePhysicalDegreesForDmxValue(value, fixturePhysicalAxisRange(props.fixture, axis)),
+    );
   const handleMovementLimitKeyDown = (event: KeyboardEvent) => {
     handleMovementLimitKey(event, {
       limits: props.normalizedLimits,
@@ -92,11 +102,11 @@ export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
         <section class="fixtureLimitsSection" data-fixture-limits-section="movement">
           <div class="limitEditorHeader fixtureLimitsSectionHeader">
             <strong>Movement Limits</strong>
-            <span>
-              Pan {props.formatDmxPercent(props.normalizedLimits.pan_min)} -{" "}
-              {props.formatDmxPercent(props.normalizedLimits.pan_max)} / Tilt{" "}
-              {props.formatDmxPercent(props.normalizedLimits.tilt_min)} -{" "}
-              {props.formatDmxPercent(props.normalizedLimits.tilt_max)}
+            <span data-fixture-limit-degree-summary>
+              Pan {movementLimitDegrees("pan", props.normalizedLimits.pan_min)} -{" "}
+              {movementLimitDegrees("pan", props.normalizedLimits.pan_max)} / Tilt{" "}
+              {movementLimitDegrees("tilt", props.normalizedLimits.tilt_min)} -{" "}
+              {movementLimitDegrees("tilt", props.normalizedLimits.tilt_max)}
             </span>
           </div>
           <div class="movementLimitEditor">
@@ -120,8 +130,8 @@ export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
                 <label class="fixtureLimitField" data-fixture-limit-field="pan_min">
                   <span class="fixtureLimitFieldLabel">
                     <span>Pan Min</span>
-                    <small data-fixture-limit-percent="pan_min">
-                      {props.formatDmxPercent(props.limitsDraft.pan_min)}
+                    <small data-fixture-limit-degree="pan_min">
+                      {movementLimitDegrees("pan", props.limitsDraft.pan_min)}
                     </small>
                   </span>
                   <input
@@ -136,8 +146,8 @@ export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
                 <label class="fixtureLimitField" data-fixture-limit-field="pan_max">
                   <span class="fixtureLimitFieldLabel">
                     <span>Pan Max</span>
-                    <small data-fixture-limit-percent="pan_max">
-                      {props.formatDmxPercent(props.limitsDraft.pan_max)}
+                    <small data-fixture-limit-degree="pan_max">
+                      {movementLimitDegrees("pan", props.limitsDraft.pan_max)}
                     </small>
                   </span>
                   <input
@@ -154,8 +164,8 @@ export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
                 <label class="fixtureLimitField" data-fixture-limit-field="tilt_min">
                   <span class="fixtureLimitFieldLabel">
                     <span>Tilt Min</span>
-                    <small data-fixture-limit-percent="tilt_min">
-                      {props.formatDmxPercent(props.limitsDraft.tilt_min)}
+                    <small data-fixture-limit-degree="tilt_min">
+                      {movementLimitDegrees("tilt", props.limitsDraft.tilt_min)}
                     </small>
                   </span>
                   <input
@@ -170,8 +180,8 @@ export function FixtureLimitsPanel(props: FixtureLimitsPanelProps) {
                 <label class="fixtureLimitField" data-fixture-limit-field="tilt_max">
                   <span class="fixtureLimitFieldLabel">
                     <span>Tilt Max</span>
-                    <small data-fixture-limit-percent="tilt_max">
-                      {props.formatDmxPercent(props.limitsDraft.tilt_max)}
+                    <small data-fixture-limit-degree="tilt_max">
+                      {movementLimitDegrees("tilt", props.limitsDraft.tilt_max)}
                     </small>
                   </span>
                   <input

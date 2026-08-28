@@ -31,6 +31,10 @@ use protocol::{
 use roxmltree::{Document, Node};
 use serde::Serialize;
 
+use crate::dvc_stage_layout::{
+    fixture_stage_footprint, project_dvc_stage_layout, DvcStageChannel, DvcStageLayoutInput,
+};
+
 const DVC_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const DVC_PATCH_MAX_BYTES: usize = 128 * 1024 * 1024;
 const DVC_FIXTURE_DATA_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -160,11 +164,13 @@ struct DvcPresetBinding {
 
 #[derive(Debug, Clone)]
 struct DvcChannelBinding {
+    control_index: u16,
     attribute: String,
     raw_offsets: Vec<usize>,
     resolution: AttributeResolution,
     raw_channel_index: usize,
     channel_type: u16,
+    stage_beam_indices: Result<Vec<u16>, String>,
     presets: Vec<DvcPresetBinding>,
 }
 
@@ -173,6 +179,7 @@ struct ParsedProfile {
     summary: FixtureProfileSummary,
     physical_channel_count: usize,
     bindings: Vec<DvcChannelBinding>,
+    stage_beam_indices: Result<Vec<u16>, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -414,7 +421,9 @@ fn validate_dvc_root(root: Node<'_, '_>) -> Result<(), String> {
     Ok(())
 }
 
-fn dvc_fixture_patch_beam_positions(fixture: Node<'_, '_>) -> HashMap<u16, DvcPatchCanvasPoint> {
+fn dvc_fixture_patch_beam_positions(
+    fixture: Node<'_, '_>,
+) -> Result<HashMap<u16, DvcPatchCanvasPoint>, String> {
     let mut positions = HashMap::new();
     if let (Some(x), Some(y)) = (
         fixture
@@ -430,25 +439,28 @@ fn dvc_fixture_patch_beam_positions(fixture: Node<'_, '_>) -> HashMap<u16, DvcPa
     // Daslight persists each sub-beam's already transformed, absolute Patch
     // position below the owning fixture. Prefer that authored coordinate over
     // the fixture origin for every explicitly listed beam, including index 0.
+    let mut explicit_indices = HashSet::new();
     for beam in element_children(fixture).filter(|node| node.has_tag_name("BEAM")) {
-        let Some(index) = beam
+        let index = beam
             .attribute("INDEX")
             .and_then(|value| value.parse::<u16>().ok())
-        else {
-            continue;
-        };
-        positions.remove(&index);
-        let (Some(x), Some(y)) = (
-            beam.attribute("POSX")
-                .and_then(|value| value.parse::<i64>().ok()),
-            beam.attribute("POSY")
-                .and_then(|value| value.parse::<i64>().ok()),
-        ) else {
-            continue;
-        };
+            .ok_or_else(|| "Daslight fixture BEAM has an invalid or missing INDEX".to_string())?;
+        if !explicit_indices.insert(index) {
+            return Err(format!(
+                "Daslight fixture contains duplicate BEAM INDEX {index}"
+            ));
+        }
+        let x = beam
+            .attribute("POSX")
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or_else(|| format!("Daslight fixture BEAM INDEX {index} has invalid POSX"))?;
+        let y = beam
+            .attribute("POSY")
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or_else(|| format!("Daslight fixture BEAM INDEX {index} has invalid POSY"))?;
         positions.insert(index, DvcPatchCanvasPoint { x, y });
     }
-    positions
+    Ok(positions)
 }
 
 fn parse_patch(
@@ -495,11 +507,14 @@ fn parse_patch(
                 fixture_node.attribute("NAME"),
                 &format!("Fixture {fixture_id}"),
             );
-            if let Some(size) = parse_f32_attribute(fixture_node, "SIZE")
-                .filter(|size| size.is_finite() && *size > f32::EPSILON)
-            {
+            let fixture_size = parse_f32_attribute(fixture_node, "SIZE")
+                .filter(|size| size.is_finite() && *size > f32::EPSILON);
+            if let Some(size) = fixture_size {
                 fixture_sizes.push(size);
             }
+            let position_x = parse_f32_attribute(fixture_node, "POSX").unwrap_or(0.0);
+            let position_z = parse_f32_attribute(fixture_node, "POSY").unwrap_or(0.0);
+            let yaw = parse_f32_attribute(fixture_node, "ANGLE").unwrap_or(0.0);
             let attribute_values = profile
                 .summary
                 .dmx_modes
@@ -541,7 +556,40 @@ fn parse_patch(
                     .count(),
             )
             .unwrap_or(u16::MAX);
-            let patch_beam_positions = dvc_fixture_patch_beam_positions(fixture_node);
+            let patch_beam_positions = dvc_fixture_patch_beam_positions(fixture_node)?;
+            let ordered_patch_beam_positions = patch_beam_positions
+                .iter()
+                .map(|(beam, point)| (*beam, (point.x, point.y)))
+                .collect::<BTreeMap<_, _>>();
+            let stage_channels = profile
+                .bindings
+                .iter()
+                .map(|binding| DvcStageChannel {
+                    control_index: binding.control_index,
+                    channel_type: binding.channel_type,
+                    beam_indices: binding.stage_beam_indices.clone(),
+                })
+                .collect::<Vec<_>>();
+            let stage_projection = project_dvc_stage_layout(DvcStageLayoutInput {
+                fixture_label: &label,
+                profile_name: &profile.summary.name,
+                fixture_x: position_x,
+                fixture_z: position_z,
+                fixture_yaw_deg: yaw,
+                cell_size: fixture_size.unwrap_or(f32::NAN),
+                profile_beam_indices: profile.stage_beam_indices.clone(),
+                patch_beam_positions: &ordered_patch_beam_positions,
+                channels: &stage_channels,
+            });
+            if stage_projection.layout.is_some() {
+                report
+                    .converted
+                    .add(1, "Exact fixture stage layout", &stage_projection.message);
+            } else if patch_beam_positions.len() > 1 {
+                report
+                    .skipped
+                    .add(1, "Fixture stage layout", &stage_projection.message);
+            }
             fixtures.push(PatchedFixtureSummary {
                 id: fixture_id,
                 label,
@@ -558,17 +606,18 @@ fn parse_patch(
                 address,
                 group_ids,
                 position: Vec3 {
-                    x: parse_f32_attribute(fixture_node, "POSX").unwrap_or(0.0),
+                    x: position_x,
                     y: 0.0,
-                    z: parse_f32_attribute(fixture_node, "POSY").unwrap_or(0.0),
+                    z: position_z,
                 },
                 rotation: Rotation3 {
                     pitch: 0.0,
-                    yaw: parse_f32_attribute(fixture_node, "ANGLE").unwrap_or(0.0),
+                    yaw,
                     roll: 0.0,
                 },
                 geometries: profile.summary.geometries.clone(),
                 controls,
+                stage_layout: stage_projection.layout,
                 attribute_values,
                 limits: protocol::FixtureLimits::default(),
                 highlighted: false,
@@ -622,6 +671,14 @@ fn parse_profile(
         .descendants()
         .find(|node| node.has_tag_name("SSLMODE"))
         .ok_or_else(|| format!("Daslight profile {library_name} has no SSLMODE"))?;
+    let stage_beam_indices = parse_exact_stage_beam_indices(
+        library
+            .descendants()
+            .find(|node| node.has_tag_name("SSLPROPERTIES"))
+            .and_then(|properties| direct_child(properties, "SSLBEAMS")),
+        &format!("Daslight profile {library_name}"),
+        true,
+    );
     let channel_nodes = element_children(mode)
         .filter(|node| node.has_tag_name("SSLCHANNEL"))
         .collect::<Vec<_>>();
@@ -707,6 +764,22 @@ fn parse_profile(
         // profile's SSLPRESETDMXDEFAULT is an editor reference value, so it is
         // intentionally not used as the imported control's idle default.
         let default_value = 0;
+        let control_index = u16::try_from(controls.len()).unwrap_or(u16::MAX);
+        let stage_beam_indices = parse_exact_stage_beam_indices(
+            direct_child(channel, "SSLBEAMS"),
+            &format!("Daslight profile {library_name} channel {channel_name}"),
+            false,
+        )
+        .or_else(|reason| {
+            // A missing channel-level SSLBEAMS element means a global
+            // control. Malformed or empty elements remain invalid and are
+            // not normalized into that global-control meaning.
+            if direct_child(channel, "SSLBEAMS").is_none() {
+                Ok(Vec::new())
+            } else {
+                Err(reason)
+            }
+        });
         controls.push(AttributeControl {
             attribute: attribute.clone(),
             channel_name,
@@ -720,11 +793,13 @@ fn parse_profile(
             functions,
         });
         bindings.push(DvcChannelBinding {
+            control_index,
             attribute,
             raw_offsets,
             resolution,
             raw_channel_index: channel_index,
             channel_type,
+            stage_beam_indices,
             presets,
         });
     }
@@ -773,7 +848,49 @@ fn parse_profile(
         },
         physical_channel_count: channel_nodes.len(),
         bindings,
+        stage_beam_indices,
     })
+}
+
+fn parse_exact_stage_beam_indices(
+    container: Option<Node<'_, '_>>,
+    owner: &str,
+    allow_implicit_order: bool,
+) -> Result<Vec<u16>, String> {
+    let container = container.ok_or_else(|| format!("{owner} has no SSLBEAMS topology"))?;
+    let beam_nodes = element_children(container)
+        .filter(|node| node.has_tag_name("SSLBEAM"))
+        .collect::<Vec<_>>();
+    if beam_nodes.is_empty() {
+        return Err(format!("{owner} SSLBEAMS is empty"));
+    }
+    let mut indices = Vec::with_capacity(beam_nodes.len());
+    let explicit_count = beam_nodes
+        .iter()
+        .filter(|beam| beam.attribute("SSLBEAMINDEX").is_some())
+        .count();
+    if explicit_count != 0 && explicit_count != beam_nodes.len() {
+        return Err(format!(
+            "{owner} mixes explicit and implicit SSLBEAM indices"
+        ));
+    }
+    if explicit_count == 0 && !allow_implicit_order {
+        return Err(format!("{owner} has no explicit SSLBEAMINDEX values"));
+    }
+    for (position, beam) in beam_nodes.into_iter().enumerate() {
+        let index = if let Some(raw) = beam.attribute("SSLBEAMINDEX") {
+            raw.parse::<u16>()
+                .map_err(|_| format!("{owner} has a non-u16 SSLBEAMINDEX"))?
+        } else {
+            u16::try_from(position).map_err(|_| format!("{owner} beam index overflowed"))?
+        };
+        indices.push(index);
+    }
+    indices.sort_unstable();
+    if indices.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(format!("{owner} has duplicate SSLBEAMINDEX values"));
+    }
+    Ok(indices)
 }
 
 fn parse_channel_functions(
@@ -8113,6 +8230,29 @@ fn median_daslight_fixture_size(fixture_sizes: &[f32]) -> f32 {
     }
 }
 
+fn minimum_locked_stage_map() -> StageMapConfig {
+    StageMapConfig {
+        locked: true,
+        min_x: -SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+        max_x: SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+        min_z: -SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+        max_z: SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+    }
+}
+
+fn fail_safe_fixture_layout(fixtures: &mut [PatchedFixtureSummary]) -> StageMapConfig {
+    // Once any imported coordinate is unverifiable, retain fixture identity
+    // but collapse the whole imported layout to the finite origin. This keeps
+    // every persisted transform inside the minimum locked map instead of
+    // leaving a NaN/Inf coordinate behind.
+    for fixture in fixtures {
+        fixture.position.x = 0.0;
+        fixture.position.z = 0.0;
+        fixture.stage_layout = None;
+    }
+    minimum_locked_stage_map()
+}
+
 fn scale_fixture_layout(
     fixtures: &mut [PatchedFixtureSummary],
     fixture_sizes: &[f32],
@@ -8120,44 +8260,122 @@ fn scale_fixture_layout(
     if fixtures.is_empty() {
         return StageMapConfig::default();
     }
-    let min_x = fixtures
+    if fixtures
         .iter()
-        .map(|fixture| fixture.position.x)
+        .any(|fixture| !fixture.position.x.is_finite() || !fixture.position.z.is_finite())
+    {
+        return fail_safe_fixture_layout(fixtures);
+    }
+    let footprints = fixtures
+        .iter()
+        .map(fixture_stage_footprint)
+        .collect::<Option<Vec<_>>>();
+    let Some(footprints) = footprints else {
+        return fail_safe_fixture_layout(fixtures);
+    };
+    let min_x = footprints
+        .iter()
+        .map(|bounds| bounds.min_x)
         .fold(f32::INFINITY, f32::min);
-    let max_x = fixtures
+    let max_x = footprints
         .iter()
-        .map(|fixture| fixture.position.x)
+        .map(|bounds| bounds.max_x)
         .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = fixtures
+    let min_z = footprints
         .iter()
-        .map(|fixture| fixture.position.z)
+        .map(|bounds| bounds.min_z)
         .fold(f32::INFINITY, f32::min);
-    let max_z = fixtures
+    let max_z = footprints
         .iter()
-        .map(|fixture| fixture.position.z)
+        .map(|bounds| bounds.max_z)
         .fold(f32::NEG_INFINITY, f32::max);
     let scale =
         SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE / median_daslight_fixture_size(fixture_sizes);
     let center_x = (min_x + max_x) * 0.5;
     let center_z = (min_z + max_z) * 0.5;
-    let mut layout_half_extent = 0.0_f32;
-    for fixture in fixtures {
-        fixture.position.x = (fixture.position.x - center_x) * scale;
-        fixture.position.z = (fixture.position.z - center_z) * scale;
-        layout_half_extent = layout_half_extent
-            .max(fixture.position.x.abs())
-            .max(fixture.position.z.abs());
+    if !scale.is_finite() || !center_x.is_finite() || !center_z.is_finite() {
+        return fail_safe_fixture_layout(fixtures);
     }
-    // A square locked reference preserves the uniform X/Z transform and adds
-    // one standard glyph of breathing room beyond the outer fixture centers.
-    let stage_half_extent = (layout_half_extent + SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE)
-        .max(SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE);
+
+    let scaled_positions = fixtures
+        .iter()
+        .map(|fixture| {
+            let x = (fixture.position.x - center_x) * scale;
+            let z = (fixture.position.z - center_z) * scale;
+            (x, z)
+        })
+        .collect::<Vec<_>>();
+    if scaled_positions
+        .iter()
+        .any(|(x, z)| !x.is_finite() || !z.is_finite())
+    {
+        return fail_safe_fixture_layout(fixtures);
+    }
+    for (fixture, (x, z)) in fixtures.iter_mut().zip(scaled_positions) {
+        fixture.position.x = x;
+        fixture.position.z = z;
+        if let Some(layout) = fixture.stage_layout.as_mut() {
+            layout.cell_width *= scale;
+            layout.cell_depth *= scale;
+            for cell in &mut layout.cells {
+                cell.offset_x *= scale;
+                cell.offset_z *= scale;
+            }
+        }
+    }
+
+    let scaled_footprints = fixtures
+        .iter()
+        .map(fixture_stage_footprint)
+        .collect::<Option<Vec<_>>>();
+    let Some(scaled_footprints) = scaled_footprints else {
+        return fail_safe_fixture_layout(fixtures);
+    };
+    let (scaled_min_x, scaled_max_x) = scaled_footprints
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), bounds| {
+            (min.min(bounds.min_x), max.max(bounds.max_x))
+        });
+    let (scaled_min_z, scaled_max_z) = scaled_footprints
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), bounds| {
+            (min.min(bounds.min_z), max.max(bounds.max_z))
+        });
+    let axis_bounds = |min: f32, max: f32| {
+        if !min.is_finite() || !max.is_finite() {
+            return None;
+        }
+        let span = max - min;
+        if max <= min || span <= f32::EPSILON {
+            return Some((
+                -SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+                SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+            ));
+        }
+        if !span.is_finite() {
+            return None;
+        }
+        let bounds = (
+            min - SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+            max + SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE,
+        );
+        (bounds.0.is_finite() && bounds.1.is_finite()).then_some(bounds)
+    };
+    let Some((min_x, max_x)) = axis_bounds(scaled_min_x, scaled_max_x) else {
+        return fail_safe_fixture_layout(fixtures);
+    };
+    let Some((min_z, max_z)) = axis_bounds(scaled_min_z, scaled_max_z) else {
+        return fail_safe_fixture_layout(fixtures);
+    };
+    if !min_x.is_finite() || !max_x.is_finite() || !min_z.is_finite() || !max_z.is_finite() {
+        return fail_safe_fixture_layout(fixtures);
+    }
     StageMapConfig {
         locked: true,
-        min_x: -stage_half_extent,
-        max_x: stage_half_extent,
-        min_z: -stage_half_extent,
-        max_z: stage_half_extent,
+        min_x,
+        max_x,
+        min_z,
+        max_z,
     }
 }
 
@@ -8686,6 +8904,48 @@ mod tests {
         )
     }
 
+    fn synthetic_exact_stage_cells_dvc() -> String {
+        let profile_beams = (0..12)
+            .map(|beam| {
+                format!(
+                    r#"<SSLBEAM SSLBEAMPOSX="{}" SSLBEAMPOSY="{}"/>"#,
+                    (beam / 3) * 100,
+                    (beam % 3) * 100,
+                )
+            })
+            .collect::<String>();
+        let mut channels = String::from(
+            r#"<SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer"><SSLPRESETS/></SSLCHANNEL>"#,
+        );
+        for group in 0..4 {
+            let beams = (group * 3..group * 3 + 3)
+                .map(|beam| format!(r#"<SSLBEAM SSLBEAMINDEX="{beam}"/>"#))
+                .collect::<String>();
+            for (channel_type, name) in [(25, "Red"), (26, "Green"), (27, "Blue")] {
+                channels.push_str(&format!(
+                    r#"<SSLCHANNEL SSLCHANNELTYPE="{channel_type}" SSLCHANNELNAME="{name} {}"><SSLBEAMS SSLNBBEAM="3">{beams}</SSLBEAMS><SSLPRESETS/></SSLCHANNEL>"#,
+                    group + 1,
+                ));
+            }
+        }
+        let patch_beams = (0..12)
+            .map(|beam| {
+                format!(
+                    r#"<BEAM INDEX="{beam}" POSX="{}" POSY="{}"/>"#,
+                    1_000 + (beam / 3) * 30,
+                    2_000 + (beam % 3) * 30,
+                )
+            })
+            .collect::<String>();
+        let patch = format!(
+            r#"<PATCH NBFIXTURE="1"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-cells" SSLNAME="Test/960 sound waves strongpoint.ssl2"><SSLPROPERTIES><SSLBEAMS SSLNBBEAM="12">{profile_beams}</SSLBEAMS></SSLPROPERTIES><SSLMODES><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="13">{channels}</SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-cells" NAME="Strongpoint" ADDRESS="1" UNIVERS="1" SIZE="30" POSX="1000" POSY="2000" ANGLE="0">{patch_beams}</FIXTURE></FIXTURES></PATCH>"#,
+        );
+        format!(
+            r#"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-cells" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES/><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"#,
+            qcompress(patch.as_bytes()),
+        )
+    }
+
     fn synthetic_fx_dvc() -> String {
         let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Dimmer 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Dimmer 2" ADDRESS="2" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-3" NAME="Dimmer 3" ADDRESS="3" UNIVERS="1" POSX="2" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
         format!(
@@ -8979,6 +9239,17 @@ mod tests {
     }
 
     #[test]
+    fn dvc_patch_duplicate_beam_index_is_rejected_instead_of_last_write_wins() {
+        let document = Document::parse(
+            r#"<FIXTURE POSX="0" POSY="0"><BEAM INDEX="0" POSX="0" POSY="0"/><BEAM INDEX="0" POSX="30" POSY="0"/></FIXTURE>"#,
+        )
+        .unwrap();
+        assert!(dvc_fixture_patch_beam_positions(document.root_element())
+            .unwrap_err()
+            .contains("duplicate BEAM INDEX 0"));
+    }
+
+    #[test]
     fn dvc_synthetic_project_imports_patch_group_cues_and_super_scene() {
         let source = synthetic_dvc().replacen(
             r#"SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1""#,
@@ -9100,10 +9371,302 @@ mod tests {
                 locked: true,
                 min_x: -30.0,
                 max_x: 30.0,
-                min_z: -30.0,
-                max_z: 30.0,
+                min_z: -15.0,
+                max_z: 15.0,
             }
         );
+    }
+
+    #[test]
+    fn dvc_import_stage_map_bounds_are_axis_independent_and_fail_safe() {
+        let imported =
+            import_bytes(synthetic_layout_dvc().as_bytes(), "synthetic-layout.dvc").unwrap();
+        let assert_bounds = |actual: StageMapConfig, expected: StageMapConfig| {
+            assert_eq!(actual.locked, expected.locked);
+            assert!((actual.min_x - expected.min_x).abs() < 0.000_01);
+            assert!((actual.max_x - expected.max_x).abs() < 0.000_01);
+            assert!((actual.min_z - expected.min_z).abs() < 0.000_01);
+            assert!((actual.max_z - expected.max_z).abs() < 0.000_01);
+        };
+        let mut vertical = imported.project.snapshot.fixtures.clone();
+        for (fixture, (x, z)) in
+            vertical
+                .iter_mut()
+                .zip([(10.0, -100.0), (10.0, 0.0), (10.0, 100.0)])
+        {
+            fixture.position.x = x;
+            fixture.position.z = z;
+        }
+        let vertical_map = scale_fixture_layout(&mut vertical, &[30.0, 30.0, 30.0]);
+        assert_bounds(
+            vertical_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -5.0,
+                max_x: 5.0,
+                min_z: -21.666_666,
+                max_z: 21.666_666,
+            },
+        );
+
+        let mut horizontal = imported.project.snapshot.fixtures.clone();
+        for (fixture, (x, z)) in
+            horizontal
+                .iter_mut()
+                .zip([(-100.0, 10.0), (0.0, 10.0), (100.0, 10.0)])
+        {
+            fixture.position.x = x;
+            fixture.position.z = z;
+        }
+        let horizontal_map = scale_fixture_layout(&mut horizontal, &[30.0, 30.0, 30.0]);
+        assert_bounds(
+            horizontal_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -21.666_666,
+                max_x: 21.666_666,
+                min_z: -5.0,
+                max_z: 5.0,
+            },
+        );
+
+        let mut zero = imported.project.snapshot.fixtures.clone();
+        zero.iter_mut().for_each(|fixture| {
+            fixture.position.x = 0.0;
+            fixture.position.z = 0.0;
+        });
+        let zero_map = scale_fixture_layout(&mut zero, &[30.0, 30.0, 30.0]);
+        assert_bounds(
+            zero_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -5.0,
+                max_x: 5.0,
+                min_z: -5.0,
+                max_z: 5.0,
+            },
+        );
+        assert!(zero
+            .iter()
+            .all(|fixture| fixture.position.x == 0.0 && fixture.position.z == 0.0));
+
+        let mut single = imported.project.snapshot.fixtures[..1].to_vec();
+        single[0].position = Vec3 {
+            x: 123.0,
+            y: 0.0,
+            z: -456.0,
+        };
+        assert_eq!(
+            scale_fixture_layout(&mut single, &[30.0]),
+            StageMapConfig {
+                locked: true,
+                min_x: -5.0,
+                max_x: 5.0,
+                min_z: -5.0,
+                max_z: 5.0,
+            }
+        );
+        assert_eq!(single[0].position.x, 0.0);
+        assert_eq!(single[0].position.z, 0.0);
+
+        let mut nonfinite = imported.project.snapshot.fixtures[..2].to_vec();
+        nonfinite[0].position.x = f32::NAN;
+        nonfinite[1].position.z = f32::INFINITY;
+        let nonfinite_map = scale_fixture_layout(&mut nonfinite, &[30.0, 30.0]);
+        assert_eq!(
+            nonfinite_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -5.0,
+                max_x: 5.0,
+                min_z: -5.0,
+                max_z: 5.0,
+            }
+        );
+        assert!(nonfinite_map.min_x.is_finite());
+        assert!(nonfinite_map.max_x.is_finite());
+        assert!(nonfinite_map.min_z.is_finite());
+        assert!(nonfinite_map.max_z.is_finite());
+        assert!(nonfinite
+            .iter()
+            .all(|fixture| fixture.position.x == 0.0 && fixture.position.z == 0.0));
+
+        let mut overflow = imported.project.snapshot.fixtures.clone();
+        for (fixture, (x, z)) in
+            overflow
+                .iter_mut()
+                .zip([(3.4e38_f32, 0.0_f32), (0.0, 1.0), (-3.4e38_f32, -1.0)])
+        {
+            fixture.position.x = x;
+            fixture.position.z = z;
+        }
+        assert!(overflow
+            .iter()
+            .all(|fixture| { fixture.position.x.is_finite() && fixture.position.z.is_finite() }));
+        let overflow_map = scale_fixture_layout(&mut overflow, &[5.0, 5.0, 5.0]);
+        assert_eq!(
+            overflow_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -5.0,
+                max_x: 5.0,
+                min_z: -5.0,
+                max_z: 5.0,
+            }
+        );
+        assert!(overflow.iter().all(|fixture| {
+            [fixture.position.x, fixture.position.z]
+                .into_iter()
+                .all(|value| value.is_finite())
+                && fixture.position.x >= overflow_map.min_x
+                && fixture.position.x <= overflow_map.max_x
+                && fixture.position.z >= overflow_map.min_z
+                && fixture.position.z <= overflow_map.max_z
+        }));
+
+        assert_eq!(
+            scale_fixture_layout(&mut [], &[]),
+            StageMapConfig::default(),
+            "an empty import keeps the existing default map instead of inventing a locked map"
+        );
+    }
+
+    #[test]
+    fn dvc_exact_stage_cells_import_physical_and_logical_topology_without_inference() {
+        let outcome = import_bytes(
+            synthetic_exact_stage_cells_dvc().as_bytes(),
+            "synthetic-exact-stage-cells.dvc",
+        )
+        .unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let fixture = &outcome.project.snapshot.fixtures[0];
+        let layout = fixture.stage_layout.as_ref().unwrap();
+        assert_eq!(layout.version, 1);
+        assert_eq!(layout.cells.len(), 4);
+        assert_eq!(layout.logical_segments.len(), 4);
+        assert_eq!(layout.global_dimmer_control_index, Some(0));
+        assert_eq!(layout.global_strobe_control_index, None);
+        assert!((layout.cell_width - 5.0).abs() < 0.000_01);
+        assert!((layout.cell_depth - 5.0).abs() < 0.000_01);
+        assert!((layout.cells[1].offset_x - 5.0).abs() < 0.000_01);
+        assert!((layout.cells[0].offset_z - 5.0).abs() < 0.000_01);
+        assert_eq!(layout.cells[3].logical_segment_index, Some(3));
+        assert_eq!(fixture.position.x, -7.5);
+        assert_eq!(fixture.position.z, -5.0);
+        assert_eq!(
+            outcome.project.snapshot.stage_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -15.0,
+                max_x: 15.0,
+                min_z: -7.5,
+                max_z: 7.5,
+            }
+        );
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "Exact fixture stage layout"
+                && detail
+                    .message
+                    .contains("three-row Strongpoint duplication collapsed to four")
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires SYNDOCAL_DVC_STAGE_ACCEPTANCE_PATH pointing to the operator-owned show"]
+    fn dvc_external_show_stage_layout_acceptance_is_exact_and_fail_closed() {
+        let path = std::env::var_os("SYNDOCAL_DVC_STAGE_ACCEPTANCE_PATH")
+            .map(std::path::PathBuf::from)
+            .expect("SYNDOCAL_DVC_STAGE_ACCEPTANCE_PATH is required");
+        let outcome = import_path(&path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let fixtures = &outcome.project.snapshot.fixtures;
+        let mega_bars = fixtures
+            .iter()
+            .filter(|fixture| fixture.label.to_ascii_lowercase().contains("mega bar rgba"))
+            .collect::<Vec<_>>();
+        let strongpoints = fixtures
+            .iter()
+            .filter(|fixture| {
+                fixture
+                    .label
+                    .to_ascii_lowercase()
+                    .contains("sound waves strongpoint")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !mega_bars.is_empty(),
+            "show contains no Mega Bar RGBA fixture"
+        );
+        assert!(
+            !strongpoints.is_empty(),
+            "show contains no Strongpoint fixture"
+        );
+        for fixture in mega_bars {
+            let layout = fixture.stage_layout.as_ref().unwrap();
+            assert_eq!(layout.cells.len(), 8);
+            assert_eq!(layout.logical_segments.len(), 8);
+            assert!(layout.global_dimmer_control_index.is_some());
+            assert!(layout.global_strobe_control_index.is_some());
+            assert_ne!(
+                layout.global_dimmer_control_index,
+                layout.global_strobe_control_index
+            );
+            assert_eq!(
+                layout
+                    .cells
+                    .iter()
+                    .map(|cell| cell.logical_segment_index)
+                    .collect::<Vec<_>>(),
+                (0..8).map(Some).collect::<Vec<_>>()
+            );
+            for segment in &layout.logical_segments {
+                let mut roles = segment
+                    .color_controls
+                    .iter()
+                    .map(|binding| binding.role.clone())
+                    .collect::<Vec<_>>();
+                roles.sort();
+                assert_eq!(
+                    roles,
+                    vec![
+                        protocol::FixtureStageColorRole::Red,
+                        protocol::FixtureStageColorRole::Green,
+                        protocol::FixtureStageColorRole::Blue,
+                        protocol::FixtureStageColorRole::Amber,
+                    ]
+                );
+            }
+        }
+        for fixture in strongpoints {
+            let layout = fixture.stage_layout.as_ref().unwrap();
+            assert_eq!(layout.cells.len(), 4);
+            assert_eq!(layout.logical_segments.len(), 4);
+            assert!(layout.global_dimmer_control_index.is_some());
+            for segment in &layout.logical_segments {
+                let mut roles = segment
+                    .color_controls
+                    .iter()
+                    .map(|binding| binding.role.clone())
+                    .collect::<Vec<_>>();
+                roles.sort();
+                assert_eq!(
+                    roles,
+                    vec![
+                        protocol::FixtureStageColorRole::Red,
+                        protocol::FixtureStageColorRole::Green,
+                        protocol::FixtureStageColorRole::Blue,
+                    ]
+                );
+            }
+        }
+        let wristbands = fixtures
+            .iter()
+            .filter(|fixture| fixture.label.to_ascii_lowercase().contains("wristband"))
+            .collect::<Vec<_>>();
+        assert!(!wristbands.is_empty(), "show contains no wristband fixture");
+        assert!(wristbands
+            .iter()
+            .all(|fixture| fixture.stage_layout.is_none()));
     }
 
     #[test]
@@ -14526,8 +15089,8 @@ mod tests {
         assert!(stage_map.locked);
         assert!((stage_map.min_x - -177.666_67).abs() < 0.001);
         assert!((stage_map.max_x - 177.666_67).abs() < 0.001);
-        assert!((stage_map.min_z - -177.666_67).abs() < 0.001);
-        assert!((stage_map.max_z - 177.666_67).abs() < 0.001);
+        assert!((stage_map.min_z - -100.833_336).abs() < 0.001);
+        assert!((stage_map.max_z - 100.833_336).abs() < 0.001);
         let chaser_count = outcome
             .project
             .snapshot

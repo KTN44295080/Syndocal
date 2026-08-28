@@ -1668,6 +1668,11 @@ pub const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID: &str =
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
+/// The only show-specific serial DMX mutation. No route fields travel on the
+/// wire: the native control plane may enable only its already-loaded disabled
+/// show route after revalidating the authored route and FTDI device identity.
+pub const OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID: &str =
+    "syndocal.output.show_serial_dmx_route.enable.v1";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -2284,6 +2289,9 @@ impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputControlActionV2 {
     EnableOutput,
+    EnableShowSerialDmxRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2332,6 +2340,9 @@ pub enum OutputControlActionV2 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum OutputControlActionV2Wire {
     EnableOutput {},
+    EnableShowSerialDmxRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2380,6 +2391,9 @@ impl OutputControlActionV2 {
     pub const fn operation_id(&self) -> &'static str {
         match self {
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
+            Self::EnableShowSerialDmxRoute { .. } => {
+                OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+            }
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -2419,7 +2433,8 @@ impl OutputControlActionV2 {
         }
         match self {
             Self::EnableOutput => {}
-            Self::Arm { lease, .. }
+            Self::EnableShowSerialDmxRoute { lease }
+            | Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
             | Self::RenewLease { lease }
             | Self::RecoverLease { lease }
@@ -2459,6 +2474,11 @@ impl OutputControlActionV2 {
     fn wire(&self) -> OutputControlActionV2Wire {
         match self {
             Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
+            Self::EnableShowSerialDmxRoute { lease } => {
+                OutputControlActionV2Wire::EnableShowSerialDmxRoute {
+                    lease: lease.clone(),
+                }
+            }
             Self::Arm { role, lease } => OutputControlActionV2Wire::Arm {
                 role: *role,
                 lease: lease.clone(),
@@ -2525,6 +2545,13 @@ impl OutputControlActionV2 {
         match self {
             Self::EnableOutput => {
                 output.push(9);
+            }
+            Self::EnableShowSerialDmxRoute { lease } => {
+                // 0..=11 are frozen. This action intentionally carries only
+                // the exact active lease; it cannot smuggle route edits.
+                output.push(12);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
             }
             Self::Arm { role, lease } => {
                 output.push(0);
@@ -2638,6 +2665,9 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
         let wire = OutputControlActionV2Wire::deserialize(deserializer)?;
         let value = match wire {
             OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
+            OutputControlActionV2Wire::EnableShowSerialDmxRoute { lease } => {
+                Self::EnableShowSerialDmxRoute { lease }
+            }
             OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
             OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
             OutputControlActionV2Wire::TakeOverStandby {
@@ -3088,6 +3118,9 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID => {
+                OutputLeaseReceiptOutcomeV2::Authorized
+            }
             OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
@@ -3245,6 +3278,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3266,12 +3300,27 @@ impl OutputControlReceiptV2 {
             OutputControlReceiptOutcomeV2::NoOp if self.fence_before != self.fence_after => {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
-            // Physical live-window mutations intentionally leave the
-            // persisted/project/output-ownership fence unchanged.  Their
-            // durable receipt/audit identity is still authoritative.
+            OutputControlReceiptOutcomeV2::Applied
+                if self.fence_before != self.fence_after
+                    && matches!(
+                        self.operation_id.as_str(),
+                        OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                    ) =>
+            {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+            // Physical display-shell and pre-authored show-route activation
+            // intentionally leave the persisted/project/output-ownership
+            // fence unchanged. Their durable receipt/audit identity is still
+            // authoritative.
             OutputControlReceiptOutcomeV2::Applied
                 if self.fence_before == self.fence_after
-                    && self.operation_id != OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =>
+                    && !matches!(
+                        self.operation_id.as_str(),
+                        OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                    ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
@@ -3353,6 +3402,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -4211,6 +4261,28 @@ mod tests {
             serde_json::from_value::<OutputControlResponseV2>(response_json.clone()).unwrap(),
             response
         );
+        let physical_route_receipt = OutputControlReceiptV2 {
+            operation_id: OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID.to_string(),
+            request_id: 26,
+            shape_sha256: hash('f'),
+            argument_fingerprint: hash('a'),
+            audit_sequence: 2,
+            fence_before: output_fence(),
+            fence_after: output_fence(),
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: match response.clone() {
+                OutputControlResponseV2::Receipt(receipt) => receipt.lease_result,
+                OutputControlResponseV2::Rejected(_) => unreachable!(),
+            },
+        };
+        assert_eq!(
+            physical_route_receipt.validate(),
+            Ok(()),
+            "the physical route receipt keeps the already-authorized lease and exact fence"
+        );
+        let mut forged_physical_route_fence = physical_route_receipt.clone();
+        forged_physical_route_fence.fence_after.output_generation += 1;
+        assert!(forged_physical_route_fence.validate().is_err());
         let mut takeover_orphan = match response.clone() {
             OutputControlResponseV2::Receipt(receipt) => receipt,
             OutputControlResponseV2::Rejected(_) => unreachable!(),
@@ -4338,6 +4410,33 @@ mod tests {
         enable.append_canonical_bytes(&mut enable_shape).unwrap();
         assert_eq!(enable_shape, vec![9]);
         let authority = lease_authority();
+        let show_route_enable = OutputControlActionV2::EnableShowSerialDmxRoute {
+            lease: authority.clone(),
+        };
+        let mut show_route_shape = Vec::new();
+        show_route_enable
+            .append_canonical_bytes(&mut show_route_shape)
+            .unwrap();
+        assert_eq!(
+            show_route_enable.operation_id(),
+            OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+        );
+        assert_eq!(show_route_shape.first(), Some(&12));
+        let show_route_json = serde_json::to_value(&show_route_enable).unwrap();
+        assert_eq!(
+            show_route_json,
+            serde_json::json!({
+                "kind": "enable_show_serial_dmx_route",
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            })
+        );
+        let mut forged_show_route_json = show_route_json.clone();
+        forged_show_route_json["serial_port"] = serde_json::json!("COM4");
+        assert!(serde_json::from_value::<OutputControlActionV2>(forged_show_route_json).is_err());
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(show_route_json).unwrap(),
+            show_route_enable
+        );
         let windows_device_label = DisplayOutputSpecV2 {
             label: r"\\.\DISPLAY2".to_string(),
             monitor_identity: "a".repeat(64),

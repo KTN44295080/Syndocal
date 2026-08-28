@@ -18,24 +18,15 @@ from the initial list.
 
 This section supersedes the older alpha and rb-output wording below for current
 execution only; the older entries remain historical provenance. The current
-KDMX execution authority is the source-only `1.2.0-alpha.26` checkpoint on
-`codex/syndocal-v1.2`, carrying the current App structural split and
-synchronized product metadata. Alpha.26 native build, artifact identity,
-launch, and native UI acceptance are unbuilt/unverified. The running alpha.25
-DJ session is preserved as an operational baseline only and is not alpha.26
-evidence. The latest observation had Deck 1 playing `More One Night × 動く、動く
-(Agate Trance&Makina bootleg)`, empty Artist, present Content ID, position
-revision `149152`, BPM `140`, and `isPlaying=true`; the DJ Agent sent
-`DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c`, but delivery was
-rejected, leaving FOH `owner— / playing No / track—`. The temporary track had no
-Timeline mapping, so the result is fail-closed. Computer Use reproduced the
-Timeline Start dropdown returning to its placeholder after selecting Timeline
-1 (UI remount bug; a separate Luna fix is in progress). This is not HW-4
-end-to-end acceptance; HW-4 remains exactly `0/12`. DJ-PC screenshot evidence
-is `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`,
-`218629` bytes, SHA-256
-`A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
-LastWrite `2026-08-28 07:10:32 JST`.
+KDMX execution authority is the dirty `1.2.0-alpha.27` source/native checkpoint
+on `codex/syndocal-v1.2`; it is not yet a reproducible committed checkpoint.
+The exact native artifact is `target/release/syndocal.exe`, `60,058,112` bytes,
+SHA-256
+`4984A2F1E7224A00FDBBF21E6D4D504F115457028605CB7A14A781412EA6BDCA`.
+PID `71672` is responsive with one maximized `Syndocal` window. The DJ Link
+panel and OS TCP table independently show an established peer at
+`192.168.50.2`; this proves transport connectivity only, not HELLO/ACK,
+authoritative Timeline snapshot, or HW-4 acceptance.
 
 Historical alpha.25 native evidence remains immutable and is not promoted to
 alpha.26: the exact source/native checkpoint was
@@ -66,20 +57,21 @@ descendant `e4c02f8e2c9013bdb735b2b785f6c75599c0a950`
 `63016` was responsive. It does not make the saved show project, its mappings,
 or any physical acceptance authoritative.
 
-The sole current DJ-PC peer checkout is controlled source version `1.1.9` at
-pushed, upstream-equal commit `c22acaa265cbbc4936ab3af5b092b59d5d543f63`,
-strict adapter `syndocal-envelope-v3`. Its exact release implementation
-provenance is `b03d66a87b8d9dcdedfbd9b5c395bda7df7e0eec`; `c22acaa` is the
-docs/evidence-recorder descendant checkout authority. The v1.1.6 and earlier
-peer entries below are historical only and must not be deployed for current
-acceptance.
+The latest committed DJ-PC peer checkpoint recorded by the final-show handoff is
+controlled source version `1.1.10` at pushed commit
+`4e26da201fef2ff204c28c7041b368e7283faebe`, strict adapter
+`syndocal-envelope-v3`. A tested v1.1.11 config-upgrader remains uncommitted and
+must not replace the connected runtime before independent review and a separate
+DJ-PC deployment checkpoint. The v1.1.9 and earlier entries below are
+historical only and must not be deployed for current acceptance.
 
-The current read-only target-DJ-PC status is Agent and Syndocal `connected`,
-`stateSync=sent`, generation `72`, but the Timeline snapshot is not ready because
-`project_mapping_not_loaded` was reported for `Untitled.sdc`. DJ TCP has
-re-established the `.50.2` peer, but this is not authoritative `running` state
-and authorizes no show operation. HW-4 remains exactly `0/12`; the actual saved
-show project and mapping remain unverified.
+The current native project is
+`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha4.sdc`. Native load
+reported 12 embedded profiles, 2 MIDI mappings, and 1 DJ Link mapping; the DJ
+Link panel shows the exact `人生オーバー` selector, Timeline 1, Deck 1 fallback,
+and once-per-play-session policy while transport remains connected. No active
+track or authoritative Timeline state was present during this readback, so
+HELLO/ACK, physical pedal, reconnect, and serial DMX acceptance remain open.
 
 Historical alpha.21 evidence is preserved, not promoted: at
 `2026-08-28T02:22:13.3046110+09:00`, a read-only FOH observation found one
@@ -94,14 +86,16 @@ play session, pedal owner, or owner Deck. The redacted record is
 `qa/artifacts/dj-link-hw4/2026-08-28-foh-live-baseline.json`; it advances no
 HW-4 row.
 
-The exact alpha.15 imported file
-`target/qa/dsf2026-native-alpha15/DSF2026-imported-alpha15.sdc` remains the
-authoritative import/save/reload artifact, but the current read-only show
-structural preflight correctly exits `1`: it has no `dj_track_triggers` and
-only one Timeline Bank entry, so the mapped source/destination IDs, adjacency,
-Follow, one-bar transition, destination first-measure hold, and source A-B loop
-cannot be accepted. This is the precise authored-show blocker; the green
-`qa/specimens/show-structural-preflight.sdc` fixture does not substitute for it.
+The alpha.15 imported file is retired as a current authoring base and remains
+historical evidence only. The approved import/save/reload base is now
+`target/qa/dsf2026-native-alpha27/DSF2026-imported-alpha27.sdc`, `1,079,564`
+bytes, SHA-256
+`B21165A70A41A4036153359E579E1433C2739EC1C3EDCC0C46B94F513238DFB1`.
+Only the pinned authoring tool may promote those bytes into a show file. Its
+current output `DSF2026-show-alpha4.sdc` passed the structural preflight and was
+read back by the exact alpha.27 native executable; the ignored machine-local
+base/output artifacts are not portable source evidence and do not replace the
+required committed checkpoint or hardware acceptance.
 
 Read-only display inventory at `2026-08-28T02:32:15.5619779+09:00` found five
 active Windows displays, including the required `1920x1080` operator geometry,

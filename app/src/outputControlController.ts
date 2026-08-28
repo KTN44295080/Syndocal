@@ -15,6 +15,8 @@ export const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =
 export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
   "syndocal.output.video.composition.assign.v2";
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
+export const OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID =
+  "syndocal.output.show_serial_dmx_route.enable.v1";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
 export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v2";
 export const OUTPUT_LEASE_RECOVER_OPERATION_ID = "syndocal.output.lease.recover.v2";
@@ -111,9 +113,15 @@ export type OutputVideoCompositionAssignmentAction = {
 };
 
 export type OutputEnableAction = { kind: "enable_output" };
+/** The sole staged show route activation. It has no mutable route fields. */
+export type OutputShowSerialDmxRouteEnableAction = {
+  kind: "enable_show_serial_dmx_route";
+  lease: OutputLeaseAuthority;
+};
 
 export type OutputControlAction =
   | OutputEnableAction
+  | OutputShowSerialDmxRouteEnableAction
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
   | {
@@ -357,6 +365,7 @@ const allocateRequestId = (): number => {
 const operationIdForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
     case "enable_output": return OUTPUT_ENABLE_OPERATION_ID;
+    case "enable_show_serial_dmx_route": return OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID;
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
@@ -373,6 +382,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
 
 type OutputControlInvokeCommand =
   | "enable_output_control_v2"
+  | "enable_show_serial_dmx_route_v1"
   | "arm_output_control_v2"
   | "release_blackout_output_control_v2"
   | "take_over_output_control_v2"
@@ -388,6 +398,7 @@ type OutputControlInvokeCommand =
 const commandForAction = (action: OutputControlOperationAction): OutputControlInvokeCommand => {
   switch (action.kind) {
     case "enable_output": return "enable_output_control_v2";
+    case "enable_show_serial_dmx_route": return "enable_show_serial_dmx_route_v1";
     case "arm": return "arm_output_control_v2";
     case "release_blackout": return "release_blackout_output_control_v2";
     case "take_over_standby": return "take_over_output_control_v2";
@@ -612,6 +623,13 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind"])) throw new Error("Output enable action was invalid; nothing was applied.");
     return;
   }
+  if (action.kind === "enable_show_serial_dmx_route") {
+    if (!hasExactKeys(record, ["kind", "lease"])) {
+      throw new Error("Show serial DMX route action was invalid; nothing was applied.");
+    }
+    assertLeaseAuthority(action.lease, "Show serial DMX route lease was invalid; nothing was applied.");
+    return;
+  }
   if (action.kind === "acquire_lease") {
     if (!hasExactKeys(record, ["kind", "role"]) || !["lighting", "video", "both"].includes(action.role)) {
       throw new Error("Output lease acquire action was invalid; nothing was applied.");
@@ -722,6 +740,10 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
         && (beforeGeneration === null || afterGeneration === null || afterGeneration <= beforeGeneration
           || beforePhase !== "held_orphaned" || !sameResources(beforeResources, ["lighting", "video"]))) throw new Error(errorMessage);
       break;
+    case "enable_show_serial_dmx_route":
+      if (outcome !== "authorized" || phase !== "held_active"
+        || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+      break;
     case "arm":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
       break;
@@ -810,14 +832,16 @@ const assertResponse = (
   const fenceBefore = assertFence(result.fence_before, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceAfter = assertFence(result.fence_after, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceUnchanged = fencesEqual(fenceBefore, fenceAfter);
-  const physicalWindowAction = action.kind === "set_display_window_open";
+  const fenceUnchangedPhysicalAction = action.kind === "set_display_window_open"
+    || action.kind === "enable_show_serial_dmx_route";
   if (!fencesEqual(fenceBefore, expectedFence)
     || result.outcome === "no_op" && !fenceUnchanged
     // Ordinary project/output-control mutations must advance their fence on
-    // Applied. The physical Display shell is deliberately outside that
-    // persisted fence, so both Applied and NoOp retain the same fence.
-    || result.outcome === "applied" && !physicalWindowAction && fenceUnchanged
-    || physicalWindowAction && !fenceUnchanged) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
+    // Applied. The physical Display shell and the already-authored COM3
+    // route activation are deliberately outside that persisted fence, so
+    // both Applied and NoOp retain the same fence.
+    || result.outcome === "applied" && !fenceUnchangedPhysicalAction && fenceUnchanged
+    || fenceUnchangedPhysicalAction && !fenceUnchanged) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
   return {
     operation_id: operationId,
     request_id: requestId,
@@ -838,6 +862,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
   if (selected.length !== 1 || selected[0].authority.generation !== action.lease.generation
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
+    || action.kind === "enable_show_serial_dmx_route" && selected[0].status !== "held_active"
     || action.kind === "take_over_standby" && selected[0].status !== "held_active"
     || action.kind === "add_display"
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
@@ -854,6 +879,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
+    || action.kind === "enable_show_serial_dmx_route"
     || action.kind === "assign_video_output_composition") {
     const expectedResources = ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");

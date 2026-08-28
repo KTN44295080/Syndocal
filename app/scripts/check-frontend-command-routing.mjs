@@ -332,12 +332,14 @@ const backendRendererMutations = rustClassification(
 // authority routes intentionally advanced the used-by-frontend manifest from
 // 417 to 422 after the retired address-only LAN picker route was removed. The
 // Scene-create clean break then removes two obsolete commands and adds one
-// versioned replacement: 421 manifest routes, 128 renderer-ticketed and 31
+// versioned replacement. The later local-only show-serial route, DJ return,
+// and two machine-local USB-DMX selection/status routes bring this to 425
+// manifest routes, with 128 renderer-ticketed and 31
 // backend-authoritative project mutations. The later R4 video-output
 // composition assignment replaces the retired direct route one-for-one and
 // remains outside both generic project-mutation classifiers; the machine-local
 // DJ authority routes are neither category.
-assert.equal(manifest.length, 421, "frontend Tauri manifest count drifted");
+assert.equal(manifest.length, 425, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 128, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

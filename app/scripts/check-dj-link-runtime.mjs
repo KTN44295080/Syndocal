@@ -59,13 +59,13 @@ assert.ok(remoteWorkbenchEnd > remoteWorkbenchStart, "the shared remote workbenc
 const remoteWorkbenchSurface = panel.slice(remoteWorkbenchStart, remoteWorkbenchEnd);
 assert.match(
   remoteWorkbenchSurface,
-  /<Show\s+when=\{props\.immediate\}\s+fallback=\{\(\s*<details class="ioDisclosure" data-io-disclosure=\{props\.disclosureId\} data-io-default-surface=\{props\.defaultSurface\}>[\s\S]*?\{props\.children\}[\s\S]*?<\/details>\s*\)\}\s*>\s*<div class=\{`ioDirectSurface\$\{bodyClass\(\)\}`\} data-io-default-surface=\{props\.defaultSurface\}>\s*\{props\.children\}\s*<\/div>\s*<\/Show>/,
-  "the shared workbench must bind immediate=true to direct content and immediate=false to the exact legacy disclosure",
+  /<Show\s+when=\{props\.immediate\}\s+fallback=\{\(\s*<details class="ioDisclosure" data-io-disclosure=\{props\.disclosureId\} data-io-default-surface=\{props\.defaultSurface\}(?: open=\{props\.defaultOpen\})?>[\s\S]*?\{props\.children\}[\s\S]*?<\/details>\s*\)\}\s*>\s*<div class=\{`ioDirectSurface\$\{bodyClass\(\)\}`\} data-io-default-surface=\{props\.defaultSurface\}>\s*\{props\.children\}\s*<\/div>\s*<\/Show>/,
+  "the shared workbench must bind immediate=true to direct content and immediate=false to the exact disclosure, with optional default opening",
 );
 assert.match(
   panel,
-  /<div class="ioDisclosureStack">\s*<Show when=\{surface\(\) !== "dj"\}>\s*<RemoteWorkbenchSurface\s+immediate=\{surface\(\) !== "all"\}\s+disclosureId="web-remote"\s+summary="Web Remote"\s+defaultSurface="remote"/,
-  "Web Remote must be a lazy peer and become direct only when its I/O workbench is selected",
+  /<div class="ioDisclosureStack">\s*<Show when=\{surface\(\) !== "dj"\}>\s*<RemoteWorkbenchSurface\s+immediate=\{surface\(\) !== "all"\}\s+defaultOpen=\{surface\(\) === "all"\}\s+disclosureId="web-remote"\s+summary="Web Remote"\s+defaultSurface="remote"/,
+  "Web Remote must be an ordinary disclosure and open for the combined I/O workbench",
 );
 assert.match(
   panel,

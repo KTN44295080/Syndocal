@@ -72,6 +72,82 @@ pub(super) fn dispatch_active(
             state_generation: current_generation,
         };
     };
+    if runtime.pending_operator_return_request_id.is_some() {
+        if runtime.track_active
+            || runtime.play_session_id.is_some()
+            || runtime.pedal_owner.is_some()
+            || runtime.release_event_id.is_some()
+            || runtime.authoritative_state != protocol::DjLinkTimelineStateValue::Running
+        {
+            return dj_link_rejected("operator_return_runtime_invalid", current_generation);
+        }
+        let expected_timeline_id = mapping.timeline_id.0.to_string();
+        if runtime.timeline_id.as_deref() != Some(expected_timeline_id.as_str()) {
+            return dj_link_rejected("operator_return_mapping_mismatch", current_generation);
+        }
+        let Some(snapshot) = engine.try_snapshot() else {
+            return DjLinkDispatchOutcome::Busy {
+                code: "engine_snapshot_busy".to_string(),
+                state_generation: current_generation,
+            };
+        };
+        if !snapshot.timeline.playing || snapshot.timeline.id != mapping.timeline_id {
+            return dj_link_rejected("operator_return_timeline_mismatch", current_generation);
+        }
+        let dedupe_key = format!(
+            "{}:{}:{}:{}:{}",
+            runtime.project_epoch,
+            mapping.id,
+            payload.deck,
+            payload.deck_id,
+            payload.play_session_id
+        );
+        if !runtime.seen_play_sessions.contains_key(&dedupe_key)
+            && runtime.seen_play_sessions.len() >= DJ_LINK_DEDUPE_LIMIT
+        {
+            return dj_link_rejected("play_session_capacity", current_generation);
+        }
+        let next_generation = match dj_link_next_generation(runtime) {
+            Ok(next) => next,
+            Err(_) => return dj_link_rejected("state_generation_exhausted", current_generation),
+        };
+        let mut next_runtime = runtime.clone();
+        next_runtime
+            .seen_play_sessions
+            .insert(dedupe_key.clone(), Instant::now());
+        next_runtime.active_dedupe_key = Some(dedupe_key);
+        next_runtime.track_active = true;
+        next_runtime.playing = true;
+        next_runtime.released = false;
+        next_runtime.unmapped_active_blocked = false;
+        next_runtime.track_content_id = payload.content_id;
+        next_runtime.track_title = payload.title;
+        next_runtime.track_artist = payload.artist;
+        next_runtime.track_deck_id = Some(payload.deck_id);
+        next_runtime.track_deck_number = Some(payload.deck);
+        next_runtime.track_started_at = Some(payload.started_at);
+        next_runtime.track_playing = payload.is_playing;
+        next_runtime.track_bpm = payload.track_bpm;
+        next_runtime.position_sec = Some(payload.position_at_send_sec);
+        next_runtime.source_position_ms = Some(position_ms);
+        next_runtime.position_revision = Some(payload.position_revision);
+        next_runtime.play_session_id = Some(payload.play_session_id);
+        next_runtime.pedal_owner = Some("dj".to_string());
+        next_runtime.release_event_id = None;
+        next_runtime.pending_operator_return_request_id = None;
+        next_runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+        next_runtime.loop_active = !matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        );
+        next_runtime.last_event_id = Some(event_id.to_string());
+        next_runtime.state_generation = next_generation;
+        *runtime = next_runtime;
+        return DjLinkDispatchOutcome::TimelineState {
+            state_generation: next_generation,
+            state: dj_link_timeline_state_from_snapshot(runtime, &snapshot, event_id, sequence),
+        };
+    }
     let dedupe_key = format!(
         "{}:{}:{}:{}:{}",
         runtime.project_epoch, mapping.id, payload.deck, payload.deck_id, payload.play_session_id
@@ -239,6 +315,33 @@ pub(super) fn owner_matches(
         && runtime.play_session_id.as_deref() == Some(play_session_id)
 }
 
+/// STATE_SYNC is diagnostic and never establishes ownership. While one
+/// operator-return request is pending, a replacement Agent is allowed to
+/// describe its current candidate tuple before the subsequent TRACK_ACTIVE;
+/// that later message remains the sole admission path. Outside that bounded
+/// window, an existing runtime owner must match exactly.
+pub(super) fn state_sync_owner_context_rejection(
+    runtime: &DjLinkRuntime,
+    payload: &protocol::DjLinkTrackStateSyncPayload,
+) -> Option<&'static str> {
+    let (Some(deck), Some(deck_id), Some(play_session_id)) = (
+        payload.owner_deck,
+        payload.owner_deck_id.as_deref(),
+        payload.active_play_session_id.as_deref(),
+    ) else {
+        return None;
+    };
+    if runtime.pending_operator_return_request_id.is_some() {
+        return None;
+    }
+    let runtime_has_owner =
+        runtime.track_active || runtime.timeline_id.is_some() || runtime.play_session_id.is_some();
+    if runtime_has_owner && !owner_matches(runtime, deck, deck_id, play_session_id) {
+        return Some("state_sync_owner_context_mismatch");
+    }
+    None
+}
+
 /// Rebase the released Stage 2 runtime to a destination only after the engine
 /// has published the exact terminal Follow completion.  The release receipt
 /// and pedal owner remain the original physical-session fence; the rebase
@@ -378,6 +481,26 @@ pub(super) fn timeline_loop_set_authority_rejection(
     }
     if requested_active == engine_loop_active {
         return Some("timeline_loop_state_unchanged");
+    }
+    None
+}
+
+/// F14 has no desired-state bit: it is valid only when both projections agree
+/// that the current runtime loop is active. Bounds remain engine-owned and are
+/// rechecked there immediately before the acknowledged mutation.
+pub(super) fn timeline_loop_half_authority_rejection(
+    runtime: &DjLinkRuntime,
+    snapshot: &EngineSnapshot,
+) -> Option<&'static str> {
+    let engine_loop_active = !matches!(
+        snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+    if runtime.loop_active != engine_loop_active {
+        return Some("timeline_loop_state_mismatch");
+    }
+    if !engine_loop_active {
+        return Some("timeline_loop_inactive");
     }
     None
 }

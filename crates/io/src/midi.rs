@@ -2029,6 +2029,7 @@ mod tests {
             rotation: protocol::Rotation3::default(),
             geometries: Vec::new(),
             controls: Vec::new(),
+            stage_layout: None,
             attribute_values: Vec::new(),
             limits: protocol::FixtureLimits::default(),
             highlighted,

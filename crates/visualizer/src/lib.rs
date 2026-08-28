@@ -4152,6 +4152,7 @@ f -4 -3 -2 -1
             rotation: Rotation3::default(),
             geometries: Vec::new(),
             controls,
+            stage_layout: None,
             attribute_values,
             limits: Default::default(),
             highlighted: false,

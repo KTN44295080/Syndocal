@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
+import type { MappingFixturePhysicalCell2d } from "../mappingRuntime";
 import {
   mappingFixtureCellGap,
   mappingFixtureGridUnit,
@@ -23,6 +24,7 @@ type StageFixtureGlyphProps = {
   hitTargetRadius?: number;
   showFacingMark?: boolean;
   segments?: FixtureLiveColorSegment[];
+  physicalCells?: MappingFixturePhysicalCell2d[];
   segmentColumns?: number;
   segmentRows?: number;
   segmentOrder?: MappingFixtureSegmentOrder;
@@ -72,6 +74,31 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   const segmentWidth = () => Math.max(0.1, segmentPitchX() - segmentGap());
   const segmentHeight = () => Math.max(0.1, segmentPitchY() - segmentGap());
   const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
+  const physicalCells = () => props.physicalCells?.length ? props.physicalCells : null;
+  const physicalBounds = () => {
+    const cells = physicalCells();
+    if (!cells) {
+      return {
+        minX: -props.width / 2,
+        maxX: props.width / 2,
+        minZ: -props.height / 2,
+        maxZ: props.height / 2,
+      };
+    }
+    return cells.reduce(
+      (bounds, cell) => ({
+        minX: Math.min(bounds.minX, cell.x - cell.width / 2),
+        maxX: Math.max(bounds.maxX, cell.x + cell.width / 2),
+        minZ: Math.min(bounds.minZ, cell.z - cell.height / 2),
+        maxZ: Math.max(bounds.maxZ, cell.z + cell.height / 2),
+      }),
+      { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity },
+    );
+  };
+  const physicalCellColor = (cell: MappingFixturePhysicalCell2d) => {
+    if (cell.logicalSegmentIndex === null) return props.color;
+    return props.segments?.[cell.logicalSegmentIndex]?.color ?? props.color;
+  };
 
   return (
     <>
@@ -79,61 +106,88 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         {(radius) => (
           <rect
             class={props.hitTargetClass ?? "stageFixtureHitTarget"}
-            x={-Math.max(radius(), props.width / 2 + 1.5)}
-            y={-Math.max(radius(), props.height / 2 + 1.5)}
-            width={Math.max(radius(), props.width / 2 + 1.5) * 2}
-            height={Math.max(radius(), props.height / 2 + 1.5) * 2}
+            x={Math.min(-radius(), physicalBounds().minX - 1.5)}
+            y={Math.min(-radius(), physicalBounds().minZ - 1.5)}
+            width={Math.max(radius(), physicalBounds().maxX + 1.5)
+              - Math.min(-radius(), physicalBounds().minX - 1.5)}
+            height={Math.max(radius(), physicalBounds().maxZ + 1.5)
+              - Math.min(-radius(), physicalBounds().minZ - 1.5)}
             rx="1"
             ry="1"
           />
         )}
       </Show>
       <Show
-        when={segments()}
+        when={physicalCells()}
         fallback={
-          <rect
-            data-stage-fixture-shape
-            data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
-            class={shapeClass()}
-            x={-props.width / 2}
-            y={-props.height / 2}
-            width={props.width}
-            height={props.height}
-            rx={fixtureCornerRadius()}
-            ry={fixtureCornerRadius()}
-            fill={props.color}
-          />
-        }
-      >
-        {(liveSegments) => (
-          <g data-stage-live-segment-space="stage">
-            <rect
-              data-stage-fixture-shape
-              data-stage-fixture-outline
-              data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
-              class={`${shapeClass()} stageFixtureSegmentOutline`}
-              x={-props.width / 2}
-              y={-props.height / 2}
-              width={props.width}
-              height={props.height}
-              rx={fixtureCornerRadius()}
-              ry={fixtureCornerRadius()}
-              fill="none"
-            />
-            {liveSegments().map((segment, index) => (
+          <Show
+            when={segments()}
+            fallback={
               <rect
-                data-stage-fixture-segment={index + 1}
-                data-stage-fixture-segment-column={segmentCell(index).column + 1}
-                data-stage-fixture-segment-row={segmentCell(index).row + 1}
-                class="stageFixtureSegment"
-                x={segmentX(index)}
-                y={segmentY(index)}
-                width={segmentWidth()}
-                height={segmentHeight()}
+                data-stage-fixture-shape
+                data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
+                class={shapeClass()}
+                x={-props.width / 2}
+                y={-props.height / 2}
+                width={props.width}
+                height={props.height}
                 rx={fixtureCornerRadius()}
                 ry={fixtureCornerRadius()}
-                fill={segment.color}
-                stroke="none"
+                fill={props.color}
+              />
+            }
+          >
+            {(liveSegments) => (
+              <g data-stage-live-segment-space="stage">
+                <rect
+                  data-stage-fixture-shape
+                  data-stage-fixture-outline
+                  data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
+                  class={`${shapeClass()} stageFixtureSegmentOutline`}
+                  x={-props.width / 2}
+                  y={-props.height / 2}
+                  width={props.width}
+                  height={props.height}
+                  rx={fixtureCornerRadius()}
+                  ry={fixtureCornerRadius()}
+                  fill="none"
+                />
+                {liveSegments().map((segment, index) => (
+                  <rect
+                    data-stage-fixture-segment={index + 1}
+                    data-stage-fixture-segment-column={segmentCell(index).column + 1}
+                    data-stage-fixture-segment-row={segmentCell(index).row + 1}
+                    class="stageFixtureSegment"
+                    x={segmentX(index)}
+                    y={segmentY(index)}
+                    width={segmentWidth()}
+                    height={segmentHeight()}
+                    rx={fixtureCornerRadius()}
+                    ry={fixtureCornerRadius()}
+                    fill={segment.color}
+                    stroke="none"
+                  />
+                ))}
+              </g>
+            )}
+          </Show>
+        }
+      >
+        {(cells) => (
+          <g data-stage-physical-cell-space="fixture-local">
+            {cells().map((cell) => (
+              <rect
+                data-stage-fixture-shape
+                data-stage-physical-beam-index={cell.beamIndex}
+                data-stage-logical-segment-index={cell.logicalSegmentIndex ?? "none"}
+                class={`${shapeClass()} stageFixturePhysicalCell`}
+                x={cell.x - cell.width / 2 + Math.min(cell.width, cell.height) * 0.06}
+                y={cell.z - cell.height / 2 + Math.min(cell.width, cell.height) * 0.06}
+                width={Math.max(0.1, cell.width - Math.min(cell.width, cell.height) * 0.12)}
+                height={Math.max(0.1, cell.height - Math.min(cell.width, cell.height) * 0.12)}
+                rx={Math.min(0.8, cell.height * 0.2)}
+                ry={Math.min(0.8, cell.height * 0.2)}
+                fill={physicalCellColor(cell)}
               />
             ))}
           </g>

@@ -19,3 +19,8 @@ serialport.workspace = true
 thiserror.workspace = true
 tungstenite.workspace = true
 zeroize = "=1.9.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The staged show route opens the exact SetupAPI COM device-interface path,
+# rather than trusting a mutable COM alias or serialport's echoed name.
+windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_System_Ioctl", "Win32_Storage_FileSystem"] }

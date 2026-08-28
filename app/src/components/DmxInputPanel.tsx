@@ -17,13 +17,13 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
   return (
     <div class="dmxInputPanel">
       <div class="panelHeader">
-        <h3>Optional external DMX input</h3>
+        <h3>DMX input and merge</h3>
         <span class={props.status.signal_present ? "pill ok" : props.status.running ? "pill warn" : "pill"}>
           {props.status.signal_present ? "Signal" : props.status.running ? "Waiting" : "Stopped"}
         </span>
       </div>
       <p class="ioDisclosureDescription">
-        Raw merge sends incoming channel levels directly to the DMX output. Control mappings turn selected input channels into specific Syndocal controls.
+        Choose one mode: raw merge sends incoming levels to the DMX output; control mappings turn selected channels into Syndocal controls.
       </p>
       <div class="dmxInputFields">
         <label>
@@ -54,19 +54,19 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
           <input type="number" min={props.config.protocol === "Sacn" ? 1 : 0} max="63999" value={props.config.universe} disabled={props.status.running} onInput={(event) => setConfig({ universe: Number(event.currentTarget.value) })} />
         </label>
         <label>
-          Use incoming DMX for
+          Input mode
           <select
             data-io-control="dmx-input-use"
             value={props.config.merge_enabled ? "merge" : "control"}
             disabled={props.status.running}
             onInput={(event) => setConfig({ merge_enabled: event.currentTarget.value === "merge" })}
           >
-            <option value="merge">Raw merge to output</option>
+            <option value="merge">Raw merge (HTP/LTP)</option>
             <option value="control">Control mappings</option>
           </select>
         </label>
         <label>
-          Merge rule
+          Merge rule (raw merge only)
           <select
             data-io-control="dmx-input-merge-rule"
             value={props.config.merge_mode}

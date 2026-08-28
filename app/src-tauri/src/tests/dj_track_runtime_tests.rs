@@ -1,6 +1,585 @@
 use super::*;
 
 #[test]
+fn operator_return_candidate_clears_only_dj_owner_and_preserves_timeline_truth() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let empty = DjLinkRuntime::from_coordinator(&coordinator);
+    assert_eq!(
+        empty.operator_return_candidate(&engine.snapshot()),
+        Err("dj_control_return_owner_unavailable")
+    );
+
+    let mut runtime = empty;
+    runtime.state_generation = 12;
+    runtime.track_active = true;
+    runtime.playing = true;
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.released = true;
+    runtime.active_dedupe_key = Some("old-dedupe".to_string());
+    runtime.track_deck_number = Some(2);
+    runtime.track_deck_id = Some("rekordbox-deck-2".to_string());
+    runtime.track_content_id = Some("old-content".to_string());
+    runtime.track_playing = true;
+    runtime.play_session_id = Some("old-session".to_string());
+    runtime.pedal_owner = Some("timeline".to_string());
+    runtime.release_event_id = Some("old-release".to_string());
+    runtime.timeline_id = Some("999".to_string());
+    runtime.loop_active = true;
+    runtime
+        .seen_play_sessions
+        .insert("retained-session-receipt".to_string(), Instant::now());
+
+    let mut snapshot = engine.snapshot();
+    assert_eq!(
+        runtime.operator_return_candidate(&snapshot),
+        Err("dj_control_return_requires_running_timeline")
+    );
+    snapshot.timeline.id = TimelineId(77);
+    snapshot.timeline.playing = true;
+    snapshot.timeline.position_ms = 4_000;
+    snapshot.timeline.loop_runtime.status = protocol::TimelineLoopRuntimeStatus::Looping;
+    let next = runtime.operator_return_candidate(&snapshot).unwrap();
+    assert_eq!(next.state_generation, 13);
+    assert!(!next.track_active);
+    assert!(next.playing);
+    assert!(!next.released);
+    assert_eq!(next.active_dedupe_key, None);
+    assert_eq!(next.track_deck_number, None);
+    assert_eq!(next.track_deck_id, None);
+    assert_eq!(next.track_content_id, None);
+    assert!(!next.track_playing);
+    assert_eq!(next.play_session_id, None);
+    assert_eq!(next.pedal_owner, None);
+    assert_eq!(next.release_event_id, None);
+    assert_eq!(next.timeline_id.as_deref(), Some("77"));
+    assert!(next.loop_active);
+    assert_eq!(next.mappings, runtime.mappings);
+    assert_eq!(next.seen_play_sessions, runtime.seen_play_sessions);
+    let state = dj_link_timeline_state_from_snapshot(&next, &snapshot, "pending", 1);
+    assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+    assert!(state.loop_active);
+    assert_eq!(state.play_session_id, None);
+    assert_eq!(state.pedal_owner, None);
+
+    // A lost queued frame can be explicitly retried without inventing an
+    // owner or touching transport position.
+    assert!(next.operator_return_candidate(&snapshot).is_ok());
+}
+
+#[test]
+fn operator_return_runtime_commits_only_after_the_correlated_frame_is_queued() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut runtime = DjLinkRuntime::from_coordinator(&coordinator);
+    runtime.track_active = true;
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.play_session_id = Some("owned-session".to_string());
+    runtime.pedal_owner = Some("timeline".to_string());
+    runtime.timeline_id = Some("77".to_string());
+    let before = runtime.clone();
+    let mut snapshot = engine.snapshot();
+    snapshot.timeline.playing = true;
+    let next = runtime.operator_return_candidate(&snapshot).unwrap();
+    let outbound = dj_link_timeline_state_from_snapshot(&next, &snapshot, "pending", 1);
+
+    let rejected = queue_and_commit_dj_link_operator_return(
+        &mut runtime,
+        next.clone(),
+        outbound.clone(),
+        |_| Ok(None),
+    );
+    assert!(rejected.is_err());
+    assert_eq!(runtime, before);
+
+    let failed = queue_and_commit_dj_link_operator_return(
+        &mut runtime,
+        next.clone(),
+        outbound.clone(),
+        |_| Err("queue failed".to_string()),
+    );
+    assert_eq!(failed, Err("queue failed".to_string()));
+    assert_eq!(runtime, before);
+
+    let committed =
+        queue_and_commit_dj_link_operator_return(&mut runtime, next.clone(), outbound, |_| {
+            Ok(Some("syndocal-dj-operator-return-9".to_string()))
+        });
+    assert_eq!(committed, Ok(()));
+    assert_eq!(
+        runtime.pending_operator_return_request_id.as_deref(),
+        Some("syndocal-dj-operator-return-9")
+    );
+    let mut expected = next;
+    expected.pending_operator_return_request_id = Some("syndocal-dj-operator-return-9".to_string());
+    assert_eq!(runtime, expected);
+}
+
+#[test]
+fn operator_return_intent_survives_project_mapping_publication_without_stale_owner() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    coordinator.epoch = 41;
+    let mut runtime = DjLinkRuntime::from_coordinator(&coordinator);
+    runtime.pending_operator_return_request_id =
+        Some("syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-7".to_string());
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.timeline_id = Some("77".to_string());
+    runtime.position_bars = 19;
+    runtime.loop_active = true;
+    runtime.track_active = true;
+    runtime.track_deck_number = Some(2);
+    runtime.track_deck_id = Some("retired-deck".to_string());
+    runtime.play_session_id = Some("retired-session".to_string());
+    runtime.pedal_owner = Some("timeline".to_string());
+    runtime.release_event_id = Some("retired-release".to_string());
+    runtime.active_dedupe_key = Some("retired-dedupe".to_string());
+
+    coordinator.epoch = 42;
+    coordinator.mappings.dj_track_triggers = vec![protocol::DjTrackTriggerMapping {
+        id: "replacement-mapping".to_string(),
+        selector: protocol::DjTrackSelector {
+            content_id: Some("current-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+        timeline_id: TimelineId(77),
+        retrigger: protocol::DjTrackRetriggerPolicy::OncePerPlaySession,
+    }];
+    runtime.sync_project(&coordinator);
+
+    assert_eq!(runtime.project_epoch, 42);
+    assert_eq!(runtime.mappings, coordinator.mappings.dj_track_triggers);
+    assert_eq!(
+        runtime.pending_operator_return_request_id.as_deref(),
+        Some("syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-7")
+    );
+    assert_eq!(
+        runtime.authoritative_state,
+        protocol::DjLinkTimelineStateValue::Running
+    );
+    assert_eq!(runtime.timeline_id.as_deref(), Some("77"));
+    assert_eq!(runtime.position_bars, 19);
+    assert!(runtime.loop_active);
+    assert!(!runtime.track_active);
+    assert_eq!(runtime.track_deck_number, None);
+    assert_eq!(runtime.track_deck_id, None);
+    assert_eq!(runtime.play_session_id, None);
+    assert_eq!(runtime.pedal_owner, None);
+    assert_eq!(runtime.release_event_id, None);
+    assert_eq!(runtime.active_dedupe_key, None);
+
+    let mut no_pending = runtime;
+    no_pending.pending_operator_return_request_id = None;
+    no_pending.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    no_pending.timeline_id = Some("77".to_string());
+    coordinator.epoch = 43;
+    no_pending.sync_project(&coordinator);
+    assert_eq!(
+        no_pending.authoritative_state,
+        protocol::DjLinkTimelineStateValue::Idle
+    );
+    assert_eq!(no_pending.timeline_id, None);
+    assert_eq!(no_pending.position_bars, 0);
+    assert!(!no_pending.loop_active);
+}
+
+#[test]
+fn operator_return_mapping_publication_core_preserves_intent_retires_owner_and_admits_fresh_active()
+{
+    // This enters the same post-admission publication core as
+    // `set_project_control_mappings`; only the Webview owner/transaction
+    // preamble is outside this test fixture.  Keep the engine live so the
+    // new mapping is checked against the actual authored Timeline bank.
+    let harness = MediaAssetA6CommandHarness::new();
+    let initial = harness.state.engine.snapshot();
+    let timeline_id = initial.timeline.id;
+    harness
+        .state
+        .engine
+        .apply_timeline_bank_published(vec![initial.timeline.clone()], timeline_id, false)
+        .unwrap();
+    harness
+        .state
+        .engine
+        .dj_link_start_timeline_at_with_canonical_snapshot(timeline_id, 4_000)
+        .unwrap();
+    let engine_before = harness.state.engine.snapshot();
+
+    let mut coordinator = lock_project_coordinator(&harness.state).unwrap();
+    reconcile_project_checkpoint_for_coordinator(&harness.state, &mut coordinator).unwrap();
+    let expected_epoch = coordinator.epoch;
+    let expected_revision = coordinator.revision;
+    let status_before = project_control_mappings_status(&coordinator);
+    let callback_epoch_before = harness
+        .state
+        .project_mapping_callback_epoch
+        .load(Ordering::Acquire);
+
+    let operator_return_id =
+        "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-7".to_string();
+    let runtime_before_invalid = {
+        let mut runtime = harness.state.dj_link_runtime.lock().unwrap();
+        runtime.sync_project(&coordinator);
+        runtime.state_generation = 22;
+        runtime.pending_operator_return_request_id = Some(operator_return_id.clone());
+        runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+        runtime.timeline_id = Some(timeline_id.0.to_string());
+        runtime.position_bars = dj_link_engine_position_bars(&engine_before);
+        runtime.loop_active = true;
+        runtime.track_active = true;
+        runtime.playing = true;
+        runtime.released = true;
+        runtime.unmapped_active_blocked = true;
+        runtime.active_dedupe_key = Some("retired-dedupe".to_string());
+        runtime.track_content_id = Some("retired-content".to_string());
+        runtime.track_deck_number = Some(2);
+        runtime.track_deck_id = Some("rekordbox-deck-2".to_string());
+        runtime.track_playing = true;
+        runtime.play_session_id = Some("retired-session".to_string());
+        runtime.pedal_owner = Some("timeline".to_string());
+        runtime.release_event_id = Some("retired-release".to_string());
+        runtime
+            .seen_play_sessions
+            .insert("retired-dedupe".to_string(), Instant::now());
+        runtime.clone()
+    };
+
+    // Snapshot validation fails before callback reservation, worker
+    // retirement, coordinator mutation, or DJ runtime mutation.
+    let invalid_mapping = protocol::DjTrackTriggerMapping {
+        id: "invalid-current-timeline".to_string(),
+        selector: protocol::DjTrackSelector {
+            content_id: Some("return-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+        timeline_id: TimelineId(timeline_id.0 + 1),
+        retrigger: protocol::DjTrackRetriggerPolicy::OncePerPlaySession,
+    };
+    let rejected = publish_project_control_mappings_after_validation(
+        &harness.state,
+        &mut coordinator,
+        expected_epoch,
+        expected_revision,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        vec![invalid_mapping],
+    );
+    assert_eq!(
+        rejected,
+        Err(format!(
+            "DJ track mapping 'invalid-current-timeline' targets missing authored TimelineId {}",
+            timeline_id.0 + 1
+        ))
+    );
+    assert_eq!(project_control_mappings_status(&coordinator), status_before);
+    assert_eq!(
+        harness
+            .state
+            .project_mapping_callback_epoch
+            .load(Ordering::Acquire),
+        callback_epoch_before
+    );
+    assert_eq!(
+        *harness.state.dj_link_runtime.lock().unwrap(),
+        runtime_before_invalid
+    );
+
+    let current_mapping = protocol::DjTrackTriggerMapping {
+        id: "fresh-return-candidate".to_string(),
+        selector: protocol::DjTrackSelector {
+            content_id: Some("return-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+        timeline_id,
+        retrigger: protocol::DjTrackRetriggerPolicy::OncePerPlaySession,
+    };
+    let published = publish_project_control_mappings_after_validation(
+        &harness.state,
+        &mut coordinator,
+        expected_epoch,
+        expected_revision,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        vec![current_mapping.clone()],
+    )
+    .unwrap();
+    assert!(published.mapping_runtimes_retired);
+    assert_eq!(published.project_epoch, expected_epoch);
+    assert_eq!(published.project_revision, expected_revision + 1);
+    assert_eq!(
+        published.history_generation,
+        status_before.history_generation + 1
+    );
+    assert_eq!(published.dj_track_triggers, vec![current_mapping.clone()]);
+    assert_eq!(
+        harness
+            .state
+            .project_mapping_callback_epoch
+            .load(Ordering::Acquire),
+        callback_epoch_before + 1
+    );
+
+    let mismatch = protocol::DjLinkTrackPayload {
+        deck: 1,
+        deck_id: "rekordbox-deck-1".to_string(),
+        content_id: Some("wrong-current-content".to_string()),
+        title: None,
+        artist: None,
+        track_bpm: Some(120.0),
+        position_at_send_sec: 4.0,
+        effective_bpm: 120.0,
+        position_revision: 8,
+        sample_age_ms: 0,
+        is_playing: true,
+        started_at: "2026-08-28T00:00:00Z".to_string(),
+        play_session_id: "fresh-return-session".to_string(),
+        loop_state: None,
+    };
+    let accepted = {
+        let mut runtime = harness.state.dj_link_runtime.lock().unwrap();
+        assert_eq!(
+            runtime.pending_operator_return_request_id.as_deref(),
+            Some(operator_return_id.as_str())
+        );
+        assert_eq!(
+            runtime.authoritative_state,
+            protocol::DjLinkTimelineStateValue::Running
+        );
+        assert_eq!(
+            runtime.timeline_id.as_deref(),
+            Some(timeline_id.0.to_string().as_str())
+        );
+        assert_eq!(
+            runtime.position_bars,
+            dj_link_engine_position_bars(&engine_before)
+        );
+        assert!(runtime.loop_active);
+        assert!(!runtime.track_active);
+        assert!(!runtime.playing);
+        assert!(!runtime.released);
+        assert!(!runtime.unmapped_active_blocked);
+        assert_eq!(runtime.active_dedupe_key, None);
+        assert_eq!(runtime.track_content_id, None);
+        assert_eq!(runtime.track_deck_number, None);
+        assert_eq!(runtime.track_deck_id, None);
+        assert_eq!(runtime.play_session_id, None);
+        assert_eq!(runtime.pedal_owner, None);
+        assert_eq!(runtime.release_event_id, None);
+        assert!(runtime.seen_play_sessions.is_empty());
+
+        assert!(matches!(
+            dj_track_runtime::dispatch_active(
+                mismatch,
+                &harness.state.engine,
+                &mut runtime,
+                22,
+                "operator-return-mismatch",
+                9,
+            ),
+            DjLinkDispatchOutcome::NoMapping {
+                state_generation: 22
+            }
+        ));
+        assert_eq!(
+            runtime.pending_operator_return_request_id.as_deref(),
+            Some(operator_return_id.as_str())
+        );
+        assert!(!runtime.track_active);
+
+        dj_track_runtime::dispatch_active(
+            protocol::DjLinkTrackPayload {
+                content_id: Some("return-content".to_string()),
+                ..mismatch_payload_for_operator_return()
+            },
+            &harness.state.engine,
+            &mut runtime,
+            22,
+            "operator-return-fresh-active",
+            10,
+        )
+    };
+    let DjLinkDispatchOutcome::TimelineState {
+        state_generation,
+        state,
+    } = accepted
+    else {
+        panic!("the fresh mapped candidate must be admitted after publication");
+    };
+    assert_eq!(state_generation, 23);
+    assert_eq!(harness.state.engine.snapshot(), engine_before);
+    let runtime = harness.state.dj_link_runtime.lock().unwrap();
+    assert!(runtime.track_active);
+    assert!(!runtime.released);
+    assert_eq!(runtime.track_deck_number, Some(1));
+    assert_eq!(runtime.track_deck_id.as_deref(), Some("rekordbox-deck-1"));
+    assert_eq!(
+        runtime.play_session_id.as_deref(),
+        Some("fresh-return-session")
+    );
+    assert_eq!(runtime.pedal_owner.as_deref(), Some("dj"));
+    assert_eq!(runtime.pending_operator_return_request_id, None);
+    assert_eq!(state.timeline_id, timeline_id.0.to_string());
+    assert_eq!(state.operator_return_request_id, None);
+}
+
+fn mismatch_payload_for_operator_return() -> protocol::DjLinkTrackPayload {
+    protocol::DjLinkTrackPayload {
+        deck: 1,
+        deck_id: "rekordbox-deck-1".to_string(),
+        content_id: None,
+        title: None,
+        artist: None,
+        track_bpm: Some(120.0),
+        position_at_send_sec: 4.0,
+        effective_bpm: 120.0,
+        position_revision: 8,
+        sample_age_ms: 0,
+        is_playing: true,
+        started_at: "2026-08-28T00:00:00Z".to_string(),
+        play_session_id: "fresh-return-session".to_string(),
+        loop_state: None,
+    }
+}
+
+#[test]
+fn operator_return_reannouncement_claims_the_same_timeline_without_transport_mutation() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let initial = engine.snapshot();
+    let timeline_id = initial.timeline.id;
+    engine
+        .apply_timeline_bank_published(vec![initial.timeline.clone()], timeline_id, false)
+        .unwrap();
+    engine
+        .dj_link_start_timeline_at_with_canonical_snapshot(timeline_id, 4_000)
+        .unwrap();
+    let engine_before = engine.snapshot();
+    let coordinator = project_coordinator_for_initial_snapshot(engine_before.clone());
+    let mapping = protocol::DjTrackTriggerMapping {
+        id: "operator-return-track".to_string(),
+        selector: protocol::DjTrackSelector {
+            content_id: Some("return-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+        timeline_id,
+        retrigger: protocol::DjTrackRetriggerPolicy::OncePerPlaySession,
+    };
+    let mut runtime = DjLinkRuntime::from_coordinator(&coordinator);
+    runtime.mappings = vec![mapping.clone()];
+    runtime.state_generation = 9;
+    runtime.playing = true;
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.timeline_id = Some(timeline_id.0.to_string());
+    runtime.position_bars = dj_link_engine_position_bars(&engine_before);
+    runtime.pending_operator_return_request_id = Some("syndocal-dj-operator-return-9".to_string());
+    let replacement_sync = protocol::DjLinkTrackStateSyncPayload {
+        released: false,
+        owner_deck: Some(1),
+        owner_deck_id: Some("rekordbox-deck-1".to_string()),
+        active_play_session_id: Some("same-play-session".to_string()),
+    };
+    assert_eq!(
+        dj_track_runtime::state_sync_owner_context_rejection(&runtime, &replacement_sync),
+        None,
+        "a replacement peer must pass STATE_SYNC while the correlated return remains pending"
+    );
+    let mut without_pending_return = runtime.clone();
+    without_pending_return.pending_operator_return_request_id = None;
+    assert_eq!(
+        dj_track_runtime::state_sync_owner_context_rejection(
+            &without_pending_return,
+            &replacement_sync,
+        ),
+        Some("state_sync_owner_context_mismatch"),
+        "the owner mismatch exception must not escape the bounded pending-return window"
+    );
+    let dedupe_key = format!(
+        "{}:{}:{}:{}:{}",
+        runtime.project_epoch, mapping.id, 1, "rekordbox-deck-1", "same-play-session"
+    );
+    runtime
+        .seen_play_sessions
+        .insert(dedupe_key.clone(), Instant::now());
+    let payload = protocol::DjLinkTrackPayload {
+        deck: 1,
+        deck_id: "rekordbox-deck-1".to_string(),
+        content_id: Some("return-content".to_string()),
+        title: None,
+        artist: None,
+        track_bpm: Some(120.0),
+        position_at_send_sec: 4.0,
+        effective_bpm: 120.0,
+        position_revision: 8,
+        sample_age_ms: 0,
+        is_playing: true,
+        started_at: "2026-08-28T00:00:00Z".to_string(),
+        play_session_id: "same-play-session".to_string(),
+        loop_state: None,
+    };
+
+    let outcome = dj_track_runtime::dispatch_active(
+        payload,
+        &engine,
+        &mut runtime,
+        9,
+        "operator-return-active",
+        10,
+    );
+    let DjLinkDispatchOutcome::TimelineState {
+        state_generation,
+        state,
+    } = outcome
+    else {
+        panic!("operator return candidate must claim the existing Timeline");
+    };
+    assert_eq!(state_generation, 10);
+    assert_eq!(engine.snapshot(), engine_before);
+    assert!(runtime.track_active);
+    assert!(!runtime.released);
+    assert_eq!(
+        runtime.active_dedupe_key.as_deref(),
+        Some(dedupe_key.as_str())
+    );
+    assert_eq!(
+        runtime.play_session_id.as_deref(),
+        Some("same-play-session")
+    );
+    assert_eq!(runtime.pedal_owner.as_deref(), Some("dj"));
+    assert_eq!(runtime.pending_operator_return_request_id, None);
+    assert_eq!(state.timeline_id, timeline_id.0.to_string());
+    assert_eq!(
+        state.position_bars,
+        dj_link_engine_position_bars(&engine_before)
+    );
+    assert_eq!(state.operator_return_request_id, None);
+}
+
+#[test]
 fn completed_follow_rebases_only_the_exact_released_stage2_receipt() {
     let engine = EngineHandle::start_for_tests(DmxOutputConfig {
         enabled: false,
@@ -158,7 +737,10 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
     let loop_off_event_id = "follow-hold-loop-off";
     let source_timeline_id_string = source_timeline_id.0.to_string();
     let target_timeline_id_string = target_timeline_id.0.to_string();
-    let source_duration_ms = 1_000;
+    // Let RELEASE hand the source clock back to normal playback and cross a
+    // real natural boundary.  Seeking to the terminal millisecond is a
+    // manual transport operation and correctly aborts Follow.
+    let source_duration_ms = 50;
 
     let engine = EngineHandle::start_for_tests(DmxOutputConfig {
         enabled: false,
@@ -184,7 +766,10 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
         curve: VideoLayerTransitionCurve::Linear,
         video_kind: VideoClipTakeKind::Crossfade,
         lighting_policy: protocol::TimelineFollowLightingPolicy::HoldThenCut,
-        destination_bpm: None,
+        // Keep the retained first-measure hold short enough to prove a real
+        // post-boundary F13 re-entry and subsequent wrap without relying on
+        // a manual seek (which would correctly abort Follow).
+        destination_bpm: Some(300.0),
         preroll_ms: 0,
         trans_cadence_bars: 4,
         trans_target_measures: Vec::new(),
@@ -284,9 +869,6 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
         Some(play_session_id)
     );
 
-    engine
-        .send(EngineCommand::SeekTimeline(source_duration_ms - 1))
-        .unwrap();
     let target_snapshot = {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -319,6 +901,14 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
     assert_eq!(
         target_snapshot.timeline.loop_runtime.status,
         protocol::TimelineLoopRuntimeStatus::Looping
+    );
+    let retained_hold_bounds = (
+        target_snapshot.timeline.loop_runtime.a_ms,
+        target_snapshot.timeline.loop_runtime.b_ms,
+        target_snapshot
+            .timeline
+            .loop_runtime
+            .musical_length_millibeats,
     );
     assert_eq!(
         runtime.lock().unwrap().timeline_id.as_deref(),
@@ -373,6 +963,18 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
         after_loop_off.timeline.loop_runtime.status,
         protocol::TimelineLoopRuntimeStatus::Disabled
     );
+    assert_eq!(
+        (
+            after_loop_off.timeline.loop_runtime.a_ms,
+            after_loop_off.timeline.loop_runtime.b_ms,
+            after_loop_off
+                .timeline
+                .loop_runtime
+                .musical_length_millibeats,
+        ),
+        retained_hold_bounds,
+        "F13 OFF retains the first-measure hold bounds for a later F13 ON"
+    );
     let runtime_after_loop_off = runtime.lock().unwrap().clone();
     assert_eq!(
         runtime_after_loop_off.timeline_id.as_deref(),
@@ -420,14 +1022,26 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
     assert_eq!(engine.snapshot(), before_stale_loop_off_engine);
     assert_eq!(*runtime.lock().unwrap(), before_stale_loop_off_runtime);
 
-    let position_before_advance = after_loop_off.timeline.position_ms;
-    std::thread::sleep(Duration::from_millis(100));
-    let advanced_snapshot = engine.snapshot();
-    assert!(
-        advanced_snapshot.timeline.position_ms > position_before_advance,
-        "target Timeline did not advance after hold release: before={position_before_advance}, after={}",
-        advanced_snapshot.timeline.position_ms
-    );
+    let retained_loop_duration_ms = retained_hold_bounds
+        .1
+        .zip(retained_hold_bounds.0)
+        .map(|(b_ms, a_ms)| b_ms - a_ms)
+        .expect("completed Follow hold retains valid A-B bounds");
+    let advanced_snapshot = {
+        let deadline = Instant::now()
+            + Duration::from_millis(retained_loop_duration_ms.saturating_mul(3).max(1_000));
+        loop {
+            let snapshot = engine.snapshot();
+            if snapshot.timeline.position_ms >= retained_hold_bounds.1.unwrap() {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "target Timeline did not advance past retained B after F13 OFF: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
     assert_eq!(advanced_snapshot.timeline.id, target_timeline_id);
     assert!(advanced_snapshot.timeline.playing);
     assert!(
@@ -439,6 +1053,63 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
     assert_eq!(
         advanced_snapshot.timeline.loop_runtime.status,
         protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+
+    let loop_on_outcome = dispatch(
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        5,
+        "follow-hold-loop-on",
+        json!({
+            "timelineId": target_timeline_id_string,
+            "playSessionId": play_session_id,
+            "active": true
+        }),
+    );
+    assert!(matches!(
+        loop_on_outcome,
+        DjLinkDispatchOutcome::TimelineState { ref state, .. } if state.loop_active
+    ));
+    let after_loop_on = engine.snapshot();
+    assert_eq!(
+        (
+            after_loop_on.timeline.loop_runtime.a_ms,
+            after_loop_on.timeline.loop_runtime.b_ms,
+            after_loop_on
+                .timeline
+                .loop_runtime
+                .musical_length_millibeats,
+        ),
+        retained_hold_bounds
+    );
+    assert_eq!(
+        after_loop_on.timeline.position_ms,
+        retained_hold_bounds.0.unwrap(),
+        "F13 ON after B must re-enter the retained first-measure hold at A"
+    );
+    assert_eq!(
+        after_loop_on.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Looping
+    );
+    let wraps_before_reentry_cycle = after_loop_on.timeline.loop_runtime.wrap_count;
+    let wrapped_snapshot = {
+        let deadline = Instant::now()
+            + Duration::from_millis(retained_loop_duration_ms.saturating_mul(3).max(1_000));
+        loop {
+            let snapshot = engine.snapshot();
+            if snapshot.timeline.loop_runtime.wrap_count > wraps_before_reentry_cycle {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "F13 re-entered hold did not wrap at retained B: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    assert!(
+        wrapped_snapshot.timeline.position_ms >= retained_hold_bounds.0.unwrap()
+            && wrapped_snapshot.timeline.position_ms < retained_hold_bounds.1.unwrap(),
+        "post-wrap playhead must remain inside the re-entered A-B loop"
     );
 }
 
@@ -1552,12 +2223,17 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
                     "playSessionId": play_session_id,
                     "active": true
                 }),
+                protocol::DjLinkMessageType::TimelineLoopHalf => json!({
+                    "timelineId": timeline_id,
+                    "playSessionId": play_session_id,
+                }),
                 _ => unreachable!("not a Stage 2 command"),
             }
         };
     let stage2_command_types = [
         protocol::DjLinkMessageType::TimelineBeatJump,
         protocol::DjLinkMessageType::TimelineLoopSet,
+        protocol::DjLinkMessageType::TimelineLoopHalf,
     ];
     let dispatch = |runtime: &Mutex<DjLinkRuntime>, message_type, sequence, event_id, payload| {
         dispatch_dj_link_event(
@@ -1604,6 +2280,14 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
                 "timelineId": timeline_id,
                 "playSessionId": play_session_id,
                 "active": true
+            }),
+        ),
+        (
+            4,
+            protocol::DjLinkMessageType::TimelineLoopHalf,
+            json!({
+                "timelineId": timeline_id,
+                "playSessionId": play_session_id,
             }),
         ),
     ] {
@@ -1851,28 +2535,25 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
     assert_eq!(engine.snapshot(), before_engine_rejection);
     assert_eq!(*runtime.lock().unwrap(), before_runtime_rejection);
 
-    // Exercise the same post-release fence for an authorized loop request,
-    // while forcing the canonical engine preflight to reject an unsafe
-    // division.  Neither side may be projected on that error.
-    let mut invalid_loop_runtime = released_runtime.clone();
-    invalid_loop_runtime.loop_division = Some(64);
-    let invalid_loop_runtime = Mutex::new(invalid_loop_runtime);
+    // F14 is not a generic scale request: before F13 activates a current
+    // runtime loop, it must fail at the app/engine active-state fence without
+    // publishing either projection.
+    let invalid_loop_runtime = Mutex::new(released_runtime.clone());
     let before_engine_loop_rejection = engine.snapshot();
     let before_runtime_loop_rejection = invalid_loop_runtime.lock().unwrap().clone();
     assert!(matches!(
         dispatch(
             &invalid_loop_runtime,
-            protocol::DjLinkMessageType::TimelineLoopSet,
+            protocol::DjLinkMessageType::TimelineLoopHalf,
             8,
-            "stage2-engine-rejected-loop",
+            "stage2-inactive-loop-half",
             json!({
                 "timelineId": timeline_id,
-                "playSessionId": play_session_id,
-                "active": true
+                "playSessionId": play_session_id
             }),
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. }
-            if code == "engine_publication_rejected"
+            if code == "timeline_loop_inactive"
     ));
     assert_eq!(engine.snapshot(), before_engine_loop_rejection);
     assert_eq!(
@@ -1904,6 +2585,41 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
     assert!(runtime.lock().unwrap().loop_active);
     assert!(loop_state.loop_active);
 
+    let length_before_half = engine
+        .snapshot()
+        .timeline
+        .loop_runtime
+        .b_ms
+        .unwrap()
+        .saturating_sub(engine.snapshot().timeline.loop_runtime.a_ms.unwrap());
+    let half_outcome = dispatch(
+        &runtime,
+        protocol::DjLinkMessageType::TimelineLoopHalf,
+        9,
+        "stage2-loop-half",
+        json!({
+            "timelineId": timeline_id,
+            "playSessionId": play_session_id,
+        }),
+    );
+    let half_generation = match half_outcome {
+        DjLinkDispatchOutcome::TimelineState {
+            state,
+            state_generation,
+        } => {
+            assert!(state.loop_active);
+            state_generation
+        }
+        outcome => panic!("Stage 2 loop half should be accepted: {outcome:?}"),
+    };
+    assert_eq!(half_generation, loop_generation + 1);
+    let half_snapshot = engine.snapshot();
+    assert_eq!(
+        half_snapshot.timeline.loop_runtime.b_ms.unwrap()
+            - half_snapshot.timeline.loop_runtime.a_ms.unwrap(),
+        (length_before_half / 2).max(1)
+    );
+
     let loop_off_outcome = dispatch(
         &runtime,
         protocol::DjLinkMessageType::TimelineLoopSet,
@@ -1922,7 +2638,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         } => (state, state_generation),
         outcome => panic!("Stage 2 loop clear should be accepted: {outcome:?}"),
     };
-    assert_eq!(loop_off_generation, loop_generation + 1);
+    assert_eq!(loop_off_generation, half_generation + 1);
     assert_eq!(
         runtime.lock().unwrap().state_generation,
         loop_off_generation
@@ -1984,6 +2700,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             let command_event_id = match message_type {
                 protocol::DjLinkMessageType::TimelineBeatJump => "stage2-rejection-beat",
                 protocol::DjLinkMessageType::TimelineLoopSet => "stage2-rejection-loop",
+                protocol::DjLinkMessageType::TimelineLoopHalf => "stage2-rejection-half",
                 _ => unreachable!("not a Stage 2 command"),
             };
             assert!(matches!(
@@ -2025,6 +2742,9 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
                     "stage2-correlation-rejection-beat"
                 }
                 protocol::DjLinkMessageType::TimelineLoopSet => "stage2-correlation-rejection-loop",
+                protocol::DjLinkMessageType::TimelineLoopHalf => {
+                    "stage2-correlation-rejection-half"
+                }
                 _ => unreachable!("not a Stage 2 command"),
             };
             assert!(matches!(

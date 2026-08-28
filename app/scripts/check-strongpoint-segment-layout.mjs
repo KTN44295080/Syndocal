@@ -176,22 +176,63 @@ try {
     ["ColorGreen 4", 65_535],
     ["ColorBlue 4", 0],
   ].map(([attribute, value]) => ({ attribute, value }));
+  dvc13.stage_layout = {
+    version: 1,
+    cell_width: 5,
+    cell_depth: 5,
+    cells: Array.from({ length: 4 }, (_, beamIndex) => ({
+      beam_index: beamIndex,
+      offset_x: beamIndex * 5,
+      offset_z: 0,
+      logical_segment_index: beamIndex,
+    })),
+    logical_segments: Array.from({ length: 4 }, (_, logicalIndex) => ({
+      logical_index: logicalIndex,
+      color_controls: [
+        { role: "Red", control_index: 1 + logicalIndex * 3 },
+        { role: "Green", control_index: 2 + logicalIndex * 3 },
+        { role: "Blue", control_index: 3 + logicalIndex * 3 },
+      ],
+    })),
+    global_dimmer_control_index: 0,
+    global_strobe_control_index: null,
+  };
+  const exactRoleLevels = [
+    65_535,
+    65_535, 0, 0,
+    0, 65_535, 0,
+    0, 0, 65_535,
+    65_535, 65_535, 0,
+  ];
+  dvc13.controls = dvc13.controls.map((control, index) => ({
+    ...control,
+    attribute: `Opaque control ${index}`,
+    channel_name: `Opaque channel ${index}`,
+  }));
+  dvc13.attribute_values = exactRoleLevels.map((value, index) => ({
+    attribute: `Opaque control ${index}`,
+    value,
+  }));
   const dvc13Live = liveColor.fixtureLiveColor(dvc13, new Map());
   assert.equal(dvc13Live.segmentCount, 4, "DVC-style unsuffixed first RGB must be segment 1");
   assert.deepEqual(
     dvc13Live.segments.map((segment) => segment.color),
     ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)", "rgb(255, 255, 0)"],
-    "segment 1 RGB must not leak into later cells",
+    "persisted color roles must drive cells without re-inferring opaque control names",
   );
 
   const glyphSource = await readFile(resolve(appRoot, "src/components/StageGlyphs.tsx"), "utf8");
   const renderSource = await readFile(resolve(appRoot, "src/createMappingRenderModel.ts"), "utf8");
   assert.match(glyphSource, /data-stage-fixture-segment-column/);
   assert.match(glyphSource, /data-stage-fixture-segment-row/);
+  assert.match(glyphSource, /data-stage-physical-beam-index/);
+  assert.match(glyphSource, /data-stage-physical-cell-space="fixture-local"/);
   assert.match(glyphSource, /mappingFixtureSegmentCell/);
   assert.match(renderSource, /mappingFixtureSegmentCell/);
   assert.match(renderSource, /localZ/);
   assert.match(renderSource, /rotateStageOffsetYaw\(\{ x: localX, z: localZ \}/);
+  assert.match(renderSource, /fixture\.stage_layout\?\.cells/);
+  assert.match(renderSource, /cell\.offset_x \* fixtureWorldToSvgScale/);
 
   console.log(
     "pass strongpoint segment layout " +

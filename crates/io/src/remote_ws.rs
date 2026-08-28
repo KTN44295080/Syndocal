@@ -13,7 +13,7 @@ use std::{
 };
 
 #[cfg(test)]
-use std::sync::OnceLock;
+use std::{collections::BTreeSet, process::Command, sync::OnceLock};
 
 use protocol::{
     canonical_video_output_mapping_field, ClockSource, CueId, DjLinkAck, DjLinkAckOutcome,
@@ -3019,6 +3019,11 @@ struct DjLinkSession {
 struct DjLinkOutboundState {
     generation: u64,
     state: DjLinkTimelineState,
+    /// Explicit operator reconciliation may need to publish a correlation
+    /// event even when the engine truth fields are unchanged.  This remains
+    /// generation- and snapshot-fenced; only semantic deduplication is
+    /// bypassed for that one queued frame.
+    force_delivery: bool,
 }
 
 const DJ_LINK_OUTBOUND_QUEUE_LIMIT: usize = 8;
@@ -3136,6 +3141,23 @@ pub struct DjLinkProcessFence {
     shape_hasher: RandomState,
     side_effect_event_limit: usize,
     side_effect_capacity_latched: bool,
+    /// Opaque process-lifetime namespace for explicit operator-return IDs.
+    /// Listener restarts reuse this fence, so neither the epoch nor its
+    /// monotonic counter can roll back on a socket/listener replacement.
+    operator_return_epoch: String,
+    next_operator_return_sequence: u64,
+}
+
+fn new_dj_link_operator_return_epoch() -> String {
+    let hasher = RandomState::new();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let process_id = std::process::id();
+    let left = hasher.hash_one(("syndocal-dj-operator-return-epoch-left", now, process_id));
+    let right = hasher.hash_one(("syndocal-dj-operator-return-epoch-right", process_id, now));
+    format!("{left:016x}{right:016x}")
 }
 
 impl Default for DjLinkProcessFence {
@@ -3146,6 +3168,8 @@ impl Default for DjLinkProcessFence {
             shape_hasher: RandomState::new(),
             side_effect_event_limit: DJ_LINK_SIDE_EFFECT_EVENT_LIMIT,
             side_effect_capacity_latched: false,
+            operator_return_epoch: new_dj_link_operator_return_epoch(),
+            next_operator_return_sequence: 0,
         }
     }
 }
@@ -3543,6 +3567,11 @@ impl DjLinkRegistry {
         self.status.last_outbound_event_id = Some(event_id.to_string());
         self.status.last_outbound_sequence = Some(sequence);
         self.status.last_outbound_delivery = Some("delivered".to_string());
+        if let Some(request_id) = state.operator_return_request_id.as_ref() {
+            self.status.last_operator_return_request_id = Some(request_id.clone());
+            self.status.last_operator_return_sequence = Some(sequence);
+            self.status.last_operator_return_delivery = Some("delivered".to_string());
+        }
         if let Some(session) = self.sessions.values_mut().find(|session| {
             session.generation == self.status.generation
                 && session
@@ -3560,15 +3589,17 @@ impl DjLinkRegistry {
         session_id: &str,
         generation: u64,
         state: &DjLinkTimelineState,
+        force_delivery: bool,
     ) -> bool {
         self.sessions.get(agent_id).is_some_and(|session| {
             session.session_id == session_id
                 && session.generation == generation
                 && session.snapshot_ready
-                && session
-                    .last_outbound_state
-                    .as_ref()
-                    .is_none_or(|previous| !dj_link_state_truth_equal(previous, state))
+                && (force_delivery
+                    || session
+                        .last_outbound_state
+                        .as_ref()
+                        .is_none_or(|previous| !dj_link_state_truth_equal(previous, state)))
         })
     }
 
@@ -3576,6 +3607,65 @@ impl DjLinkRegistry {
     /// session. The queue is bounded and replacement/disconnect/queue failure
     /// retires the current authority instead of allowing stale delivery.
     fn queue_outbound_state(&mut self, mut state: DjLinkTimelineState) -> Result<bool, String> {
+        self.queue_outbound_state_with_correlation(&mut state, false)
+            .map(|queued| queued.is_some())
+    }
+
+    fn queue_operator_return_state(
+        &mut self,
+        mut state: DjLinkTimelineState,
+    ) -> Result<Option<String>, String> {
+        self.queue_outbound_state_with_correlation(&mut state, true)
+            .map(|queued| queued.and_then(|state| state.operator_return_request_id))
+    }
+
+    fn next_operator_return_request_id(&self) -> Result<String, String> {
+        let mut fence = self
+            .process_fence
+            .lock()
+            .map_err(|_| "DJ Link process fence lock was poisoned".to_string())?;
+        fence.next_operator_return_sequence = fence
+            .next_operator_return_sequence
+            .checked_add(1)
+            .ok_or_else(|| "DJ Link operator return request sequence exhausted".to_string())?;
+        Ok(format!(
+            "syndocal-dj-operator-return-{}-{}",
+            fence.operator_return_epoch, fence.next_operator_return_sequence
+        ))
+    }
+
+    /// A pending operator-return intent survives a socket replacement, but
+    /// its wire correlation identity does not.  The peer deliberately keeps
+    /// a process-lifetime high-water fence, so replaying the old ID in the new
+    /// generation would be rejected as stale and permanently strand the
+    /// operator request.  Reissue the still-pending intent with a fresh
+    /// process-epoch counter while leaving the application-owned intent
+    /// marker untouched until a current track candidate is admitted.
+    fn prepare_outbound_timeline_state(
+        &self,
+        request_type: DjLinkMessageType,
+        state: &mut DjLinkTimelineState,
+    ) -> Result<(), String> {
+        if request_type == DjLinkMessageType::TimelineStateRequest
+            && state.operator_return_request_id.is_some()
+        {
+            state.operator_return_request_id = Some(self.next_operator_return_request_id()?);
+            state.validate()?;
+        }
+        Ok(())
+    }
+
+    fn queue_outbound_state_with_correlation(
+        &mut self,
+        state: &mut DjLinkTimelineState,
+        operator_return: bool,
+    ) -> Result<Option<DjLinkTimelineState>, String> {
+        if state.operator_return_request_id.is_some() {
+            return Err(
+                "DJ Link operator return correlation is assigned only by the authoritative queue"
+                    .to_string(),
+            );
+        }
         state.validate()?;
         let Some((agent_id, generation, sender, previous)) =
             self.sessions.iter().next().map(|(agent_id, session)| {
@@ -3587,20 +3677,21 @@ impl DjLinkRegistry {
                 )
             })
         else {
-            return Ok(false);
+            return Ok(None);
         };
         if !self
             .sessions
             .get(&agent_id)
             .is_some_and(|session| session.snapshot_ready)
         {
-            return Ok(false);
+            return Ok(None);
         }
-        if previous
-            .as_ref()
-            .is_some_and(|previous| dj_link_state_truth_equal(previous, &state))
+        if !operator_return
+            && previous
+                .as_ref()
+                .is_some_and(|previous| dj_link_state_truth_equal(previous, state))
         {
-            return Ok(false);
+            return Ok(None);
         }
         self.next_outbound_sequence = self
             .next_outbound_sequence
@@ -3608,10 +3699,19 @@ impl DjLinkRegistry {
             .ok_or_else(|| "DJ Link outbound state sequence exhausted".to_string())?;
         state.event_id = format!("syndocal-dj-state-{}", self.next_outbound_sequence);
         state.sequence = self.next_outbound_sequence;
+        state.operator_return_request_id = if operator_return {
+            Some(self.next_operator_return_request_id()?)
+        } else {
+            None
+        };
         state.validate()?;
-        let queued = DjLinkOutboundState { generation, state };
+        let queued = DjLinkOutboundState {
+            generation,
+            state: state.clone(),
+            force_delivery: operator_return,
+        };
         match sender.try_send(queued) {
-            Ok(()) => Ok(true),
+            Ok(()) => Ok(Some(state.clone())),
             Err(TrySendError::Full(_)) => {
                 self.sessions.remove(&agent_id);
                 self.status.connected = false;
@@ -4507,6 +4607,7 @@ impl RemoteWsServer {
                                     play_session_id: None,
                                     pedal_owner: None,
                                     release_event_id: None,
+                                    operator_return_request_id: None,
                                 };
                                 if let Ok(mut registry) = thread_dj_link_registry.lock() {
                                     let _ = registry.queue_outbound_state(state);
@@ -4705,6 +4806,22 @@ impl RemoteWsServer {
                 status
             })
             .unwrap_or_else(|_| DjLinkRuntimeStatus::default())
+    }
+
+    /// Publish one explicitly operator-triggered authority reconciliation
+    /// request to the current snapshot-ready DJ peer.  The state fields remain
+    /// authoritative engine truth; the dedicated
+    /// `operatorReturnRequestId` payload field is the replay-safe correlation
+    /// that asks the Agent to reannounce its current fresh candidate exactly
+    /// once.
+    pub fn queue_dj_link_operator_return_state(
+        &self,
+        state: DjLinkTimelineState,
+    ) -> Result<Option<String>, String> {
+        self.dj_link_registry
+            .lock()
+            .map_err(|_| "DJ Link registry is unavailable".to_string())?
+            .queue_operator_return_state(state)
     }
 
     /// Process-local lifecycle diagnostics used by the production-loopback
@@ -5532,7 +5649,8 @@ fn send_dj_link_ack<S: Read + Write>(
 
 /// The outbound timeline-state frame is the exact v3 envelope whose payload
 /// carries exactly `state`, `loopActive`, `transitionHoldActive`, `timelineId`,
-/// `positionBars`, `playSessionId`, `pedalOwner`, and `releaseEventId`.
+/// `positionBars`, `playSessionId`, `pedalOwner`, `releaseEventId`, and
+/// `operatorReturnRequestId`.
 fn dj_link_state_wire(
     state: &DjLinkTimelineState,
     agent_id: &str,
@@ -5555,6 +5673,7 @@ fn dj_link_state_wire(
             "playSessionId": state.play_session_id,
             "pedalOwner": state.pedal_owner,
             "releaseEventId": state.release_event_id,
+            "operatorReturnRequestId": state.operator_return_request_id,
         },
     }))
     .map_err(|error| error.to_string())
@@ -5583,6 +5702,7 @@ fn send_pending_dj_link_states<S: Read + Write>(
                 session_id,
                 generation,
                 &outbound.state,
+                outbound.force_delivery,
             ),
             Err(_) => return false,
         };
@@ -5621,6 +5741,7 @@ fn send_pending_dj_link_states<S: Read + Write>(
                 session_id,
                 generation,
                 &outbound.state,
+                outbound.force_delivery,
             ),
             Err(_) => false,
         };
@@ -6145,8 +6266,32 @@ fn handle_dj_link_client(
                             };
                         }
                         if !stale_generation {
-                            if let DjLinkDispatchOutcome::TimelineState { state, .. } = &outcome {
-                                outbound_state = Some(state.clone());
+                            let timeline_state = match &outcome {
+                                DjLinkDispatchOutcome::TimelineState {
+                                    state,
+                                    state_generation,
+                                } => Some((state.clone(), *state_generation)),
+                                _ => None,
+                            };
+                            if let Some((mut state, state_generation)) = timeline_state {
+                                let refresh_result = registry
+                                    .lock()
+                                    .map_err(|_| "operator_return_registry_unavailable".to_string())
+                                    .and_then(|registry| {
+                                        registry.prepare_outbound_timeline_state(
+                                            envelope.message_type,
+                                            &mut state,
+                                        )
+                                    });
+                                match refresh_result {
+                                    Ok(()) => outbound_state = Some(state),
+                                    Err(code) => {
+                                        outcome = DjLinkDispatchOutcome::Rejected {
+                                            code,
+                                            state_generation,
+                                        };
+                                    }
+                                }
                             }
                         }
                         let (outcome, code, state_generation) = match outcome {
@@ -6988,6 +7133,7 @@ mod tests {
                         play_session_id: None,
                         pedal_owner: None,
                         release_event_id: None,
+                        operator_return_request_id: None,
                     },
                 };
             }
@@ -7003,7 +7149,8 @@ mod tests {
         server_port: u16,
         session: &str,
         server: &RemoteWsServer,
-    ) where
+    ) -> Value
+    where
         S: Read + Write,
     {
         let _ = server_port;
@@ -7050,14 +7197,16 @@ mod tests {
             DjLinkAckOutcome::Accepted,
             "state request acknowledgement: {state_request_ack:?}"
         );
-        match client.read().unwrap() {
+        let state = match client.read().unwrap() {
             Message::Text(text) => {
                 let state: Value = serde_json::from_str(&text).unwrap();
                 assert_eq!(state["type"], "DJ_TIMELINE_STATE");
+                state
             }
             other => panic!("unexpected timeline state reply: {other:?}"),
-        }
+        };
         wait_for_dj_link_snapshot_ready(server);
+        state
     }
 
     fn read_dj_ack<S>(client: &mut tungstenite::WebSocket<S>) -> DjLinkAck
@@ -9884,6 +10033,7 @@ mod tests {
                         play_session_id: Some("play-1".to_string()),
                         pedal_owner: None,
                         release_event_id: None,
+                        operator_return_request_id: None,
                     },
                 };
             }
@@ -9989,9 +10139,13 @@ mod tests {
         assert_eq!(state["payload"]["pedalOwner"], serde_json::json!(null));
         assert_eq!(state["payload"]["releaseEventId"], serde_json::json!(null));
         assert_eq!(
+            state["payload"]["operatorReturnRequestId"],
+            serde_json::json!(null)
+        );
+        assert_eq!(
             state["payload"].as_object().unwrap().len(),
-            8,
-            "timeline-state payload must be exactly eight keys"
+            9,
+            "timeline-state payload must be exactly nine keys"
         );
         wait_for_dj_link_snapshot_ready(&server);
 
@@ -10875,6 +11029,7 @@ mod tests {
             play_session_id: Some("play-1".to_string()),
             pedal_owner: Some("pedal-1".to_string()),
             release_event_id: None,
+            operator_return_request_id: None,
         };
         let wire_text = dj_link_state_wire(&state, DJ_V3_AGENT, "matrix-session").unwrap();
         let wire_value: serde_json::Value = serde_json::from_str(&wire_text).unwrap();
@@ -10888,6 +11043,30 @@ mod tests {
         assert_eq!(wire_value["payload"]["positionBars"], 2);
         assert_eq!(wire_value["payload"]["playSessionId"], "play-1");
         assert_eq!(wire_value["payload"]["pedalOwner"], "pedal-1");
+        assert_eq!(
+            wire_value["payload"]["operatorReturnRequestId"],
+            serde_json::json!(null)
+        );
+        let payload_keys = wire_value["payload"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            payload_keys,
+            BTreeSet::from([
+                "loopActive",
+                "operatorReturnRequestId",
+                "pedalOwner",
+                "playSessionId",
+                "positionBars",
+                "releaseEventId",
+                "state",
+                "timelineId",
+                "transitionHoldActive",
+            ])
+        );
         assert_eq!(
             wire_value["payload"]["releaseEventId"],
             serde_json::json!(null)
@@ -10979,6 +11158,7 @@ mod tests {
             play_session_id: None,
             pedal_owner: None,
             release_event_id: None,
+            operator_return_request_id: None,
         };
         assert!(registry.queue_outbound_state(state.clone()).unwrap());
         assert!(registry.queue_outbound_state(state).is_err());
@@ -11033,6 +11213,7 @@ mod tests {
             play_session_id: play_session_id.map(str::to_string),
             pedal_owner: pedal_owner.map(str::to_string),
             release_event_id: release_event_id.map(str::to_string),
+            operator_return_request_id: None,
         }
     }
 
@@ -11130,6 +11311,9 @@ mod tests {
         let fresh_transport = DjLinkTimelineState {
             event_id: "syndocal-dj-state-99".to_string(),
             sequence: 42,
+            operator_return_request_id: Some(
+                "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-42".to_string(),
+            ),
             ..baseline.clone()
         };
         assert!(dj_link_state_truth_equal(&baseline, &fresh_transport));
@@ -11149,6 +11333,7 @@ mod tests {
         assert_eq!(delivered[0].event_id, "syndocal-dj-state-1");
         assert_eq!(delivered[0].sequence, 1);
         assert_eq!(delivered[0].play_session_id.as_deref(), Some("play-1"));
+        assert_eq!(delivered[0].operator_return_request_id, None);
         registry.note_outbound_state(&delivered[0], &delivered[0].event_id, delivered[0].sequence);
 
         // Identical truth stays suppressed even with a fresh transport
@@ -11224,12 +11409,446 @@ mod tests {
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].play_session_id, None);
         assert_eq!(delivered[0].pedal_owner, None);
+        assert!(registry
+            .queue_outbound_state(DjLinkTimelineState {
+                operator_return_request_id: Some("caller-injected-return".to_string()),
+                ..dj_truth_state(None, None, None)
+            })
+            .is_err());
         assert_eq!(delivered[0].release_event_id, None);
         registry.note_outbound_state(&delivered[0], &delivered[0].event_id, delivered[0].sequence);
         assert!(!registry
             .queue_outbound_state(dj_truth_state(None, None, None))
             .unwrap());
         assert!(drain_dj_truth_queue(&receiver).is_empty());
+
+        // An explicit operator return is correlation traffic, not a change
+        // to engine truth. It bypasses semantic deduplication once while
+        // retaining the same snapshot-ready generation fence.
+        let queued_request_id = registry
+            .queue_operator_return_state(dj_truth_state(None, None, None))
+            .unwrap()
+            .expect("operator return must queue a request identity");
+        let delivered = drain_dj_truth_queue(&receiver);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            delivered[0].event_id,
+            format!("syndocal-dj-state-{}", delivered[0].sequence)
+        );
+        let operator_epoch = registry
+            .process_fence
+            .lock()
+            .unwrap()
+            .operator_return_epoch
+            .clone();
+        let expected_operator_request = format!("syndocal-dj-operator-return-{operator_epoch}-1");
+        assert_eq!(
+            delivered[0].operator_return_request_id.as_deref(),
+            Some(expected_operator_request.as_str())
+        );
+        assert_eq!(queued_request_id, expected_operator_request);
+        assert_eq!(delivered[0].play_session_id, None);
+        assert_eq!(delivered[0].pedal_owner, None);
+    }
+
+    #[test]
+    fn dj_link_operator_return_epoch_and_counter_survive_listener_replacement() {
+        fn ready_registry(
+            process_fence: DjLinkProcessFenceHandle,
+            session_id: &str,
+        ) -> (DjLinkRegistry, Receiver<DjLinkOutboundState>) {
+            let mut registry = DjLinkRegistry::with_process_fence(process_fence);
+            let (sender, receiver) = mpsc::sync_channel(DJ_LINK_OUTBOUND_QUEUE_LIMIT);
+            let hello_event = format!("operator-return-hello-{session_id}");
+            registry.inflight.insert(
+                (DJ_V3_AGENT.to_string(), hello_event.clone()),
+                DjLinkInflight {
+                    shape_digest: 0,
+                    process_lifetime_shape_digest: 0,
+                    identity_digest: 0,
+                    sequence: 1,
+                    generation: 0,
+                    is_physical: false,
+                },
+            );
+            registry
+                .register(
+                    DJ_V3_AGENT,
+                    session_id,
+                    1,
+                    &hello_event,
+                    DjLinkRegistrationTransport {
+                        peer: "operator-return-peer".to_string(),
+                        outbound: sender,
+                        now: Instant::now(),
+                    },
+                )
+                .unwrap();
+            registry
+                .inflight
+                .remove(&(DJ_V3_AGENT.to_string(), hello_event));
+            let session = registry.sessions.get_mut(DJ_V3_AGENT).unwrap();
+            session.state_sync_received = true;
+            session.timeline_state_request_received = true;
+            session.snapshot_ready = true;
+            (registry, receiver)
+        }
+
+        let process_fence = new_dj_link_process_fence();
+        let process_epoch = process_fence.lock().unwrap().operator_return_epoch.clone();
+        assert_eq!(process_epoch.len(), 32);
+        assert!(process_epoch
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+
+        let (mut first, first_receiver) =
+            ready_registry(Arc::clone(&process_fence), "operator-return-a");
+        let first_id = first
+            .queue_operator_return_state(dj_truth_state(None, None, None))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-1")
+        );
+        assert_eq!(drain_dj_truth_queue(&first_receiver).len(), 1);
+
+        let (replacement, replacement_receiver) =
+            ready_registry(Arc::clone(&process_fence), "operator-return-b");
+        let mut pending_snapshot = dj_truth_state(None, None, None);
+        pending_snapshot.operator_return_request_id = Some(first_id.clone());
+        replacement
+            .prepare_outbound_timeline_state(
+                DjLinkMessageType::TimelineStateRequest,
+                &mut pending_snapshot,
+            )
+            .unwrap();
+        let replacement_id = pending_snapshot
+            .operator_return_request_id
+            .clone()
+            .expect("replacement snapshot must retain the pending intent");
+        assert_eq!(
+            replacement_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-2")
+        );
+        assert_ne!(replacement_id, first_id);
+        assert!(drain_dj_truth_queue(&replacement_receiver).is_empty());
+
+        let mut non_request_broadcast = dj_truth_state(None, None, None);
+        non_request_broadcast.operator_return_request_id = Some(replacement_id.clone());
+        replacement
+            .prepare_outbound_timeline_state(
+                DjLinkMessageType::StateSync,
+                &mut non_request_broadcast,
+            )
+            .unwrap();
+        assert_eq!(
+            non_request_broadcast.operator_return_request_id.as_deref(),
+            Some(replacement_id.as_str()),
+            "only a fresh snapshot request may reissue a pending operator return"
+        );
+
+        let fresh_process_fence = new_dj_link_process_fence();
+        let fresh_epoch = fresh_process_fence
+            .lock()
+            .unwrap()
+            .operator_return_epoch
+            .clone();
+        assert_ne!(fresh_epoch, process_epoch);
+        let (mut fresh_process, fresh_receiver) =
+            ready_registry(fresh_process_fence, "operator-return-c");
+        let fresh_id = fresh_process
+            .queue_operator_return_state(dj_truth_state(None, None, None))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fresh_id,
+            format!("syndocal-dj-operator-return-{fresh_epoch}-1")
+        );
+        assert_eq!(drain_dj_truth_queue(&fresh_receiver).len(), 1);
+    }
+
+    #[test]
+    fn dj_link_listener_replacement_reissues_pending_operator_return_on_the_wire() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let process_fence = new_dj_link_process_fence();
+        let process_epoch = process_fence.lock().unwrap().operator_return_epoch.clone();
+        let pending_operator_return = Arc::new(Mutex::new(None::<String>));
+        let handler: DjLinkDispatchHandler = {
+            let pending_operator_return = Arc::clone(&pending_operator_return);
+            Arc::new(move |envelope| {
+                if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                    return DjLinkDispatchOutcome::TimelineState {
+                        state_generation: 73,
+                        state: DjLinkTimelineState {
+                            message_type: "DJ_TIMELINE_STATE".to_string(),
+                            event_id: envelope.event_id.clone(),
+                            sequence: envelope.sequence,
+                            state: protocol::DjLinkTimelineStateValue::Idle,
+                            loop_active: false,
+                            transition_hold_active: false,
+                            timeline_id: "operator-return".to_string(),
+                            position_bars: 0,
+                            play_session_id: None,
+                            pedal_owner: None,
+                            release_event_id: None,
+                            operator_return_request_id: pending_operator_return
+                                .lock()
+                                .unwrap()
+                                .clone(),
+                        },
+                    };
+                }
+                DjLinkDispatchOutcome::Accepted {
+                    state_generation: 73,
+                }
+            })
+        };
+        let config = |port| RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            pairing_pin: "123456".to_string(),
+            max_connections: 1,
+            max_messages_per_second: 1_000,
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
+            ..RemoteControlConfig::default()
+        };
+        let start_listener = |port, process_fence, handler: DjLinkDispatchHandler| {
+            RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(
+                config(port),
+                |_| {},
+                || Some(EngineSnapshot::default()),
+                (
+                    VideoRuntimeStatus::default,
+                    default_video_output_render_plans,
+                    default_external_video_io_plans,
+                    default_external_video_transport_status,
+                    default_external_video_transport_sync,
+                ),
+                Some(handler),
+                Some(process_fence),
+            )
+            .unwrap()
+        };
+        let url = format!("ws://127.0.0.1:{port}/dj-link");
+
+        let mut first = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
+        let (mut first_client, _) = tungstenite::connect(url.as_str()).unwrap();
+        let initial_snapshot =
+            complete_dj_v3_snapshot_gate(&mut first_client, port, "operator-return-first", &first);
+        assert_eq!(
+            initial_snapshot["payload"]["operatorReturnRequestId"],
+            Value::Null
+        );
+
+        let first_id = first
+            .queue_dj_link_operator_return_state(dj_truth_state(None, None, None))
+            .unwrap()
+            .expect("explicit operator return must allocate a request ID");
+        assert_eq!(
+            first_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-1")
+        );
+        let delivered_first = match first_client.read().unwrap() {
+            Message::Text(text) => serde_json::from_str::<Value>(&text).unwrap(),
+            other => panic!("unexpected queued operator-return reply: {other:?}"),
+        };
+        assert_eq!(delivered_first["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(
+            delivered_first["payload"]["operatorReturnRequestId"],
+            first_id
+        );
+        *pending_operator_return.lock().unwrap() = Some(first_id.clone());
+
+        // The application handler intentionally continues to expose its old
+        // pending intent.  A replacement listener sharing this process fence
+        // must issue a fresh same-epoch ID only while writing the new
+        // TimelineStateRequest response, never replay the old wire ID.
+        first.stop_and_join();
+        drop(first_client);
+        drop(first);
+
+        let replacement = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
+        let (mut replacement_client, _) = tungstenite::connect(url.as_str()).unwrap();
+        let replacement_snapshot = complete_dj_v3_snapshot_gate(
+            &mut replacement_client,
+            port,
+            "operator-return-replacement",
+            &replacement,
+        );
+        let replacement_id = replacement_snapshot["payload"]["operatorReturnRequestId"]
+            .as_str()
+            .expect("replacement snapshot must carry a fresh operator-return ID");
+        assert_eq!(
+            replacement_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-2")
+        );
+        assert_ne!(replacement_id, first_id);
+        assert_eq!(
+            pending_operator_return.lock().unwrap().as_deref(),
+            Some(first_id.as_str()),
+            "the handler supplied the old pending ID; the listener rewrote only the wire snapshot"
+        );
+        assert_eq!(
+            replacement
+                .dj_link_status()
+                .last_operator_return_request_id
+                .as_deref(),
+            Some(replacement_id)
+        );
+
+        let _ = replacement_client.close(None);
+        drop(replacement_client);
+        drop(replacement);
+    }
+
+    #[test]
+    #[ignore = "requires SYNDOCAL_RB_OUTPUT_TEST_ROOT and a local Node runtime"]
+    fn dj_link_operator_return_replacement_admits_real_rb_output_router_owner() {
+        let rb_output_root = std::env::var_os("SYNDOCAL_RB_OUTPUT_TEST_ROOT")
+            .map(std::path::PathBuf::from)
+            .expect("set SYNDOCAL_RB_OUTPUT_TEST_ROOT to the rb-output checkout");
+        let harness = rb_output_root.join("tests/operator-return-rust-wire-harness.cjs");
+        assert!(
+            harness.is_file(),
+            "rb-output operator-return wire harness is missing: {}",
+            harness.display()
+        );
+        let node = std::env::var_os("NODE").unwrap_or_else(|| "node".into());
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let process_fence = new_dj_link_process_fence();
+        let process_epoch = process_fence.lock().unwrap().operator_return_epoch.clone();
+        let pending_operator_return = Arc::new(Mutex::new(None::<String>));
+        let handler: DjLinkDispatchHandler = {
+            let pending_operator_return = Arc::clone(&pending_operator_return);
+            Arc::new(move |envelope| {
+                if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                    return DjLinkDispatchOutcome::TimelineState {
+                        state_generation: 73,
+                        state: DjLinkTimelineState {
+                            message_type: "DJ_TIMELINE_STATE".to_string(),
+                            event_id: envelope.event_id.clone(),
+                            sequence: envelope.sequence,
+                            state: protocol::DjLinkTimelineStateValue::Idle,
+                            loop_active: false,
+                            transition_hold_active: false,
+                            timeline_id: "operator-return".to_string(),
+                            position_bars: 0,
+                            play_session_id: None,
+                            pedal_owner: None,
+                            release_event_id: None,
+                            operator_return_request_id: pending_operator_return
+                                .lock()
+                                .unwrap()
+                                .clone(),
+                        },
+                    };
+                }
+                DjLinkDispatchOutcome::Accepted {
+                    state_generation: 73,
+                }
+            })
+        };
+        let config = |port| RemoteControlConfig {
+            bind_ip: "127.0.0.1".to_string(),
+            port,
+            pairing_pin: "123456".to_string(),
+            max_connections: 1,
+            max_messages_per_second: 1_000,
+            dj_link_enabled: true,
+            dj_link_bind_ip: Some("127.0.0.1".to_string()),
+            dj_link_token: Some(DJ_V3_TOKEN.to_string()),
+            ..RemoteControlConfig::default()
+        };
+        let start_listener = |port, process_fence, handler: DjLinkDispatchHandler| {
+            RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link_with_process_fence(
+                config(port),
+                |_| {},
+                || Some(EngineSnapshot::default()),
+                (
+                    VideoRuntimeStatus::default,
+                    default_video_output_render_plans,
+                    default_external_video_io_plans,
+                    default_external_video_transport_status,
+                    default_external_video_transport_sync,
+                ),
+                Some(handler),
+                Some(process_fence),
+            )
+            .unwrap()
+        };
+        let url = format!("ws://127.0.0.1:{port}/dj-link");
+
+        // Deliver ID 1 to a real first socket, then retain it only in the
+        // application handler.  The replacement listener must create ID 2
+        // while answering rb-output's fresh TimelineStateRequest.
+        let mut first = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
+        let (mut first_client, _) = tungstenite::connect(url.as_str()).unwrap();
+        complete_dj_v3_snapshot_gate(&mut first_client, port, "rust-wire-first", &first);
+        let first_id = first
+            .queue_dj_link_operator_return_state(dj_truth_state(None, None, None))
+            .unwrap()
+            .expect("explicit operator return must allocate ID 1");
+        assert_eq!(
+            first_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-1")
+        );
+        let _ = first_client.read().unwrap();
+        *pending_operator_return.lock().unwrap() = Some(first_id.clone());
+        first.stop_and_join();
+        drop(first_client);
+        drop(first);
+
+        let replacement = start_listener(port, Arc::clone(&process_fence), Arc::clone(&handler));
+        let output = Command::new(node)
+            .arg(&harness)
+            .env("SYNDOCAL_RUST_WIRE_PORT", port.to_string())
+            .env("SYNDOCAL_RUST_WIRE_OLD_REQUEST_ID", &first_id)
+            .output()
+            .expect("launch rb-output production client/router harness");
+        assert!(
+            output.status.success(),
+            "rb-output wire harness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "rb-output wire harness must emit one JSON result ({error}): {}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        });
+        let replacement_id = result["observedRequestId"]
+            .as_str()
+            .expect("rb-output must report the received replacement request ID");
+        assert_eq!(
+            replacement_id,
+            format!("syndocal-dj-operator-return-{process_epoch}-2")
+        );
+        assert_ne!(replacement_id, first_id);
+        assert_eq!(result["candidateRequests"], 1);
+        assert_eq!(result["ownerDeck"], 1);
+        assert_eq!(result["ownerDeckId"], "rekordbox-deck-1");
+        assert_eq!(result["activePlaySessionId"], "rust-wire-session");
+        assert_eq!(result["ownerSource"], "acknowledged-track-candidate");
+        assert_eq!(
+            pending_operator_return.lock().unwrap().as_deref(),
+            Some(first_id.as_str()),
+            "the application pending intent retains only the obsolete handler ID"
+        );
+        assert_eq!(
+            replacement
+                .dj_link_status()
+                .last_operator_return_request_id
+                .as_deref(),
+            Some(replacement_id),
+            "the real accepted ACTIVE must be preceded by the rewritten wire ID"
+        );
     }
 
     #[test]
@@ -11257,7 +11876,15 @@ mod tests {
             DJ_V3_AGENT,
             "gate-session",
             generation,
-            &replay
+            &replay,
+            false,
+        ));
+        assert!(registry.should_deliver_outbound_state(
+            DJ_V3_AGENT,
+            "gate-session",
+            generation,
+            &replay,
+            true,
         ));
 
         // Ownership-only Release handoff passes the worker delivery gate
@@ -11267,14 +11894,16 @@ mod tests {
             DJ_V3_AGENT,
             "gate-session",
             generation,
-            &handoff
+            &handoff,
+            false,
         ));
         registry.note_outbound_state(&handoff, "evt-handoff", 12);
         assert!(!registry.should_deliver_outbound_state(
             DJ_V3_AGENT,
             "gate-session",
             generation,
-            &handoff
+            &handoff,
+            false,
         ));
         let retained = registry.sessions[DJ_V3_AGENT]
             .last_outbound_state
@@ -11289,7 +11918,8 @@ mod tests {
             DJ_V3_AGENT,
             "gate-session",
             generation,
-            &released
+            &released,
+            false,
         ));
     }
 

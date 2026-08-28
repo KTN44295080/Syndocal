@@ -7,6 +7,10 @@ const geometryLayerSource = await readFile(
   new URL("../src/components/MappingGeometryLayer.tsx", import.meta.url),
   "utf8",
 );
+const mappingFixturesLayerSource = await readFile(
+  new URL("../src/components/MappingFixturesLayer.tsx", import.meta.url),
+  "utf8",
+);
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -169,6 +173,28 @@ const labelsOffResult = layout.planStageFixtureLabels({
   hoveredFixtureId: 40,
 });
 assert.equal(labelsOffResult.labels.length, 0, "the explicit labels toggle must override zoom and priority states");
+
+const globalOnlySelectedResult = layout.planStageFixtureLabels({
+  fixtures: [fixture(42)],
+  viewport,
+  showLabels: true,
+  pickedFixtureId: 42,
+});
+assert.equal(
+  globalOnlySelectedResult.labels.length,
+  1,
+  "the generic planner still supports a single selected fixture for non-Mapping consumers",
+);
+assert.match(
+  mappingFixturesLayerSource,
+  /pickedFixtureIds: props\.selectedFixtureIds/,
+  "Mapping labels must use the mapping-owned selected set",
+);
+assert.doesNotMatch(
+  mappingFixturesLayerSource,
+  /pickedFixtureId:\s*props\.selectedFixtureId/,
+  "Mapping labels must not promote the global selected fixture by itself",
+);
 
 assert.match(
   geometryLayerSource,

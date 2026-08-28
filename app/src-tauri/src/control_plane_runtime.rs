@@ -75,6 +75,7 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
     matches!(
         action,
         OutputControlActionV2::ReleaseBlackout { .. }
+            | OutputControlActionV2::EnableShowSerialDmxRoute { .. }
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
             | OutputControlActionV2::AddDisplay { .. }
@@ -606,6 +607,15 @@ where
             &lease_request,
             lease_now_ms,
         ),
+        OutputControlActionV2::EnableShowSerialDmxRoute { .. } => {
+            super::enable_show_serial_dmx_route_with_output_control_fence(
+                app,
+                state,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+        }
         OutputControlActionV2::ReleaseBlackout { .. } => {
             super::release_safety_blackout_with_output_control_fence(
                 state,
@@ -891,6 +901,9 @@ fn validate_output_action_current(
 ) -> Result<(), String> {
     match action {
         OutputControlActionV2::EnableOutput => Ok(()),
+        OutputControlActionV2::EnableShowSerialDmxRoute { .. } => {
+            super::validate_current_staged_show_serial_dmx_route(state).map(|_| ())
+        }
         OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
             let snapshot = state.engine.snapshot();
@@ -1700,6 +1713,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
     let expected_outcome = match action {
         OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::Arm { .. }
+        | OutputControlActionV2::EnableShowSerialDmxRoute { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
@@ -4530,6 +4544,19 @@ mod tests {
             Err(OutputControlErrorCodeV2::Forbidden)
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let show_serial_route = OutputControlActionV2::EnableShowSerialDmxRoute {
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        assert_eq!(
+            output_confirmation_gate(&show_serial_route, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden),
+            "the COM3 show route can never bypass the local native R4 confirmation"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         let accept_calls = std::sync::atomic::AtomicUsize::new(0);
         let accept = |_: &OutputControlActionV2| {

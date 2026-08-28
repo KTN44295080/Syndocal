@@ -95,7 +95,7 @@ use crossbeam_queue::ArrayQueue;
 use io::{
     artnet::ArtNetSender,
     sacn::SacnSender,
-    serial_dmx::{EnttecOpenDmxSender, EnttecUsbProSender},
+    serial_dmx::{EnttecOpenDmxSender, EnttecUsbProSender, OpenDmxSafetyWriteGate},
 };
 #[cfg(test)]
 use protocol::StageObjectKind;
@@ -127,9 +127,9 @@ use protocol::{
     DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
     EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
     ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MachineOutputRole,
-    MappingEffectDirection, MappingEffectRequest, MediaAssetId, MediaAssetSummary,
-    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    FixtureStageLayout, LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures,
+    MachineOutputRole, MappingEffectDirection, MappingEffectRequest, MediaAssetId,
+    MediaAssetSummary, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
     NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
     NodeGraphSummary, NodeGraphTransformOp, OutputOwnershipReason, OutputOwnershipState,
     OutputOwnershipStatus, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
@@ -2336,6 +2336,8 @@ mod realtime_thread {
 pub enum EngineError {
     #[error("engine command queue is full")]
     QueueFull,
+    #[error("safety blackout authority could not be reserved: {0}")]
+    SafetyBlackoutAuthority(String),
     #[error("{0}")]
     InvalidAllocatorCapacity(String),
 }
@@ -3864,6 +3866,17 @@ define_engine_command! {
     },
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
+    /// The one show-specific route activation path. Its payload is the exact
+    /// disabled route captured after the native control plane's final fence
+    /// and device checks; this command cannot configure arbitrary routes.
+    EnableShowSerialDmxRoutePublished {
+        expected_disabled_output: DmxOutputConfig,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetOutputOwnershipRole {
         role: MachineOutputRole,
         expires_at: Instant,
@@ -4600,6 +4613,23 @@ define_engine_command! {
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Stage-2 F13. This toggles the current runtime loop without resolving
+    /// an authored absolute division; its identity and playing state are
+    /// rechecked by the worker immediately before mutation.
+    DjLinkSetCurrentTimelineLoopEnabled {
+        expected_timeline_id: TimelineId,
+        enabled: bool,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Stage-2 F14. Halve only the active current runtime loop.
+    DjLinkHalfCurrentTimelineLoop {
+        expected_timeline_id: TimelineId,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Authored-grid absolute beat jump used by the DJ Link timeline lane.
     /// The worker validates the active authored Timeline identity and returns
     /// only after the canonical runtime publication has completed.
@@ -5182,6 +5212,8 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::SetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+            | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
             | EngineCommand::ToggleTimelineLoop
             | EngineCommand::ScaleTimelineLoop(_)
             | EngineCommand::SetDirectChildTimelinePlaying { .. }
@@ -5237,6 +5269,7 @@ macro_rules! engine_command_video_presentation_relevance {
             // DMX output routing and DMX input streams are lighting-domain.
             EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
+            | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
             | EngineCommand::ClearDmxInput(_) => false,
             // Output ownership is fenced by its own epoch in every transport;
@@ -5429,6 +5462,8 @@ impl EngineCommand {
                 | EngineCommand::DjLinkStartTimeline { .. }
                 | EngineCommand::DjLinkSyncTimelinePosition { .. }
                 | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+                | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
                 | EngineCommand::DjLinkTimelineBeatJump { .. }
                 | EngineCommand::DjLinkRelease { .. }
                 | EngineCommand::SeekTimeline(_)
@@ -5513,6 +5548,7 @@ impl EngineCommand {
                 | EngineCommand::LoadProjectSnapshotPublished { .. }
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
+                | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
                 | EngineCommand::FenceOutputOwnership { .. }
                 | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -5695,6 +5731,17 @@ pub struct SafetyBlackoutAuthority {
     pub generation: u64,
 }
 
+/// A priority S0 request reserves the safety authority before it is made
+/// visible to the engine worker.  The reservation is intentionally runtime
+/// only: its only purpose is to prevent an ordinary route activation from
+/// publishing a live sender in the safety-drain-to-normal-command interval.
+#[derive(Debug, Clone, Copy)]
+struct SafetyBlackoutEnqueueReservation {
+    before: SafetyBlackoutAuthority,
+    disposition: SafetyBlackoutEngageDisposition,
+    authority: SafetyBlackoutAuthority,
+}
+
 /// One atomic-enough presentation capture for native output transports: the
 /// engine-issued configuration token paired with the snapshot read that
 /// strictly follows it. See [`EngineHandle::video_presentation_sample`].
@@ -5846,7 +5893,16 @@ struct EngineSharedTelemetry {
     queue_push_failure_count: AtomicU64,
     requested_live_audio_clear_generation: AtomicU64,
     live_audio_take_gate: Mutex<()>,
+    /// Serializes the exact linearization point for a priority S0 enqueue
+    /// against show-route publication.  A route may commit only while this
+    /// gate proves that no S0 request has already been enqueued.
+    safety_blackout_enqueue_gate: Mutex<()>,
+    /// Runtime-only physical authority shared with every Open DMX worker.
+    /// It is deliberately outside project persistence: an S0 reservation must
+    /// linearize against BREAK/write_all, not merely an engine mailbox push.
+    open_dmx_safety_write_gate: OpenDmxSafetyWriteGate,
     safety_blackout: Mutex<SafetyBlackoutAuthority>,
+    safety_blackout_enqueue_reservations: Mutex<VecDeque<SafetyBlackoutEnqueueReservation>>,
 }
 
 impl EngineSharedTelemetry {
@@ -5855,11 +5911,14 @@ impl EngineSharedTelemetry {
             queue_push_failure_count: AtomicU64::new(0),
             requested_live_audio_clear_generation: AtomicU64::new(0),
             live_audio_take_gate: Mutex::new(()),
+            safety_blackout_enqueue_gate: Mutex::new(()),
+            open_dmx_safety_write_gate: OpenDmxSafetyWriteGate::new(),
             safety_blackout: Mutex::new(SafetyBlackoutAuthority {
                 engaged: false,
                 epoch: 1,
                 generation: 1,
             }),
+            safety_blackout_enqueue_reservations: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -5900,11 +5959,13 @@ impl EngineSharedTelemetry {
     fn engage_safety_blackout(
         &self,
     ) -> Result<(SafetyBlackoutEngageDisposition, SafetyBlackoutAuthority), String> {
+        let mut physical = self.open_dmx_safety_write_gate.lock()?;
         let mut authority = self
             .safety_blackout
             .lock()
             .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
         if authority.engaged {
+            physical.set_blackout_engaged(true);
             return Ok((SafetyBlackoutEngageDisposition::NoOp, *authority));
         }
         let (epoch, generation) =
@@ -5918,7 +5979,114 @@ impl EngineSharedTelemetry {
             epoch,
             generation,
         };
+        physical.set_blackout_engaged(true);
         Ok((SafetyBlackoutEngageDisposition::Applied, *authority))
+    }
+
+    /// Reserve the authoritative S0 epoch before its priority command is
+    /// queued.  The caller owns `safety_blackout_enqueue_gate`, so a route
+    /// publication cannot observe a clear authority after this returns.
+    fn reserve_safety_blackout_engage(&self) -> Result<SafetyBlackoutEnqueueReservation, String> {
+        let mut physical = self.open_dmx_safety_write_gate.lock()?;
+        let mut authority = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        let before = *authority;
+        if authority.engaged {
+            physical.set_blackout_engaged(true);
+            return Ok(SafetyBlackoutEnqueueReservation {
+                before,
+                disposition: SafetyBlackoutEngageDisposition::NoOp,
+                authority: before,
+            });
+        }
+        let (epoch, generation) =
+            protocol::control_plane_command::next_timeline_transport_authority(
+                authority.epoch,
+                authority.generation,
+            )
+            .ok_or_else(|| "Safety blackout authority is exhausted".to_string())?;
+        *authority = SafetyBlackoutAuthority {
+            engaged: true,
+            epoch,
+            generation,
+        };
+        physical.set_blackout_engaged(true);
+        Ok(SafetyBlackoutEnqueueReservation {
+            before,
+            disposition: SafetyBlackoutEngageDisposition::Applied,
+            authority: *authority,
+        })
+    }
+
+    fn stage_safety_blackout_enqueue_reservation(
+        &self,
+        reservation: SafetyBlackoutEnqueueReservation,
+    ) -> Result<(), String> {
+        self.safety_blackout_enqueue_reservations
+            .lock()
+            .map_err(|_| "Safety blackout enqueue reservations were poisoned".to_string())?
+            .push_back(reservation);
+        Ok(())
+    }
+
+    fn discard_safety_blackout_enqueue_reservation(
+        &self,
+        reservation: SafetyBlackoutEnqueueReservation,
+    ) -> Result<(), String> {
+        let removed = self
+            .safety_blackout_enqueue_reservations
+            .lock()
+            .map_err(|_| "Safety blackout enqueue reservations were poisoned".to_string())?
+            .pop_back()
+            .ok_or_else(|| "Safety blackout enqueue reservation was missing".to_string())?;
+        if removed.authority != reservation.authority
+            || removed.before != reservation.before
+            || removed.disposition != reservation.disposition
+        {
+            return Err("Safety blackout enqueue reservation order was corrupted".to_string());
+        }
+        Ok(())
+    }
+
+    fn take_safety_blackout_enqueue_reservation(
+        &self,
+    ) -> Result<Option<SafetyBlackoutEnqueueReservation>, String> {
+        self.safety_blackout_enqueue_reservations
+            .lock()
+            .map_err(|_| "Safety blackout enqueue reservations were poisoned".to_string())
+            .map(|mut reservations| reservations.pop_front())
+    }
+
+    fn has_pending_safety_blackout_enqueue(&self) -> Result<bool, String> {
+        self.safety_blackout_enqueue_reservations
+            .lock()
+            .map_err(|_| "Safety blackout enqueue reservations were poisoned".to_string())
+            .map(|reservations| !reservations.is_empty())
+    }
+
+    fn rollback_unqueued_safety_blackout_reservation(
+        &self,
+        reservation: SafetyBlackoutEnqueueReservation,
+    ) -> Result<(), String> {
+        if reservation.disposition != SafetyBlackoutEngageDisposition::Applied {
+            return Ok(());
+        }
+        let mut physical = self.open_dmx_safety_write_gate.lock()?;
+        let mut current = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        if *current != reservation.authority {
+            return Err(
+                "Safety blackout authority changed while an unqueued reservation was rolled back"
+                    .to_string(),
+            );
+        }
+        *current = reservation.before;
+        physical.set_blackout_engaged(reservation.before.engaged);
+        Ok(())
     }
 
     fn release_safety_blackout(
@@ -5933,6 +6101,7 @@ impl EngineSharedTelemetry {
         ),
         String,
     > {
+        let mut physical = self.open_dmx_safety_write_gate.lock()?;
         let mut authority = self
             .safety_blackout
             .lock()
@@ -5942,6 +6111,7 @@ impl EngineSharedTelemetry {
         }
         let before = *authority;
         if !authority.engaged {
+            physical.set_blackout_engaged(false);
             return Ok((SafetyBlackoutReleaseDisposition::NoOp, before, before));
         }
         let (epoch, generation) =
@@ -5955,6 +6125,7 @@ impl EngineSharedTelemetry {
             epoch,
             generation,
         };
+        physical.set_blackout_engaged(false);
         Ok((
             SafetyBlackoutReleaseDisposition::Applied,
             before,
@@ -5966,11 +6137,13 @@ impl EngineSharedTelemetry {
         &self,
         authority: SafetyBlackoutAuthority,
     ) -> Result<(), String> {
+        let mut physical = self.open_dmx_safety_write_gate.lock()?;
         let mut current = self
             .safety_blackout
             .lock()
             .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
         *current = authority;
+        physical.set_blackout_engaged(authority.engaged);
         Ok(())
     }
 }
@@ -6497,6 +6670,41 @@ impl EngineHandle {
         self.enqueue_prepared_command(command)
     }
 
+    /// Enable only the native control plane's already-validated staged show
+    /// serial route and wait until the resulting engine snapshot is published.
+    /// The worker repeats the exact route and lighting-authority checks, so a
+    /// caller cannot use this ACK path as a generic output configuration API.
+    pub fn enable_show_serial_dmx_route_published(
+        &self,
+        expected_disabled_output: DmxOutputConfig,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::EnableShowSerialDmxRoutePublished {
+            expected_disabled_output,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| format!("Show serial DMX route activation could not enqueue: {error}"))?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "Show serial DMX route activation did not receive an acknowledged snapshot"
+                    .to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "Show serial DMX route activation worker disconnected before acknowledgement"
+                    .to_string(),
+            ),
+        }
+    }
+
     fn enqueue_prepared_command(&self, command: EngineCommand) -> Result<(), EngineError> {
         if let EngineCommand::ClearLiveAudioInput { generation }
         | EngineCommand::ClearLiveAudioInputPublished { generation, .. } = &command
@@ -6678,6 +6886,47 @@ impl EngineHandle {
         )
     }
 
+    /// Stage-2 F13: toggle the current runtime loop and return only after the
+    /// canonical worker snapshot is published. Unlike the measured Stage-1
+    /// absolute convergence path, this never resolves an authored division.
+    #[doc(hidden)]
+    pub fn dj_link_set_current_timeline_loop_enabled_with_canonical_snapshot(
+        &self,
+        expected_timeline_id: TimelineId,
+        enabled: bool,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+            "DJ Link current loop toggle",
+            |expires_at, admission, ack| EngineCommand::DjLinkSetCurrentTimelineLoopEnabled {
+                expected_timeline_id,
+                enabled,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
+    }
+
+    /// Stage-2 F14: halve the active current runtime loop behind the same
+    /// identity-fenced acknowledgement boundary as F13.
+    #[doc(hidden)]
+    pub fn dj_link_half_current_timeline_loop_with_canonical_snapshot(
+        &self,
+        expected_timeline_id: TimelineId,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+            "DJ Link current loop half",
+            |expires_at, admission, ack| EngineCommand::DjLinkHalfCurrentTimelineLoop {
+                expected_timeline_id,
+                expires_at,
+                admission,
+                ack,
+            },
+        )
+    }
+
     /// Publish a bounded authored-grid beat jump and wait for the worker
     /// acknowledgement.  This is intentionally distinct from the legacy
     /// fire-and-forget `SeekTimelineBeat` command.
@@ -6810,6 +7059,52 @@ impl EngineHandle {
         let command = self
             .prepare_command_for_enqueue(command)
             .map_err(EngineError::InvalidAllocatorCapacity)?;
+        if matches!(command, EngineCommand::SafetyBlackoutEngagePublished { .. }) {
+            // Reserve the S0 authority before the command becomes observable
+            // in the priority queue.  `apply_show_serial_dmx_route_enable_*`
+            // takes this same gate at its irreversible publication point, so
+            // an S0 that has successfully queued can never lose to a
+            // low-latency live DMX tick in the same engine turn.
+            let _enqueue_gate = self
+                .shared_telemetry
+                .safety_blackout_enqueue_gate
+                .lock()
+                .map_err(|_| {
+                    EngineError::SafetyBlackoutAuthority(
+                        "Safety blackout enqueue gate was poisoned".to_string(),
+                    )
+                })?;
+            let reservation = self
+                .shared_telemetry
+                .reserve_safety_blackout_engage()
+                .map_err(EngineError::SafetyBlackoutAuthority)?;
+            self.shared_telemetry
+                .stage_safety_blackout_enqueue_reservation(reservation)
+                .map_err(EngineError::SafetyBlackoutAuthority)?;
+            return match self.safety_queue.push(QueuedEngineCommand {
+                command,
+                queued_at: Instant::now(),
+            }) {
+                Ok(()) => {
+                    self.wake.notify_command();
+                    Ok(())
+                }
+                Err(_) => {
+                    let rollback = self
+                        .shared_telemetry
+                        .discard_safety_blackout_enqueue_reservation(reservation)
+                        .and_then(|()| {
+                            self.shared_telemetry
+                                .rollback_unqueued_safety_blackout_reservation(reservation)
+                        });
+                    self.shared_telemetry.record_queue_push_failure();
+                    match rollback {
+                        Ok(()) => Err(EngineError::QueueFull),
+                        Err(error) => Err(EngineError::SafetyBlackoutAuthority(error)),
+                    }
+                }
+            };
+        }
         match self.safety_queue.push(QueuedEngineCommand {
             command,
             queued_at: Instant::now(),
@@ -10505,6 +10800,7 @@ impl EngineHandle {
             | EngineCommand::RemoveStageObject(_)
             | EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
+            | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
             | EngineCommand::FenceOutputOwnership { .. }
             | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -10586,6 +10882,8 @@ impl EngineHandle {
             | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::SetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+            | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+            | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
             | EngineCommand::DjLinkTimelineBeatJump { .. }
             | EngineCommand::DjLinkRelease { .. }
             | EngineCommand::ToggleTimelineLoop
@@ -11110,6 +11408,10 @@ fn observe_video_effect_legacy_adapter_allocator_sources(
 fn validate_current_schema_snapshot_reference_integrity_for_load(
     snapshot: &EngineSnapshot,
 ) -> Result<(), String> {
+    for fixture in &snapshot.fixtures {
+        protocol::validate_fixture_stage_layout(fixture)
+            .map_err(|error| format!("project snapshot stage layout integrity: {error}"))?;
+    }
     if snapshot.timeline_bank.is_empty() {
         return Ok(());
     }
@@ -11448,6 +11750,7 @@ struct RuntimeFixture {
     mode_index: usize,
     limits: FixtureLimits,
     color_binding: Option<RuntimeColorBinding>,
+    stage_layout: Option<FixtureStageLayout>,
 }
 
 /// Fully validated fixture runtimes and their authored default values. This
@@ -18153,6 +18456,15 @@ enum PendingCommandRollback {
         touch_surface: TouchSurfaceSummary,
         last_error: Option<String>,
     },
+    /// The route begins disabled and has no sender by contract. Retaining
+    /// this exact A image lets an acknowledged publication failure drop the
+    /// newly-opened serial sender and restore the authored disabled route.
+    RestoreShowSerialDmxRouteEnable {
+        output: DmxOutputConfig,
+        dmx_sender_recovery: DmxRouteRecovery,
+        dmx_route_configuration_generation: u64,
+        last_error: Option<String>,
+    },
     ClearBootstrappedVjShow,
     RemoveAddedEffect {
         effect_id: EffectId,
@@ -18468,6 +18780,7 @@ impl PendingCommandRollback {
         matches!(
             self,
             Self::RemoveAddedEffect { .. }
+                | Self::RestoreShowSerialDmxRouteEnable { .. }
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreNodeGraphs { .. }
@@ -18881,8 +19194,13 @@ enum DmxSender {
 }
 
 impl RuntimeDmxOutput {
-    fn new_with_lighting_allowed(config: DmxOutputConfig, lighting_allowed: bool) -> Self {
-        let sender_result = create_enabled_dmx_sender(&config, lighting_allowed);
+    fn new_with_lighting_allowed(
+        config: DmxOutputConfig,
+        lighting_allowed: bool,
+        open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
+    ) -> Self {
+        let sender_result =
+            create_enabled_dmx_sender(&config, lighting_allowed, open_dmx_safety_write_gate);
         let mut recovery = DmxRouteRecovery::default();
         if let Err(error) = &sender_result {
             recovery.record_failure(error.clone(), Instant::now());
@@ -18897,8 +19215,10 @@ impl RuntimeDmxOutput {
     fn new_with_error_and_lighting_allowed(
         config: DmxOutputConfig,
         lighting_allowed: bool,
+        open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
     ) -> (Self, Option<String>) {
-        let sender_result = create_enabled_dmx_sender(&config, lighting_allowed);
+        let sender_result =
+            create_enabled_dmx_sender(&config, lighting_allowed, open_dmx_safety_write_gate);
         let error = sender_result.as_ref().err().cloned();
         (
             Self {
@@ -19025,8 +19345,11 @@ impl EngineRuntime {
         #[cfg(test)] test_publication_failure_flags: (Arc<AtomicBool>, Arc<AtomicBool>),
     ) -> Self {
         let output_ownership_role = output_ownership_gate.status().effective_role;
-        let dmx_sender_result =
-            create_enabled_dmx_sender(&output, output_ownership_role.lighting_allowed());
+        let dmx_sender_result = create_enabled_dmx_sender(
+            &output,
+            output_ownership_role.lighting_allowed(),
+            &shared_telemetry.open_dmx_safety_write_gate,
+        );
         let last_error = dmx_sender_result.as_ref().err().cloned();
         let dmx_sender = dmx_sender_result.ok().flatten();
         #[cfg(test)]
@@ -19282,7 +19605,11 @@ impl EngineRuntime {
 
     fn refresh_dmx_senders_for_ownership(&mut self) -> Option<String> {
         let lighting_allowed = self.output_ownership_role.lighting_allowed();
-        let primary_sender_result = create_enabled_dmx_sender(&self.output, lighting_allowed);
+        let primary_sender_result = create_enabled_dmx_sender(
+            &self.output,
+            lighting_allowed,
+            &self.shared_telemetry.open_dmx_safety_write_gate,
+        );
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         if let Err(error) = &primary_sender_result {
             self.dmx_sender_recovery
@@ -19294,7 +19621,11 @@ impl EngineRuntime {
             .map(|error| format!("DMX output route 0: {error}"));
         self.dmx_sender = primary_sender_result.ok().flatten();
         for (index, output) in self.additional_dmx_outputs.iter_mut().enumerate() {
-            let sender_result = create_enabled_dmx_sender(&output.config, lighting_allowed);
+            let sender_result = create_enabled_dmx_sender(
+                &output.config,
+                lighting_allowed,
+                &self.shared_telemetry.open_dmx_safety_write_gate,
+            );
             output.recovery = DmxRouteRecovery::default();
             if let Err(error) = &sender_result {
                 output
@@ -19417,6 +19748,7 @@ impl EngineRuntime {
                 mode_index,
                 limits: FixtureLimits::default(),
                 color_binding,
+                stage_layout: None,
             };
             occupied.push(runtime_fixture.clone());
             prepared.push(runtime_fixture);
@@ -19730,6 +20062,7 @@ impl EngineRuntime {
         let ingress_current_schema = !snapshot.timeline_bank.is_empty();
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
+        normalize_retired_show_serial_dmx_project_alias(&mut snapshot);
         // Runtime authority is never imported with project JSON or an
         // in-memory authored image. The live process owns its epoch.
         snapshot.timeline.transport_epoch = 0;
@@ -20060,7 +20393,11 @@ impl EngineRuntime {
             .acquire(OutputCapability::Lighting)
             .ok();
         let lighting_allowed = lighting_permit.is_some();
-        let primary_sender_result = create_enabled_dmx_sender(&self.output, lighting_allowed);
+        let primary_sender_result = create_enabled_dmx_sender(
+            &self.output,
+            lighting_allowed,
+            &self.shared_telemetry.open_dmx_safety_write_gate,
+        );
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         if let Err(error) = &primary_sender_result {
             self.dmx_sender_recovery
@@ -20069,7 +20406,13 @@ impl EngineRuntime {
         self.dmx_sender = primary_sender_result.ok().flatten();
         self.additional_dmx_outputs = outputs
             .into_iter()
-            .map(|output| RuntimeDmxOutput::new_with_lighting_allowed(output, lighting_allowed))
+            .map(|output| {
+                RuntimeDmxOutput::new_with_lighting_allowed(
+                    output,
+                    lighting_allowed,
+                    &self.shared_telemetry.open_dmx_safety_write_gate,
+                )
+            })
             .collect();
         self.bump_dmx_route_configuration_generation();
         self.dmx_input_frames.clear();
@@ -20790,6 +21133,8 @@ impl EngineRuntime {
                 EngineCommand::DjLinkStartTimeline { .. }
                     | EngineCommand::DjLinkSyncTimelinePosition { .. }
                     | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                    | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+                    | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
                     | EngineCommand::DjLinkTimelineBeatJump { .. }
                     | EngineCommand::DjLinkRelease { .. }
             );
@@ -20862,6 +21207,8 @@ impl EngineRuntime {
                     | EngineCommand::DjLinkStartTimeline { .. }
                     | EngineCommand::DjLinkSyncTimelinePosition { .. }
                     | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
+                    | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
+                    | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
                     | EngineCommand::DjLinkTimelineBeatJump { .. }
                     | EngineCommand::DjLinkRelease { .. }
                     | EngineCommand::SafetyBlackoutEngagePublished { .. }
@@ -21012,6 +21359,7 @@ impl EngineRuntime {
                     mode_index,
                     limits: FixtureLimits::default(),
                     color_binding,
+                    stage_layout: None,
                 });
                 self.rebuild_lfo_effect_targets();
                 self.rebuild_color_effect_targets();
@@ -21957,7 +22305,11 @@ impl EngineRuntime {
                     .output_ownership_gate
                     .acquire(OutputCapability::Lighting)
                     .ok();
-                match create_enabled_dmx_sender(&self.output, lighting_permit.is_some()) {
+                match create_enabled_dmx_sender(
+                    &self.output,
+                    lighting_permit.is_some(),
+                    &self.shared_telemetry.open_dmx_safety_write_gate,
+                ) {
                     Ok(sender) => {
                         self.dmx_sender = sender;
                         self.last_error = None;
@@ -21983,8 +22335,11 @@ impl EngineRuntime {
                     .acquire(OutputCapability::Lighting)
                     .ok();
                 let lighting_allowed = lighting_permit.is_some();
-                let primary_sender_result =
-                    create_enabled_dmx_sender(&self.output, lighting_allowed);
+                let primary_sender_result = create_enabled_dmx_sender(
+                    &self.output,
+                    lighting_allowed,
+                    &self.shared_telemetry.open_dmx_safety_write_gate,
+                );
                 let mut first_error = primary_sender_result
                     .as_ref()
                     .err()
@@ -22003,6 +22358,7 @@ impl EngineRuntime {
                             RuntimeDmxOutput::new_with_error_and_lighting_allowed(
                                 output,
                                 lighting_allowed,
+                                &self.shared_telemetry.open_dmx_safety_write_gate,
                             );
                         if first_error.is_none() {
                             first_error = error
@@ -22013,6 +22369,41 @@ impl EngineRuntime {
                     .collect();
                 self.bump_dmx_route_configuration_generation();
                 self.last_error = first_error;
+            }
+            EngineCommand::EnableShowSerialDmxRoutePublished {
+                expected_disabled_output,
+                expected_device,
+                expected_safety_epoch,
+                expected_safety_generation,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreShowSerialDmxRouteEnable {
+                    output: self.output.clone(),
+                    dmx_sender_recovery: self.dmx_sender_recovery.clone(),
+                    dmx_route_configuration_generation: self.dmx_route_configuration_generation,
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err(
+                        "Show serial DMX route activation expired before engine execution"
+                            .to_string(),
+                    )
+                } else {
+                    self.apply_show_serial_dmx_route_enable(
+                        &expected_disabled_output,
+                        &expected_device,
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Show serial DMX route activation could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::SetDmxInputFrame {
                 universe,
@@ -22039,10 +22430,31 @@ impl EngineRuntime {
                 expires_at,
                 completion,
             } => {
-                let result = if Instant::now() > expires_at {
-                    Err("Safety blackout expired before engine execution".to_string())
-                } else {
-                    match self.shared_telemetry.engage_safety_blackout() {
+                // A public priority enqueue reserves the authority before it
+                // enters `safety_queue`; consume that exact receipt rather
+                // than attempting to advance the epoch a second time. Direct
+                // runtime tests retain the old unreserved behavior.
+                let reservation = self
+                    .shared_telemetry
+                    .take_safety_blackout_enqueue_reservation();
+                let result = match reservation {
+                    Ok(Some(reservation)) => {
+                        self.safety_blackout_engaged = reservation.authority.engaged;
+                        match completion.outcome.lock() {
+                            Ok(mut slot) => {
+                                *slot = Some(reservation.disposition);
+                                Ok(())
+                            }
+                            Err(_) => {
+                                Err("Safety blackout acknowledgement state was poisoned"
+                                    .to_string())
+                            }
+                        }
+                    }
+                    Ok(None) if Instant::now() > expires_at => {
+                        Err("Safety blackout expired before engine execution".to_string())
+                    }
+                    Ok(None) => match self.shared_telemetry.engage_safety_blackout() {
                         Ok((disposition, authority)) => {
                             self.safety_blackout_engaged = authority.engaged;
                             match completion.outcome.lock() {
@@ -22055,7 +22467,8 @@ impl EngineRuntime {
                             }
                         }
                         Err(error) => Err(error),
-                    }
+                    },
+                    Err(error) => Err(error),
                 };
                 self.pending_command_acks.push(PendingCommandAck {
                     ack: PendingCommandAckSender::Plain(completion.ack),
@@ -25996,6 +26409,105 @@ impl EngineRuntime {
                         "Engine snapshot was busy; DJ Link absolute loop was rolled back",
                 });
             }
+            EngineCommand::DjLinkSetCurrentTimelineLoopEnabled {
+                expected_timeline_id,
+                enabled,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.require_dj_link_timeline(
+                        expected_timeline_id,
+                        true,
+                        "DJ Link current loop timeline identity is stale",
+                    )
+                    .and_then(|_| self.set_current_timeline_loop_enabled_state(enabled))
+                } else {
+                    Err(
+                        "DJ Link current loop toggle expired or was cancelled before commit"
+                            .to_string(),
+                    )
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link current loop toggle was rolled back",
+                });
+            }
+            EngineCommand::DjLinkHalfCurrentTimelineLoop {
+                expected_timeline_id,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt: receipt.clone(),
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.require_dj_link_timeline(
+                        expected_timeline_id,
+                        true,
+                        "DJ Link current loop timeline identity is stale",
+                    )
+                    .and_then(|_| self.scale_current_timeline_loop_state(TimelineLoopScale::Half))
+                } else {
+                    Err(
+                        "DJ Link current loop half expired or was cancelled before commit"
+                            .to_string(),
+                    )
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link current loop half was rolled back",
+                });
+            }
             EngineCommand::DjLinkTimelineBeatJump {
                 timeline_id,
                 bars,
@@ -26089,46 +26601,7 @@ impl EngineRuntime {
                 self.set_timeline_loop_enabled_state(enabled);
             }
             EngineCommand::ScaleTimelineLoop(scale) => {
-                if let (Some(a_ms), Some(b_ms)) = (
-                    self.timeline_loop_runtime.a_ms,
-                    self.timeline_loop_runtime.b_ms,
-                ) {
-                    let length_ms = b_ms.saturating_sub(a_ms).max(1);
-                    let next_millibeats = self.timeline_loop_runtime.musical_length_millibeats.map(
-                        |beats| match scale {
-                            TimelineLoopScale::Half => (beats / 2).max(1),
-                            TimelineLoopScale::Double => beats.saturating_mul(2),
-                        },
-                    );
-                    let next_length_ms = match next_millibeats {
-                        Some(millibeats) => ((millibeats as f64 / 1_000.0) * 60_000.0
-                            / f64::from(self.clock.bpm.max(1.0)))
-                        .round()
-                        .max(1.0) as u64,
-                        None => match scale {
-                            TimelineLoopScale::Half => (length_ms / 2).max(1),
-                            TimelineLoopScale::Double => length_ms.saturating_mul(2),
-                        },
-                    };
-                    let duration = self.timeline_duration_ms();
-                    let next_b_ms = a_ms.saturating_add(next_length_ms).min(duration);
-                    if next_b_ms > a_ms {
-                        self.timeline_loop_runtime.b_ms = Some(next_b_ms);
-                        if next_millibeats.is_some() {
-                            let actual_length_ms = next_b_ms - a_ms;
-                            self.timeline_loop_runtime.musical_length_millibeats = Some(
-                                ((actual_length_ms as f64 * f64::from(self.clock.bpm.max(1.0))
-                                    / 60_000.0)
-                                    * 1_000.0)
-                                    .round()
-                                    .max(1.0) as u64,
-                            );
-                        }
-                        self.timeline_loop_runtime.generation =
-                            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
-                        self.refresh_timeline_loop_runtime_status();
-                    }
-                }
+                let _ = self.scale_current_timeline_loop_state(scale);
             }
             EngineCommand::SeekTimeline(position_ms) => {
                 let now = Instant::now();
@@ -28143,6 +28616,21 @@ impl EngineRuntime {
                 self.touch_surface = touch_surface;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreShowSerialDmxRouteEnable {
+                output,
+                dmx_sender_recovery,
+                dmx_route_configuration_generation,
+                last_error,
+            } => {
+                // This operation admits only a disabled, sender-free single
+                // route. Dropping B's serial worker before restoring A keeps
+                // a failed publication from leaving a live physical output.
+                self.dmx_sender = None;
+                self.output = output;
+                self.dmx_sender_recovery = dmx_sender_recovery;
+                self.dmx_route_configuration_generation = dmx_route_configuration_generation;
+                self.last_error = last_error;
+            }
             PendingCommandRollback::ClearBootstrappedVjShow => {
                 self.media_assets.clear();
                 self.video_layers.clear();
@@ -29906,7 +30394,29 @@ impl EngineRuntime {
         self.advance_video_output_fades(now);
         self.expire_effect_transitions(now);
 
-        let mut frames_by_universe = self.render_dmx_preview_frames(now);
+        // S0 safety is sampled fail-closed for preview telemetry.  Actual
+        // sender boundaries take the short shared physical gate below; do not
+        // hold that gate while a sender is created/reconnected.
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let shared_safety_blackout_engaged = shared_telemetry
+            .safety_blackout
+            .lock()
+            .map(|authority| authority.engaged)
+            .unwrap_or(true)
+            || shared_telemetry
+                .open_dmx_safety_write_gate
+                .blackout_engaged()
+                .unwrap_or(true);
+        let effective_safety_blackout =
+            self.safety_blackout_engaged || shared_safety_blackout_engaged;
+        let mut frames_by_universe = if effective_safety_blackout {
+            self.dmx_preview_universes()
+                .into_iter()
+                .map(|universe| (universe, [0u8; 512]))
+                .collect()
+        } else {
+            self.render_dmx_preview_frames(now)
+        };
         if let Some(transition) = &self.timeline_follow_transition {
             let elapsed_ms = now
                 .saturating_duration_since(transition.started_at)
@@ -29932,7 +30442,13 @@ impl EngineRuntime {
         let frame = frames_by_universe
             .get(&self.output.universe)
             .copied()
-            .unwrap_or_else(|| self.render_dmx_frame_for_universe(self.output.universe, now));
+            .unwrap_or_else(|| {
+                if effective_safety_blackout {
+                    [0u8; 512]
+                } else {
+                    self.render_dmx_frame_for_universe(self.output.universe, now)
+                }
+            });
         self.last_frame = frame;
         self.last_frames_by_universe = frames_by_universe.clone();
 
@@ -29960,6 +30476,7 @@ impl EngineRuntime {
                 &frame,
                 now,
                 lighting_allowed,
+                &shared_telemetry,
             );
             let recovery = self.dmx_sender_recovery.clone();
             self.record_dmx_route_send_outcome(0, main_output.universe, outcome, &recovery, now);
@@ -29978,7 +30495,13 @@ impl EngineRuntime {
             let config = self.additional_dmx_outputs[index].config.clone();
             let frame = frames_by_universe
                 .remove(&config.universe)
-                .unwrap_or_else(|| self.render_dmx_frame_for_universe(config.universe, now));
+                .unwrap_or_else(|| {
+                    if effective_safety_blackout {
+                        [0u8; 512]
+                    } else {
+                        self.render_dmx_frame_for_universe(config.universe, now)
+                    }
+                });
             let route_index = index + 1;
             if !config.enabled {
                 let recovery = self.additional_dmx_outputs[index].recovery.clone();
@@ -29999,6 +30522,7 @@ impl EngineRuntime {
                 &frame,
                 now,
                 lighting_allowed,
+                &shared_telemetry,
             );
             let recovery = output.recovery.clone();
             self.record_dmx_route_send_outcome(
@@ -30016,7 +30540,6 @@ impl EngineRuntime {
                 self.record_dmx_output_tick(now);
             }
         }
-
         self.acknowledge_timeline_follow_lighting_settlement(now);
         self.refresh_timeline_follow_video_render_snapshot();
 
@@ -42146,6 +42669,119 @@ impl EngineRuntime {
         }
     }
 
+    /// Strict current-runtime loop transition used by Stage-2 F13.  This is
+    /// intentionally separate from authored absolute convergence: disabling
+    /// a transition hold preserves its A/B and musical shape so the next F13
+    /// can re-enable that exact first-measure hold.
+    fn set_current_timeline_loop_enabled_state(&mut self, enabled: bool) -> Result<(), String> {
+        let was_enabled = !matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        );
+        if was_enabled == enabled {
+            return Err("DJ Link current loop transition is unchanged".to_string());
+        }
+        if enabled {
+            let (Some(a_ms), Some(b_ms)) = (
+                self.timeline_loop_runtime.a_ms,
+                self.timeline_loop_runtime.b_ms,
+            ) else {
+                return Err("DJ Link current loop enable requires retained A-B bounds".to_string());
+            };
+            if b_ms <= a_ms {
+                return Err("DJ Link current loop enable requires valid A-B bounds".to_string());
+            }
+            // An F13 OFF can deliberately let the Timeline pass B while it
+            // retains the current hold.  Re-enabling that retained loop must
+            // therefore be an actual current-runtime re-entry, not an Armed
+            // status which `advance_timeline` correctly treats as past its
+            // loop window.  Reuse the exact discontinuity machinery of an
+            // ordinary A-B wrap so audio, effects, children, Guide, and
+            // transport authority all describe the same post-ACK image.
+            if self.timeline_position_ms >= b_ms {
+                self.reenter_timeline_loop_at_a(a_ms, Instant::now(), false)?;
+            }
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Armed;
+            self.refresh_timeline_loop_runtime_status();
+        } else {
+            self.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Disabled;
+            // Do not call clear_timeline_follow_destination_hold here: it
+            // deliberately erases bounds for RELEASE, while F13 OFF is only
+            // a reversible current-runtime loop transition.
+            self.timeline_follow_runtime.transition_hold_active = false;
+            self.push_timeline_guide_cue(
+                self.timeline_position_ms,
+                "Break".to_string(),
+                TimelineGuideCueKind::Break,
+            );
+        }
+        self.timeline_loop_runtime.generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        Ok(())
+    }
+
+    /// Shared checked scaling primitive. Legacy generic commands retain their
+    /// no-op-on-invalid behavior by discarding this error; strict DJ commands
+    /// surface it and therefore cannot halve a disabled or malformed loop.
+    fn scale_current_timeline_loop_state(
+        &mut self,
+        scale: TimelineLoopScale,
+    ) -> Result<(), String> {
+        if matches!(
+            self.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ) {
+            return Err("Timeline loop scale requires an active loop".to_string());
+        }
+        let (Some(a_ms), Some(b_ms)) = (
+            self.timeline_loop_runtime.a_ms,
+            self.timeline_loop_runtime.b_ms,
+        ) else {
+            return Err("Timeline loop scale requires A-B bounds".to_string());
+        };
+        if b_ms <= a_ms {
+            return Err("Timeline loop scale requires valid A-B bounds".to_string());
+        }
+        let length_ms = b_ms - a_ms;
+        let next_millibeats = self
+            .timeline_loop_runtime
+            .musical_length_millibeats
+            .map(|beats| match scale {
+                TimelineLoopScale::Half => (beats / 2).max(1),
+                TimelineLoopScale::Double => beats.saturating_mul(2),
+            });
+        let next_length_ms = match next_millibeats {
+            Some(millibeats) => ((millibeats as f64 / 1_000.0) * 60_000.0
+                / f64::from(self.clock.bpm.max(1.0)))
+            .round()
+            .max(1.0) as u64,
+            None => match scale {
+                TimelineLoopScale::Half => (length_ms / 2).max(1),
+                TimelineLoopScale::Double => length_ms.saturating_mul(2),
+            },
+        };
+        let next_b_ms = a_ms
+            .saturating_add(next_length_ms)
+            .min(self.timeline_duration_ms());
+        if next_b_ms <= a_ms {
+            return Err("Timeline loop scale produced invalid A-B bounds".to_string());
+        }
+        self.timeline_loop_runtime.b_ms = Some(next_b_ms);
+        if next_millibeats.is_some() {
+            let actual_length_ms = next_b_ms - a_ms;
+            self.timeline_loop_runtime.musical_length_millibeats = Some(
+                ((actual_length_ms as f64 * f64::from(self.clock.bpm.max(1.0)) / 60_000.0)
+                    * 1_000.0)
+                    .round()
+                    .max(1.0) as u64,
+            );
+        }
+        self.timeline_loop_runtime.generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        self.refresh_timeline_loop_runtime_status();
+        Ok(())
+    }
+
     fn install_timeline_follow_destination_hold(&mut self, hold: TimelineFollowHoldPlan) {
         self.timeline_loop_runtime = TimelineLoopRuntimeSummary {
             generation: next_timeline_runtime_generation(self.timeline_loop_runtime.generation),
@@ -42172,6 +42808,40 @@ impl EngineRuntime {
             "Break".to_string(),
             TimelineGuideCueKind::Break,
         );
+    }
+
+    /// Re-enter an enabled A-B loop at its retained A boundary.  This is used
+    /// both by a normal wrap and by Stage-2 F13 re-enabling a loop after the
+    /// playhead has passed B, so every discontinuity has one transport image.
+    fn reenter_timeline_loop_at_a(
+        &mut self,
+        a_ms: u64,
+        now: Instant,
+        count_wrap: bool,
+    ) -> Result<(), String> {
+        let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
+        let next_audio_transport_revision =
+            self.reserve_timeline_audio_transport_revision_successors(revision_successors)?;
+        self.preflight_timeline_transport_authority_invalidation()?;
+        self.invalidate_timeline_transport_authority()?;
+        if self.timeline_follow_is_abortable() {
+            self.abort_timeline_follow(protocol::TimelineFollowAbortReason::LoopWrap, now);
+        }
+        self.timeline_position_ms = a_ms;
+        self.timeline_audio_transport_revision = next_audio_transport_revision;
+        self.timeline_guide_cues.clear();
+        self.reconcile_timeline_effect_activations_at_position(a_ms, now);
+        self.deactivate_all_child_transports();
+        self.establish_child_transports_at_position(now);
+        if count_wrap {
+            self.timeline_loop_runtime.wrap_count =
+                self.timeline_loop_runtime.wrap_count.saturating_add(1);
+        }
+        self.timeline_loop_runtime.generation =
+            next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+        self.timeline_last_announced_phase_id = None;
+        self.announce_timeline_phase_at(a_ms);
+        Ok(())
     }
 
     /// Advance one monotonically increasing transport segment. Returns true
@@ -42549,39 +43219,14 @@ impl EngineRuntime {
             }
             remaining_ms -= distance_to_b;
             // The tick-level reservation above guarantees this succeeds for
-            // every planned wrap. Keep the mutation first at the individual
-            // boundary too: an unforeseen future caller cannot move a loop
-            // back to `a_ms` and only then discover terminal exhaustion.
-            let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
-            let next_audio_transport_revision = match self
-                .reserve_timeline_audio_transport_revision_successors(revision_successors)
-            {
-                Ok(revision) => revision,
-                Err(error) => {
-                    self.last_error = Some(error);
-                    return;
-                }
-            };
-            if let Err(error) = self.invalidate_timeline_transport_authority() {
+            // every planned wrap. The shared re-entry helper repeats the
+            // single-step preflight before it mutates so Stage-2 F13 and a
+            // worker tick keep the same fail-closed transport contract.
+            if let Err(error) = self.reenter_timeline_loop_at_a(a_ms, now, true) {
                 self.last_error = Some(error);
                 return;
             }
-            if self.timeline_follow_is_abortable() {
-                self.abort_timeline_follow(protocol::TimelineFollowAbortReason::LoopWrap, now);
-            }
-            self.timeline_position_ms = a_ms;
-            self.timeline_audio_transport_revision = next_audio_transport_revision;
-            self.timeline_guide_cues.clear();
-            self.reconcile_timeline_effect_activations_at_position(a_ms, now);
-            self.deactivate_all_child_transports();
-            self.establish_child_transports_at_position(now);
-            self.timeline_loop_runtime.wrap_count =
-                self.timeline_loop_runtime.wrap_count.saturating_add(1);
-            self.timeline_loop_runtime.generation =
-                next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
             completed_wraps = completed_wraps.saturating_add(1);
-            self.timeline_last_announced_phase_id = None;
-            self.announce_timeline_phase_at(a_ms);
             segment_start = a_ms;
             segment_include_start = true;
             if remaining_ms == 0 {
@@ -46546,6 +47191,7 @@ impl EngineRuntime {
                     rotation: fixture.request.rotation,
                     geometries: fixture.profile.geometries.clone(),
                     controls: mode.controls.clone(),
+                    stage_layout: fixture.stage_layout.clone(),
                     attribute_values: self
                         .fixture_attribute_values(fixture, mode.controls.as_slice()),
                     limits: fixture.limits,
@@ -46834,6 +47480,136 @@ impl EngineRuntime {
                     .map(|output| output.config.clone()),
             )
             .collect()
+    }
+
+    fn apply_show_serial_dmx_route_enable_with_sender_factory<F>(
+        &mut self,
+        expected_disabled_output: &DmxOutputConfig,
+        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        mut create_sender: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(
+            &DmxOutputConfig,
+            bool,
+            &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+            &OpenDmxSafetyWriteGate,
+        ) -> Result<Option<DmxSender>, String>,
+    {
+        if !show_serial_dmx_route_is_exact_staged(expected_disabled_output) {
+            return Err(
+                "Show serial DMX route request did not name the exact disabled logical Enttec Open DMX/250000/U0 route"
+                    .to_string(),
+            );
+        }
+        if !self.additional_dmx_outputs.is_empty() {
+            return Err(
+                "Show serial DMX route activation requires exactly one authored DMX route"
+                    .to_string(),
+            );
+        }
+        if self.output != *expected_disabled_output
+            || !show_serial_dmx_route_is_exact_staged(&self.output)
+        {
+            return Err(
+                "Show serial DMX route changed or is already enabled; reload the exact staged show route before enabling"
+                    .to_string(),
+            );
+        }
+        if self.dmx_sender.is_some() {
+            return Err(
+                "Show serial DMX route sender state is ambiguous while the staged route is disabled"
+                    .to_string(),
+            );
+        }
+        if !show_serial_dmx_device_identity_is_exact(expected_device) {
+            return Err(
+                "Show serial DMX route requires an exact machine-local USB-DMX hardware identity"
+                    .to_string(),
+            );
+        }
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Ready
+            || ownership.effective_role != MachineOutputRole::Both
+            || ownership.desired_role != MachineOutputRole::Both
+            || !ownership.lighting_allowed
+        {
+            return Err(
+                "Show serial DMX route activation requires the current local Both lighting authority"
+                    .to_string(),
+            );
+        }
+
+        // Create the serial sender before touching the authoritative route.
+        // A missing/busy/failed selected interface leaves the complete A image untouched.
+        let enabled_output = DmxOutputConfig {
+            enabled: true,
+            ..expected_disabled_output.clone()
+        };
+        let sender = create_sender(
+            &enabled_output,
+            true,
+            expected_device,
+            &self.shared_telemetry.open_dmx_safety_write_gate,
+        )?;
+        // Safety engage uses a priority queue on another worker. Linearize
+        // the route commit against the priority-enqueue gate after opening
+        // but before publishing any live route. A successfully queued S0 has
+        // already reserved its authority epoch, while an S0 that arrives
+        // later cannot enqueue until this non-live commit has finished.
+        // Clone the Arc before taking the guards so they remain independent
+        // of the `self` borrow through the complete output/sender mutation.
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _safety_enqueue_gate = shared_telemetry
+            .safety_blackout_enqueue_gate
+            .lock()
+            .map_err(|_| {
+                "Safety blackout enqueue gate was poisoned before show serial DMX activation"
+                    .to_string()
+            })?;
+        let safety = shared_telemetry.safety_blackout.lock().map_err(|_| {
+            "Safety blackout authority lock was poisoned before show serial DMX activation"
+                .to_string()
+        })?;
+        if shared_telemetry.has_pending_safety_blackout_enqueue()? {
+            return Err(
+                "Show serial DMX route activation was superseded by a queued emergency blackout"
+                    .to_string(),
+            );
+        }
+        if safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return Err(
+                "Show serial DMX route activation was superseded by an emergency blackout authority change"
+                    .to_string(),
+            );
+        }
+        self.output = enabled_output;
+        self.dmx_sender = sender;
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        self.bump_dmx_route_configuration_generation();
+        self.last_error = None;
+        Ok(())
+    }
+
+    fn apply_show_serial_dmx_route_enable(
+        &mut self,
+        expected_disabled_output: &DmxOutputConfig,
+        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+    ) -> Result<(), String> {
+        self.apply_show_serial_dmx_route_enable_with_sender_factory(
+            expected_disabled_output,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            create_verified_show_serial_dmx_sender,
+        )
     }
 
     fn dmx_preview_snapshot(&self) -> Vec<DmxUniversePreview> {
@@ -47312,6 +48088,7 @@ fn runtime_fixture_from_snapshot(fixture: &PatchedFixtureSummary) -> RuntimeFixt
         mode_index: 0,
         limits: normalized_fixture_limits(fixture.limits),
         color_binding,
+        stage_layout: fixture.stage_layout.clone(),
     }
 }
 
@@ -60854,6 +61631,7 @@ fn send_output_frame_with_recovery(
     frame: &[u8; 512],
     now: Instant,
     lighting_allowed: bool,
+    shared_telemetry: &EngineSharedTelemetry,
 ) -> DmxRouteSendOutcome {
     if !lighting_allowed {
         *sender = None;
@@ -60876,7 +61654,13 @@ fn send_output_frame_with_recovery(
     }
     if sender.is_none() {
         recovery.reconnect_attempts = recovery.reconnect_attempts.saturating_add(1);
-        match create_dmx_sender(config) {
+        // Reconnect/open may perform slow OS I/O. It deliberately stays
+        // outside the S0 physical-send boundary; the created Open DMX worker
+        // receives the already-shared physical gate before it can emit.
+        match create_dmx_sender_with_safety_write_gate(
+            config,
+            &shared_telemetry.open_dmx_safety_write_gate,
+        ) {
             Ok(created) => *sender = Some(created),
             Err(error) => {
                 recovery.record_failure(error.clone(), now);
@@ -60887,10 +61671,7 @@ fn send_output_frame_with_recovery(
             }
         }
     }
-    let result = match sender.as_mut() {
-        Some(sender) => sender.send_dmx_frame(universe, frame),
-        None => Err("DMX sender is not initialized".to_string()),
-    };
+    let result = send_dmx_frame_at_safety_boundary(sender, universe, frame, shared_telemetry);
     match result {
         Ok(bytes) => {
             recovery.record_success();
@@ -60910,15 +61691,129 @@ fn send_output_frame_with_recovery(
     }
 }
 
+/// Linearize synchronous Art-Net/sACN/USB-Pro sends and Open-DMX enqueueing
+/// with the same S0 physical-write authority.  The Open-DMX worker rechecks
+/// this gate around its later BREAK/write_all transaction, so its queue hop
+/// cannot reopen a live-output race.
+fn send_dmx_frame_at_safety_boundary(
+    sender: &mut Option<DmxSender>,
+    universe: u16,
+    requested: &[u8; 512],
+    shared_telemetry: &EngineSharedTelemetry,
+) -> Result<usize, String> {
+    let _enqueue_gate = shared_telemetry
+        .safety_blackout_enqueue_gate
+        .lock()
+        .map_err(|_| "Safety blackout enqueue gate was poisoned".to_string())?;
+    let physical = shared_telemetry.open_dmx_safety_write_gate.lock()?;
+    let authority = shared_telemetry
+        .safety_blackout
+        .lock()
+        .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+    let zero = [0u8; 512];
+    let frame = if authority.engaged || physical.blackout_engaged() {
+        &zero
+    } else {
+        requested
+    };
+    match sender.as_mut() {
+        Some(sender) => sender.send_dmx_frame(universe, frame),
+        None => Err("DMX sender is not initialized".to_string()),
+    }
+}
+
 fn create_enabled_dmx_sender(
     output: &DmxOutputConfig,
     lighting_allowed: bool,
+    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
 ) -> Result<Option<DmxSender>, String> {
     if output.enabled && lighting_allowed {
-        create_dmx_sender(output).map(Some)
+        create_dmx_sender_with_safety_write_gate(output, open_dmx_safety_write_gate).map(Some)
     } else {
         Ok(None)
     }
+}
+
+const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
+const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
+
+/// This is deliberately narrower than normal DMX validation. It identifies
+/// the one disabled authored route that the R4 local-confirmed control may
+/// activate; all other output configuration remains unavailable.
+fn show_serial_dmx_route_is_exact_staged(output: &DmxOutputConfig) -> bool {
+    !output.enabled
+        && output.protocol == DmxOutputProtocol::EnttecOpenDmx
+        // The project is portable. The selected COM alias belongs only to
+        // machine-local USB-DMX binding, never to a show/project snapshot.
+        && output.serial_port.is_empty()
+        && output.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
+        && output.universe == SHOW_SERIAL_DMX_UNIVERSE
+}
+
+/// v1 machine-binding clean break: a previously authored Open-DMX COM alias
+/// was a host detail accidentally retained in projects. The only retired
+/// shape we normalize is the disabled production logical route; no enabled or
+/// arbitrary serial route is touched. Saving the loaded project persists the
+/// portable empty alias, while selecting hardware lives exclusively outside
+/// the project in the machine-local store.
+fn normalize_retired_show_serial_dmx_project_alias(snapshot: &mut EngineSnapshot) {
+    let normalize = |output: &mut DmxOutputConfig| {
+        if !output.enabled
+            && output.protocol == DmxOutputProtocol::EnttecOpenDmx
+            && output.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
+            && output.universe == SHOW_SERIAL_DMX_UNIVERSE
+            && !output.serial_port.trim().is_empty()
+        {
+            output.serial_port.clear();
+        }
+    };
+    normalize(&mut snapshot.output);
+    for output in &mut snapshot.dmx_outputs {
+        normalize(output);
+    }
+}
+
+fn show_serial_dmx_device_identity_is_exact(
+    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+) -> bool {
+    !identity.port_name.trim().is_empty()
+        && !identity.port_type.trim().is_empty()
+        && identity.usb_vid != 0
+        && identity.usb_pid != 0
+        && !identity.manufacturer.trim().is_empty()
+        && !identity.product.trim().is_empty()
+        && !identity.serial_number.trim().is_empty()
+        && identity
+            .windows_device_instance_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn create_verified_show_serial_dmx_sender(
+    output: &DmxOutputConfig,
+    lighting_allowed: bool,
+    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
+) -> Result<Option<DmxSender>, String> {
+    if !output.enabled || !lighting_allowed {
+        return Ok(None);
+    }
+    if output.protocol != DmxOutputProtocol::EnttecOpenDmx
+        || !output.serial_port.is_empty()
+        || !show_serial_dmx_device_identity_is_exact(identity)
+    {
+        return Err(
+            "Show serial DMX sender identity is not an exact machine-local USB-DMX binding"
+                .to_string(),
+        );
+    }
+    EnttecOpenDmxSender::new_verified_with_safety_write_gate(
+        identity,
+        open_dmx_safety_write_gate.clone(),
+    )
+    .map(DmxSender::EnttecOpenDmx)
+    .map(Some)
+    .map_err(|error| error.to_string())
 }
 
 impl DmxSender {
@@ -60960,7 +61855,10 @@ fn store_next_id_u32(counter: &AtomicU32, next_id: u32) {
     }
 }
 
-fn create_dmx_sender(output: &DmxOutputConfig) -> Result<DmxSender, String> {
+fn create_dmx_sender_with_safety_write_gate(
+    output: &DmxOutputConfig,
+    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
+) -> Result<DmxSender, String> {
     match output.protocol {
         DmxOutputProtocol::ArtNet => ArtNetSender::new(&output.target_ip, output.port)
             .map(DmxSender::ArtNet)
@@ -60973,9 +61871,12 @@ fn create_dmx_sender(output: &DmxOutputConfig) -> Result<DmxSender, String> {
                 .map(DmxSender::EnttecUsbPro)
                 .map_err(|error| error.to_string())
         }
-        DmxOutputProtocol::EnttecOpenDmx => EnttecOpenDmxSender::new(&output.serial_port)
-            .map(DmxSender::EnttecOpenDmx)
-            .map_err(|error| error.to_string()),
+        DmxOutputProtocol::EnttecOpenDmx => EnttecOpenDmxSender::new_with_safety_write_gate(
+            &output.serial_port,
+            open_dmx_safety_write_gate.clone(),
+        )
+        .map(DmxSender::EnttecOpenDmx)
+        .map_err(|error| error.to_string()),
     }
 }
 
@@ -61619,6 +62520,23 @@ mod tests {
         .mutates_persistence_snapshot());
         assert!(!EngineCommand::TriggerCue(1).mutates_persistence_snapshot());
         assert!(!EngineCommand::SeekTimeline(120).mutates_persistence_snapshot());
+        let (current_loop_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::DjLinkSetCurrentTimelineLoopEnabled {
+            expected_timeline_id: TimelineId(1),
+            enabled: true,
+            expires_at: Instant::now(),
+            admission: ProjectSnapshotLoadAdmission::new_dj_link(),
+            ack: current_loop_ack,
+        }
+        .mutates_persistence_snapshot());
+        let (half_loop_ack, _) = mpsc::sync_channel(1);
+        assert!(!EngineCommand::DjLinkHalfCurrentTimelineLoop {
+            expected_timeline_id: TimelineId(1),
+            expires_at: Instant::now(),
+            admission: ProjectSnapshotLoadAdmission::new_dj_link(),
+            ack: half_loop_ack,
+        }
+        .mutates_persistence_snapshot());
         let (queue_ack, _) = mpsc::sync_channel(1);
         assert!(!EngineCommand::QueueVideoClipSlotPublished {
             layer_id: 1,
@@ -63500,6 +64418,7 @@ mod tests {
             rotation: Default::default(),
             geometries: sample_geometries(),
             controls: sample_profile().dmx_modes[0].controls.clone(),
+            stage_layout: None,
             attribute_values: vec![AttributeValueSummary {
                 attribute: "Dimmer".to_string(),
                 value: 40_000,
@@ -65021,6 +65940,7 @@ mod tests {
                 rotation: Default::default(),
                 geometries: sample_geometries(),
                 controls: vec![dimmer.clone()],
+                stage_layout: None,
                 attribute_values: vec![AttributeValueSummary {
                     attribute: "Dimmer".to_string(),
                     value: 40_000,
@@ -65295,6 +66215,61 @@ mod tests {
         assert!(engine.allocate_video_output_id() > 46);
         assert!(engine.allocate_effect_id() > 47);
         assert!(engine.allocate_node_graph_id() > 48);
+    }
+
+    #[test]
+    fn project_load_snapshot_save_preserves_stage_layout_losslessly() {
+        let mut source = EngineSnapshot::default();
+        let mut fixture = sample_patched_fixture(1, "Physical", 1);
+        fixture.stage_layout = Some(FixtureStageLayout {
+            version: 1,
+            cell_width: 0.75,
+            cell_depth: 0.5,
+            cells: vec![protocol::FixtureStageLayoutCell {
+                beam_index: 0,
+                offset_x: 0.25,
+                offset_z: -0.125,
+                logical_segment_index: None,
+            }],
+            logical_segments: Vec::new(),
+            global_dimmer_control_index: None,
+            global_strobe_control_index: None,
+        });
+        source.fixtures = vec![fixture.clone()];
+
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime
+            .load_project_snapshot_checked(source.clone())
+            .expect("legacy project load must preserve a valid physical-only layout");
+
+        let published = runtime.build_snapshot(0);
+        assert_eq!(published.fixtures[0].stage_layout, fixture.stage_layout);
+        let persisted = runtime.build_persistence_snapshot();
+        assert_eq!(persisted.fixtures[0].stage_layout, fixture.stage_layout);
+        let encoded = serde_json::to_string(&persisted).expect("persist stage layout");
+        let decoded: EngineSnapshot =
+            serde_json::from_str(&encoded).expect("decode persisted stage layout");
+        assert_eq!(decoded.fixtures[0].stage_layout, fixture.stage_layout);
+
+        let mut reloaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        reloaded
+            .load_project_snapshot_checked(decoded)
+            .expect("reload persisted stage layout");
+        let reloaded_persisted = reloaded.build_persistence_snapshot();
+        assert_eq!(
+            reloaded_persisted.fixtures[0].stage_layout,
+            fixture.stage_layout
+        );
+
+        let mut future = source;
+        future.fixtures[0].stage_layout.as_mut().unwrap().version = 2;
+        assert!(reloaded.load_project_snapshot_checked(future).is_err());
     }
 
     #[test]
@@ -66448,6 +67423,7 @@ mod tests {
                 rotation: Default::default(),
                 geometries: sample_geometries(),
                 controls,
+                stage_layout: None,
                 attribute_values: Vec::new(),
                 limits: FixtureLimits::default(),
                 highlighted: false,
@@ -72924,7 +73900,7 @@ mod tests {
         runtime.publish_pending_command_acks(0, &published);
         assert_eq!(
             expired_receiver.recv().unwrap().unwrap_err(),
-            "Cue create expired before engine execution"
+            "Scene capture expired or was cancelled before engine admission"
         );
         assert_eq!(
             runtime.cues.iter().map(cue_summary).collect::<Vec<_>>(),
@@ -79559,15 +80535,18 @@ mod tests {
 
     #[test]
     fn dmxking_ultradmx_uses_enttec_pro_serial_sender_path() {
-        let result = create_dmx_sender(&DmxOutputConfig {
-            enabled: true,
-            protocol: DmxOutputProtocol::DmxKingUltraDmx,
-            target_ip: String::new(),
-            port: 0,
-            universe: 1,
-            serial_port: String::new(),
-            serial_baud_rate: 57_600,
-        });
+        let result = create_dmx_sender_with_safety_write_gate(
+            &DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::DmxKingUltraDmx,
+                target_ip: String::new(),
+                port: 0,
+                universe: 1,
+                serial_port: String::new(),
+                serial_baud_rate: 57_600,
+            },
+            &OpenDmxSafetyWriteGate::new(),
+        );
 
         match result {
             Ok(_) => panic!("DMXKing ultraDMX without a serial port should not create a sender"),
@@ -79606,6 +80585,7 @@ mod tests {
         };
         let mut sender = None;
         let mut recovery = DmxRouteRecovery::default();
+        let telemetry = EngineSharedTelemetry::new();
         let now = Instant::now();
         let frame = [0_u8; 512];
 
@@ -79617,6 +80597,7 @@ mod tests {
             &frame,
             now,
             true,
+            &telemetry,
         );
         assert!(first.attempted);
         assert!(first.result.is_err());
@@ -79630,6 +80611,7 @@ mod tests {
             &frame,
             now + Duration::from_millis(100),
             true,
+            &telemetry,
         );
         assert!(!waiting.attempted);
         assert_eq!(recovery.reconnect_attempts, 1);
@@ -79642,6 +80624,7 @@ mod tests {
             &frame,
             now + Duration::from_millis(251),
             true,
+            &telemetry,
         );
         assert!(retry.attempted);
         assert!(retry.result.is_err());
@@ -97562,6 +98545,7 @@ mod tests {
             mode_index: 0,
             limits: FixtureLimits::default(),
             color_binding,
+            stage_layout: None,
         }
     }
 
@@ -109075,6 +110059,80 @@ mod tests {
         assert!(persisted.timeline.guide_cues.is_empty());
     }
 
+    #[test]
+    fn dj_link_current_runtime_loop_toggle_retains_hold_bounds_and_half_is_strict() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_playing = true;
+        runtime.timeline_audio_duration_ms = 10_000;
+        runtime.timeline_position_ms = 2_500;
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 7,
+            status: TimelineLoopRuntimeStatus::Looping,
+            a_ms: Some(0),
+            b_ms: Some(2_000),
+            musical_length_millibeats: Some(4_000),
+            wrap_count: 0,
+        };
+        runtime.timeline_follow_runtime.transition_hold_active = true;
+
+        runtime
+            .set_current_timeline_loop_enabled_state(false)
+            .unwrap();
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        assert!(!runtime.timeline_follow_runtime.transition_hold_active);
+        assert_eq!(runtime.timeline_loop_runtime.a_ms, Some(0));
+        assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(2_000));
+        assert_eq!(
+            runtime.timeline_loop_runtime.musical_length_millibeats,
+            Some(4_000)
+        );
+        assert_eq!(
+            runtime.timeline_position_ms, 2_500,
+            "F13 OFF is a loop-state transition and must not seek the playhead"
+        );
+
+        runtime
+            .set_current_timeline_loop_enabled_state(true)
+            .unwrap();
+        assert_eq!(
+            runtime.timeline_position_ms, 0,
+            "F13 ON after B must re-enter the retained loop at exact A"
+        );
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Looping
+        ));
+        let wraps_before_reentry_cycle = runtime.timeline_loop_runtime.wrap_count;
+        runtime.last_tick_interval = Duration::from_millis(2_100);
+        runtime.advance_timeline(Instant::now());
+        assert_eq!(runtime.timeline_position_ms, 100);
+        assert_eq!(
+            runtime.timeline_loop_runtime.wrap_count,
+            wraps_before_reentry_cycle + 1,
+            "the re-entered loop must subsequently wrap at its retained B"
+        );
+        runtime
+            .scale_current_timeline_loop_state(TimelineLoopScale::Half)
+            .unwrap();
+        assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(1_000));
+        assert_eq!(
+            runtime.timeline_loop_runtime.musical_length_millibeats,
+            Some(2_000)
+        );
+
+        runtime
+            .set_current_timeline_loop_enabled_state(false)
+            .unwrap();
+        let before_rejected_half = runtime.timeline_loop_runtime.clone();
+        assert!(runtime
+            .scale_current_timeline_loop_state(TimelineLoopScale::Half)
+            .is_err());
+        assert_eq!(runtime.timeline_loop_runtime, before_rejected_half);
+    }
+
     fn dj_link_transaction_test_engine() -> EngineHandle {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -109926,7 +110984,8 @@ mod tests {
 
         // Model a stale outer authority proof: the caller observed a playing
         // Timeline, but the worker receives the command after the playhead has
-        // stopped. Both Stage 2 mutations must reject before touching state.
+        // stopped. Every Stage 2 pedal mutation must reject before touching
+        // state.
         engine
             .send(EngineCommand::SetTimelinePlaying(false))
             .unwrap();
@@ -109939,6 +110998,14 @@ mod tests {
             .contains("already-playing Timeline"));
         assert!(engine
             .dj_link_set_timeline_loop_absolute_with_canonical_snapshot(TimelineId(2), 0, true,)
+            .unwrap_err()
+            .contains("already-playing Timeline"));
+        assert!(engine
+            .dj_link_set_current_timeline_loop_enabled_with_canonical_snapshot(TimelineId(2), true)
+            .unwrap_err()
+            .contains("already-playing Timeline"));
+        assert!(engine
+            .dj_link_half_current_timeline_loop_with_canonical_snapshot(TimelineId(2))
             .unwrap_err()
             .contains("already-playing Timeline"));
         assert_eq!(engine.snapshot(), stopped_before);
@@ -109961,6 +111028,14 @@ mod tests {
             .contains("identity is stale"));
         assert!(engine
             .dj_link_set_timeline_loop_absolute_with_canonical_snapshot(TimelineId(2), 0, true,)
+            .unwrap_err()
+            .contains("identity is stale"));
+        assert!(engine
+            .dj_link_set_current_timeline_loop_enabled_with_canonical_snapshot(TimelineId(2), true)
+            .unwrap_err()
+            .contains("identity is stale"));
+        assert!(engine
+            .dj_link_half_current_timeline_loop_with_canonical_snapshot(TimelineId(2))
             .unwrap_err()
             .contains("identity is stale"));
         assert_eq!(engine.snapshot(), swapped_before);
@@ -123835,6 +124910,7 @@ mod tests {
             rotation: Default::default(),
             geometries: sample_geometries(),
             controls: sample_profile().dmx_modes[0].controls.clone(),
+            stage_layout: None,
             attribute_values: Vec::new(),
             limits: FixtureLimits::default(),
             highlighted: false,
@@ -126418,5 +127494,648 @@ mod tests {
             )
             .is_err());
         assert!(!has_complete(&stale));
+    }
+
+    fn staged_show_serial_dmx_output() -> DmxOutputConfig {
+        DmxOutputConfig {
+            enabled: false,
+            protocol: DmxOutputProtocol::EnttecOpenDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 0,
+            serial_port: String::new(),
+            serial_baud_rate: 250_000,
+        }
+    }
+
+    fn verified_show_serial_dmx_device() -> io::serial_dmx::VerifiedUsbSerialPortIdentity {
+        io::serial_dmx::VerifiedUsbSerialPortIdentity {
+            port_name: "COM3".to_string(),
+            port_type: "USB 0403:6001 USB Serial Port".to_string(),
+            usb_vid: 0x0403,
+            usb_pid: 0x6001,
+            serial_number: "FTDI-SHOW-INSTANCE-1".to_string(),
+            manufacturer: "FTDI".to_string(),
+            product: "USB Serial Port".to_string(),
+            windows_device_instance_id: Some(
+                r"FTDIBUS\VID_0403+PID_6001+FTDI-SHOW-INSTANCE-1\0000".to_string(),
+            ),
+        }
+    }
+
+    fn live_open_dmx_runtime_with_test_sender(
+        shared_telemetry: Arc<EngineSharedTelemetry>,
+        sender: EnttecOpenDmxSender,
+    ) -> EngineRuntime {
+        let mut runtime = EngineRuntime::new_with_shared_telemetry(
+            staged_show_serial_dmx_output(),
+            shared_telemetry,
+        );
+        runtime.output.enabled = true;
+        runtime.dmx_sender = Some(DmxSender::EnttecOpenDmx(sender));
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: PatchFixtureRequest {
+                profile_path: "memory://open-dmx-s0-physical-proof.gdtf".to_string(),
+                mode_name: Some("Standard".to_string()),
+                label: "Open DMX S0 physical-proof fixture".to_string(),
+                universe: 0,
+                address: 1,
+                group_ids: Vec::new(),
+                position: Vec3::default(),
+                rotation: Default::default(),
+            },
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: u16::MAX,
+        });
+        runtime
+    }
+
+    fn wait_for_open_dmx_test_write_count(
+        observation: &io::serial_dmx::OpenDmxTestSerialObservation,
+        minimum: usize,
+    ) -> Vec<io::serial_dmx::OpenDmxTestSerialOperation> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            let operations = observation
+                .operations()
+                .expect("test serial observation must remain available");
+            if operations
+                .iter()
+                .filter(|operation| {
+                    matches!(
+                        operation,
+                        io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(_)
+                    )
+                })
+                .count()
+                >= minimum
+            {
+                return operations;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("Open DMX fake serial port did not complete {minimum} write_all operations");
+    }
+
+    fn assert_open_dmx_physical_operation_order(
+        operations: &[io::serial_dmx::OpenDmxTestSerialOperation],
+    ) {
+        assert!(!operations.is_empty());
+        assert_eq!(operations.len() % 4, 0);
+        for transaction in operations.chunks_exact(4) {
+            assert!(matches!(
+                transaction,
+                [
+                    io::serial_dmx::OpenDmxTestSerialOperation::SetBreak,
+                    io::serial_dmx::OpenDmxTestSerialOperation::ClearBreak,
+                    io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(_),
+                    io::serial_dmx::OpenDmxTestSerialOperation::Flush,
+                ]
+            ));
+        }
+    }
+
+    #[test]
+    fn published_s0_linearizes_with_the_actual_open_dmx_serial_worker_transaction() {
+        // S0-first: the public priority API reserves the shared physical gate
+        // before its queue item is consumed. A subsequently queued live frame
+        // must reach the real worker as BREAK/MAB/write_all/flush zero-only.
+        let s0_first_shared = Arc::new(EngineSharedTelemetry::new());
+        let (s0_first_port, s0_first_observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+        let s0_first_sender = EnttecOpenDmxSender::from_test_serial_port(
+            s0_first_port,
+            s0_first_shared.open_dmx_safety_write_gate.clone(),
+            || {},
+        )
+        .expect("the fake serial port must start the real Open DMX worker");
+        let mut s0_first_runtime =
+            live_open_dmx_runtime_with_test_sender(Arc::clone(&s0_first_shared), s0_first_sender);
+        let s0_first_snapshot = Arc::new(RwLock::new(s0_first_runtime.build_snapshot(0)));
+        let mut s0_first_handle = allocator_test_handle(Arc::clone(&s0_first_snapshot));
+        s0_first_handle.shared_telemetry = Arc::clone(&s0_first_shared);
+        let s0_first_public_handle = s0_first_handle.clone();
+        let s0_first = thread::spawn(move || {
+            s0_first_public_handle
+                .safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while s0_first_handle.safety_queue.is_empty() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert_eq!(s0_first_handle.safety_queue.len(), 1);
+        assert!(s0_first_shared
+            .open_dmx_safety_write_gate
+            .blackout_engaged()
+            .expect("public S0 must reserve the physical worker gate"));
+        s0_first_runtime.tick(1, &s0_first_snapshot);
+        let s0_first_operations = wait_for_open_dmx_test_write_count(&s0_first_observation, 1);
+        s0_first_runtime.consume_commands(&s0_first_handle.safety_queue);
+        s0_first_runtime.publish_pending_command_acks(0, &s0_first_snapshot);
+        assert_eq!(
+            s0_first.join().expect("public S0 caller must not deadlock"),
+            Ok(SafetyBlackoutEngageDisposition::Applied)
+        );
+        s0_first_runtime.dmx_sender = None;
+        assert_open_dmx_physical_operation_order(&s0_first_operations);
+        assert!(s0_first_operations.iter().all(|operation| {
+            match operation {
+                io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(payload) => {
+                    payload.len() == io::serial_dmx::ENTTEC_OPEN_DMX_PAYLOAD_LEN
+                        && payload[0] == io::serial_dmx::ENTTEC_OPEN_DMX_START_CODE
+                        && payload[1..].iter().all(|value| *value == 0)
+                }
+                _ => true,
+            }
+        }));
+
+        // Worker-first: block the fake serial port immediately before the
+        // actual write_all, while the worker owns the physical gate. Public
+        // S0 cannot enqueue until this one live transaction finishes; once it
+        // returns, every later physical transaction is zero-only.
+        let worker_first_shared = Arc::new(EngineSharedTelemetry::new());
+        let physical_entered = Arc::new(Barrier::new(2));
+        let physical_release = Arc::new(Barrier::new(2));
+        let physical_once = Arc::new(AtomicBool::new(true));
+        let (worker_first_port, worker_first_observation) =
+            io::serial_dmx::OpenDmxTestSerialPort::new_with_before_write_all({
+                let physical_entered = Arc::clone(&physical_entered);
+                let physical_release = Arc::clone(&physical_release);
+                let physical_once = Arc::clone(&physical_once);
+                move || {
+                    if physical_once.swap(false, Ordering::AcqRel) {
+                        physical_entered.wait();
+                        physical_release.wait();
+                    }
+                }
+            });
+        let worker_first_sender = EnttecOpenDmxSender::from_test_serial_port(
+            worker_first_port,
+            worker_first_shared.open_dmx_safety_write_gate.clone(),
+            || {},
+        )
+        .expect("the fake serial port must start the real Open DMX worker");
+        let mut worker_first_runtime = live_open_dmx_runtime_with_test_sender(
+            Arc::clone(&worker_first_shared),
+            worker_first_sender,
+        );
+        let worker_first_snapshot = Arc::new(RwLock::new(worker_first_runtime.build_snapshot(0)));
+        let mut worker_first_handle = allocator_test_handle(Arc::clone(&worker_first_snapshot));
+        worker_first_handle.shared_telemetry = Arc::clone(&worker_first_shared);
+        worker_first_runtime.tick(0, &worker_first_snapshot);
+        physical_entered.wait();
+        let (public_s0_started_tx, public_s0_started_rx) = mpsc::sync_channel(1);
+        let worker_first_public_handle = worker_first_handle.clone();
+        let worker_first_s0 = thread::spawn(move || {
+            public_s0_started_tx
+                .send(())
+                .expect("test must observe the public S0 call");
+            worker_first_public_handle
+                .safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
+        });
+        public_s0_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("public S0 thread must begin while write_all is held");
+        assert!(
+            worker_first_handle.safety_queue.is_empty(),
+            "the public S0 must wait for the worker-owned physical transaction"
+        );
+        physical_release.wait();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while worker_first_handle.safety_queue.is_empty() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert_eq!(worker_first_handle.safety_queue.len(), 1);
+        let worker_first_operations =
+            wait_for_open_dmx_test_write_count(&worker_first_observation, 2);
+        worker_first_runtime.consume_commands(&worker_first_handle.safety_queue);
+        worker_first_runtime.publish_pending_command_acks(0, &worker_first_snapshot);
+        assert_eq!(
+            worker_first_s0
+                .join()
+                .expect("public S0 caller must not deadlock"),
+            Ok(SafetyBlackoutEngageDisposition::Applied)
+        );
+        worker_first_runtime.dmx_sender = None;
+        assert_open_dmx_physical_operation_order(&worker_first_operations);
+        let writes = worker_first_operations
+            .iter()
+            .filter_map(|operation| match operation {
+                io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(payload) => Some(payload),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(writes[0][1..].iter().any(|value| *value != 0));
+        assert!(writes[1..]
+            .iter()
+            .all(|payload| payload[1..].iter().all(|value| *value == 0)));
+    }
+
+    #[test]
+    fn retired_disabled_show_serial_com_alias_is_migrated_without_touching_enabled_or_other_routes()
+    {
+        let retired = DmxOutputConfig {
+            serial_port: "COM3".to_string(),
+            ..staged_show_serial_dmx_output()
+        };
+        let enabled = DmxOutputConfig {
+            enabled: true,
+            ..retired.clone()
+        };
+        let other_universe = DmxOutputConfig {
+            universe: 1,
+            ..retired.clone()
+        };
+        let mut snapshot = EngineSnapshot {
+            output: retired.clone(),
+            dmx_outputs: vec![retired, enabled.clone(), other_universe.clone()],
+            ..EngineSnapshot::default()
+        };
+        normalize_retired_show_serial_dmx_project_alias(&mut snapshot);
+        assert!(snapshot.output.serial_port.is_empty());
+        assert!(snapshot.dmx_outputs[0].serial_port.is_empty());
+        assert_eq!(snapshot.dmx_outputs[1], enabled);
+        assert_eq!(snapshot.dmx_outputs[2], other_universe);
+    }
+
+    #[test]
+    fn show_serial_dmx_route_enable_is_exact_atomic_and_sender_bound() {
+        let staged = staged_show_serial_dmx_output();
+        let device = verified_show_serial_dmx_device();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let generation_before = runtime.dmx_route_configuration_generation;
+        let mut sender_inputs = Vec::new();
+
+        runtime
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &device,
+                safety.epoch,
+                safety.generation,
+                |output, allowed, identity, _physical_gate| {
+                    sender_inputs.push((output.clone(), allowed, identity.clone()));
+                    Ok(None)
+                },
+            )
+            .expect("the exact staged show route activates");
+
+        assert_eq!(sender_inputs.len(), 1);
+        assert!(sender_inputs[0].1);
+        assert_eq!(sender_inputs[0].2, device);
+        assert_eq!(
+            sender_inputs[0].0,
+            DmxOutputConfig {
+                enabled: true,
+                ..staged.clone()
+            },
+            "the serial sender receives the exact route with only enabled changed"
+        );
+        assert_eq!(runtime.dmx_output_snapshot().len(), 1);
+        assert_eq!(runtime.output.protocol, DmxOutputProtocol::EnttecOpenDmx);
+        assert!(runtime.output.serial_port.is_empty());
+        assert_eq!(runtime.output.serial_baud_rate, 250_000);
+        assert_eq!(runtime.output.universe, 0);
+        assert!(runtime.output.enabled);
+        assert_eq!(
+            runtime.dmx_route_configuration_generation,
+            generation_before + 1
+        );
+
+        let mut rejected = EngineRuntime::new(staged.clone());
+        let rejected_before = rejected.build_snapshot(0);
+        let rejected_generation = rejected.dmx_route_configuration_generation;
+        let wrong_route = DmxOutputConfig {
+            serial_port: "COM4".to_string(),
+            ..staged.clone()
+        };
+        assert!(rejected
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &wrong_route,
+                &device,
+                safety.epoch,
+                safety.generation,
+                |_, _, _, _| panic!("a rejected route must not reach serial sender creation"),
+            )
+            .is_err());
+        assert_eq!(rejected.build_snapshot(0), rejected_before);
+        assert_eq!(
+            rejected.dmx_route_configuration_generation,
+            rejected_generation
+        );
+
+        let mut missing_instance = device.clone();
+        missing_instance.serial_number.clear();
+        assert!(rejected
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &missing_instance,
+                safety.epoch,
+                safety.generation,
+                |_, _, _, _| panic!(
+                    "an identity without a hardware instance must not open the selected interface"
+                ),
+            )
+            .is_err());
+        assert_eq!(rejected.build_snapshot(0), rejected_before);
+
+        let mut already_enabled = EngineRuntime::new(DmxOutputConfig {
+            enabled: true,
+            ..staged.clone()
+        });
+        let already_enabled_before = already_enabled.build_snapshot(0);
+        assert!(already_enabled
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &device,
+                safety.epoch,
+                safety.generation,
+                |_, _, _, _| panic!(
+                    "an already enabled route must not reach serial sender creation"
+                ),
+            )
+            .is_err());
+        assert_eq!(already_enabled.build_snapshot(0), already_enabled_before);
+
+        let mut multiple_routes = EngineRuntime::new(staged.clone());
+        multiple_routes
+            .additional_dmx_outputs
+            .push(RuntimeDmxOutput {
+                config: DmxOutputConfig {
+                    universe: 1,
+                    ..staged.clone()
+                },
+                sender: None,
+                recovery: DmxRouteRecovery::default(),
+            });
+        let multiple_routes_before = multiple_routes.build_snapshot(0);
+        assert!(multiple_routes
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &device,
+                safety.epoch,
+                safety.generation,
+                |_, _, _, _| panic!(
+                    "multiple authored routes must not reach serial sender creation"
+                ),
+            )
+            .is_err());
+        assert_eq!(multiple_routes.build_snapshot(0), multiple_routes_before);
+
+        let mut unavailable_device = EngineRuntime::new(staged.clone());
+        let unavailable_device_before = unavailable_device.build_snapshot(0);
+        let unavailable_device_generation = unavailable_device.dmx_route_configuration_generation;
+        assert!(unavailable_device
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &device,
+                safety.epoch,
+                safety.generation,
+                |_, _, _, _| Err("selected USB-DMX interface is unavailable".to_string()),
+            )
+            .is_err());
+        assert_eq!(
+            unavailable_device.build_snapshot(0),
+            unavailable_device_before
+        );
+        assert_eq!(
+            unavailable_device.dmx_route_configuration_generation,
+            unavailable_device_generation
+        );
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        rejected.apply_command(EngineCommand::EnableShowSerialDmxRoutePublished {
+            expected_disabled_output: rejected.output.clone(),
+            expected_device: device,
+            expected_safety_epoch: safety.epoch,
+            expected_safety_generation: safety.generation,
+            expires_at: Instant::now() - Duration::from_millis(1),
+            ack,
+        });
+        let published = RwLock::new(rejected_before.clone());
+        rejected.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(rejected.build_snapshot(0), rejected_before);
+        assert_eq!(*published.read().unwrap(), rejected_before);
+    }
+
+    #[test]
+    fn show_serial_dmx_route_enable_linearizes_after_priority_blackout() {
+        let staged = staged_show_serial_dmx_output();
+        let device = verified_show_serial_dmx_device();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let before = runtime.build_snapshot(0);
+        let generation = runtime.dmx_route_configuration_generation;
+        let telemetry = Arc::clone(&runtime.shared_telemetry);
+
+        let result = runtime.apply_show_serial_dmx_route_enable_with_sender_factory(
+            &staged,
+            &device,
+            safety.epoch,
+            safety.generation,
+            |_, _, _, _| {
+                // This is the same mutex transition used by the priority S0
+                // command. It deterministically interleaves after the handle opens
+                // but before the route can become live.
+                telemetry
+                    .engage_safety_blackout()
+                    .expect("priority safety blackout must engage");
+                Ok(None)
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(runtime.shared_telemetry.safety_blackout_authority().engaged);
+        assert_eq!(runtime.build_snapshot(0), before);
+        assert_eq!(runtime.dmx_route_configuration_generation, generation);
+        assert!(runtime.dmx_sender.is_none());
+    }
+
+    #[test]
+    fn show_serial_dmx_route_rejects_an_actual_priority_s0_enqueue_before_any_live_tick() {
+        let staged = staged_show_serial_dmx_output();
+        let device = verified_show_serial_dmx_device();
+        let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime =
+            EngineRuntime::new_with_shared_telemetry(staged.clone(), Arc::clone(&shared_telemetry));
+        let mut handle = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        handle.shared_telemetry = Arc::clone(&shared_telemetry);
+        let safety_before = runtime.shared_telemetry.safety_blackout_authority();
+        let enqueue_handle = handle.clone();
+
+        // This is the real public S0 enqueue path, not a direct mutation of
+        // the shared authority mutex. The handle has no worker, so the test
+        // can deterministically hold its priority queue between the worker's
+        // first safety drain and the normal selected-interface route command.
+        let emergency = thread::spawn(move || {
+            enqueue_handle.safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
+        });
+
+        let route_result = runtime.apply_show_serial_dmx_route_enable_with_sender_factory(
+            &staged,
+            &device,
+            safety_before.epoch,
+            safety_before.generation,
+            |_, _, _, _| {
+                let deadline = Instant::now() + Duration::from_millis(250);
+                while handle.safety_queue.is_empty() && Instant::now() < deadline {
+                    thread::yield_now();
+                }
+                assert_eq!(
+                    handle.safety_queue.len(),
+                    1,
+                    "the actual S0 command must be enqueued before route publication",
+                );
+                Ok(None)
+            },
+        );
+
+        assert!(route_result.is_err());
+        assert!(
+            runtime.shared_telemetry.safety_blackout_authority().engaged,
+            "enqueue itself must reserve the authoritative safety epoch",
+        );
+        assert!(!runtime.output.enabled);
+        assert!(runtime.dmx_sender.is_none());
+
+        // A low-latency tick cannot emit a live frame while the priority S0
+        // remains queued: the route was never committed and therefore no
+        // sender exists to write to physical DMX.
+        let snapshot = RwLock::new(runtime.build_snapshot(0));
+        runtime.tick(handle.safety_queue.len(), &snapshot);
+        let post_tick = runtime.build_snapshot(handle.safety_queue.len());
+        assert_eq!(post_tick.telemetry.total_dmx_send_success_count, 0);
+        assert_eq!(post_tick.telemetry.last_dmx_send_success_count, 0);
+
+        runtime.consume_commands(&handle.safety_queue);
+        runtime.publish_pending_command_acks(0, &snapshot);
+        assert_eq!(
+            emergency.join().expect("S0 enqueue thread panicked"),
+            Ok(SafetyBlackoutEngageDisposition::Applied),
+        );
+        assert!(runtime.safety_blackout_engaged);
+    }
+
+    #[test]
+    fn show_serial_dmx_route_queued_s0_forces_zero_before_the_worker_consumes_priority() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let staged = staged_show_serial_dmx_output();
+        let device = verified_show_serial_dmx_device();
+        let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime =
+            EngineRuntime::new_with_shared_telemetry(staged.clone(), Arc::clone(&shared_telemetry));
+        let mut handle = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        handle.shared_telemetry = Arc::clone(&shared_telemetry);
+        let safety_before = runtime.shared_telemetry.safety_blackout_authority();
+
+        // Commit the exact logical serial route first. The injected Art-Net
+        // sender is a loopback-only test transport; production can only
+        // create the verified Open DMX sender. It proves that the next tick
+        // reaches a real DMX sender boundary rather than merely zeroing a
+        // preview buffer.
+        let loopback_port = receiver.local_addr().unwrap().port();
+        runtime
+            .apply_show_serial_dmx_route_enable_with_sender_factory(
+                &staged,
+                &device,
+                safety_before.epoch,
+                safety_before.generation,
+                |_, _, _, _| {
+                    ArtNetSender::new("127.0.0.1", loopback_port)
+                        .map(DmxSender::ArtNet)
+                        .map(Some)
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .expect("the exact route must commit before the S0 interleave");
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: PatchFixtureRequest {
+                profile_path: "memory://s0-live-frame.gdtf".to_string(),
+                mode_name: Some("Standard".to_string()),
+                label: "S0 live-frame proof fixture".to_string(),
+                universe: 0,
+                address: 1,
+                group_ids: Vec::new(),
+                position: Vec3::default(),
+                rotation: Default::default(),
+            },
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: u16::MAX,
+        });
+
+        let snapshot = RwLock::new(runtime.build_snapshot(0));
+        runtime.tick(0, &snapshot);
+        let mut buffer = [0u8; 600];
+        let (received, _) = receiver
+            .recv_from(&mut buffer)
+            .expect("the committed route must emit the test live frame first");
+        let live_packet = parse_art_dmx_packet(&buffer[..received]).unwrap();
+        assert!(
+            live_packet.data.iter().any(|value| *value != 0),
+            "the pre-S0 route must be observably live"
+        );
+
+        let enqueue_handle = handle.clone();
+        let emergency = thread::spawn(move || {
+            enqueue_handle.safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
+        });
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while handle.safety_queue.is_empty() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert_eq!(handle.safety_queue.len(), 1, "the real S0 must be queued");
+        assert!(runtime.shared_telemetry.safety_blackout_authority().engaged);
+        assert!(
+            runtime
+                .shared_telemetry
+                .open_dmx_safety_write_gate
+                .blackout_engaged()
+                .expect("the actual priority S0 enqueue must reserve the physical Open DMX gate"),
+            "the physical worker gate must turn safer before priority consumption"
+        );
+        assert!(
+            !runtime.safety_blackout_engaged,
+            "the priority command has not reached the worker-local latch"
+        );
+
+        // The queued S0 has not been consumed, so this is the former gap:
+        // shared authority is engaged while the local runtime latch is false.
+        // The tick must still emit only an all-zero blackout frame at the real
+        // sender boundary; no live DMX values may escape.
+        runtime.tick(handle.safety_queue.len(), &snapshot);
+        let (received, _) = receiver
+            .recv_from(&mut buffer)
+            .expect("the safety tick must write the blackout frame");
+        let blackout_packet = parse_art_dmx_packet(&buffer[..received]).unwrap();
+        assert!(
+            blackout_packet.data.iter().all(|value| *value == 0),
+            "a queued S0 must prevent every live DMX byte before worker consumption"
+        );
+        assert!(runtime.last_frame.iter().all(|value| *value == 0));
+        assert!(runtime
+            .last_frames_by_universe
+            .values()
+            .all(|frame| frame.iter().all(|value| *value == 0)));
+
+        runtime.consume_commands(&handle.safety_queue);
+        runtime.publish_pending_command_acks(0, &snapshot);
+        assert_eq!(
+            emergency.join().expect("S0 enqueue thread panicked"),
+            Ok(SafetyBlackoutEngageDisposition::Applied),
+        );
+        assert!(runtime.safety_blackout_engaged);
     }
 }

@@ -1107,9 +1107,55 @@ async function awaitObservedPromises(promises) {
   return results.map((result) => result.value);
 }
 
-async function navigateToReadyAppThroughExpectedBeforeUnload(client, url) {
+async function readAuthoritativeMutationReceiptDocument(client) {
+  return await client.evaluate(`(() => {
+    return {
+      href: location.href,
+      timeOrigin: performance.timeOrigin,
+    };
+  })()`);
+}
+
+async function beginAuthoritativeMutationReceipt(client, operation) {
+  const document = await readAuthoritativeMutationReceiptDocument(client);
+  if (!operation || !document.href || !Number.isFinite(document.timeOrigin)) {
+    throw new Error(`Cannot begin an authoritative mutation receipt for ${operation || "an unnamed mutation"}: ${JSON.stringify(document)}`);
+  }
+  return { operation, ...document };
+}
+
+async function finishAuthoritativeMutationReceipt(client, baseline, mutationProof) {
+  if (!baseline?.operation || !baseline.href || !Number.isFinite(baseline.timeOrigin) || mutationProof?.changed !== true) {
+    throw new Error(`Invalid authoritative mutation receipt: ${JSON.stringify({ baseline, mutationProof })}`);
+  }
+  const document = await readAuthoritativeMutationReceiptDocument(client);
+  if (document.href !== baseline.href || document.timeOrigin !== baseline.timeOrigin) {
+    throw new Error(`Authoritative mutation receipt did not remain on its mutation document: ${JSON.stringify({ baseline, document })}`);
+  }
+  return {
+    operation: baseline.operation,
+    sourceHref: document.href,
+    sourceTimeOrigin: document.timeOrigin,
+    mutationProof,
+  };
+}
+
+async function navigateToReadyAppThroughExpectedBeforeUnload(
+  client,
+  url,
+  { receipt = null } = {},
+) {
   await waitForApp(client);
-  const previousTimeOrigin = await client.evaluate("performance.timeOrigin");
+  const source = await readAuthoritativeMutationReceiptDocument(client);
+  if (receipt && (
+    !receipt.operation ||
+    receipt.mutationProof?.changed !== true ||
+    receipt.sourceHref !== source.href ||
+    receipt.sourceTimeOrigin !== source.timeOrigin
+  )) {
+    throw new Error(`Expected beforeunload receipt is not current and authoritative: ${JSON.stringify({ receipt, source })}`);
+  }
+  const previousTimeOrigin = source.timeOrigin;
   const dialogOpening = client.waitForEvent("Page.javascriptDialogOpening", 8_000);
   const loaded = observePromise(client.waitForEvent("Page.loadEventFired", 8_000));
   const navigation = observePromise(client.send("Page.navigate", { url }));
@@ -1118,6 +1164,9 @@ async function navigateToReadyAppThroughExpectedBeforeUnload(client, url) {
     dialog = await dialogOpening;
     if (dialog?.type !== "beforeunload") {
       throw new Error(`Expected a beforeunload dialog after the authoritative mutation: ${JSON.stringify(dialog)}`);
+    }
+    if (receipt && dialog.url !== receipt.sourceHref) {
+      throw new Error(`beforeunload dialog URL did not match its mutation receipt: ${JSON.stringify({ receipt, dialog })}`);
     }
     await client.send("Page.handleJavaScriptDialog", { accept: true });
     const [navigationResult, loadedResult] = await Promise.all([navigation, loaded]);
@@ -1135,7 +1184,12 @@ async function navigateToReadyAppThroughExpectedBeforeUnload(client, url) {
     previousTimeOrigin,
     actionDescription: "accepted beforeunload navigation",
   });
-  return { ...state, beforeUnloadDialogType: dialog.type };
+  return {
+    ...state,
+    beforeUnloadDialogType: dialog.type,
+    beforeUnloadDialogUrl: dialog.url ?? null,
+    beforeUnloadReceiptOperation: receipt?.operation ?? null,
+  };
 }
 
 async function reloadReadyApp(client) {
@@ -4349,9 +4403,12 @@ async function runStageSettingsCheck(client, viewport) {
   await sleep(160);
   const mappingLinkReturn = await measureStageSettingsState(client);
 
-  const partNames = ["groups", "stage", "selections", "context"];
-  const allPartsPresent = (state) => partNames.every((part) => Boolean(state.persistentBandRects[part]));
-  const allPartsStable = (state) => partNames.every((part) =>
+  // Stage Settings is an in-context disclosure. Opening it intentionally
+  // reallocates only the selection-content row; the fixed band geometry is
+  // the group strip, stage pane, and full right-hand context pane.
+  const fixedPartNames = ["groups", "stage", "context"];
+  const fixedPartsPresent = (state) => fixedPartNames.every((part) => Boolean(state.persistentBandRects[part]));
+  const fixedPartsStable = (state) => fixedPartNames.every((part) =>
     persistentBandRectsWithinTolerance(
       collapsed.persistentBandRects[part],
       state.persistentBandRects[part],
@@ -4379,19 +4436,33 @@ async function runStageSettingsCheck(client, viewport) {
     ["selectionContextLivesInLowerRight", () => collapsed.selectionContextVisible &&
       Boolean(collapsed.persistentBandRects.selections && collapsed.persistentBandRects.context) &&
       collapsed.persistentBandRects.selections.x >= collapsed.persistentBandRects.context.x - 1],
-    ["setupFourRegionRectsPresentAcrossSubtabs", () =>
-      [collapsed, opened, oldStageShortcut, video, io, restored].every(allPartsPresent)],
-    ["setupFourRegionRectsStableAcrossSubtabsWithinHalfPixel", () =>
-      [opened, oldStageShortcut, video, io, restored].every(allPartsStable)],
+    ["setupFixedBandRectsPresentAcrossSubtabs", () =>
+      [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn].every(fixedPartsPresent)],
+    ["setupFixedBandRectsStableAcrossSubtabsWithinHalfPixel", () =>
+      [opened, oldStageShortcut, video, io, restored, mappingLinkReturn].every(fixedPartsStable)],
+    ["selectionContextStaysContainedAcrossSubtabs", () =>
+      [collapsed, opened, oldStageShortcut, video, io, restored].every((state) => {
+        const selections = state.persistentBandRects.selections;
+        const context = state.persistentBandRects.context;
+        if (!selections) return true;
+        return Boolean(
+          context &&
+          state.persistentBandRects.stage.right <= selections.x + 0.5 &&
+          selections.x >= context.x - 0.5 &&
+          selections.right <= context.right + 0.5 &&
+          selections.y >= context.y - 0.5 &&
+          selections.bottom <= context.bottom + 0.5,
+        );
+      })],
     ["setupKeepsBothFixedSplittersAcrossSubtabs", () =>
       [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn]
         .every((state) => Boolean(state.horizontalSplitterRect && state.verticalSplitterRect))],
     ["removedStageShortcutCannotReachExpandedState", () =>
-      oldStageShortcut.legacyExpansionMarkerCount === 0 && allPartsPresent(oldStageShortcut)],
+      oldStageShortcut.legacyExpansionMarkerCount === 0 && fixedPartsPresent(oldStageShortcut)],
     ["controlStageLinkReturnsToFixedSetupPatchBand", () =>
       mappingLinkReturn.setupModePatchActive &&
       mappingLinkReturn.legacyExpansionMarkerCount === 0 &&
-      allPartsPresent(mappingLinkReturn)],
+      fixedPartsPresent(mappingLinkReturn)],
     ["stageSettingsTraversalKeepsDocumentAndAppScrollZero", () =>
       setupStates.every((state) => state.documentAndAppScrollZero)],
   ];
@@ -4419,13 +4490,18 @@ async function runStageSettingsCheck(client, viewport) {
 }
 
 async function runStageSettingsViewport(client, viewport) {
+  // Setup's Pick Visible/Clear Pick contract requires the fixture-bearing
+  // Patch dataset. The focused runner isolates each viewport in a fresh
+  // browser so the fixture's intentional close protection cannot leak into
+  // the next independent viewport measurement.
+  const stageSettingsUrl = fixtureUrl("patch");
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: stageSettingsUrl });
   await waitForApp(client);
   await seedViewportLocalStorage(client);
   await client.evaluate(`(() => {
@@ -4433,7 +4509,7 @@ async function runStageSettingsViewport(client, viewport) {
     const stored = JSON.parse(window.localStorage.getItem(key) || '{}');
     window.localStorage.setItem(key, JSON.stringify({ ...stored, workspace_tab: 'setup', setup_sub_tab: 'mapping' }));
   })()`);
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: stageSettingsUrl });
   await waitForApp(client);
   await sleep(160);
   await clickWorkspaceOption(client, "setup");
@@ -4453,7 +4529,7 @@ async function runStageSettingsViewport(client, viewport) {
   );
   const setupStageBandPickStatesPassed = hasExpectedSetupSurface(setupStageBand);
 
-  await client.send("Page.navigate", { url: appUrl });
+  await client.send("Page.navigate", { url: stageSettingsUrl });
   await waitForApp(client);
   const stageSettings = await runStageSettingsCheck(client, viewport);
   const legacyStoredRouteMigrated =
@@ -4847,18 +4923,25 @@ async function exerciseLegacySetupIoStoredTabs(client) {
   };
 }
 
-async function runSetupVideoViewport(client, viewport) {
+async function runSetupVideoViewport(client, viewport, { navigate = true } = {}) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: appUrl });
-  await waitForApp(client);
-  await clickWorkspaceOption(client, "setup");
-  await clickByText(client, "Video");
-  await clickByText(client, "Outputs");
+  if (navigate) {
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+    await clickWorkspaceOption(client, "setup");
+    await clickByText(client, "Video");
+    await clickByText(client, "Outputs");
+  } else {
+    // The full flow has already navigated through Setup > Video > Outputs.
+    // Do not discard that current document after a layout-only Pick/Clear
+    // probe; it has no mutation receipt that could justify beforeunload.
+    await waitForApp(client);
+  }
   await sleep(180);
 
   const closed = await measure(client, `setup-video-closed-${viewport.width}x${viewport.height}`);
@@ -5257,7 +5340,10 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  const expectedDmxControlCount = 22;
+  // The operator surface now has one explicit staged-show serial-route action
+  // in addition to its existing primary DMX controls. Keep the count exact
+  // and assert that the added control is the intended one.
+  const expectedDmxControlCount = 23;
   const expectedDmxDisclosureCount = 6;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
@@ -5299,6 +5385,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     dmxControlsAndDisclosuresPreserved:
       measurements.io.ioZoneVisibleControlCounts.dmx === expectedDmxControlCount &&
       measurements.io.ioActiveZoneVisibleControlCount === expectedDmxControlCount &&
+      measurements.io.visibleDmxEnableStagedShowSerialRouteCount === 1 &&
       measurements.io.ioZoneDisclosureCounts.dmx === expectedDmxDisclosureCount &&
       measurements.io.ioZoneOpenDisclosureCounts.dmx === 0 &&
       measurements.io.ioDisclosureCount === expectedDmxDisclosureCount,
@@ -5483,7 +5570,11 @@ async function runSetupStageBandSequenceViewport(client, viewport) {
     mappingSceneFxReturnsToVisibleLightingOwner: mappingSceneFxRoutePassed,
     stageBandPickStatesRestoreNeutralTraversal: hasExpectedSetupSurface(stageBand),
     stageBandContinuesIntoUnifiedIo: hasExpectedSetupSurface(io),
-    ioContinuesIntoLightingPatch: hasExpectedSetupSurface(patch),
+    // Pick/Clear deliberately leaves this traversal without a selected
+    // fixture. The normal Patch predicate covers an armed fixture editor;
+    // this route must instead prove the neutral Patch surface remains usable
+    // and does not resurrect inactive selection controls.
+    ioContinuesIntoLightingPatch: hasExpectedNeutralSetupStageBandSequencePatchSurface(patch),
   };
   const failedChecks = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -7086,13 +7177,13 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       initial.fixtureYawHandleCount === 0
       && zoomOne.fixtureYawHandleCount === 0
       && maxZoom.fixtureYawHandleCount === 0,
-    rotateModeShowsOneSmallerHandleForActiveFixture:
+    rotateModeShowsOneScreenFixedAccessibleHandleForActiveFixture:
       rotateMode.fixtureYawHandleCount === 1
       && Boolean(rotateFixtureHandle)
-      && rotateFixtureHandle.targetScreenSizePx === 16
+      && rotateFixtureHandle.targetScreenSizePx === 22
       && rotateFixtureHandle.minimumHitSizePx === 16
-      && rotateFixtureHandle.screenMinPx >= 14
-      && rotateFixtureHandle.screenMaxPx <= 20
+      && rotateFixtureHandle.screenMinPx >= 18
+      && rotateFixtureHandle.screenMaxPx <= 26
       && rotateFixtureHandle.topHitOwnsHandle,
     detachedHandleSetCoversStageObjectGrabHandles:
       stageObjectHandlesAreComplete(zoomOne)
@@ -8368,8 +8459,18 @@ async function measureLayeredTimelineDeskState(client) {
 }
 
 async function runLayeredTimelineDeskCheck(client, viewport) {
+  // The focused runner invokes this directly; retain the same explicit
+  // viewport contract when the full runner isolates it in a fresh browser.
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  traceViewport(`layered timeline initial navigation start ${viewport.width}x${viewport.height}`);
   await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
   await waitForApp(client);
+  traceViewport(`layered timeline initial navigation ready ${viewport.width}x${viewport.height}`);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
   await ensureTimelineShowSurface(client);
@@ -8450,7 +8551,15 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       clickCount: 1,
     });
     await sleep(160);
-    return { dragged: true, during, point };
+    // A resize may temporarily replace the selected marker before the
+    // measurement callback runs. Preserve the DOM hit-tested marker identity
+    // from the active pointer target; an empty identity remains fail-closed.
+    return {
+      dragged: true,
+      during,
+      point,
+      targetEventId: during?.id || point.hitEventId || '',
+    };
   };
   const selectFirstSceneBlock = async () => client.evaluate(`(() => {
     const marker = [...document.querySelectorAll('.timelineMarker.sceneBlock')]
@@ -8467,6 +8576,11 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       width: rect.width,
     };
   })()`);
+  const sceneBlockEventIds = async () => client.evaluate(`(() => (
+    [...document.querySelectorAll('.timelineMarker.sceneBlock')]
+      .map((marker) => marker.getAttribute('data-timeline-event-id') || '')
+      .filter(Boolean)
+  ))()`);
   const readSelectedSceneBlock = async () => client.evaluate(`(() => {
     const marker = document.querySelector('.timelineMarker.sceneBlock.selected');
     if (!marker) return null;
@@ -8484,6 +8598,11 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       liveStamp: marker.querySelector('[data-timeline-live-stamp]')?.textContent?.trim() ?? '',
     };
   })()`);
+  const sameNonemptyEventId = (...states) => {
+    const ids = states.map((state) => state?.id ?? '');
+    return ids.length > 0 && ids.every((id) => typeof id === 'string' && id.length > 0) &&
+      new Set(ids).size === 1;
+  };
 
   const directControls = await client.evaluate(`(() => ({
     stretchToggle: Boolean(document.querySelector('[data-timeline-stretch-mode-toggle]')),
@@ -8492,6 +8611,10 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     magnetToggle: Boolean(document.querySelector('[data-timeline-magnet-toggle]')),
     armButton: Boolean(document.querySelector('.timelineDirectToolbar [data-timeline-arm-cue]')),
   }))()`);
+  const rateMutationBaseline = await beginAuthoritativeMutationReceipt(
+    client,
+    'layered-timeline-rate-resize',
+  );
   await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="RATE"]')?.click()`);
   const rateBefore = await selectFirstSceneBlock();
   await sleep(32);
@@ -8502,13 +8625,37 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     readSelectedSceneBlock,
   );
   const rateAfter = await readSelectedSceneBlock();
+  const rateMutationReceipt = await finishAuthoritativeMutationReceipt(client, rateMutationBaseline, {
+    changed:
+      rateDrag.dragged &&
+      sameNonemptyEventId(rateBefore, { id: rateDrag.targetEventId }, rateAfter) &&
+      rateAfter?.rate !== rateBefore?.rate,
+    eventIds: {
+      before: rateBefore?.id ?? '',
+      during: rateDrag.targetEventId,
+      after: rateAfter?.id ?? '',
+    },
+    beforeRate: rateBefore?.rate ?? null,
+    afterRate: rateAfter?.rate ?? null,
+  });
 
-  await client.send('Page.navigate', { url: fixtureUrl('timeline-layered') });
-  await waitForApp(client);
+  // RATE resize has an exact mutation receipt. Both focused and full
+  // layered checks must accept exactly this document's beforeunload dialog.
+  traceViewport(`layered timeline window reset start ${viewport.width}x${viewport.height}`);
+  const rateMutationNavigation = await navigateToReadyAppThroughExpectedBeforeUnload(
+    client,
+    fixtureUrl('timeline-layered'),
+    { receipt: rateMutationReceipt },
+  );
+  traceViewport(`layered timeline window reset ready ${viewport.width}x${viewport.height}`);
   await clickWorkspaceOption(client, 'control');
   await selectControlSurface(client, 'live');
   await ensureTimelineShowSurface(client);
   await sleep(120);
+  const finalMutationBaseline = await beginAuthoritativeMutationReceipt(
+    client,
+    'layered-timeline-window-fade-placement',
+  );
   await client.evaluate(`document.querySelector('[data-timeline-stretch-mode="WINDOW"]')?.click()`);
   const windowBefore = await selectFirstSceneBlock();
   await sleep(32);
@@ -8518,6 +8665,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   );
   const windowAfter = await readSelectedSceneBlock();
 
+  const fadeInBefore = await readSelectedSceneBlock();
   const fadeInDrag = await dragTimelineElement(
     '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-fade="in"]',
     36,
@@ -8525,6 +8673,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     readSelectedSceneBlock,
   );
   const fadeInAfter = await readSelectedSceneBlock();
+  const fadeOutBefore = await readSelectedSceneBlock();
   const fadeOutDrag = await dragTimelineElement(
     '.timelineMarker.sceneBlock.selected [data-timeline-scene-block-fade="out"]',
     -36,
@@ -8618,6 +8767,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     : Number.POSITIVE_INFINITY;
 
   const placementBefore = await client.evaluate(`document.querySelectorAll('.timelineMarker.sceneBlock').length`);
+  const placementBeforeEventIds = await sceneBlockEventIds();
   await client.evaluate(`document.querySelector('.timelineDirectToolbar [data-timeline-arm-cue]')?.click()`);
   const placementDispatched = await client.evaluate(`(() => {
     const row = document.querySelector('[data-timeline-layer-id="13"].timelineLayerRowBackground');
@@ -8646,6 +8796,10 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   })()`);
   await sleep(180);
   const placementAfter = await client.evaluate(`document.querySelectorAll('.timelineMarker.sceneBlock').length`);
+  const placementAfterEventIds = await sceneBlockEventIds();
+  const placementAddedEventIds = placementAfterEventIds.filter(
+    (eventId) => !placementBeforeEventIds.includes(eventId),
+  );
   const superSceneOpened = await client.evaluate(`(() => {
     const marker = document.querySelector('.timelineMarker.sceneBlock[data-super-scene="true"]');
     if (!marker) return false;
@@ -8712,13 +8866,69 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     controls: directControls,
     rate: { before: rateBefore, drag: rateDrag, after: rateAfter },
     window: { before: windowBefore, drag: windowDrag, after: windowAfter },
-    fadeIn: { drag: fadeInDrag, after: fadeInAfter },
-    fadeOut: { drag: fadeOutDrag, after: fadeOutAfter },
+    fadeIn: { before: fadeInBefore, drag: fadeInDrag, after: fadeInAfter },
+    fadeOut: { before: fadeOutBefore, drag: fadeOutDrag, after: fadeOutAfter },
     escape: { before: escapeBefore, during: escapeDuring, after: escapeAfter },
     wheel: { before: wheelBefore, after: wheelAfter, cursorDriftPx: wheelCursorDriftPx },
-    placement: { before: placementBefore, after: placementAfter, dispatched: placementDispatched },
+    placement: {
+      before: placementBefore,
+      after: placementAfter,
+      beforeEventIds: placementBeforeEventIds,
+      afterEventIds: placementAfterEventIds,
+      addedEventIds: placementAddedEventIds,
+      dispatched: placementDispatched,
+    },
     superScene: { opened: superSceneOpened, toolsOpened: superSceneToolsOpened, child: childTimeline, exitClicked: superSceneExitClicked, restored: superSceneRestored },
   };
+  const finalMutationReceipt = await finishAuthoritativeMutationReceipt(client, finalMutationBaseline, {
+    changed:
+      windowDrag.dragged &&
+      sameNonemptyEventId(
+        windowBefore,
+        { id: windowDrag.targetEventId },
+        windowAfter,
+        fadeInBefore,
+        { id: fadeInDrag.targetEventId },
+        fadeInAfter,
+        fadeOutBefore,
+        { id: fadeOutDrag.targetEventId },
+        fadeOutAfter,
+      ) &&
+      windowAfter?.previewEndMs !== windowBefore?.previewEndMs &&
+      fadeInDrag.dragged &&
+      fadeInAfter?.fadeInMs > 0 &&
+      fadeOutDrag.dragged &&
+      fadeOutAfter?.fadeOutMs > 0 &&
+      placementDispatched &&
+      placementAfter === placementBefore + 1 &&
+      placementAddedEventIds.length === 1 &&
+      placementAddedEventIds[0].length > 0,
+    eventIds: {
+      windowBefore: windowBefore?.id ?? '',
+      windowDuring: windowDrag.targetEventId,
+      windowAfter: windowAfter?.id ?? '',
+      fadeInBefore: fadeInBefore?.id ?? '',
+      fadeInDuring: fadeInDrag.targetEventId,
+      fadeInAfter: fadeInAfter?.id ?? '',
+      fadeOutBefore: fadeOutBefore?.id ?? '',
+      fadeOutDuring: fadeOutDrag.targetEventId,
+      fadeOutAfter: fadeOutAfter?.id ?? '',
+      placed: placementAddedEventIds[0] ?? '',
+    },
+    beforeEndMs: windowBefore?.previewEndMs ?? null,
+    afterEndMs: windowAfter?.previewEndMs ?? null,
+    placementBefore,
+    placementAfter,
+  });
+  // Window/fade/placement has its own fresh receipt. Do not reuse the RATE
+  // receipt or silently assume a dialog from unrelated UI state.
+  traceViewport(`layered timeline return start ${viewport.width}x${viewport.height}`);
+  const finalMutationNavigation = await navigateToReadyAppThroughExpectedBeforeUnload(
+    client,
+    appUrl,
+    { receipt: finalMutationReceipt },
+  );
+  traceViewport(`layered timeline return ready ${viewport.width}x${viewport.height}`);
   const expectedFrameHeight = before.frameHeight;
   const minimumFrameHeight = viewport.height <= 800 ? 120 : 148;
   const conditions = [
@@ -8818,6 +9028,49 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       direct.wheel.after?.documentAndAppScrollZero === true],
     ['timelineArmedCueDoubleClickPlacesNaturalBlock', () =>
       direct.controls.armButton && direct.placement.dispatched && direct.placement.after === direct.placement.before + 1],
+    ['timelineRateResizeBeforeUnloadUsesItsExactMutationReceipt', () =>
+      rateMutationReceipt.operation === 'layered-timeline-rate-resize' &&
+      rateMutationReceipt.mutationProof?.changed === true &&
+      sameNonemptyEventId(direct.rate.before, { id: direct.rate.drag.targetEventId }, direct.rate.after) &&
+      rateMutationReceipt.mutationProof?.eventIds?.before === direct.rate.before?.id &&
+      rateMutationReceipt.mutationProof?.eventIds?.during === direct.rate.drag.targetEventId &&
+      rateMutationReceipt.mutationProof?.eventIds?.after === direct.rate.after?.id &&
+      rateMutationNavigation.beforeUnloadDialogType === 'beforeunload' &&
+      rateMutationNavigation.beforeUnloadDialogUrl === rateMutationReceipt.sourceHref &&
+      rateMutationNavigation.beforeUnloadReceiptOperation === rateMutationReceipt.operation &&
+      rateMutationNavigation.href === new URL(fixtureUrl('timeline-layered')).href &&
+      rateMutationNavigation.timeOrigin !== rateMutationReceipt.sourceTimeOrigin],
+    ['timelineWindowFadePlacementBeforeUnloadUsesItsExactMutationReceipt', () =>
+      finalMutationReceipt.operation === 'layered-timeline-window-fade-placement' &&
+      finalMutationReceipt.mutationProof?.changed === true &&
+      sameNonemptyEventId(
+        direct.window.before,
+        { id: direct.window.drag.targetEventId },
+        direct.window.after,
+        direct.fadeIn.before,
+        { id: direct.fadeIn.drag.targetEventId },
+        direct.fadeIn.after,
+        direct.fadeOut.before,
+        { id: direct.fadeOut.drag.targetEventId },
+        direct.fadeOut.after,
+      ) &&
+      direct.placement.addedEventIds.length === 1 &&
+      direct.placement.addedEventIds[0].length > 0 &&
+      finalMutationReceipt.mutationProof?.eventIds?.windowBefore === direct.window.before?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.windowDuring === direct.window.drag.targetEventId &&
+      finalMutationReceipt.mutationProof?.eventIds?.windowAfter === direct.window.after?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeInBefore === direct.fadeIn.before?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeInDuring === direct.fadeIn.drag.targetEventId &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeInAfter === direct.fadeIn.after?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeOutBefore === direct.fadeOut.before?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeOutDuring === direct.fadeOut.drag.targetEventId &&
+      finalMutationReceipt.mutationProof?.eventIds?.fadeOutAfter === direct.fadeOut.after?.id &&
+      finalMutationReceipt.mutationProof?.eventIds?.placed === direct.placement.addedEventIds[0] &&
+      finalMutationNavigation.beforeUnloadDialogType === 'beforeunload' &&
+      finalMutationNavigation.beforeUnloadDialogUrl === finalMutationReceipt.sourceHref &&
+      finalMutationNavigation.beforeUnloadReceiptOperation === finalMutationReceipt.operation &&
+      finalMutationNavigation.href === new URL(appUrl).href &&
+      finalMutationNavigation.timeOrigin !== finalMutationReceipt.sourceTimeOrigin],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -8837,13 +9090,15 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     restoredLayer,
     muted,
     direct,
+    rateMutationReceipt,
+    rateMutationNavigation,
+    finalMutationReceipt,
+    finalMutationNavigation,
     muteToggleClicked,
     expandToggleClicked,
     collapseToggleClicked,
     expectedFrameHeight,
   };
-  await client.send('Page.navigate', { url: appUrl });
-  await waitForApp(client);
   return result;
 }
 
@@ -9860,7 +10115,7 @@ async function measure(client, label) {
         '.setupContextPane [data-mapping-selection-flags] .mappingFlagActions button'
       ),
       visibleMappingOpenSceneFxButtonCount: visibleCount(
-        '.setupContextPane [data-mapping-selection-flags] .mappingEffectActions button'
+        '.setupContextPane [data-mapping-selection-flags] .mappingEffectActions button.primary'
       ),
       visibleMappingNudgeButtonCount: visibleCount(
         '.setupContextPane [data-mapping-selection-flags] .mappingNudgeGrid button'
@@ -9908,7 +10163,7 @@ async function measure(client, label) {
         '.layoutSetup [data-mapping-selection-action="remove"]'
       ).length,
       mappingSelectionClearCount: document.querySelectorAll(
-        '.layoutSetup [data-mapping-selection-action="clear"]'
+        '.layoutSetup .mappingSearchActions [data-mapping-selection-action="clear"]'
       ).length,
       mappingGroupEditorCount: document.querySelectorAll(
         '.layoutSetup [data-mapping-group-editor]'
@@ -10225,6 +10480,9 @@ async function measure(client, label) {
         setupIoPanel?.querySelector('[data-io-disclosure="dmx-route-actions"]')?.open !== true
       ),
       visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-io .dmxOutputConfigPanel'),
+      visibleDmxEnableStagedShowSerialRouteCount: visibleCount(
+        '.setupMode-io [data-io-control="dmx-enable-staged-show-serial-route"]',
+      ),
       visibleArtRdmPanelCount: visibleCount('.setupMode-io .artRdmPanel'),
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-io .outputDiagnosticsDesk'),
       visibleLightingRuntimeDeskCount: visibleCount('.setupMode-io .lightingRuntimeDesk'),
@@ -12468,7 +12726,7 @@ function largePatchGridScalingChecks(results) {
 
 async function clickSetupStageBandClearPickControl(client) {
   const result = await client.evaluate(`(() => {
-    const selector = '.layoutSetup [data-mapping-selection-action="clear"]';
+    const selector = '.layoutSetup .mappingSearchActions [data-mapping-selection-action="clear"]';
     const controls = [...document.querySelectorAll(selector)];
     const visibleControls = controls.filter((control) => {
       const rect = control.getBoundingClientRect();
@@ -12505,6 +12763,58 @@ async function clickSetupStageBandClearPickControl(client) {
       `Could not click stable Setup stage-band clear-pick control: ${JSON.stringify(result)}`,
     );
   }
+  return result;
+}
+
+async function clickSetupStageBandPickVisibleControl(client) {
+  const result = await client.evaluate(`(() => {
+    const selector = '.layoutSetup .mappingSearchActions button';
+    const controls = [...document.querySelectorAll(selector)];
+    const visibleControls = controls.filter((control) => {
+      const rect = control.getBoundingClientRect();
+      const style = getComputedStyle(control);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden'
+      );
+    });
+    const control = visibleControls.find((candidate) =>
+      (candidate.textContent || '').replace(/\\s+/g, ' ').trim().startsWith('Pick Visible'),
+    );
+    if (!(control instanceof HTMLButtonElement) || control.disabled) {
+      return {
+        clicked: false,
+        selectorCount: controls.length,
+        visibleSelectorCount: visibleControls.length,
+      };
+    }
+    const evidence = {
+      clicked: true,
+      selectorCount: controls.length,
+      visibleSelectorCount: visibleControls.length,
+      text: (control.textContent || '').replace(/\\s+/g, ' ').trim(),
+      insideSelectionActions: Boolean(control.closest('.mappingSearchActions')),
+    };
+    control.click();
+    return evidence;
+  })()`);
+  if (!result.clicked) {
+    throw new Error(
+      `Could not click stable Setup stage-band pick-visible control: ${JSON.stringify(result)}`,
+    );
+  }
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const clear = document.querySelector(
+        '.layoutSetup .mappingSearchActions [data-mapping-selection-action="clear"]',
+      );
+      return clear instanceof HTMLButtonElement && !clear.disabled;
+    })()`,
+    'Setup stage-band Pick Visible selection',
+  );
   return result;
 }
 
@@ -12571,6 +12881,7 @@ function hitStableSetupStageBandClearPickControl(control) {
 }
 
 async function measureSetupStageBandPickStates(client, label) {
+  const pickControl = await clickSetupStageBandPickVisibleControl(client);
   const picked = await measure(client, label);
   const clearControl = await clickSetupStageBandClearPickControl(client);
   await sleep(80);
@@ -12581,10 +12892,44 @@ async function measureSetupStageBandPickStates(client, label) {
     stageBandPickStates: {
       picked: mappingPickStateFromMeasurement(picked),
       cleared: mappingPickStateFromMeasurement(cleared),
+      pickControl,
       clearControl,
       traversalRestored,
     },
   };
+}
+
+function hasExpectedNeutralSetupStageBandSequencePatchSurface(result) {
+  return (
+    result.label.startsWith('setup-patch-sequence-') &&
+    result.visiblePatchActionRowCount === 1 &&
+    result.visiblePatchLeftFormCount === 1 &&
+    result.visiblePatchTopFormCount === 0 &&
+    result.visiblePatchProfileBrowserCount === 1 &&
+    result.visiblePatchProfileSearchCount === 1 &&
+    JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(['verified', 'bundled', 'cache', 'recent', 'share']) &&
+    result.visiblePatchVerifiedProfileTreeCount === 1 &&
+    result.visiblePatchSelectedProfileRowCount === 1 &&
+    result.visiblePatchPrimaryButtonCount === 1 &&
+    result.visiblePatchNextFreeButtonCount === 1 &&
+    result.visibleDmxAddressGridCount === 1 &&
+    result.dmxAddressCellCount === 512 &&
+    result.visibleDmxGridUsageCount === 1 &&
+    result.visibleMappingSelectionFlagsCount === 0 &&
+    result.visibleMappingOpenSceneFxButtonCount === 0 &&
+    result.visibleMappingNudgeButtonCount === 0 &&
+    result.visibleMappingFixtureFlagRowCount === 0 &&
+    result.visibleMappingFixtureCoordinateEditorCount === 0 &&
+    result.visibleMappingFixtureLimitsEditorCount === 0 &&
+    result.visibleFixtureSetupEditorCount === 0 &&
+    result.visibleFixtureSetupEmptyStateCount === 0 &&
+    result.visibleUseProfileForPatchButtonCount === 0 &&
+    result.visibleApplyFixturePatchButtonCount === 0 &&
+    result.visibleRightPatchExecutionFormCount === 0 &&
+    result.visibleDuplicateFixtureButtonCount === 0 &&
+    result.visibleMappingStageObjectGuidanceCount === 1 &&
+    hasExpectedContinuousPatchGrid(result)
+  );
 }
 
 function hasExpectedSetupSurface(result) {
@@ -12602,7 +12947,8 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 22 &&
+      result.ioActiveZoneVisibleControlCount === 23 &&
+      result.visibleDmxEnableStagedShowSerialRouteCount === 1 &&
       JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 6 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
       result.ioDisclosureCount === 6 &&
@@ -12698,6 +13044,7 @@ function hasExpectedSetupSurface(result) {
         (
           hasHiddenMappingPickState(clearedState) &&
           mappingFixedPaneRectsUnchanged(pickedState, clearedState) &&
+          hitStableSetupStageBandPickVisibleControl(result.stageBandPickStates?.pickControl) &&
           hitStableSetupStageBandClearPickControl(result.stageBandPickStates?.clearControl) &&
           hasNeutralSetupStageBandTraversalState(result.stageBandPickStates?.traversalRestored)
         )
@@ -13084,6 +13431,17 @@ function clickLiveAudioControlInPage(kind) {
 async function clickLiveAudioControl(client, kind) {
   return client.evaluate(
     "(" + clickLiveAudioControlInPage.toString() + ")(" + JSON.stringify(kind) + ")",
+  );
+}
+
+function hitStableSetupStageBandPickVisibleControl(control) {
+  return Boolean(
+    control &&
+    control.clicked &&
+    control.selectorCount === 4 &&
+    control.visibleSelectorCount === 4 &&
+    control.text.startsWith("Pick Visible") &&
+    control.insideSelectionActions
   );
 }
 
@@ -16949,7 +17307,7 @@ async function runAutoVjAcceptanceViewport(client, viewport, locale) {
   };
 }
 
-async function runViewport(client, viewport) {
+async function runViewport(client, viewport, { recycleForLayeredTimeline = null } = {}) {
   traceViewport(`start ${viewport.width}x${viewport.height}`);
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -17045,7 +17403,7 @@ async function runViewport(client, viewport) {
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
     const setupContainment = setupTab.id === "video"
-      ? await runSetupVideoViewport(client, viewport)
+      ? await runSetupVideoViewport(client, viewport, { navigate: false })
       : await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
     results.push(setupContainment);
     if (setupTab.id === "patch") {
@@ -17076,9 +17434,22 @@ async function runViewport(client, viewport) {
     persistentControl,
     persistentSetupAfter,
   );
+  traceViewport(`stage settings start ${viewport.width}x${viewport.height}`);
   const stageSettings = await runStageSettingsCheck(client, viewport);
+  traceViewport(`stage settings complete ${viewport.width}x${viewport.height}`);
+  traceViewport(`timeline pane expansion start ${viewport.width}x${viewport.height}`);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
+  traceViewport(`timeline pane expansion complete ${viewport.width}x${viewport.height}`);
+  // Pane expansion is disclosure-only and has no authoritative mutation
+  // receipt. The current full-run document may still have its fixture's
+  // runtime close guard armed, so isolate the independent layered fixture
+  // instead of accepting an unrelated beforeunload dialog.
+  if (recycleForLayeredTimeline) {
+    client = await recycleForLayeredTimeline();
+  }
+  traceViewport(`layered timeline desk start ${viewport.width}x${viewport.height}`);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
+  traceViewport(`layered timeline desk complete ${viewport.width}x${viewport.height}`);
   results.push({
     ...(setupStageBandContainment ?? {}),
     ...persistentSetupAfter,
@@ -17172,6 +17543,10 @@ async function runViewport(client, viewport) {
         'document.querySelector("[data-scene-settings-effect-editor=\\"Color\\"]") !== null',
         `Scene Color FX editor ${viewport.width}x${viewport.height}`,
       );
+      const sceneFxMutationBaseline = await beginAuthoritativeMutationReceipt(
+        client,
+        'control-live-scene-fx-authoring',
+      );
       await clickVisibleByText(client, ".colorEffectPaletteFooter button", "Add stop");
       await client.evaluate(`(() => {
         const removeButtons = [...document.querySelectorAll(
@@ -17192,6 +17567,13 @@ async function runViewport(client, viewport) {
         'document.querySelector("[data-scene-settings-effect-editor=\\"Chaser\\"]") !== null',
         `Scene Chaser FX editor ${viewport.width}x${viewport.height}`,
       );
+      const sceneFxChaserBefore = await client.evaluate(`(() => {
+        const editor = document.querySelector('[data-scene-settings-effect-editor="Chaser"]');
+        return {
+          featureCount: editor?.querySelectorAll('.chaserFeatureRow').length ?? 0,
+          stepCount: editor?.querySelectorAll('.chaserStepRow').length ?? 0,
+        };
+      })()`);
       await clickVisibleByText(client, ".chaserDirectionGrid button", "Random");
       await client.evaluate(`(() => {
         const setInput = (input, value) => {
@@ -17217,6 +17599,40 @@ async function runViewport(client, viewport) {
       await clickVisibleByText(client, ".chaserFeatureFooter button", "Add feature");
       await clickVisibleByText(client, ".chaserTargetDock button", "Append current");
       await sleep(160);
+      const sceneFxMutationProof = await client.evaluate(`(() => {
+        const editor = document.querySelector('[data-scene-settings-effect-editor="Chaser"]');
+        if (!editor) return { changed: false, reason: 'missing-chaser-editor' };
+        const labels = [...editor.querySelectorAll('.chaserEffectEditor label, .effectActionDock > label')];
+        const inputValue = (labelStart) => labels
+          .find((label) => (label.textContent || '').trim().startsWith(labelStart))
+          ?.querySelector('input')?.value ?? null;
+        const randomSelected = [...editor.querySelectorAll('.chaserDirectionGrid button')]
+          .some((button) => button.getAttribute('aria-pressed') === 'true' &&
+            (button.textContent || '').trim().startsWith('Random'));
+        const fading = editor.querySelector('.chaserFadingToggle input')?.checked === true;
+        const featureCount = editor.querySelectorAll('.chaserFeatureRow').length;
+        const stepCount = editor.querySelectorAll('.chaserStepRow').length;
+        const values = {
+          pixelsOn: inputValue('Pixels on'),
+          size: editor.querySelector('input[aria-label="Chaser size percent"]')?.value ?? null,
+          phase: inputValue('Phase'),
+          randomSeed: inputValue('Random seed'),
+          randomCycles: inputValue('Random cycles'),
+        };
+        return {
+          changed:
+            randomSelected && fading &&
+            values.pixelsOn === '2' && values.size === '37' &&
+            values.phase === '0.5' && values.randomSeed === '0' && values.randomCycles === '3' &&
+            featureCount > ${sceneFxChaserBefore.featureCount} &&
+            stepCount > ${sceneFxChaserBefore.stepCount},
+          randomSelected,
+          fading,
+          featureCount,
+          stepCount,
+          values,
+        };
+      })()`);
       results.push(await measure(
         client,
         `control-live-scene-settings-fx-chaser-editor-${viewport.width}x${viewport.height}`,
@@ -17232,9 +17648,17 @@ async function runViewport(client, viewport) {
         client,
         `control-live-scene-settings-fx-move-editor-${viewport.width}x${viewport.height}`,
       ));
+      const sceneFxMutationReceipt = await finishAuthoritativeMutationReceipt(
+        client,
+        sceneFxMutationBaseline,
+        sceneFxMutationProof,
+      );
       await clickVisibleSelector(client, ".sceneSettingsClose");
-      await client.send("Page.navigate", { url: appUrl });
-      await waitForApp(client);
+      // The authored FX probes above are real state mutations. This full-run
+      // reset is their one-shot beforeunload boundary, not a focused route.
+      await navigateToReadyAppThroughExpectedBeforeUnload(client, appUrl, {
+        receipt: sceneFxMutationReceipt,
+      });
       await pressKey(client, "F2");
       await sleep(100);
       await selectControlSurface(client, "edit");
@@ -37005,7 +37429,7 @@ async function main() {
     }
     if (setupStageBandSequenceOnlyMode) {
       const sequenceResults = [];
-      for (const viewport of viewports) {
+      for (const [index, viewport] of viewports.entries()) {
         const result = await runSetupStageBandSequenceViewport(client, viewport);
         sequenceResults.push(result);
         console.log(
@@ -37040,6 +37464,12 @@ async function main() {
             `patch=${result.patch.visibleDmxAddressGridCount}/${result.patch.dmxAddressCellCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
+        if (index < viewports.length - 1) {
+          // The sequence ends in Patch without a durable mutation receipt.
+          // Isolate the next viewport's fresh launch instead of accepting an
+          // unrelated close prompt from the prior fixture state.
+          client = await recycleBrowser();
+        }
       }
       const failures = sequenceResults.filter((result) => !result.passed);
       if (failures.length > 0) {
@@ -37469,7 +37899,7 @@ async function main() {
     }
     if (stageSettingsOnlyMode) {
       const stageSettingsResults = [];
-      for (const viewport of viewports) {
+      for (const [index, viewport] of viewports.entries()) {
         const result = await runStageSettingsViewport(client, viewport);
         stageSettingsResults.push(result);
         console.log(
@@ -37521,6 +37951,9 @@ async function main() {
             `checks=${JSON.stringify(result.checks)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
+        if (index < viewports.length - 1) {
+          client = await recycleBrowser();
+        }
       }
       const failures = stageSettingsResults.filter((result) => !result.passed);
       if (failures.length > 0) {
@@ -38999,7 +39432,19 @@ async function main() {
     const blindResults = [];
     const sceneSettingsResults = [];
     for (const viewport of viewports) {
-      results.push(...(await runViewport(client, viewport)));
+      // The preceding viewport ends in independent fixture scenarios whose
+      // close protection is intentionally not inferred from layout probes.
+      // Start this viewport's raw launch navigation in a clean browser rather
+      // than treating an unproven prompt as an expected mutation boundary.
+      client = await recycleBrowser();
+      results.push(...(await runViewport(client, viewport, {
+        recycleForLayeredTimeline: recycleBrowser,
+      })));
+      // `runViewport` has already consumed the only receipts it creates.
+      // Composed Touch is an independent fixture, so start it from a fresh
+      // document instead of accepting a close prompt without a matching
+      // authoritative mutation receipt.
+      client = await recycleBrowser();
       results.push(await runComposedTouchViewport(client, viewport));
       const patchDndResult = await runPatchDndViewport(client, viewport);
       patchDndResults.push(patchDndResult);

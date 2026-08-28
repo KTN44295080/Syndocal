@@ -838,6 +838,7 @@ mod tests {
                 default_value: 0,
                 functions: Vec::new(),
             }],
+            stage_layout: None,
             attribute_values: Vec::new(),
             limits: FixtureLimits::default(),
             highlighted: false,

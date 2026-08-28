@@ -10,6 +10,13 @@ pub mod control_plane;
 pub mod control_plane_command;
 pub mod control_plane_query;
 pub mod control_plane_registry_v2;
+pub mod fixture_stage_layout;
+
+pub use fixture_stage_layout::validate_fixture_stage_layout;
+pub use fixture_stage_layout::{
+    FixtureStageColorBinding, FixtureStageColorRole, FixtureStageLayout, FixtureStageLayoutCell,
+    FixtureStageLogicalSegment, FIXTURE_STAGE_LAYOUT_MAX_ENTRIES, FIXTURE_STAGE_LAYOUT_WORLD_CAP,
+};
 
 pub type FixtureId = u64;
 pub type EffectId = u64;
@@ -430,6 +437,10 @@ pub struct PatchedFixtureSummary {
     #[serde(default)]
     pub geometries: Vec<GeometrySummary>,
     pub controls: Vec<AttributeControl>,
+    /// Optional v1 physical cell topology. `None` is the explicit legacy
+    /// marker for snapshots authored before stage-layout support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_layout: Option<FixtureStageLayout>,
     pub attribute_values: Vec<AttributeValueSummary>,
     #[serde(default)]
     pub limits: FixtureLimits,
@@ -7435,6 +7446,11 @@ pub struct SerialPortSummary {
     pub manufacturer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub product: Option<String>,
+    /// Windows PnP devnode that backs the current COM alias. This is an
+    /// observation only; live output still requires the backend's exact
+    /// approved-instance gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_device_instance_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommended_protocol: Option<DmxOutputProtocol>,
 }
@@ -8005,7 +8021,7 @@ pub const DJ_LINK_BEATS_PER_BAR: u8 = 4;
 /// Exact capability strings every HELLO must advertise. The list must be
 /// complete, duplicate-free, and carry no extras; partial capability
 /// negotiation does not exist on this wire revision.
-pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 9] = [
+pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 10] = [
     "DJ_TRACK_ACTIVE",
     "DJ_TRACK_SYNC",
     "DJ_LOOP_STATE",
@@ -8013,6 +8029,7 @@ pub const DJ_LINK_REQUIRED_CAPABILITIES: [&str; 9] = [
     "DJ_RELEASE",
     "DJ_TIMELINE_BEAT_JUMP",
     "DJ_TIMELINE_LOOP_SET",
+    "DJ_TIMELINE_LOOP_HALF",
     "DJ_TIMELINE_STATE_REQUEST",
     "DJ_STATE_SYNC",
 ];
@@ -8070,6 +8087,8 @@ pub enum DjLinkMessageType {
     TimelineBeatJump,
     #[serde(rename = "DJ_TIMELINE_LOOP_SET")]
     TimelineLoopSet,
+    #[serde(rename = "DJ_TIMELINE_LOOP_HALF")]
+    TimelineLoopHalf,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -8266,6 +8285,18 @@ pub struct DjLinkTimelineLoopSetPayload {
     pub play_session_id: String,
 }
 
+/// Stage-2 F14: halve the currently active Timeline loop.  This carries only
+/// the exact authority pair; loop shape is always derived in the engine from
+/// the current runtime image and never accepted from the peer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DjLinkTimelineLoopHalfPayload {
+    #[serde(rename = "timelineId")]
+    pub timeline_id: String,
+    #[serde(rename = "playSessionId")]
+    pub play_session_id: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DjLinkTimelineStateValue {
@@ -8301,6 +8332,23 @@ pub struct DjLinkTimelineState {
     pub pedal_owner: Option<String>,
     #[serde(rename = "releaseEventId", default)]
     pub release_event_id: Option<String>,
+    /// Explicit operator reconciliation correlation. Ordinary authoritative
+    /// state frames carry `null`; only the confirmed Syndocal-side return
+    /// action assigns a fresh process-epoch/counter request identity.
+    #[serde(
+        rename = "operatorReturnRequestId",
+        deserialize_with = "deserialize_required_nullable_dj_link_string"
+    )]
+    pub operator_return_request_id: Option<String>,
+}
+
+fn deserialize_required_nullable_dj_link_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 impl DjLinkTimelineState {
@@ -8322,8 +8370,60 @@ impl DjLinkTimelineState {
                 validate_dj_link_string(value, label)?;
             }
         }
+        if let Some(value) = self.operator_return_request_id.as_deref() {
+            validate_dj_link_operator_return_request_id(value)?;
+        }
         Ok(())
     }
+}
+
+const DJ_LINK_OPERATOR_RETURN_REQUEST_PREFIX: &str = "syndocal-dj-operator-return-";
+const DJ_LINK_OPERATOR_RETURN_EPOCH_HEX_LEN: usize = 32;
+
+/// Validate the one canonical operator-return identity shape. The opaque
+/// lowercase epoch changes only with the authoritative Syndocal process while
+/// the decimal counter remains monotonic for that process. This lets the Agent
+/// reject reconnect replay without suppressing a fresh process whose counter
+/// legitimately starts again at one.
+pub fn validate_dj_link_operator_return_request_id(value: &str) -> Result<(), String> {
+    validate_dj_link_string(value, "operatorReturnRequestId")?;
+    let remainder = value
+        .strip_prefix(DJ_LINK_OPERATOR_RETURN_REQUEST_PREFIX)
+        .ok_or_else(|| {
+            "operatorReturnRequestId must use the canonical Syndocal epoch/counter form".to_string()
+        })?;
+    let (epoch, counter) = remainder.rsplit_once('-').ok_or_else(|| {
+        "operatorReturnRequestId must use the canonical Syndocal epoch/counter form".to_string()
+    })?;
+    if epoch.len() != DJ_LINK_OPERATOR_RETURN_EPOCH_HEX_LEN
+        || !epoch
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(
+            "operatorReturnRequestId epoch must be exactly 32 lowercase hexadecimal characters"
+                .to_string(),
+        );
+    }
+    if counter.is_empty()
+        || counter.starts_with('0')
+        || !counter.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            "operatorReturnRequestId counter must be a canonical positive decimal integer"
+                .to_string(),
+        );
+    }
+    let parsed = counter.parse::<u64>().map_err(|_| {
+        "operatorReturnRequestId counter exceeds the supported unsigned 64-bit range".to_string()
+    })?;
+    if parsed == 0 {
+        return Err(
+            "operatorReturnRequestId counter must be a canonical positive decimal integer"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -8396,6 +8496,12 @@ pub struct DjLinkRuntimeStatus {
     pub authoritative_state: Option<DjLinkTimelineStateValue>,
     #[serde(default, rename = "timelineId")]
     pub timeline_id: Option<String>,
+    #[serde(default, rename = "playSessionId")]
+    pub play_session_id: Option<String>,
+    #[serde(default, rename = "pedalOwner")]
+    pub pedal_owner: Option<String>,
+    #[serde(default, rename = "releaseEventId")]
+    pub release_event_id: Option<String>,
     #[serde(default, rename = "positionBars")]
     pub position_bars: Option<u64>,
     #[serde(default, rename = "loopActive")]
@@ -8406,6 +8512,12 @@ pub struct DjLinkRuntimeStatus {
     pub last_outbound_sequence: Option<u64>,
     #[serde(default, rename = "lastOutboundDelivery")]
     pub last_outbound_delivery: Option<String>,
+    #[serde(default, rename = "lastOperatorReturnRequestId")]
+    pub last_operator_return_request_id: Option<String>,
+    #[serde(default, rename = "lastOperatorReturnSequence")]
+    pub last_operator_return_sequence: Option<u64>,
+    #[serde(default, rename = "lastOperatorReturnDelivery")]
+    pub last_operator_return_delivery: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -8700,6 +8812,11 @@ impl DjLinkEnvelope {
             }
             DjLinkMessageType::TimelineLoopSet => {
                 let payload: DjLinkTimelineLoopSetPayload = parse_dj_link_payload(&self.payload)?;
+                validate_dj_link_string(&payload.timeline_id, "timelineId")?;
+                validate_dj_link_required_identity(&payload.play_session_id, "playSessionId")?;
+            }
+            DjLinkMessageType::TimelineLoopHalf => {
+                let payload: DjLinkTimelineLoopHalfPayload = parse_dj_link_payload(&self.payload)?;
                 validate_dj_link_string(&payload.timeline_id, "timelineId")?;
                 validate_dj_link_required_identity(&payload.play_session_id, "playSessionId")?;
             }
@@ -9863,6 +9980,9 @@ pub fn validate_current_engine_snapshot_reference_integrity(
             .map(|fixture| (fixture.id, fixture)),
         "fixture",
     )?;
+    for fixture in &snapshot.fixtures {
+        validate_fixture_stage_layout(fixture)?;
+    }
     let palettes = project_index_nonzero_u64(
         snapshot
             .palettes
@@ -17784,6 +17904,13 @@ mod tests {
                     "playSessionId": "play-1",
                 }),
             ),
+            (
+                "DJ_TIMELINE_LOOP_HALF",
+                serde_json::json!({
+                    "timelineId": "show-1",
+                    "playSessionId": "play-1",
+                }),
+            ),
         ];
 
         for (message_type, valid_payload) in cases {
@@ -18176,6 +18303,7 @@ mod tests {
         .is_ok());
         assert!(generic_set.contains(&"DJ_TRACK_ACTIVE"));
         assert!(generic_set.contains(&"DJ_TRACK_SYNC"));
+        assert!(generic_set.contains(&"DJ_TIMELINE_LOOP_HALF"));
         assert!(!generic_set.contains(&"DJ_MASTER_TRACK_ACTIVE"));
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
@@ -18230,7 +18358,7 @@ mod tests {
         ))
         .is_err());
         let mut duplicated = generic_set.to_vec();
-        duplicated[8] = duplicated[0];
+        duplicated[9] = duplicated[0];
         assert!(super::DjLinkEnvelope::parse_json(&hello(
             "0123456789abcdef0123456789abcdef",
             3,
@@ -18318,6 +18446,7 @@ mod tests {
             play_session_id: Some("play-1".to_string()),
             pedal_owner: None,
             release_event_id: None,
+            operator_return_request_id: None,
         };
         state.validate().unwrap();
         let wire = serde_json::to_value(&state).unwrap();
@@ -18334,10 +18463,45 @@ mod tests {
             "playSessionId",
             "pedalOwner",
             "releaseEventId",
+            "operatorReturnRequestId",
         ] {
             assert!(keys.contains_key(key), "missing output key {key}");
         }
         assert_eq!(wire["pedalOwner"], serde_json::json!(null));
+        let mut missing_operator_return = wire.clone();
+        missing_operator_return
+            .as_object_mut()
+            .unwrap()
+            .remove("operatorReturnRequestId");
+        assert!(
+            serde_json::from_value::<super::DjLinkTimelineState>(missing_operator_return).is_err(),
+            "current v3 timeline state must reject an omitted operatorReturnRequestId"
+        );
+    }
+
+    #[test]
+    fn dj_link_operator_return_request_id_requires_exact_epoch_and_counter() {
+        let valid = "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-1";
+        super::validate_dj_link_operator_return_request_id(valid).unwrap();
+        super::validate_dj_link_operator_return_request_id(
+            "syndocal-dj-operator-return-ffffffffffffffffffffffffffffffff-18446744073709551615",
+        )
+        .unwrap();
+
+        for invalid in [
+            "return-request-1",
+            "syndocal-dj-operator-return-1",
+            "syndocal-dj-operator-return-0123456789ABCDEF0123456789abcdef-1",
+            "syndocal-dj-operator-return-0123456789abcdef0123456789abcde-1",
+            "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-0",
+            "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-01",
+            "syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-18446744073709551616",
+        ] {
+            assert!(
+                super::validate_dj_link_operator_return_request_id(invalid).is_err(),
+                "noncanonical operator return ID must fail closed: {invalid}"
+            );
+        }
     }
 
     #[test]
@@ -18848,6 +19012,7 @@ mod tests {
                 attribute: "Dimmer".to_string(),
                 value: 0,
             }],
+            stage_layout: None,
             limits: super::FixtureLimits::default(),
             highlighted: false,
             soloed: false,

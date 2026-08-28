@@ -25,6 +25,15 @@ export interface VisualizerFixtureBeam {
   color: string;
 }
 
+export interface MappingFixturePhysicalCell2d {
+  beamIndex: number;
+  x: number;
+  z: number;
+  width: number;
+  height: number;
+  logicalSegmentIndex: number | null;
+}
+
 export interface VisualizerFixture {
   id: number;
   label: string;
@@ -44,6 +53,7 @@ export interface VisualizerFixture {
   beamYaw: number;
   beamPoints: string;
   beams?: VisualizerFixtureBeam[];
+  physicalCells?: MappingFixturePhysicalCell2d[];
   intensity: number;
   color: string;
   inGroupFilter: boolean;

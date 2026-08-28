@@ -361,12 +361,34 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         fixtureSegmentSkeleton(fixture).length,
       );
       const segmentOrder = mappingFixtureSegmentOrder(fixture);
-      const size = mappingFixtureStageSize(
-        visualKind,
-        segmentGrid.columns,
-        fixtureWorldToSvgScale,
-        segmentGrid.rows,
+      const physicalCells = fixture.stage_layout?.cells.map((cell) => ({
+        beamIndex: cell.beam_index,
+        x: cell.offset_x * fixtureWorldToSvgScale,
+        z: cell.offset_z * fixtureWorldToSvgScale,
+        width: fixture.stage_layout!.cell_width * fixtureWorldToSvgScale,
+        height: fixture.stage_layout!.cell_depth * fixtureWorldToSvgScale,
+        logicalSegmentIndex: cell.logical_segment_index,
+      }));
+      const physicalBounds = physicalCells?.reduce(
+        (extent, cell) => ({
+          minX: Math.min(extent.minX, cell.x - cell.width / 2),
+          maxX: Math.max(extent.maxX, cell.x + cell.width / 2),
+          minZ: Math.min(extent.minZ, cell.z - cell.height / 2),
+          maxZ: Math.max(extent.maxZ, cell.z + cell.height / 2),
+        }),
+        { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity },
       );
+      const size = physicalBounds
+        ? {
+            width: physicalBounds.maxX - physicalBounds.minX,
+            height: physicalBounds.maxZ - physicalBounds.minZ,
+          }
+        : mappingFixtureStageSize(
+            visualKind,
+            segmentGrid.columns,
+            fixtureWorldToSvgScale,
+            segmentGrid.rows,
+          );
       return {
         id: fixture.id,
         label: fixture.label,
@@ -382,6 +404,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         segmentColumns: segmentGrid.columns,
         segmentRows: segmentGrid.rows,
         segmentOrder,
+        physicalCells,
         yaw,
         beamYaw: yaw + panDegrees,
         beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
@@ -431,6 +454,25 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         : undefined;
       const beams = live && liveSegments
         ? liveSegments.map((segment, index) => {
+            const exactCells = base.physicalCells?.filter(
+              (cell) => cell.logicalSegmentIndex === index,
+            );
+            if (exactCells?.length) {
+              const localX = exactCells.reduce((sum, cell) => sum + cell.x, 0) / exactCells.length;
+              const localZ = exactCells.reduce((sum, cell) => sum + cell.z, 0) / exactCells.length;
+              const offset = rotateStageOffsetYaw({ x: localX, z: localZ }, base.yaw);
+              return {
+                cellIndex: index + 1,
+                points: beamPoints(
+                  base.x + offset.x,
+                  base.z + offset.z,
+                  base.beamYaw,
+                  segment.intensity,
+                ),
+                intensity: segment.intensity,
+                color: segment.color,
+              };
+            }
             const columns = Math.max(1, base.segmentColumns);
             const rows = Math.max(1, base.segmentRows);
             const cell = mappingFixtureSegmentCell(

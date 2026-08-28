@@ -539,18 +539,20 @@ the checkbox open and name the missing subcheck.
   Release. Only accepted/duplicate ACK succeeds. Rejection, timeout, disconnect,
   and send failure remain visible and fail closed; withheld/rejected ACK needs a
   bounded protocol/fault harness.
-- [ ] **HW-4.8 — Stage 2.** Require authoritative `running`, exact
-  timeline/play-session/pedal-owner/release correlation, and authoritative
-  `loopActive:true`. F13 sends exactly one absolute
-  `DJ_TIMELINE_LOOP_SET { active:false }`, releasing either the authored
-  `人生オーバー` C-melody A-B loop or the post-Follow destination-first-measure
-  runtime hold. The strict `transitionHoldActive` boolean remains required state,
-  but is diagnostic for the latter and is not the F13 admission gate. A completed
-  Follow rebase is required only to inherit authority for the post-Follow target;
-  it is not required for the ordinary C-melody loop. F14 toggles the authoritative
-  absolute loop; F15 alone sends `DJ_TIMELINE_BEAT_JUMP { bars:4 }`. `-4` and
-  every Stage 2 Rekordbox MIDI action are rejected. Stale, abort, fault, or
-  mismatched receipts remain fail-closed.
+- [ ] **HW-4.8 — Stage 2.** Require authoritative `running` and exact
+  timeline/play-session/pedal-owner/release correlation. F13 is the only loop
+  toggle and sends exactly one absolute `DJ_TIMELINE_LOOP_SET` with
+  `active: !loopActive`: OFF releases either the authored `人生オーバー` C-melody
+  A-B loop or the post-Follow destination-first-measure hold while retaining its
+  exact bounds; ON may re-enable only those retained current bounds. The strict
+  `transitionHoldActive` boolean remains required state, but is diagnostic for
+  the destination hold and is not the F13 admission gate. A completed Follow
+  rebase is required only to inherit authority for the post-Follow target; it is
+  not required for the ordinary C-melody loop. F14 sends
+  `DJ_TIMELINE_LOOP_HALF` and must halve the active current loop; it rejects while
+  `loopActive:false`. F15 alone sends `DJ_TIMELINE_BEAT_JUMP { bars:4 }`. `-4`
+  and every Stage 2 Rekordbox MIDI action are rejected. Stale, abort, fault,
+  inactive-loop, or mismatched receipts remain fail-closed.
 - [ ] **HW-4.9 — disconnect/reconnect.** Stage 1 local controls continue while
   disconnected. Reconnect requires fresh State Sync. Stage 2 stays fail-closed
   until a fresh authoritative snapshot exists.

@@ -5912,16 +5912,13 @@ export default function App() {
     refreshEngineTelemetryReport,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
-    applyOutput,
+    enableStagedShowSerialDmxRoute,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
-    applyCurrentDmxRoutes,
-    addCurrentDmxRoute,
-    addDmxNetworkRoute,
-    removeDmxRoute,
-    setDmxRouteEnabled,
-    setOutputProtocol,
     refreshSerialPorts,
+    refreshSerialDmxMachineBinding,
+    serialDmxMachineBinding,
+    selectSerialDmxMachineBinding,
   } = createOutputDiagnosticsController({
     invoke,
     setMessage,
@@ -18191,6 +18188,7 @@ export default function App() {
   let djLinkWiredRefreshGeneration = 0;
   let djLinkTokenOperationGeneration = 0;
   const [djLinkTokenOperationBusy, setDjLinkTokenOperationBusy] = createSignal(false);
+  const [djLinkOperatorReturnBusy, setDjLinkOperatorReturnBusy] = createSignal(false);
   const refreshDjLinkMachineStatus = async () => {
     const requestGeneration = ++djLinkMachineRequestGeneration;
     if (!isTauriRuntime()) return djLinkMachineStatus();
@@ -18409,6 +18407,30 @@ export default function App() {
       setMessage("DJ Link token copied and cleared.");
     } catch (error) {
       setMessage(`Could not copy DJ Link token: ${String(error)}`);
+    }
+  };
+
+  const requestDjLinkOperatorReturn = async () => {
+    if (djLinkOperatorReturnBusy()) return;
+    if (!window.confirm(translateUiText(
+      "Return DJ control authority? The current Timeline keeps running while the Agent reannounces its fresh track candidate.",
+      uiLocale(),
+    ))) return;
+    setDjLinkOperatorReturnBusy(true);
+    try {
+      await invoke("request_dj_link_operator_return_to_dj_control", {
+        confirmation: "return-to-dj-control",
+      });
+      await refreshRemoteControlStatus();
+      setMessage(translateUiText(
+        "DJ control return requested. Waiting for the Agent to reannounce its fresh candidate.",
+        uiLocale(),
+      ));
+    } catch (error) {
+      await refreshRemoteControlStatus();
+      setMessage(`${translateUiText("DJ control return failed:", uiLocale())} ${String(error)}`);
+    } finally {
+      setDjLinkOperatorReturnBusy(false);
     }
   };
 
@@ -28328,7 +28350,6 @@ export default function App() {
             webRemoteRunning={genericRemoteRunning()}
             djListenerRunning={djListenerRunning()}
             djLinkEnabled={djLinkEnabled()}
-            onApplyOutput={applyOutput}
             onConnectMidiClock={connectMidiClock}
             onDisconnectMidiClock={disconnectMidiClock}
             onStartOsc={startOscInput}
@@ -28342,25 +28363,17 @@ export default function App() {
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
-            routes={dmxOutputRoutes()}
-            routeStatuses={snapshot().telemetry.last_dmx_route_results}
             serialPorts={serialPorts()}
-            isSerialProtocol={isSerialDmxProtocol}
-            onOutputChange={(nextOutput) => setOutput(nextOutput)}
-            onProtocolChange={setOutputProtocol}
+            binding={serialDmxMachineBinding()}
             onRefreshSerialPorts={refreshSerialPorts}
-            onApply={applyOutput}
-            onAddNetworkRoute={addDmxNetworkRoute}
-            onAddCurrentRoute={addCurrentDmxRoute}
-            onApplyRoutes={applyCurrentDmxRoutes}
-            onRouteEnabled={setDmxRouteEnabled}
-            onRemoveRoute={removeDmxRoute}
+            onSelectMachineBinding={selectSerialDmxMachineBinding}
+            onEnableStagedShowSerialRoute={enableStagedShowSerialDmxRoute}
           />
           <div class="ioDisclosureStack">
           <IoDisclosure
             id="dmx-input"
-            summary="External DMX input"
-            description="Receive Art-Net or sACN, then choose raw merge or control mappings."
+            summary="Advanced: DMX input and merge"
+            description="Receive Art-Net or sACN, then choose raw merge to output or control mappings; these modes are mutually exclusive."
           >
           <DmxInputPanel
             config={dmxInputConfig()}
@@ -28374,7 +28387,7 @@ export default function App() {
           </IoDisclosure>
           <IoDisclosure
             id="dmx-rdm"
-            summary="Advanced RDM tools"
+            summary="Advanced: RDM tools"
             description="Use only with an RDM-capable gateway or USB interface to discover, inspect, or send RDM."
           >
           <ArtRdmPanel
@@ -28391,7 +28404,7 @@ export default function App() {
           </IoDisclosure>
           <IoDisclosure
             id="dmx-diagnostics"
-            summary="Output diagnostics and runtime"
+            summary="Advanced: DMX diagnostics and test"
             description="Test frames, raw monitor, telemetry, masters, and clock controls."
             bodyClass="dmxDiagnosticsDisclosure"
           >
@@ -28593,7 +28606,10 @@ export default function App() {
             ) : (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">
           <RemoteControlPanel
-            surface={connection === "dj" ? "dj" : "web"}
+            // Web Remote is an ordinary disclosure alongside endpoint/client,
+            // safety-limit, standby, and DJ Link disclosures. DJ Link keeps
+            // its existing direct authority surface when explicitly selected.
+            surface={connection === "dj" ? "dj" : "all"}
             backendAvailable={isTauriRuntime()}
             invokeCommand={invoke}
             bindIp={remoteBindIp()}
@@ -28619,6 +28635,7 @@ export default function App() {
             genericRunning={genericRemoteRunning()}
             djListenerRunning={djListenerRunning()}
             djLinkTokenOperationBusy={djLinkTokenOperationBusy()}
+            djLinkOperatorReturnBusy={djLinkOperatorReturnBusy()}
             remoteUrls={remoteUrls()}
             status={remoteStatus()}
             onBindIp={setRemoteBindIp}
@@ -28647,6 +28664,7 @@ export default function App() {
             onDisarmDjLinkMachine={disarmDjLinkMachine}
             onRotateDjLinkToken={rotateDjLinkToken}
             onCopyDjLinkToken={copyDjLinkToken}
+            onRequestDjLinkOperatorReturn={requestDjLinkOperatorReturn}
             onDjTrackTriggers={setDjTrackTriggersFromPanel}
             onCopyRemoteUrl={copyRemoteUrl}
             onOpenRemoteUrl={openRemoteUrl}

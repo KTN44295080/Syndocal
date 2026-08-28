@@ -32,14 +32,47 @@ fields to ABI v2:
   `string_free`, `start`, `stop`, `close`, and `telemetry_json`) under the
   `syndocal_asio_v3_` prefix. Header, binary-export, loader, and packaging tests
   reject any missing, extra, retired, or unknown export.
+- Freeze the v3 header/schema before implementation. Its Start contract must
+  define output-only versus full-duplex callback types, native-format conversion
+  ownership, device channel count, fixed callback frame count, first output
+  frame, session/render generation, queue-full/underflow result, context
+  lifetime, telemetry/fault codes, and the guarantee that no callback can occur
+  after successful Stop/Close. An operation-name-only export set is not an ABI.
 - Open one explicit ASIO driver as one multichannel output stream. PROGRAM and
   CUE must share that stream and clock domain; two independent output devices or
   streams are not an accepted implementation.
+- Do not build v3 output on the current CPAL/`asio-sys` callback path. Its ASIO
+  callback implementation takes synchronization locks and can resize an
+  interleaved buffer after a buffer-size change, while the underlying dispatcher
+  also takes a global callback mutex. V3 therefore requires a purpose-built or
+  reviewed forked SDK callback backend with one `ASIOCreateBuffers` set and a
+  lock-free static session dispatch. This is a hard realtime gate, not an
+  optimization item.
 - If Reactive Capture input and playback output are both active on the same
   ASIO driver, v3 must own one full-duplex driver session. ASIO playback never
   leaves an input-v2 session active in parallel. An already-active v2 session
   makes v3 Start fail with a visible busy fault; there is no implicit stop or
   migration of the live session.
+- V2 and v3 load the canonical bridge DLL once and share one process-wide ASIO
+  host/session lease with explicit
+  `Stopped | Starting(v2|v3) | Active(v2|v3) | Stopping | Fault` states. The
+  existing v2 callback-generation fence alone is not a lease. Concurrent
+  Starts and every cross-version Start while another version owns the driver
+  reject as Busy without stopping or migrating the owner.
+- The shared lease also fences driver enumeration and capability discovery,
+  because those operations may instantiate or interrogate the real ASIO
+  driver. Live enumeration and capability probing are allowed only in
+  `Stopped`. While v2 or v3 owns Starting, Active, Stopping, or Fault, the
+  bridge either returns the immutable catalog captured for that owner or
+  rejects the request as Busy; it never touches the driver concurrently.
+  Deterministic tests cover v2/v3 enumerate, capabilities, Start, Stop, and
+  Close races against every owning state.
+- Fault recovery is an explicit drained transition:
+  `Fault --operator Stop/Close; dispatch unpublished and callback readers drained--> Stopped`.
+  Only then may a fresh driver enumeration and capability revalidation occur,
+  followed by an explicit Start. If Stop or Close cannot complete, ownership
+  remains Fault/Locked, live driver probing stays forbidden, and no fallback or
+  automatic restart occurs.
 - The realtime callback may only consume prevalidated, preallocated audio state
   and publish lock-free/bounded telemetry. Filesystem access, decoding, device
   enumeration, UI work, blocking locks, allocation, and fallback selection are
@@ -47,22 +80,69 @@ fields to ABI v2:
 
 The v3 request describes the exact output stream width/rate/native format/fixed
 buffer and whether the stream is output-only or full-duplex. Full-duplex input
-fields are mandatory only in duplex mode. PROGRAM/CUE physical mapping remains
-application-owned machine state and is deliberately absent from the bridge
-wire schema.
+fields are mandatory only in duplex mode. Input and output native formats and
+capability tuples are validated separately; v3 must not assume that they are
+identical. The exact paired full-duplex tuple and actual opened values are
+revalidated while the Start lease is held. PROGRAM/CUE physical mapping remains
+application-owned machine state and is deliberately absent from the bridge wire
+schema.
 
 Rodio mixers are drained by a non-realtime render worker into a preallocated,
 bounded interleaved-frame SPSC. Rodio's mixer source is not pulled directly in
 the ASIO callback because its internal source management uses synchronization
 and dynamic collections. The ASIO callback only copies the next complete block
-or emits one complete silent block and latches a terminal fault; partial or
-mixed-authority frames are forbidden.
+whose session generation, transport authority, first output frame, and frame
+count are exact, or emits one complete silent block and latches a terminal
+fault. Partial, stale-generation, non-contiguous, and mixed-authority frames are
+forbidden. Start prefills complete blocks before the hardware callback can run;
+seek, pause, loop, speed, stop, and project/transport revision changes rotate the
+render generation before old queued audio can become audible.
 
 The existing Timeline Cue Audio runtime for generated Click/Guide events is an
 input to the same logical CUE mixer. While show-ASIO output is active it must not
 use the existing `FollowProgram` route and must not open a second explicit OS
 output device. Normal MIT/WASAPI behavior remains unchanged when show-ASIO is
 not selected. This is one routing coordinator, not a parallel playback path.
+
+Every Timeline and preview source constructor is admitted through one
+application `AudioOutputRouter`. While v3 is Starting, Active, or Fault, direct
+Rodio `OutputStream`/default-device/explicit-device construction is unreachable
+for both PROGRAM and CUE. A test or preview action cannot bypass this owner.
+
+The implementation is split at explicit boundaries rather than growing the
+existing oversized v2 and application files:
+
+- `tools/asio-bridge/src/v3_abi.rs`: strict v3 wire/FFI types and validation;
+- `tools/asio-bridge/src/v3_rt_backend.rs`: SDK session, callback, and shared
+  v2/v3 lease;
+- `app/src-tauri/src/asio_bridge_v3.rs`: exact dynamic loader and lifecycle;
+- `app/src-tauri/src/asio_program_cue.rs`: render blocks, mapper, and telemetry;
+- `app/src-tauri/src/audio_output_router.rs`: exclusive normal/show-ASIO source
+  admission and backend transition fence.
+
+The show-ASIO header, build wrapper, export checker, local artifact manifest,
+and local-only documentation move together from an exact v2-nine contract to an
+exact v2-nine plus v3-nine contract. The ordinary MIT packaging checker remains
+v2/v3-ASIO-artifact-free.
+
+Backend change is a fenced state transition:
+
+```text
+Normal -> Quiescing -> ASIO Starting -> ASIO Active
+                         |                 |
+                         +----> Fault <----+
+```
+
+Entering `Quiescing` retires and joins every PROGRAM sink, the legacy
+`FollowProgram` CUE attachment, every `ExplicitDevice` CUE stream, and every
+in-flight output-prepare worker before v3 may Start. The transition must prove
+that no normal/default/explicit Rodio stream or late prepare result remains
+publishable. ASIO Start failure or Fault stays silent: it must not recreate
+`FollowProgram`, reopen a default/explicit normal device, or resume prior
+samples. Returning to the normal backend requires an explicit operator
+selection and a fresh validated Start. Tests must cover each former output
+route, a late prepare completion, transition, Start failure, Fault, Stop, and
+retry without a second stream or one CUE sample becoming audible on PROGRAM.
 
 ## Logical buses and persistence
 
@@ -75,6 +155,10 @@ Project data stores logical routing only:
 Physical channel indices must never be written to a Timeline Item, Audio Clip,
 Media Asset, or portable show project. A one-way default/migration maps absent
 logical-bus data to PROGRAM. Invalid and future schema values fail closed.
+This applies to root, nested child, directly triggered child, follow transport,
+import, save/reload, duplicate, paste, trim, split, and lane-move projections:
+only a missing legacy field becomes PROGRAM, while an explicit CUE value is
+preserved end to end.
 
 Machine-local audio configuration stores:
 
@@ -82,6 +166,13 @@ Machine-local audio configuration stores:
 - sample rate and fixed/requested buffer settings;
 - PROGRAM L, PROGRAM R, CUE, and optional Spare physical output channels;
 - the capability/catalog generation used to validate the selection.
+
+This output profile has its own strict versioned machine-only schema. Unknown
+fields, duplicate fields, malformed values, corrupt bytes, oversized input,
+and future schema versions lock the output configuration without rewriting the
+file. A failed restore never falls back to an OS default device, the legacy CUE
+route, or another backend. Recovery requires an explicit operator selection,
+successful capability revalidation, and Start.
 
 The UI displays physical channels as one-based Output 1, Output 2, and so on.
 The internal zero-based boundary must have explicit off-by-one tests. Stale,
@@ -100,11 +191,22 @@ CUE     = average(cue_left, cue_right) or the unchanged mono cue sample
 The validated machine mapping places those values into the selected physical
 channels of the device-sized interleaved frame. Every other channel, including
 Spare during ordinary playback, is zero. The implementation is not fixed to
-four channels.
+four channels and must not assume contiguous or ascending selections. A fixture
+such as PROGRAM L=Output 5, PROGRAM R=Output 1, CUE=Output 7 must prove exact
+channel placement, zero in every unselected device channel, and no CUE leak.
 
 Stereo CUE uses an average/gain-safe mono sum, never raw addition. PROGRAM and
 CUE may play simultaneously and must retain the existing Timeline seek, pause,
 resume, stop, loop, speed, fade, and synchronization semantics.
+Changing a playing clip's logical bus in either direction is itself a render
+generation barrier. Save/edit, import, paste, duplicate, split/trim, lane move,
+and undo/restore equivalents may publish the new bus only after old queued
+blocks are retired; not one frame may remain audible on the old bus after the
+authoritative change.
+The current Timeline clip path does not yet publish or apply an authoritative
+audio speed. V3 may claim speed preservation only after that source of truth and
+its render barrier are implemented and tested; otherwise non-default speed must
+reject visibly instead of being silently ignored.
 
 ## DSF2026 machine profile
 
@@ -139,6 +241,14 @@ rerouted to CUE. A fault must not switch to WASAPI, another ASIO device, an OS
 default, or another sample rate. Reconnection does not resume playback; the
 operator must revalidate and explicitly Start.
 
+No panic or foreign exception may cross the v3 callback FFI boundary. A caught
+callback failure writes one complete silent device-width block, latches a
+terminal Fault through the non-realtime notifier, and returns without unwind.
+Stop and Close first unpublish static dispatch, then drain every in-flight
+callback reader before freeing callback context. Deterministic panic/fault and
+Stop/Close race injection must prove silence, terminal state, and no
+use-after-free.
+
 ## Operator UI
 
 The machine Audio settings must provide:
@@ -172,10 +282,24 @@ the device schema or silently reroute CUE.
 - [ ] Invalid or future bus/schema values fail closed.
 - [ ] Physical mappings exist only in machine-local state.
 - [ ] One-based UI channels map exactly once to zero-based callback channels.
+- [ ] Non-contiguous/reordered mapping (PROGRAM L=5, PROGRAM R=1, CUE=7) writes
+      only those exact callback channels and zeroes every unselected channel.
 - [ ] PROGRAM stereo reaches only mapped PROGRAM L/R.
 - [ ] Mono CUE reaches only mapped CUE.
 - [ ] Stereo CUE is averaged safely and reaches only mapped CUE.
 - [ ] Simultaneous PROGRAM+CUE uses one frame clock and one ASIO output stream.
+- [ ] The v3 callback backend contains no CPAL/`asio-sys` callback mutex or
+      callback-time allocation/resize path.
+- [ ] V2/v3 mutual exclusion and concurrent Starts are linearized by one shared
+      lease; Busy never stops or migrates the current owner.
+- [ ] V2/v3 driver enumeration and capability discovery obey the same lease;
+      active-owner races never interrogate or reconfigure the live driver.
+- [ ] Device-loss recovery performs no driver query before an operator
+      Stop/Close fully drains Fault to Stopped; only Stopped permits fresh
+      enumeration/revalidation, and playback remains stopped until explicit
+      Start. Stop/Close failure remains Fault/Locked without fallback.
+- [ ] Output and optional input native formats/capability tuples are validated
+      separately and the exact opened tuple matches the request.
 - [ ] Existing generated Click and Guide events enter the same CUE mixer; no
       second OS output stream is opened while show-ASIO is active.
 - [ ] PROGRAM silence is written to the CUE channel; CUE silence is written to
@@ -187,18 +311,47 @@ the device schema or silently reroute CUE.
       terminal Fault and requires explicit operator Start.
 - [ ] Seek, pause, resume, stop, loop, speed, fades, and nested Timeline playback
       keep PROGRAM and CUE synchronized.
+- [ ] Every transport/revision barrier invalidates queued old-generation blocks;
+      the callback emits no old samples after the authoritative change.
+- [ ] A live PROGRAM-to-CUE or CUE-to-PROGRAM edit rotates the render generation;
+      no queued sample reaches the formerly authoritative bus after the change.
+- [ ] Queue empty/full, decode/render stall, insufficient prefill, Stop/Close
+      races, and callback-after-close are injected deterministically: the only
+      callback result is one complete silent block plus terminal Fault, with no
+      partial frame, stale generation, lock/allocation, or use-after-free.
+- [ ] Show-ASIO Starting/Active/Fault blocks every direct normal/default/explicit
+      OS output constructor, including test and preview paths.
+- [ ] Quiescing retires every PROGRAM sink, legacy `FollowProgram`, every
+      `ExplicitDevice` CUE stream, and all in-flight output-prepare workers
+      before v3 Start. Transition, Start failure, Fault, Stop, and retry leave
+      no second stream and never reopen normal output without explicit operator
+      selection.
+- [ ] Callback panic/fault injection cannot unwind across FFI; it produces one
+      complete silent block plus terminal Fault, and context is freed only after
+      every in-flight callback reader drains.
 - [ ] Project reload preserves logical bus; app restart restores then
       revalidates machine mapping without auto-start.
+- [ ] Missing, corrupt, oversized, unknown-field, duplicate-field, and future
+      machine-output schemas remain Locked, preserve their bytes, and never
+      reopen a default device or legacy CUE route.
 - [ ] A CUE-unused operating day is represented only by unarmed or muted CUE
       content; no date-specific mode or physical mapping is written to project
       data.
 - [ ] ABI/header/schema tests prove v2 input behavior is unchanged and the new
       output ABI rejects unknown/future fields and revisions.
+- [ ] Header, loader, bridge build, export checker, local manifest schema, and
+      local-only documentation require exactly the nine v2 plus nine v3 exports;
+      no gate remains pinned to a v2-only symbol set.
 - [ ] Packaging tests prove the default build/installer/updater contains no ASIO
       SDK-linked artifact or enabled ASIO feature.
 - [ ] Focused Rust/UI tests pass with zero first-party warnings.
-- [ ] Exact Windows native gate and `pnpm --dir app tauri build --no-bundle`
-      pass before handoff.
+- [ ] Exact Windows native gate and normal MIT
+      `pnpm --dir app tauri build --no-bundle` pass, with proof that the normal
+      executable/installer/updater contains no ASIO SDK-linked artifact.
+- [ ] A separate dedicated show-ASIO native build passes with the exact v2-nine
+      plus v3-nine bridge exports, reviewed manifest/source hashes, real app
+      loader Start/Stop/Fault smoke, and exactly one responsive maximized
+      Syndocal window. The normal native build is not evidence for this gate.
 
 ## Physical MOTU M4 acceptance
 

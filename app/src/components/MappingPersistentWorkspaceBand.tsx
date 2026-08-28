@@ -244,7 +244,10 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   <MappingStageConfigPanel {...props.stageConfig} />
                 </div>
               </details>
-              <div class="mappingSetupContextMain">
+              <div
+                class="mappingSetupContextMain"
+                data-persistent-band-part="selections"
+              >
                 <MappingSetupContextPanel
                   {...props.selection}
                   typeFilters={{

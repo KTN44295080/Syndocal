@@ -44,6 +44,7 @@ interface RemoteControlPanelProps {
   genericRunning: boolean;
   djListenerRunning: boolean;
   djLinkTokenOperationBusy: boolean;
+  djLinkOperatorReturnBusy: boolean;
   remoteUrls: string[];
   status: RemoteControlStatus;
   onBindIp: (value: string) => void;
@@ -60,6 +61,7 @@ interface RemoteControlPanelProps {
   onDisarmDjLinkMachine: () => void | Promise<void>;
   onRotateDjLinkToken: () => void | Promise<void>;
   onCopyDjLinkToken: () => void | Promise<void>;
+  onRequestDjLinkOperatorReturn: () => void | Promise<void>;
   onDjTrackTriggers: (value: DjTrackTriggerMapping[]) => void;
   onCopyRemoteUrl: (url: string) => void | Promise<void>;
   onOpenRemoteUrl: (url: string) => void | Promise<void>;
@@ -70,6 +72,7 @@ interface RemoteControlPanelProps {
 
 interface RemoteWorkbenchSurfaceProps {
   immediate: boolean;
+  defaultOpen?: boolean;
   disclosureId: string;
   summary: string;
   defaultSurface?: string;
@@ -88,7 +91,7 @@ function RemoteWorkbenchSurface(props: RemoteWorkbenchSurfaceProps) {
     <Show
       when={props.immediate}
       fallback={(
-        <details class="ioDisclosure" data-io-disclosure={props.disclosureId} data-io-default-surface={props.defaultSurface}>
+        <details class="ioDisclosure" data-io-disclosure={props.disclosureId} data-io-default-surface={props.defaultSurface} open={props.defaultOpen}>
           <summary>{props.summary}</summary>
           <div class={`ioDisclosureBody${bodyClass()}`} data-io-disclosure-body>
             {props.children}
@@ -123,6 +126,15 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
     || props.djLinkMachineStatus.credentialGeneration !== null
     || props.djLinkMachineStatus.credentialCleanupPending
     || props.djLinkMachineStatus.blockReason === "disarm_cleanup_pending";
+  const canRequestDjControlReturn = () => Boolean(
+    linkStatus()?.connected
+      && linkStatus()?.snapshotReady
+      && linkStatus()?.authoritativeState === "running"
+      && (linkStatus()?.trackActive
+        || linkStatus()?.playSessionId
+        || linkStatus()?.pedalOwner
+        || linkStatus()?.timelineId),
+  );
   const resetMappingDraft = () => {
     setSelectorMode("title_contains");
     setContentId("");
@@ -232,6 +244,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
         <Show when={surface() !== "dj"}>
         <RemoteWorkbenchSurface
           immediate={surface() !== "all"}
+          defaultOpen={surface() === "all"}
           disclosureId="web-remote"
           summary="Web Remote"
           defaultSurface="remote"
@@ -321,7 +334,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
           </section>
         </RemoteWorkbenchSurface>
         <details class="ioDisclosure" data-io-disclosure="remote-security">
-          <summary>Advanced remote safety limits</summary>
+          <summary>Advanced: Remote safety limits</summary>
           <div class="ioDisclosureBody" data-io-disclosure-body>
             <p class="ioDisclosureDescription">Set the maximum client count, message size, and request rate for trusted remote access.</p>
             <p class="hint">Share only the PIN-protected endpoint with trusted operators.</p>
@@ -365,7 +378,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
         </details>
 
         <details class="ioDisclosure" data-io-disclosure="remote-endpoints">
-          <summary>Connection information and clients</summary>
+          <summary>Advanced: Remote endpoints and clients</summary>
           <div class="ioDisclosureBody remoteEndpointGrid" data-io-disclosure-body>
             <p class="ioDisclosureDescription">View Web Remote addresses, share a trusted URL, or disconnect a specific client.</p>
             <section class="remoteEndpointDesk">
@@ -478,7 +491,15 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                   disabled={props.listenerRunning || !props.listenerStatusHydrated || props.djLinkTokenOperationBusy || !machineStatusKnown() || !props.djLinkEnabled}
                   onClick={() => void props.onRotateDjLinkToken()}
                 >Rotate token</button>
+                <button
+                  type="button"
+                  data-io-control="dj-link-return-to-dj-control"
+                  aria-busy={props.djLinkOperatorReturnBusy}
+                  disabled={props.djLinkOperatorReturnBusy || !canRequestDjControlReturn()}
+                  onClick={() => void props.onRequestDjLinkOperatorReturn()}
+                >{props.djLinkOperatorReturnBusy ? "Returning…" : "Return to DJ control"}</button>
               </div>
+              <p class="hint">Available only while the Timeline is running. It preserves transport and asks the connected Agent to reannounce its fresh candidate.</p>
               <p class={props.djLinkMachineStatus.blockReason ? "inlineWarning" : "hint"}>
                 {props.djLinkMachineStatus.autoStartArmed
                   ? `Endpoint: ws://${props.djLinkMachineStatus.bindIp ?? "[select LAN IP]"}:${props.djLinkMachineStatus.bindPort ?? "[select port]"}/dj-link`
@@ -534,6 +555,11 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                     <span>Track <strong data-no-localize>{status().trackTitle ?? "—"} · {status().trackArtist ?? "—"}</strong></span>
                     <span>Content ID <strong data-no-localize>{status().trackContentId ?? "—"}</strong></span>
                     <span>Loop / released <strong data-no-localize>{status().loopDivision ?? "—"} / {status().released ? "Yes" : "No"}</strong></span>
+                    <span>Timeline authority <strong data-no-localize>{status().authoritativeState ?? "—"} / {status().pedalOwner ?? "unowned"}</strong></span>
+                    <span>Play session <strong data-no-localize>{status().playSessionId ?? "—"}</strong></span>
+                    <span>Last operator return <strong data-no-localize>{status().lastOperatorReturnRequestId
+                      ? `${status().lastOperatorReturnRequestId} · ${status().lastOperatorReturnDelivery ?? "pending"}`
+                      : "—"}</strong></span>
                     <span>Outcome <strong data-no-localize>{status().outcome ?? "—"}</strong></span>
                     <span>Last event <strong data-no-localize>{status().lastEventId ?? "—"}</strong></span>
                   </div>

@@ -44,10 +44,13 @@ async function remoteDisclosureScrollInPage() {
     const body = document.querySelector('[data-io-workbench-body]');
     const zone = body?.querySelector('[data-io-zone]');
     const disclosureStack = zone?.querySelector('.remoteControl > .ioDisclosureStack');
-    const directSurface = disclosureStack?.querySelector(':scope > .ioDirectSurface');
     const disclosureMounted = (name) => Boolean(
       disclosureStack?.querySelector(`:scope > [data-io-disclosure="${name}"]`),
     );
+    const disclosureOpen = (name) => disclosureStack?.querySelector(`:scope > [data-io-disclosure="${name}"]`)?.open === true;
+    const disclosureSummary = (name) => disclosureStack
+      ?.querySelector(`:scope > [data-io-disclosure="${name}"] > summary`)
+      ?.textContent?.trim() ?? null;
     return {
       id,
       found: true,
@@ -61,7 +64,21 @@ async function remoteDisclosureScrollInPage() {
         remoteStandby: disclosureMounted('remote-standby'),
         djLink: disclosureMounted('dj-link'),
       },
-      directSurface: directSurface instanceof HTMLElement,
+      directSurface: Boolean(disclosureStack?.querySelector(':scope > .ioDirectSurface')),
+      openDisclosures: {
+        webRemote: disclosureOpen('web-remote'),
+        remoteSecurity: disclosureOpen('remote-security'),
+        remoteEndpoints: disclosureOpen('remote-endpoints'),
+        remoteStandby: disclosureOpen('remote-standby'),
+        djLink: disclosureOpen('dj-link'),
+      },
+      summaries: {
+        webRemote: disclosureSummary('web-remote'),
+        remoteSecurity: disclosureSummary('remote-security'),
+        remoteEndpoints: disclosureSummary('remote-endpoints'),
+        remoteStandby: disclosureSummary('remote-standby'),
+        djLink: disclosureSummary('dj-link'),
+      },
     };
   };
   const resetScroll = (root) => {
@@ -100,12 +117,13 @@ async function remoteDisclosureScrollInPage() {
     const workbenchBody = remoteZone?.closest('[data-io-workbench-body]');
     const remoteControl = remoteZone?.querySelector('.remoteControl');
     const disclosureStack = remoteControl?.querySelector(':scope > .ioDisclosureStack');
-    const webRemoteSurface = disclosureStack?.querySelector(':scope > .ioDirectSurface[data-io-default-surface="remote"]') ?? null;
+    const webRemoteDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="web-remote"]') ?? null;
+    const webRemoteBody = webRemoteDisclosure?.querySelector(':scope > [data-io-disclosure-body]') ?? null;
     const remoteSecurityDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-security"]') ?? null;
     const remoteEndpointsDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-endpoints"]') ?? null;
     const remoteStandbyDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-standby"]') ?? null;
-    const webDisclosures = [remoteSecurityDisclosure, remoteEndpointsDisclosure, remoteStandbyDisclosure];
-    const serverDesk = webRemoteSurface?.querySelector(':scope > .remoteServerDesk');
+    const webDisclosures = [webRemoteDisclosure, remoteSecurityDisclosure, remoteEndpointsDisclosure, remoteStandbyDisclosure];
+    const serverDesk = webRemoteBody?.querySelector(':scope > .remoteServerDesk');
     const remoteAction = serverDesk?.querySelector('[data-io-control="remote-start"], [data-io-control="remote-stop"]');
     const remoteStandbySummary = remoteStandbyDisclosure?.querySelector(':scope > summary');
     const remoteStandbyBody = remoteStandbyDisclosure?.querySelector(':scope > [data-io-disclosure-body]');
@@ -114,7 +132,7 @@ async function remoteDisclosureScrollInPage() {
     if (remoteControl instanceof HTMLElement) resetScroll(remoteControl);
     if (disclosureStack instanceof HTMLElement) resetScroll(disclosureStack);
     for (const disclosure of webDisclosures) openDisclosure(disclosure);
-    for (const nested of webRemoteSurface?.querySelectorAll('details') ?? []) openDisclosure(nested);
+    for (const nested of webRemoteBody?.querySelectorAll('details') ?? []) openDisclosure(nested);
     await settle();
     const remoteActionSizeBeforeDisclosureScroll = sizeOf(remoteAction);
     const remoteStyle = remoteControl ? getComputedStyle(remoteControl) : null;
@@ -141,8 +159,11 @@ async function remoteDisclosureScrollInPage() {
     );
     return {
       remoteFound: remoteControl instanceof HTMLElement,
-      directSurfaceFound: webRemoteSurface instanceof HTMLElement,
-      directSurfaceVisible: visible(webRemoteSurface),
+      webRemoteDisclosureFound: webRemoteDisclosure instanceof HTMLElement,
+      webRemoteDisclosureOpen: webRemoteDisclosure?.open === true,
+      webRemoteBodyFound: webRemoteBody instanceof HTMLElement,
+      directSurfaceFound: false,
+      directSurfaceVisible: false,
       serverDeskFound: serverDesk instanceof HTMLElement,
       remoteActionFound: remoteAction instanceof HTMLElement,
       remoteStandbySummaryFound: remoteStandbySummary instanceof HTMLElement,
@@ -167,8 +188,9 @@ async function remoteDisclosureScrollInPage() {
       remoteActionHitTestableAfterDisclosureScroll: remoteActionHitTestable,
       passed:
         remoteControl instanceof HTMLElement &&
-        webRemoteSurface instanceof HTMLElement &&
-        visible(webRemoteSurface) &&
+        webRemoteDisclosure instanceof HTMLElement &&
+        webRemoteDisclosure.open === true &&
+        webRemoteBody instanceof HTMLElement &&
         serverDesk instanceof HTMLElement &&
         remoteAction instanceof HTMLElement &&
         remoteStandbySummary instanceof HTMLElement &&
@@ -267,9 +289,11 @@ async function remoteDisclosureScrollInPage() {
   const restoredWebSelection = await selectConnection('web');
   const restoredWebZone = document.querySelector('[data-io-zone="remote"]');
   const restoredWebStack = restoredWebZone?.querySelector('.remoteControl > .ioDisclosureStack');
-  const restoredWebSurface = restoredWebStack?.querySelector(':scope > .ioDirectSurface[data-io-default-surface="remote"]');
-  if (restoredWebSurface instanceof HTMLElement) {
-    for (const disclosure of restoredWebStack?.querySelectorAll('[data-io-disclosure]') ?? []) closeDisclosure(disclosure);
+  const restoredWebDisclosure = restoredWebStack?.querySelector(':scope > [data-io-disclosure="web-remote"]');
+  if (restoredWebDisclosure instanceof HTMLElement) {
+    for (const disclosure of restoredWebStack?.querySelectorAll('[data-io-disclosure]') ?? []) {
+      if (disclosure !== restoredWebDisclosure) closeDisclosure(disclosure);
+    }
   }
   await settle();
   return {
@@ -282,12 +306,19 @@ async function remoteDisclosureScrollInPage() {
     djCardReachable: djSelection.found && djSelection.selected && djSelection.zone === 'remote',
     passed:
       webSelection.found && webSelection.selected && webSelection.zoneMountedInWorkbench &&
-      webSelection.directSurface &&
-      !webSelection.mountedDisclosures.webRemote &&
+      !webSelection.directSurface &&
+      webSelection.mountedDisclosures.webRemote &&
       webSelection.mountedDisclosures.remoteSecurity &&
       webSelection.mountedDisclosures.remoteEndpoints &&
       webSelection.mountedDisclosures.remoteStandby &&
-      !webSelection.mountedDisclosures.djLink &&
+      webSelection.mountedDisclosures.djLink &&
+      webSelection.openDisclosures.webRemote &&
+      !webSelection.openDisclosures.remoteSecurity &&
+      !webSelection.openDisclosures.remoteEndpoints &&
+      !webSelection.openDisclosures.remoteStandby &&
+      !webSelection.openDisclosures.djLink &&
+      webSelection.summaries.remoteSecurity === 'Advanced: Remote safety limits' &&
+      webSelection.summaries.remoteEndpoints === 'Advanced: Remote endpoints and clients' &&
       djSelection.found && djSelection.selected && djSelection.zoneMountedInWorkbench &&
       djSelection.directSurface &&
       !djSelection.mountedDisclosures.djLink &&
@@ -296,10 +327,15 @@ async function remoteDisclosureScrollInPage() {
       !djSelection.mountedDisclosures.remoteEndpoints &&
       !djSelection.mountedDisclosures.remoteStandby &&
       restoredWebSelection.found && restoredWebSelection.selected &&
-      restoredWebSelection.directSurface &&
-      !restoredWebSelection.mountedDisclosures.webRemote &&
+      !restoredWebSelection.directSurface &&
+      restoredWebSelection.mountedDisclosures.webRemote &&
       restoredWebSelection.mountedDisclosures.remoteStandby &&
-      !restoredWebSelection.mountedDisclosures.djLink &&
+      restoredWebSelection.mountedDisclosures.djLink &&
+      restoredWebSelection.openDisclosures.webRemote &&
+      !restoredWebSelection.openDisclosures.remoteSecurity &&
+      !restoredWebSelection.openDisclosures.remoteEndpoints &&
+      !restoredWebSelection.openDisclosures.remoteStandby &&
+      !restoredWebSelection.openDisclosures.djLink &&
       web.passed && dj.passed,
   };
 }
