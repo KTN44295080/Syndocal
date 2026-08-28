@@ -98,6 +98,35 @@ forbidden. Start prefills complete blocks before the hardware callback can run;
 seek, pause, loop, speed, stop, and project/transport revision changes rotate the
 render generation before old queued audio can become audible.
 
+The frozen nine-export v3 ABI has no mid-session generation-update operation.
+`Start.renderGeneration` is therefore the immutable ASIO-session root
+generation echoed by the bridge callback. The application callback context and
+every queued render block additionally carry an application-owned, lock-free
+transport generation. Seek, pause, loop, speed, bus changes, stop, and project
+or transport revision changes rotate that application transport generation and
+retire the old queue without restarting the ASIO device. A callback accepts a
+block only when both the immutable session-root generation and the current
+application transport generation are exact. This two-level fence must be
+deterministically tested; treating the Start generation as mutable, silently
+ignoring it, or restarting the device for ordinary transport edits is not
+accepted.
+
+Timeline live ownership uses a separate monotonic packed fence shared directly
+with the Engine. Engine publication never waits for the device callback. An
+old Test/Solo buffer that the callback has already returned to the ASIO driver
+is outside application recall, so the accepted physical boundary permits at
+most that one already-returned buffer tail; it does not claim zero residual
+samples at the Engine acknowledgement edge. When the callback first observes a
+new active Timeline fence generation, it must discard the complete current
+device-width block and the complete following block, including ordinary
+PROGRAM/CUE material. These two consecutive silent callbacks drain the ASIO A/B
+buffers. Current Timeline PROGRAM/CUE may become audible only from the third
+callback, so Test/Solo and Timeline audio never become co-audible. Any new
+active packed word during the drain restarts the two-callback count. An inactive
+word clears a pending drain but never revives the retired Test/Solo selection.
+If no callback arrives, Timeline audio is not admitted through this boundary;
+the existing callback-gap terminal fault remains authoritative.
+
 The existing Timeline Cue Audio runtime for generated Click/Guide events is an
 input to the same logical CUE mixer. While show-ASIO output is active it must not
 use the existing `FollowProgram` route and must not open a second explicit OS
@@ -119,11 +148,21 @@ existing oversized v2 and application files:
 - `app/src-tauri/src/asio_program_cue.rs`: render blocks, mapper, and telemetry;
 - `app/src-tauri/src/audio_output_router.rs`: exclusive normal/show-ASIO source
   admission and backend transition fence.
+- `app/src-tauri/src/normal_audio_output.rs`: concrete Router-owned normal
+  PROGRAM stream lease, bounded mixer projection, and explicit retirement.
 
 The show-ASIO header, build wrapper, export checker, local artifact manifest,
 and local-only documentation move together from an exact v2-nine contract to an
 exact v2-nine plus v3-nine contract. The ordinary MIT packaging checker remains
 v2/v3-ASIO-artifact-free.
+
+The local artifact source identity covers every executable boundary that can
+change show output: the application owner and cue runtime, v2/v3 loaders,
+router and router tests, bridge build script, shared lease, v3 ABI/native/SDK
+FFI and C++ callback sources, headers, tests, manifests, and their trusted build
+helpers. A missing or post-build-mutated member rejects the artifact before DLL
+inspection or use; hashing only the public ABI and Rust realtime facade is not
+sufficient.
 
 Backend change is a fenced state transition:
 
@@ -277,74 +316,89 @@ the device schema or silently reroute CUE.
 
 ## Deterministic software acceptance
 
-- [ ] Missing bus data deserializes/migrates to PROGRAM and reserializes
+- [x] Missing bus data deserializes/migrates to PROGRAM and reserializes
       canonically.
-- [ ] Invalid or future bus/schema values fail closed.
-- [ ] Physical mappings exist only in machine-local state.
-- [ ] One-based UI channels map exactly once to zero-based callback channels.
-- [ ] Non-contiguous/reordered mapping (PROGRAM L=5, PROGRAM R=1, CUE=7) writes
+- [x] Invalid or future bus/schema values fail closed.
+- [x] Physical mappings exist only in machine-local state.
+- [x] One-based UI channels map exactly once to zero-based callback channels.
+- [x] Non-contiguous/reordered mapping (PROGRAM L=5, PROGRAM R=1, CUE=7) writes
       only those exact callback channels and zeroes every unselected channel.
-- [ ] PROGRAM stereo reaches only mapped PROGRAM L/R.
-- [ ] Mono CUE reaches only mapped CUE.
-- [ ] Stereo CUE is averaged safely and reaches only mapped CUE.
-- [ ] Simultaneous PROGRAM+CUE uses one frame clock and one ASIO output stream.
-- [ ] The v3 callback backend contains no CPAL/`asio-sys` callback mutex or
+- [x] PROGRAM stereo reaches only mapped PROGRAM L/R.
+- [x] Mono CUE reaches only mapped CUE.
+- [x] Stereo CUE is averaged safely and reaches only mapped CUE.
+- [x] Simultaneous PROGRAM+CUE uses one frame clock and one ASIO output stream.
+- [x] The v3 callback backend contains no CPAL/`asio-sys` callback mutex or
       callback-time allocation/resize path.
-- [ ] V2/v3 mutual exclusion and concurrent Starts are linearized by one shared
+- [x] V2/v3 mutual exclusion and concurrent Starts are linearized by one shared
       lease; Busy never stops or migrates the current owner.
-- [ ] V2/v3 driver enumeration and capability discovery obey the same lease;
+- [x] V2/v3 driver enumeration and capability discovery obey the same lease;
       active-owner races never interrogate or reconfigure the live driver.
-- [ ] Device-loss recovery performs no driver query before an operator
+- [x] Device-loss recovery performs no driver query before an operator
       Stop/Close fully drains Fault to Stopped; only Stopped permits fresh
       enumeration/revalidation, and playback remains stopped until explicit
       Start. Stop/Close failure remains Fault/Locked without fallback.
-- [ ] Output and optional input native formats/capability tuples are validated
+- [x] Output and optional input native formats/capability tuples are validated
       separately and the exact opened tuple matches the request.
-- [ ] Existing generated Click and Guide events enter the same CUE mixer; no
+- [x] Existing generated Click and Guide events enter the same CUE mixer; no
       second OS output stream is opened while show-ASIO is active.
-- [ ] PROGRAM silence is written to the CUE channel; CUE silence is written to
+- [x] PROGRAM silence is written to the CUE channel; CUE silence is written to
       both PROGRAM channels for isolated bus tests.
-- [ ] Unmapped, duplicated, stale, and out-of-range physical channels reject
+- [x] Unmapped, duplicated, stale, and out-of-range physical channels reject
       Start with a specific conflict/error.
-- [ ] Exact-rate mismatch rejects Start without fallback.
-- [ ] Disconnect/XRUN/reset/resync/rate-change/buffer-change/callback-gap enters
+- [x] Exact-rate mismatch rejects Start without fallback.
+- [x] Disconnect/XRUN/reset/resync/rate-change/buffer-change/callback-gap enters
       terminal Fault and requires explicit operator Start.
 - [ ] Seek, pause, resume, stop, loop, speed, fades, and nested Timeline playback
       keep PROGRAM and CUE synchronized.
-- [ ] Every transport/revision barrier invalidates queued old-generation blocks;
+- [x] Every transport/revision barrier invalidates queued old-generation blocks;
       the callback emits no old samples after the authoritative change.
-- [ ] A live PROGRAM-to-CUE or CUE-to-PROGRAM edit rotates the render generation;
+- [x] The immutable v3 Start/session-root generation and the app-owned mutable
+      transport generation are both checked; transport rotation rejects an old
+      queued block without restarting the ASIO device.
+- [x] A live PROGRAM-to-CUE or CUE-to-PROGRAM edit rotates the render generation;
       no queued sample reaches the formerly authoritative bus after the change.
-- [ ] Queue empty/full, decode/render stall, insufficient prefill, Stop/Close
+- [x] A newly active Timeline fence permits at most one already-returned
+      Test/Solo buffer tail, then forces exactly two complete device-width
+      silent callbacks before current Timeline PROGRAM/CUE can become audible
+      on the third callback; no Test/Solo/Timeline co-audibility is possible.
+- [x] A new active packed fence word during the drain restarts both silent
+      callbacks, inactive clears the drain without reviving Test/Solo, and a
+      callback gap never causes Engine publication to block or Timeline audio
+      to bypass the drain.
+- [x] Queue empty/full, decode/render stall, insufficient prefill, Stop/Close
       races, and callback-after-close are injected deterministically: the only
       callback result is one complete silent block plus terminal Fault, with no
       partial frame, stale generation, lock/allocation, or use-after-free.
-- [ ] Show-ASIO Starting/Active/Fault blocks every direct normal/default/explicit
+- [x] Show-ASIO Starting/Active/Fault blocks every direct normal/default/explicit
       OS output constructor, including test and preview paths.
-- [ ] Quiescing retires every PROGRAM sink, legacy `FollowProgram`, every
+- [x] Quiescing retires every PROGRAM sink, legacy `FollowProgram`, every
       `ExplicitDevice` CUE stream, and all in-flight output-prepare workers
       before v3 Start. Transition, Start failure, Fault, Stop, and retry leave
       no second stream and never reopen normal output without explicit operator
       selection.
-- [ ] Callback panic/fault injection cannot unwind across FFI; it produces one
+- [x] Callback panic/fault injection cannot unwind across FFI; it produces one
       complete silent block plus terminal Fault, and context is freed only after
       every in-flight callback reader drains.
-- [ ] Project reload preserves logical bus; app restart restores then
+- [x] Project reload preserves logical bus; app restart restores then
       revalidates machine mapping without auto-start.
-- [ ] Missing, corrupt, oversized, unknown-field, duplicate-field, and future
+- [x] Missing, corrupt, oversized, unknown-field, duplicate-field, and future
       machine-output schemas remain Locked, preserve their bytes, and never
       reopen a default device or legacy CUE route.
-- [ ] A CUE-unused operating day is represented only by unarmed or muted CUE
+- [x] A CUE-unused operating day is represented only by unarmed or muted CUE
       content; no date-specific mode or physical mapping is written to project
       data.
-- [ ] ABI/header/schema tests prove v2 input behavior is unchanged and the new
+- [x] ABI/header/schema tests prove v2 input behavior is unchanged and the new
       output ABI rejects unknown/future fields and revisions.
-- [ ] Header, loader, bridge build, export checker, local manifest schema, and
+- [x] Header, loader, bridge build, export checker, local manifest schema, and
       local-only documentation require exactly the nine v2 plus nine v3 exports;
       no gate remains pinned to a v2-only symbol set.
-- [ ] Packaging tests prove the default build/installer/updater contains no ASIO
+- [x] The exact show-ASIO source identity includes every app, bridge, lease,
+      native SDK/FFI/C++ callback, build, test, and trusted-helper source that
+      can affect the artifact; a missing or mutated member rejects before
+      artifact acceptance.
+- [x] Packaging tests prove the default build/installer/updater contains no ASIO
       SDK-linked artifact or enabled ASIO feature.
-- [ ] Focused Rust/UI tests pass with zero first-party warnings.
+- [x] Focused Rust/UI tests pass with zero first-party warnings.
 - [ ] Exact Windows native gate and normal MIT
       `pnpm --dir app tauri build --no-bundle` pass, with proof that the normal
       executable/installer/updater contains no ASIO SDK-linked artifact.

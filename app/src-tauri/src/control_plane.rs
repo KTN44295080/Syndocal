@@ -52,9 +52,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 485;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 497;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "f8370bf69e619001fbd806937cd17dd5dabc12910ec0b7a4cbe2037e8ae49151";
+    "0bd22551709135aa516f4f3baec3552bb1f53243c72fc3fbf68713327e9e45e9";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -248,6 +248,8 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "check_application_update"
             | "dmx_input_status"
             | "get_application_update_configuration"
+            | "get_asio_output_capabilities"
+            | "get_asio_output_status"
             | "get_control_plane_canonical_registry"
             | "get_control_plane_operation_registry"
             | "get_control_plane_query_capabilities"
@@ -386,6 +388,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "learn_dmx_control"
             | "learn_midi_control"
             | "learn_osc_control"
+            | "list_asio_output_drivers"
             | "load_custom_fixture_profile"
             | "load_gdtf_model_file"
             | "load_gdtf_wheel_media"
@@ -412,6 +415,8 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "renew_output_lease_v2"
             | "request_dj_link_operator_return_to_dj_control"
             | "reset_engine_telemetry"
+            | "reselect_asio_output_profile"
+            | "revalidate_asio_program_cue_output"
             | "rotate_dj_link_token"
             | "scale_timeline_loop"
             | "seek_direct_child_timeline"
@@ -419,12 +424,15 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "seek_timeline_beat"
             | "seek_video_clip_slot_authoritative"
             | "seek_vj_preview"
+            | "select_normal_audio_output"
             | "select_serial_dmx_machine_binding_v1"
             | "send_art_rdm_request"
             | "send_dmx_routes_test_frame"
             | "send_dmx_test_frame"
             | "send_midi_feedback"
             | "send_usb_rdm_request"
+            | "set_asio_output_solo"
+            | "set_asio_output_test"
             | "set_auto_vj_armed"
             | "set_auto_vj_hold"
             | "set_bpm"
@@ -461,12 +469,14 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "set_vj_preview_speed"
             | "stage_vj_preview_layer"
             | "start_art_rdm_full_discovery"
+            | "start_asio_program_cue_output"
             | "start_dmx_input"
             | "start_live_audio_input"
             | "start_osc_input"
             | "start_remote_control"
             | "start_standby_sync"
             | "start_video_output_recording"
+            | "stop_close_asio_program_cue_output"
             | "stop_dmx_input"
             | "stop_live_audio_input"
             | "stop_osc_input"
@@ -537,6 +547,8 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "add_timeline_audio_clip"
             | "update_timeline_audio_clip"
             | "remove_timeline_audio_clip"
+            | "set_cue_child_timeline_audio_clip_output_bus"
+            | "set_timeline_audio_clip_output_bus"
             | "set_timeline_audio_master"
             | "set_timeline_metronome"
             | "patch_fixtures"
@@ -1795,6 +1807,8 @@ pub fn registered_tauri_command_names_from_source(
     source: &str,
 ) -> Result<Vec<String>, ControlPlaneRegistryError> {
     const MARKER: &str = "tauri::generate_handler![";
+    const WINDOWS_X64_ASIO_CFG: &str =
+        "#[cfg(all(target_os = \"windows\", target_arch = \"x86_64\", feature = \"asio\"))]";
     if source.match_indices(MARKER).count() > 1 {
         return Err(ControlPlaneRegistryError::MultipleHandlerMarkers);
     }
@@ -1816,9 +1830,19 @@ pub fn registered_tauri_command_names_from_source(
         .ok_or(ControlPlaneRegistryError::HandlerClosingBracketMissing)?;
     let mut distinct = BTreeSet::new();
     let mut names = Vec::new();
+    let mut pending_windows_x64_asio_cfg = false;
     for raw_line in remainder[..body_end].lines() {
         let name = raw_line.trim().trim_end_matches(',').trim();
         if name.is_empty() {
+            continue;
+        }
+        if name == WINDOWS_X64_ASIO_CFG {
+            if pending_windows_x64_asio_cfg {
+                return Err(ControlPlaneRegistryError::InvalidCommandName(
+                    name.to_string(),
+                ));
+            }
+            pending_windows_x64_asio_cfg = true;
             continue;
         }
         if !is_lower_snake_case(name) {
@@ -1832,6 +1856,12 @@ pub fn registered_tauri_command_names_from_source(
             ));
         }
         names.push(name.to_string());
+        pending_windows_x64_asio_cfg = false;
+    }
+    if pending_windows_x64_asio_cfg {
+        return Err(ControlPlaneRegistryError::InvalidCommandName(
+            WINDOWS_X64_ASIO_CFG.to_string(),
+        ));
     }
     if names.is_empty() {
         return Err(ControlPlaneRegistryError::HandlerMarkerMissing);
@@ -1940,6 +1970,51 @@ mod tests {
                 "select_serial_dmx_machine_binding_v1",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
+            ("get_asio_output_status", TauriRouteAdmissionClass::ReadOnly),
+            (
+                "get_asio_output_capabilities",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "list_asio_output_drivers",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "reselect_asio_output_profile",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "revalidate_asio_program_cue_output",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "start_asio_program_cue_output",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "stop_close_asio_program_cue_output",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "set_asio_output_test",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "set_asio_output_solo",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "select_normal_audio_output",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
+                "set_timeline_audio_clip_output_bus",
+                TauriRouteAdmissionClass::RendererTicketedProjectMutation,
+            ),
+            (
+                "set_cue_child_timeline_audio_clip_output_bus",
+                TauriRouteAdmissionClass::RendererTicketedProjectMutation,
+            ),
             // D3/P0: the authoritative Bank create/rename routes carry the
             // exact E/R/H/owner authority receipt args themselves, so they
             // must classify as backend-authoritative project mutations and
@@ -1971,25 +2046,30 @@ mod tests {
         assert_eq!(tauri_route_admission_class("set_cue_list"), None);
         assert!(classes.get("remove_cue_list").is_none());
         assert_eq!(tauri_route_admission_class("remove_cue_list"), None);
+        assert!(classes.get("mark_asio_output_transport_revision").is_none());
+        assert_eq!(
+            tauri_route_admission_class("mark_asio_output_transport_revision"),
+            None
+        );
         let mut counts = std::collections::BTreeMap::new();
         for name in &names {
             let class = tauri_route_admission_class(name)
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 485);
+        assert_eq!(names.len(), 497);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            128
+            130
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 90);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 92);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 149);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
@@ -2021,8 +2101,8 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 485);
-        const ENGINE_COMMAND_COUNT: usize = 267;
+        assert_eq!(names.len(), 497);
+        const ENGINE_COMMAND_COUNT: usize = 269;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2044,16 +2124,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 425;
+        const FRONTEND_INVOKE_COUNT: usize = 437;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            485 + ENGINE_COMMAND_COUNT
+            497 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1499);
+        assert_eq!(registry.operations.len(), 1525);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2063,7 +2143,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            471 + ENGINE_COMMAND_COUNT
+            483 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -2094,7 +2174,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 471);
+        assert_eq!(tauri_unavailable.clone().count(), 483);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2365,19 +2445,19 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 485;
-        const ENGINE_COUNT: usize = 267;
+        const TAURI_COUNT: usize = 497;
+        const ENGINE_COUNT: usize = 269;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 425;
+        const FRONTEND_COUNT: usize = 437;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1499);
-        assert_eq!(SOURCE_TOTAL, 1532);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1525);
+        assert_eq!(SOURCE_TOTAL, 1558);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 35);
 
@@ -2696,7 +2776,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1067);
+        assert_eq!(unclassified.len(), 1081);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3359,11 +3439,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1499);
+        assert_eq!(legacy.operations.len(), 1525);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1499);
+        assert_eq!(operations.len(), 1525);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"
@@ -3500,6 +3580,36 @@ mod tests {
                 "get_snapshot".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn handler_parser_accepts_only_exact_nonorphaned_windows_x64_asio_cfg() {
+        const ASIO_CFG: &str =
+            "#[cfg(all(target_os = \"windows\", target_arch = \"x86_64\", feature = \"asio\"))]";
+        let accepted = format!(
+            "tauri::generate_handler![\n  get_snapshot,\n  {ASIO_CFG}\n  get_asio_output_status,\n]"
+        );
+        assert_eq!(
+            registered_tauri_command_names_from_source(&accepted),
+            Ok(vec![
+                "get_asio_output_status".to_string(),
+                "get_snapshot".to_string()
+            ])
+        );
+
+        for invalid in [
+            "tauri::generate_handler![\n  #[cfg(feature = \"asio\")]\n  get_asio_output_status,\n]"
+                .to_string(),
+            format!(
+                "tauri::generate_handler![\n  {ASIO_CFG}\n  {ASIO_CFG}\n  get_asio_output_status,\n]"
+            ),
+            format!("tauri::generate_handler![\n  get_snapshot,\n  {ASIO_CFG}\n]"),
+        ] {
+            assert!(matches!(
+                registered_tauri_command_names_from_source(&invalid),
+                Err(ControlPlaneRegistryError::InvalidCommandName(_))
+            ));
+        }
     }
 
     #[test]

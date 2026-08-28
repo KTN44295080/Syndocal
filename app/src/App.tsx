@@ -6,6 +6,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
+import {
+  establishProjectOpenBootstrapAuthority,
+  isProjectOpenAuthorityMismatch,
+  ProjectOpenBootstrapRetryLatch,
+} from "./projectOpenBootstrap";
 import { retainDjTimelineOptions, type DjTimelineOption } from "./djTimelineOptions";
 import { normalizeDjTrackTriggerMappings } from "./djTrackMappingPolicy";
 import {
@@ -59,6 +64,8 @@ import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
 import { ControlFaderWriteHeader } from "./components/ControlFaderWriteHeader";
+import { createAudioOutputController } from "./audioOutputControl";
+import { AudioOutputPanel } from "./components/AudioOutputPanel";
 import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPanel";
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
@@ -453,6 +460,7 @@ import type {
   ChildTimelineSummary,
   TimelineCueEventSummary,
   TimelineAudioClipSummary,
+  TimelineAudioOutputBus,
   TimelineAdvancedAuthoringSummary,
   TimelineAdvancedAuthoritativeResult,
   TimelineAdvancedMutationRequest,
@@ -1081,6 +1089,7 @@ const projectMutationCommands = new Set([
   "clear_timeline_audio",
   "add_timeline_audio_clip",
   "update_timeline_audio_clip",
+  "set_timeline_audio_clip_output_bus",
   "remove_timeline_audio_clip",
   "set_timeline_audio_master",
   "set_timeline_metronome",
@@ -1117,6 +1126,7 @@ const projectMutationCommands = new Set([
   "add_cue_owned_effect",
   "set_cue_metadata",
   "set_cue_child_timeline",
+  "set_cue_child_timeline_audio_clip_output_bus",
   "set_cue_steps",
   "set_cue_color",
   "set_cue_live_modifier_defaults",
@@ -5926,12 +5936,17 @@ export default function App() {
     serialPorts,
     setSerialPorts,
   });
+  const audioOutputController = createAudioOutputController({
+    invoke,
+    backendAvailable: isTauriRuntime(),
+    readLivePlaybackActive: () => snapshot().timeline.playing,
+  });
+  onCleanup(() => audioOutputController.dispose());
   if (
     viewportFixture === "timeline"
     || viewportFixture === "cue-recall"
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
-    || viewportFixture === "setup-io"
   ) {
     setSerialPorts([
       {
@@ -5961,6 +5976,16 @@ export default function App() {
     );
   }
   if (viewportFixture === "setup-io") {
+    const stagedShowDmxOutput = {
+      ...defaultOutput,
+      enabled: false,
+      protocol: "EnttecOpenDmx" as const,
+      universe: 0,
+      serial_port: "",
+      serial_baud_rate: 250_000,
+    };
+    setOutput(stagedShowDmxOutput);
+    setDmxOutputRoutes([stagedShowDmxOutput]);
     setMidiInputs([{ index: 7, name: "Viewport MIDI Input" }]);
     setMidiOutputs([{ index: 9, name: "Viewport MIDI Output" }]);
     setSelectedMidiInput(7);
@@ -12266,38 +12291,46 @@ export default function App() {
   };
   scheduleSnapshotPoll();
   let projectAuthorityPollTimer: number | null = null;
-  let projectAuthorityPollInFlight = false;
-  const pollProjectAuthorityBundle = async () => {
-    if (!isTauriRuntime() || projectAuthorityPollInFlight) return;
+  let projectAuthorityPollInFlight: Promise<boolean> | null = null;
+  const pollProjectAuthorityBundle = (): Promise<boolean> => {
+    if (!isTauriRuntime()) return Promise.resolve(false);
+    if (projectAuthorityPollInFlight) return projectAuthorityPollInFlight;
     const known = projectMappingsAuthority();
-    projectAuthorityPollInFlight = true;
-    try {
-      const bundle = await tauriInvoke<ProjectAuthorityBundle | null>("poll_project_authority_bundle", {
-        knownEpoch: known.project_epoch,
-        knownRevision: known.project_revision,
-        knownCheckpointHash: known.checkpoint_hash,
-        knownPathGeneration: observedProjectPathGeneration,
-        knownHistoryGeneration: observedProjectHistoryGeneration,
-        knownMappingReplacementGeneration: observedMappingReplacementGeneration,
-        knownAuthorityDispositionGeneration: observedAuthorityDispositionGeneration,
-        knownRecoveryAuthoritySerial: observedRecoveryAuthoritySerial,
-        knownProjectInputRuntimeGeneration: observedProjectInputRuntimeGeneration,
-        knownMappingInputRuntimeGeneration: observedMappingInputRuntimeGeneration,
-      });
-      if (bundle) {
-        applyPolledProjectAuthorityBundle(bundle);
+    let attempt: Promise<boolean>;
+    attempt = Promise.resolve().then(async () => {
+      try {
+        const bundle = await tauriInvoke<ProjectAuthorityBundle | null>("poll_project_authority_bundle", {
+          knownEpoch: known.project_epoch,
+          knownRevision: known.project_revision,
+          knownCheckpointHash: known.checkpoint_hash,
+          knownPathGeneration: observedProjectPathGeneration,
+          knownHistoryGeneration: observedProjectHistoryGeneration,
+          knownMappingReplacementGeneration: observedMappingReplacementGeneration,
+          knownAuthorityDispositionGeneration: observedAuthorityDispositionGeneration,
+          knownRecoveryAuthoritySerial: observedRecoveryAuthoritySerial,
+          knownProjectInputRuntimeGeneration: observedProjectInputRuntimeGeneration,
+          knownMappingInputRuntimeGeneration: observedMappingInputRuntimeGeneration,
+        });
+        if (bundle) {
+          applyPolledProjectAuthorityBundle(bundle);
+        }
+      } catch (error) {
+        // A pending transaction intentionally rejects a partial capture. This
+        // poll is convergence-only, so surface neither a stale B error nor a
+        // noisy transient while a user edit owns the coordinator.
+        if (projectMappingsAuthorityReady()) {
+          const detail = String(error);
+          if (!detail.includes("transaction")) setMessage(`Project authority refresh failed: ${detail}`);
+        }
+      } finally {
+        if (projectAuthorityPollInFlight === attempt) {
+          projectAuthorityPollInFlight = null;
+        }
       }
-    } catch (error) {
-      // A pending transaction intentionally rejects a partial capture. This
-      // poll is convergence-only, so surface neither a stale B error nor a
-      // noisy transient while a user edit owns the coordinator.
-      if (projectMappingsAuthorityReady()) {
-        const detail = String(error);
-        if (!detail.includes("transaction")) setMessage(`Project authority refresh failed: ${detail}`);
-      }
-    } finally {
-      projectAuthorityPollInFlight = false;
-    }
+      return projectMappingsAuthorityReady();
+    });
+    projectAuthorityPollInFlight = attempt;
+    return attempt;
   };
   const scheduleProjectAuthorityPoll = () => {
     if (!isTauriRuntime()) return;
@@ -12429,13 +12462,24 @@ export default function App() {
     let mainProjectOpenBootstrapReady = false;
     let startupProjectLoaded = false;
     let mainProjectOpenBootstrapInFlight: Promise<void> | null = null;
+    const mainProjectOpenBootstrapRetryLatch = new ProjectOpenBootstrapRetryLatch();
     let runMainProjectOpenBootstrap = async (): Promise<void> => undefined;
     createEffect(() => {
       // A user-armed registration retry may succeed outside the original
-      // bootstrap attempt. Resume exactly this main-only sequence; panes do
-      // not own it and no polling path can create a retry arm.
+      // bootstrap attempt. A later authoritative bootstrap poll may likewise
+      // close a transient initial read failure. Resume exactly this main-only
+      // sequence; panes do not own it.
       projectTransactionOwnerRegistrationRevision();
+      projectMappingsAuthorityReady();
+      const authority = projectMappingsAuthority();
+      mainProjectOpenBootstrapRetryLatch.observe(
+        authority,
+        mainProjectOpenBootstrapInFlight !== null,
+      );
       if (mainProjectOpenBootstrapReady && !queuedOpenProjectDrainReady) {
+        if (mainProjectOpenBootstrapInFlight) {
+          return;
+        }
         void runMainProjectOpenBootstrap();
       }
     });
@@ -12472,7 +12516,11 @@ export default function App() {
             // Keep this order serial. A queued external open cannot race a
             // startup project or owner registration and accidentally apply an
             // older reply.
-            await awaitProjectTransactionOwnerRegistrationBarrier();
+            await establishProjectOpenBootstrapAuthority({
+              awaitOwnerRegistration: awaitProjectTransactionOwnerRegistrationBarrier,
+              refreshAuthority: pollProjectAuthorityBundle,
+              authorityReady: projectMappingsAuthorityReady,
+            });
             if (disposed) return;
             if (!startupProjectLoaded) {
               await loadStartupProject();
@@ -12489,13 +12537,16 @@ export default function App() {
             if (mainProjectOpenBootstrapInFlight === attempt) {
               mainProjectOpenBootstrapInFlight = null;
             }
+            const retryForNewAuthority = mainProjectOpenBootstrapRetryLatch.take();
             // An explicit open/gesture which arrived while registration was
-            // pending leaves one retry arm. Consume it only after this failed
-            // bootstrap has released its single-flight slot.
+            // pending or a new authority token observed during this attempt
+            // leaves one retry arm. Consume it only after this bootstrap has
+            // released its single-flight slot; another attempt requires a
+            // genuinely newer token or another explicitly armed owner retry.
             if (
               !disposed
               && !queuedOpenProjectDrainReady
-              && projectTransactionOwnerRegistrationRetryArmed
+              && (projectTransactionOwnerRegistrationRetryArmed || retryForNewAuthority)
             ) {
               void runMainProjectOpenBootstrap();
             }
@@ -16372,20 +16423,27 @@ export default function App() {
     }
   };
 
-  const loadStartupProject = async () => {
-    const authority = captureProjectAuthorityIdentity();
-    try {
-      const result = await invoke<ProjectLoadResult | null>("load_startup_project", {
-        ownerId: projectTransactionOwnerId,
-        expectedEpoch: authority.project_epoch,
-        expectedRevision: authority.project_revision,
-        expectedCheckpointHash: authority.checkpoint_hash,
-      });
-      if (result) {
-        await applyLoadedProjectResult(result, result.path);
+  const loadStartupProject = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const authority = captureProjectAuthorityIdentity();
+      try {
+        const result = await invoke<ProjectLoadResult | null>("load_startup_project", {
+          ownerId: projectTransactionOwnerId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+        });
+        if (result) {
+          await applyLoadedProjectResult(result, result.path);
+        }
+        return;
+      } catch (error) {
+        if (attempt === 0 && isProjectOpenAuthorityMismatch(error)) {
+          const refreshed = await pollProjectAuthorityBundle();
+          if (refreshed && projectMappingsAuthorityReady()) continue;
+        }
+        throw error;
       }
-    } catch (error) {
-      setMessage(String(error));
     }
   };
 
@@ -17639,6 +17697,7 @@ export default function App() {
           gain: 1,
           fade_in_ms: 0,
           fade_out_ms: 0,
+          output_bus: "PROGRAM",
         }],
         duration_ms: Math.max(child.duration_ms ?? 0, startMs + Math.max(1, analysis.duration_ms)),
       }));
@@ -17662,6 +17721,7 @@ export default function App() {
             gain: 1,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: "PROGRAM",
           }],
         },
       }));
@@ -17790,6 +17850,39 @@ export default function App() {
         fadeOutMs: clip.fade_out_ms,
       });
       await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setTimelineAudioClipOutputBus = async (
+    clip: TimelineAudioClipSummary,
+    outputBus: TimelineAudioOutputBus,
+  ) => {
+    try {
+      const childCueId = timelineChildCueId();
+      if (childCueId !== null) {
+        await invoke("set_cue_child_timeline_audio_clip_output_bus", {
+          cueId: childCueId,
+          clipId: clip.id,
+          outputBus,
+        });
+        await refreshSnapshot();
+        setMessage(`Audio Clip ${clip.id} output bus set to ${outputBus}.`);
+        return;
+      }
+      // The viewport fixture is deliberately local-only; it has no engine
+      // authority and therefore keeps its in-memory preview behavior.
+      if (viewportFixture === "timeline-layered") {
+        await updateTimelineAudioClip({ ...clip, output_bus: outputBus });
+        return;
+      }
+      await invoke("set_timeline_audio_clip_output_bus", {
+        id: clip.id,
+        outputBus,
+      });
+      await refreshSnapshot();
+      setMessage(`Audio Clip ${clip.id} output bus set to ${outputBus}.`);
     } catch (error) {
       setMessage(String(error));
     }
@@ -28222,6 +28315,7 @@ export default function App() {
               onApplyAudioBpm={applyAudioBpm}
               onAddAudioClip={addTimelineAudioClip}
               onUpdateAudioClip={updateTimelineAudioClip}
+              onSetAudioClipOutputBus={setTimelineAudioClipOutputBus}
               onUpdateVideoClip={updateTimelineVideoClip}
               onGroupItems={groupTimelineItems}
               onUngroupItem={ungroupTimelineItem}
@@ -28344,6 +28438,9 @@ export default function App() {
             activeId={activeIoConnection()}
             onActiveId={setActiveIoConnection}
             outputEnabled={output().enabled}
+            audioOutputSummary={audioOutputController.summary()}
+            audioOutputState={audioOutputController.view().state}
+            audioOutputStateTone={audioOutputController.stateTone()}
             midiClockConnected={midiConnected()}
             midiControlConnected={midiControlConnected()}
             oscRunning={oscRunning()}
@@ -28474,9 +28571,42 @@ export default function App() {
           />
           </IoDisclosure>
           </div>
-          </div>
-          </section>
-            ) : connection === "midi" ? (
+           </div>
+           </section>
+             ) : connection === "audio" ? (
+           <section class="ioUnifiedZone ioCompactZone" data-io-zone="audio">
+           <AudioOutputPanel
+             view={audioOutputController.view()}
+             options={audioOutputController.options()}
+             busy={audioOutputController.busy()}
+             canRefresh={audioOutputController.canRefresh()}
+             canRevalidate={audioOutputController.canRevalidate()}
+             canStart={audioOutputController.canStart()}
+             canStop={audioOutputController.canStop()}
+             canReturnToNormal={audioOutputController.canReturnToNormal()}
+             canTest={audioOutputController.canTest()}
+             canSolo={audioOutputController.canSolo()}
+             livePlaybackActive={audioOutputController.livePlaybackActive()}
+             testMode={audioOutputController.testMode()}
+             soloMode={audioOutputController.soloMode()}
+             onBackendChange={audioOutputController.setBackend}
+             onDriverChange={audioOutputController.setDriver}
+             onSampleRateChange={audioOutputController.setSampleRate}
+             onBufferFramesChange={audioOutputController.setBufferFrames}
+             onProgramLeftChange={audioOutputController.setProgramLeft}
+             onProgramRightChange={audioOutputController.setProgramRight}
+             onCueChange={audioOutputController.setCue}
+             onSpareChange={audioOutputController.setSpare}
+             onRefresh={audioOutputController.refresh}
+             onRevalidate={audioOutputController.revalidate}
+             onStart={audioOutputController.start}
+             onStop={audioOutputController.stop}
+             onReturnToNormal={audioOutputController.returnToNormal}
+             onTest={audioOutputController.setTest}
+             onSoloModeChange={audioOutputController.setSoloMode}
+           />
+           </section>
+             ) : connection === "midi" ? (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="midi">
           <MidiControlMappingPanel
             snapshot={snapshot()}

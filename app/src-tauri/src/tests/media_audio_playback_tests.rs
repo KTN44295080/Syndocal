@@ -66,6 +66,52 @@ fn empty_audio_monitor_status_does_not_open_an_output_device() {
     assert!(status.active_layer_ids.is_empty());
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn normal_program_retirement_owner_remains_reachable_after_media_lock_poison() {
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let poison_target = Arc::clone(&audio);
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = poison_target.lock().unwrap();
+        panic!("poison media playback for retirement-owner regression proof");
+    });
+
+    with_media_audio_retirement_owner(&audio, |playback| {
+        playback.last_sync_error = Some("retirement owner retained".to_string());
+    });
+    let playback = match audio.lock() {
+        Ok(_) => panic!("media playback mutex unexpectedly recovered its poison state"),
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    assert_eq!(
+        playback.last_sync_error.as_deref(),
+        Some("retirement owner retained")
+    );
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn rejected_program_install_keeps_prepared_output_owned_by_retirement_guard() {
+    let (active_mixer, _) = rodio::mixer::mixer(2, 48_000);
+    let mut playback = MediaAudioPlayback::default();
+    playback
+        .sinks
+        .insert(7, rodio::Sink::connect_new(&active_mixer));
+    let (prepared_mixer, _) = rodio::mixer::mixer(2, 48_000);
+    let mut prepared = Some(PreparedMediaAudioOutput::Test {
+        mixer: prepared_mixer,
+    });
+
+    let error = playback.install_prepared_output(&mut prepared).unwrap_err();
+
+    assert!(error.contains("cannot stop active sinks"));
+    assert!(
+        prepared.is_some(),
+        "rejected lease must remain with its guard"
+    );
+    assert_eq!(playback.sinks.len(), 1);
+}
+
 #[test]
 fn audio_device_generation_exhaustion_is_fail_closed_without_runtime_delta() {
     let mut playback = MediaAudioPlayback {
@@ -84,6 +130,7 @@ fn audio_device_generation_exhaustion_is_fail_closed_without_runtime_delta() {
                 path: PathBuf::from("existing.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
             error: "existing failure".to_string(),
         },
@@ -126,6 +173,10 @@ fn timeline_audio_prepare_stall_releases_control_lock_and_rejects_device_aba() {
         sync_timeline_audio_without_blocking_playback_lock(
             &worker_engine,
             &worker_audio,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            None,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            None,
             &timeline,
             &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
             || {
@@ -189,6 +240,7 @@ fn timeline_audio_real_wav_prepare_survives_multiple_position_ticks_and_installs
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         })
         .unwrap();
     let transport = engine.snapshot().timeline;
@@ -215,6 +267,10 @@ fn timeline_audio_real_wav_prepare_survives_multiple_position_ticks_and_installs
     sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {
@@ -284,6 +340,7 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
             source_position_ms: 100,
             volume: 1.0,
@@ -291,6 +348,7 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
                 path: path.clone(),
                 gain: 1.0,
                 offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         },
         &mixer,
@@ -299,11 +357,15 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
     let started = Instant::now();
     let mut prepared = seek_prepared_timeline_audio_decoders(vec![Ok(prepared)]);
     assert!(started.elapsed() < Duration::from_millis(250));
-    prepared = append_prepared_timeline_audio_decoders(prepared);
-    let prepared = prepared.pop().unwrap().unwrap();
+    prepared = append_prepared_timeline_audio_decoders(
+        prepared,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+    );
+    let mut prepared = prepared.pop().unwrap().unwrap();
     assert_eq!(prepared.request.source_position_ms, 100);
     assert!(prepared.decoder.is_none());
-    prepared.sink.stop();
+    prepared.stop();
     let _ = fs::remove_file(path);
 }
 
@@ -327,6 +389,7 @@ fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
             TimelineAudioClipSummary {
                 id: 802,
@@ -339,6 +402,7 @@ fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         ],
         playing: true,
@@ -357,6 +421,10 @@ fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {},
@@ -638,6 +706,71 @@ fn timeline_audio_prepare_outcomes_never_cross_follow_contexts() {
 }
 
 #[test]
+fn timeline_audio_prepare_shutdown_cancels_and_joins_nested_worker() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+    let context = TimelineAudioPrepareCoordinator::context(&engine, &audio, &timeline)
+        .expect("idle playback exposes a stable output fingerprint");
+    let authority = context.fingerprint.authority;
+    let commit_state = Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default()));
+    let observed_commit_state = Arc::clone(&commit_state);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let _ = release_rx.recv();
+        let _ = result_tx.send(Ok(authority));
+    });
+    let mut coordinator = TimelineAudioPrepareCoordinator {
+        active: Some(TimelineAudioPrepareJob {
+            context,
+            started_at: Instant::now(),
+            receiver: result_rx,
+            worker: Some(worker),
+            result: None,
+            timed_out: false,
+            commit_state,
+        }),
+        ..TimelineAudioPrepareCoordinator::default()
+    };
+    let (shutdown_done_tx, shutdown_done_rx) = mpsc::sync_channel(1);
+    let shutdown = std::thread::spawn(move || {
+        coordinator.shutdown();
+        shutdown_done_tx
+            .send((
+                coordinator.active.is_none(),
+                coordinator.blocked.is_none(),
+                coordinator.reap_count,
+            ))
+            .unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if observed_commit_state.lock().unwrap().cancelled {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        shutdown_done_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    release_tx.send(()).unwrap();
+    let (active_cleared, block_cleared, reap_count) = shutdown_done_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    shutdown.join().unwrap();
+    assert!(active_cleared);
+    assert!(block_cleared);
+    assert_eq!(reap_count, 1);
+}
+
+#[test]
 fn timeline_audio_prepare_timeout_unblocks_only_after_output_device_rotation() {
     let engine = EngineHandle::start_for_tests(DmxOutputConfig {
         enabled: false,
@@ -718,6 +851,15 @@ fn timeline_audio_prepare_timeout_unblocks_only_after_output_device_rotation() {
                 assert!(Instant::now() < finish_deadline);
                 std::thread::yield_now();
             }
+            TimelineAudioPreparePoll::Obsolete => {
+                // The isolated test engine may rotate its independent Follow
+                // context while the recovered-device worker is finishing.
+                // Production correctly discards that stale result; keep
+                // polling until the same recovered device fingerprint gets a
+                // job under the current Follow context.
+                assert!(Instant::now() < finish_deadline);
+                std::thread::yield_now();
+            }
             other => panic!("recovered device requires its own exact job: {other:?}"),
         }
     };
@@ -766,6 +908,7 @@ fn timeline_audio_prepare_timeout_cancels_exact_precommit_before_install() {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         })
         .unwrap();
     let transport = engine.snapshot().timeline;
@@ -884,6 +1027,10 @@ fn timeline_audio_commit_fence_rejects_publication_after_final_snapshot_read() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {},
@@ -918,6 +1065,10 @@ fn timeline_audio_commit_fence_rejects_same_authority_transport_publication() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {},
@@ -958,6 +1109,10 @@ fn timeline_audio_commit_fence_rejects_same_authority_seek_publication() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {},
@@ -1073,6 +1228,7 @@ fn timeline_audio_sink_domain_recreates_clip_id_on_seek_and_stops_on_pause_or_mu
                 path: PathBuf::from("fixture.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
     };
@@ -1120,6 +1276,7 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
                 path: PathBuf::from(path),
                 gain: 1.0,
                 offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
     }
@@ -1140,6 +1297,7 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
         gain: 1.0,
         fade_in_ms: 0,
         fade_out_ms: 0,
+        output_bus: protocol::TimelineAudioOutputBus::Program,
     };
     let lane_a = clip(70, r"C:\syndocal-missing\audio-lane-a.wav");
     let lane_b = clip(71, "lane-b.wav");
@@ -1195,6 +1353,7 @@ fn timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once() {
             path: PathBuf::from("same-source.wav"),
             gain: 1.0,
             offset_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         },
     );
     playback.timeline_source_projection_authority =
@@ -1220,6 +1379,7 @@ fn timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once() {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         }],
         playing: true,
         position_ms: 500,
@@ -1276,6 +1436,7 @@ fn timeline_audio_decoder_fence_rejects_stale_source_before_sink_start() {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         }],
         playing: true,
         position_ms: 100,
@@ -1292,6 +1453,83 @@ fn timeline_audio_decoder_fence_rejects_stale_source_before_sink_start() {
     assert!(error.contains("changed while its decoder was opening"));
     assert!(playback.timeline_sinks.is_empty());
     assert!(playback.timeline_sources.is_empty());
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn timeline_audio_output_bus_change_retires_old_sink_before_each_logical_rebuild() {
+    let suffix = current_unix_ms();
+    let path =
+        std::env::temp_dir().join(format!("syndocal-timeline-audio-logical-bus-{suffix}.wav"));
+    write_timeline_audio_test_wav(&path);
+    let (mixer, _mixed) = rodio::mixer::mixer(1, 8_000);
+    let mut playback = MediaAudioPlayback {
+        timeline_test_mixer: Some(mixer),
+        ..MediaAudioPlayback::default()
+    };
+    let mut timeline = engine::TimelineAudioRuntimeSnapshot {
+        clips: vec![TimelineAudioClipSummary {
+            id: 92,
+            layer_id: 9,
+            media_asset_id: None,
+            path: path.to_string_lossy().into_owned(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 2_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
+        }],
+        playing: true,
+        // This test proves logical bus retirement/rebuild, not seeking. The
+        // injected mixer has no callback thread, so a non-zero Sink::try_seek
+        // would wait forever for an audio consumer that does not exist in
+        // this in-memory seam.
+        position_ms: 0,
+        source_projection_authority: engine::TimelineAudioProjectionAuthority {
+            epoch: 2,
+            generation: 4,
+        },
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    };
+
+    playback
+        .sync_to_timeline_audio_evidenced(&timeline)
+        .unwrap();
+    let key = TimelineAudioSinkKey::Root(92);
+    assert_eq!(playback.timeline_start_attempt_count, 1);
+    assert_eq!(playback.timeline_stop_count, 0);
+    assert_eq!(
+        playback.timeline_sources.get(&key).unwrap().output_bus,
+        protocol::TimelineAudioOutputBus::Program
+    );
+
+    timeline.clips[0].output_bus = protocol::TimelineAudioOutputBus::Cue;
+    timeline.source_projection_authority.generation = 5;
+    playback
+        .sync_to_timeline_audio_evidenced(&timeline)
+        .unwrap();
+    assert_eq!(playback.timeline_stop_count, 1);
+    assert_eq!(playback.timeline_start_attempt_count, 2);
+    assert_eq!(
+        playback.timeline_sources.get(&key).unwrap().output_bus,
+        protocol::TimelineAudioOutputBus::Cue,
+        "the committed CUE reconstruction cannot retain an old PROGRAM source"
+    );
+
+    timeline.clips[0].output_bus = protocol::TimelineAudioOutputBus::Program;
+    timeline.source_projection_authority.generation = 6;
+    playback
+        .sync_to_timeline_audio_evidenced(&timeline)
+        .unwrap();
+    assert_eq!(playback.timeline_stop_count, 2);
+    assert_eq!(playback.timeline_start_attempt_count, 3);
+    assert_eq!(
+        playback.timeline_sources.get(&key).unwrap().output_bus,
+        protocol::TimelineAudioOutputBus::Program,
+        "the committed PROGRAM reconstruction cannot retain an old CUE source"
+    );
     let _ = fs::remove_file(path);
 }
 
@@ -1384,6 +1622,7 @@ fn timeline_audio_clip_gain_envelope_combines_fades_and_gain() {
         gain: 1.5,
         fade_in_ms: 500,
         fade_out_ms: 500,
+        output_bus: protocol::TimelineAudioOutputBus::Program,
     };
 
     assert_eq!(timeline_audio_clip_volume(&clip, 1_000), 0.0);

@@ -2727,6 +2727,8 @@ export interface TimelineLayerSummary {
   kind: TimelineLayerKind;
 }
 
+export type TimelineAudioOutputBus = "PROGRAM" | "CUE";
+
 export interface TimelineAudioClipSummary {
   id: number;
   layer_id: number;
@@ -2738,6 +2740,8 @@ export interface TimelineAudioClipSummary {
   gain: number;
   fade_in_ms: number;
   fade_out_ms: number;
+  /** Missing only in legacy browser fixtures; native project migration resolves it to PROGRAM. */
+  output_bus?: TimelineAudioOutputBus;
 }
 
 export interface TimelineCueEventSummary {

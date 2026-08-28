@@ -25,6 +25,8 @@ $script:WrongVersion = "9.9.9-wrong"
 $script:GoodArtifactHead = "566a7101b0d5c9307e8d0efa5ccf499aba3eb404"
 $script:GoodHead = "566a7101b0d5c9307e8d0efa5ccf499aba3eb404"
 $script:GoodDescendantHead = ("6" * 40)
+$script:GoodShowArtifactHead = ("a" * 40)
+$script:GoodShowEvidenceHead = ("b" * 40)
 $script:WrongHead = ("dead" * 10)
 $script:GoodBranch = "codex/syndocal-v1.2"
 $script:WrongBranch = "codex/wrong-current-branch"
@@ -224,12 +226,13 @@ function Install-GoodWorldSeams {
 
 function New-GoodConfiguration {
   param([bool]$Apply = $true)
+  $script:CurrentHead = $script:GoodHead
   New-ThreeDisplayConfiguration -IsApply $Apply -AuthorityMode StandardRelease -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
 }
 
 # ---- ShowAsioLocal authority-mode fixtures -------------------------------
 
-$script:GoodCommit12 = $script:GoodHead.Substring(0, 12)
+$script:GoodCommit12 = $script:GoodShowArtifactHead.Substring(0, 12)
 $script:WrongCommit12 = "deaddeaddead"
 $script:ShowCheckerSha = ("ef" * 32)
 
@@ -265,9 +268,11 @@ function New-ShowConfiguration {
     [string]$Commit12 = $script:GoodCommit12,
     [string]$ExecutablePath = ""
   )
+  $script:CurrentHead = $script:GoodShowEvidenceHead
+  $script:CurrentBranch = $script:GoodBranch
   $expectedShowExecutable = Join-Path (Get-TestShowArtifactDirectory -Commit12 $Commit12) "syndocal-show-asio.exe"
   $effectivePath = if ($ExecutablePath -ne "") { $ExecutablePath } else { $expectedShowExecutable }
-  New-ThreeDisplayConfiguration -IsApply $Apply -AuthorityMode ShowAsioLocal -ExecutablePath $effectivePath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
+  New-ThreeDisplayConfiguration -IsApply $Apply -AuthorityMode ShowAsioLocal -ExecutablePath $effectivePath -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodShowEvidenceHead -ArtifactSourceHead $script:GoodShowArtifactHead -ArtifactSourceBranch $script:GoodBranch -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
 }
 
 function New-PassLine {
@@ -276,7 +281,14 @@ function New-PassLine {
 }
 
 function New-CheckerVerification {
-  param([int]$ExitCode = 0, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$StandardOut, [string]$StandardError = "")
+  param(
+    [int]$ExitCode = 0,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$StandardOut,
+    [string]$StandardError = "",
+    [string]$ArtifactSourceHead = $script:GoodShowArtifactHead,
+    [string]$EvidenceHead = $script:GoodShowEvidenceHead,
+    [string]$SourceBranch = $script:GoodBranch
+  )
   return [pscustomobject]@{
     exit_code = [int]$ExitCode
     standard_out = $StandardOut
@@ -284,6 +296,10 @@ function New-CheckerVerification {
     checker_path = Join-Path $script:CheckoutRoot "app\scripts\check-show-asio-artifact.mjs"
     checker_sha256 = $script:ShowCheckerSha
     node_executable_path = "C:\synthetic\node.exe"
+    artifact_source_head = $ArtifactSourceHead.ToLowerInvariant()
+    evidence_head = $EvidenceHead.ToLowerInvariant()
+    source_branch = $SourceBranch
+    checker_arguments = @("--artifact-source", $ArtifactSourceHead.ToLowerInvariant(), "--evidence-head", $EvidenceHead.ToLowerInvariant(), "--source-branch", $SourceBranch)
     invoked_at_utc = [DateTime]::UtcNow.ToString("o")
   }
 }
@@ -297,9 +313,9 @@ function Install-ShowAuthoritySeams {
   param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$StandardOut)
   $script:ShowCheckerInvocations = [System.Collections.Generic.List[object]]::new()
   Set-TestSeam "Invoke-ThreeDisplayShowAsioArtifactVerification" {
-    param($CheckoutRootPath, $NodeExecutablePath)
-    [void]$script:ShowCheckerInvocations.Add([pscustomobject]@{ checkout_root = [string]$CheckoutRootPath; node = [string]$NodeExecutablePath })
-    return (New-CheckerVerification -ExitCode $script:ShowCheckerExitCode -StandardOut $script:ShowCheckerStdOut -StandardError $script:ShowCheckerStdErr)
+    param($CheckoutRootPath, $NodeExecutablePath, $ArtifactSourceHead, $EvidenceHead, $SourceBranch)
+    [void]$script:ShowCheckerInvocations.Add([pscustomobject]@{ checkout_root = [string]$CheckoutRootPath; node = [string]$NodeExecutablePath; artifact_source_head = [string]$ArtifactSourceHead; evidence_head = [string]$EvidenceHead; source_branch = [string]$SourceBranch })
+    return (New-CheckerVerification -ExitCode $script:ShowCheckerExitCode -StandardOut $script:ShowCheckerStdOut -StandardError $script:ShowCheckerStdErr -ArtifactSourceHead ([string]$ArtifactSourceHead) -EvidenceHead ([string]$EvidenceHead) -SourceBranch ([string]$SourceBranch))
   }
   Set-TestSeam "Test-ThreeDisplaySingleLinkFile" { param($Path) [bool]$script:ShowSingleLinkResult }
   $script:ShowCheckerExitCode = 0
@@ -334,6 +350,25 @@ function Invoke-FocusedChecks {
     $script:CurrentHash = $script:GoodHash; $script:CurrentSize = $script:GoodSize; $script:CurrentVersion = $script:GoodVersion; $script:CurrentHead = $script:GoodHead; $script:CurrentBranch = $script:GoodBranch; $script:SourceAncestorResult = $true
     Install-GoodWorldSeams -World $script:World
     $config = New-GoodConfiguration
+
+    $checks.Add([pscustomobject]@{ Name = "Git authority environment overrides fail closed without mutating the operator environment"; Run = {
+      $overrideNames = @($script:ThreeDisplayGitAuthorityEnvironmentNames + "GIT_CONFIG_KEY_0" + "GIT_CONFIG_VALUE_0")
+      $passed = $true
+      $details = [System.Collections.Generic.List[string]]::new()
+      foreach ($name in $overrideNames) {
+        try {
+          Assert-ThreeDisplayGitEnvironmentSafe -Environment @{ $name = "synthetic-override" } | Out-Null
+          $passed = $false
+          [void]$details.Add("did not reject $name")
+        } catch {
+          if (-not $_.Exception.Message.Contains($name)) {
+            $passed = $false
+            [void]$details.Add("wrong diagnostic for $name")
+          }
+        }
+      }
+      New-Check -Passed $passed -Detail $(if ($details.Count -eq 0) { "all Git repo/index/object/config authority overrides rejected" } else { $details -join "; " })
+    } })
 
     $checks.Add([pscustomobject]@{ Name = "alpha.25 authority binds exact artifact metadata"; Run = {
       $authority = $config.artifact_authority
@@ -725,7 +760,7 @@ function Invoke-FocusedChecks {
       New-Check -Passed ($r.Passed) -Detail $r.Detail
     } })
     $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal does not inherit StandardRelease alpha.25 product lock"; Run = {
-      $showAlpha14 = New-ThreeDisplayConfiguration -IsApply $false -AuthorityMode ShowAsioLocal -ExecutablePath "" -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
+      $showAlpha14 = New-ThreeDisplayConfiguration -IsApply $false -AuthorityMode ShowAsioLocal -ExecutablePath "" -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodShowEvidenceHead -ArtifactSourceHead $script:GoodShowArtifactHead -ArtifactSourceBranch $script:GoodBranch -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
       $passed = ([string]$showAlpha14.expected_product_version -ceq "1.2.0-alpha.14") -and ($null -eq $showAlpha14.artifact_authority) -and ([uint64]$showAlpha14.expected_byte_size -eq 0)
       New-Check -Passed $passed -Detail "ShowAsioLocal retains checker/manifest-bound product/version authority; StandardRelease alpha.25 metadata is not applied"
     } })
@@ -759,11 +794,24 @@ function Invoke-FocusedChecks {
       }
       New-Check -Passed $allRejected -Detail "nine hostile stdout/stderr shapes failed closed at '$($hostile.expect)'"
     } })
-    $checks.Add([pscustomobject]@{ Name = "exact PASS parser succeeds and derives only the attested directory"; Run = {
-      $parsed = ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification (New-CheckerVerification -StandardOut (New-PassLine (Get-TestShowArtifactDirectory) -Files 14))
-      New-Check -Passed (($parsed.files_verified -eq 14) -and ($parsed.artifact_directory_raw -ceq (Get-TestShowArtifactDirectory))) -Detail "one exact PASS contract parsed"
-    } })
-    $checks.Add([pscustomobject]@{ Name = "checker-derived directory outside this checkout is rejected"; Run = {
+     $checks.Add([pscustomobject]@{ Name = "exact PASS parser succeeds and derives only the attested directory"; Run = {
+       $parsed = ConvertTo-ThreeDisplayShowAsioVerifiedPassContract -Verification (New-CheckerVerification -StandardOut (New-PassLine (Get-TestShowArtifactDirectory) -Files 14))
+       New-Check -Passed (($parsed.files_verified -eq 14) -and ($parsed.artifact_directory_raw -ceq (Get-TestShowArtifactDirectory))) -Detail "one exact PASS contract parsed"
+     } })
+     $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal authority rejects checker S/E/B drift"; Run = {
+       [void](New-ShowArtifactFixture)
+       Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory))
+       try {
+         $config = New-ShowConfiguration
+         Set-TestSeam "Invoke-ThreeDisplayShowAsioArtifactVerification" {
+           param($CheckoutRootPath, $NodeExecutablePath, $ArtifactSourceHead, $EvidenceHead, $SourceBranch)
+           return (New-CheckerVerification -StandardOut $script:ShowCheckerStdOut -ArtifactSourceHead $script:GoodHead -EvidenceHead $EvidenceHead -SourceBranch $SourceBranch)
+         }
+         $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "artifact source S differs"
+         New-Check -Passed $r.Passed -Detail $r.Detail
+       } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
+     } })
+     $checks.Add([pscustomobject]@{ Name = "checker-derived directory outside this checkout is rejected"; Run = {
       [void](New-ShowArtifactFixture)
       Install-ShowAuthoritySeams -StandardOut (New-PassLine "C:\foreign-checkout\target\show-asio-local\Syndocal_Show_ASIO_$($script:GoodVersion)_facefaceface_x64")
       try {
@@ -777,7 +825,7 @@ function Invoke-FocusedChecks {
       Install-ShowAuthoritySeams -StandardOut (New-PassLine (Split-Path -Parent $driftedExe))
       try {
         $config = New-ShowConfiguration
-        $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "binds commit '$($script:WrongCommit12)'"
+         $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "binds source commit '$($script:WrongCommit12)'"
         New-Check -Passed ($r.Passed) -Detail $r.Detail
       } finally { Install-ShowAuthoritySeams -StandardOut (New-PassLine (Get-TestShowArtifactDirectory)) | Out-Null }
     } })
@@ -842,7 +890,7 @@ function Invoke-FocusedChecks {
         [void](New-Item -ItemType Junction -Path $junctionDirectory -Target $junctionTarget -ErrorAction Stop)
         $createdJunction = $true
         Install-ShowAuthoritySeams -StandardOut (New-PassLine $junctionDirectory)
-        $config = New-ThreeDisplayConfiguration -IsApply $true -AuthorityMode ShowAsioLocal -ExecutablePath (Join-Path $junctionDirectory "syndocal-show-asio.exe") -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $alternateCheckout -ShowAsioNodeExecutablePath ""
+        $config = New-ThreeDisplayConfiguration -IsApply $true -AuthorityMode ShowAsioLocal -ExecutablePath (Join-Path $junctionDirectory "syndocal-show-asio.exe") -Sha256 $script:GoodHash -ProductVersion $script:GoodVersion -GitHead $script:GoodShowEvidenceHead -ArtifactSourceHead $script:GoodShowArtifactHead -ArtifactSourceBranch $script:GoodBranch -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $alternateCheckout -ShowAsioNodeExecutablePath ""
         $r = Assert-Throws { Invoke-ThreeDisplayShowAsioAuthorityGate -Configuration $config -Phase "pre-mutation" } "reparse point"
         New-Check -Passed ($r.Passed) -Detail $r.Detail
       } catch {
@@ -875,7 +923,11 @@ function Invoke-FocusedChecks {
           ([string]$verifications[1].executable_sha256 -ceq $script:GoodHash) -and
           ([uint64]$verifications[1].executable_byte_size -eq $script:GoodSize) -and
           ([string]$verifications[1].executable_product_version -ceq $script:GoodVersion) -and
-          ([string]$verifications[1].checkout_git_head -ceq $script:GoodHead) -and
+           ([string]$verifications[1].checkout_git_head -ceq $script:GoodShowEvidenceHead) -and
+           ([string]$verifications[1].artifact_source_head -ceq $script:GoodShowArtifactHead) -and
+           ([string]$verifications[1].artifact_source_branch -ceq $script:GoodBranch) -and
+           ([string]$verifications[1].evidence_head -ceq $script:GoodShowEvidenceHead) -and
+           ((@($verifications[1].checker_arguments) -join "|") -ceq ("--artifact-source|{0}|--evidence-head|{1}|--source-branch|{2}" -f @($script:GoodShowArtifactHead, $script:GoodShowEvidenceHead, $script:GoodBranch))) -and
           ([string]$verifications[1].checker_sha256 -ceq $script:ShowCheckerSha) -and
           ([string]$verifications[1].artifact_flavor -ceq "windows-show-asio-local-only") -and
           ($verifications[1].distribution_approved -eq $false) -and
@@ -883,7 +935,7 @@ function Invoke-FocusedChecks {
           ([long]$verifications[1].files_verified -gt 0) -and
           (-not [string]::IsNullOrWhiteSpace([string]$verifications[1].verified_at_utc)) -and
           ([string]$config.expected_executable_path -ieq $showExecutable)
-        New-Check -Passed $passed -Detail "two-phase authority verifications bound flavor/checker/path/hash/byte-size/version/HEAD and both times"
+         New-Check -Passed $passed -Detail "two-phase authority verifications bound distinct artifact source S, evidence HEAD E, source branch B, flavor/checker/path/hash/byte-size/version and both times"
       } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal Apply maximize path re-verifies immediately before the UI mutation"; Run = {
@@ -945,8 +997,12 @@ function Invoke-FocusedChecks {
           ($result.succeeded) -and ([string]$result.verdict -ceq "dry-run-would-accept") -and
           (@($finalEvidence.authority_verifications).Count -eq 1) -and
           ([string]@($finalEvidence.authority_verifications)[0].phase -ceq "dry-run-pre-executable-use") -and
-          ([string]$provenance.authority_mode -ceq "ShowAsioLocal") -and
-          ([string]$provenance.show_asio_authority_contract.artifact_flavor -ceq "windows-show-asio-local-only") -and
+           ([string]$provenance.authority_mode -ceq "ShowAsioLocal") -and
+           ([string]$provenance.artifact_source_head -ceq $script:GoodShowArtifactHead) -and
+           ([string]$provenance.artifact_source_branch -ceq $script:GoodBranch) -and
+           ([string]$provenance.evidence_head -ceq $script:GoodShowEvidenceHead) -and
+           ([string]$provenance.expectations.evidence_head -ceq $script:GoodShowEvidenceHead) -and
+           ([string]$provenance.show_asio_authority_contract.artifact_flavor -ceq "windows-show-asio-local-only") -and
           ($provenance.safety.launches_or_terminates_processes -eq $false)
         New-Check -Passed $passed -Detail "single dry-run authority verification bound into final.json and provenance.json"
       } finally { Install-GoodWorldSeams -World $script:World }
@@ -964,9 +1020,11 @@ function Invoke-FocusedChecks {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
       if ($text.Contains("1.2.0-alpha.21")) { return New-Check $false "stale alpha.21 authority remains in the runner" }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.25", "D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1", "59807744", "566a7101b0d5c9307e8d0efa5ccf499aba3eb404", "source_provenance", "artifact_source_head", "artifact_source_branch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.25", "D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1", "59807744", "566a7101b0d5c9307e8d0efa5ccf499aba3eb404", "source_provenance", "artifact_source_head", "artifact_source_branch", "ExpectedArtifactSourceHead", "ExpectedArtifactSourceBranch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", '--artifact-source', '--evidence-head', '--source-branch', 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
-      $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
+       foreach ($token in @("Assert-ThreeDisplayGitEnvironmentSafe", "--no-replace-objects", "ThreeDisplayShowAsioSourceIdentityCount = 70", 'app\src\uiLocalization.ts')) { if (-not $text.Contains($token)) { return New-Check $false "required source/Git authority token $token missing" } }
+       if (([regex]::Matches($text, [regex]::Escape("--no-replace-objects")).Count) -ne 4) { return New-Check $false "all four harness Git authority calls must disable refs/replace object substitution" }
+       $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }
       foreach ($retired in @("plugin:window|get_current_window", "__TAURI_INTERNALS__", "expected_gdi_device_name", "\\.\DISPLAY2", "\\.\DISPLAY3", "\\.\DISPLAY5")) { if ($text.Contains($retired)) { return New-Check $false "retired or hardcoded GDI role authority $retired remains" } }
       New-Check $true "static safety and identity contract present"

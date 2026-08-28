@@ -2,6 +2,7 @@
 
 const expectedZoneByConnection = {
   dmx: "dmx",
+  audio: "audio",
   midi: "midi",
   osc: "osc",
   web: "remote",
@@ -326,10 +327,10 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
   );
 
   const cardResults = [];
-  let fifthTabPointerHitTestable = false;
+  let lastTabPointerHitTestable = false;
   for (const id of Object.keys(expectedZoneByConnection)) {
     const geometry = await clickIoConnectionTab(client, id);
-    if (id === "dj") fifthTabPointerHitTestable = geometry.hitTestable;
+    if (id === "dj") lastTabPointerHitTestable = geometry.hitTestable;
     await waitForClientCondition(
       client,
       `document.querySelector('[data-io-primary-connection="${id}"] > button[role="tab"]')?.getAttribute('aria-selected') === 'true'`,
@@ -365,46 +366,67 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
     });
   }
 
+  // DMX no longer exposes an inactive-card quick action. Verify the current
+  // operator path instead: while another workbench is active, the DMX tab
+  // remains reachable and selecting it mounts the DMX workbench/zone.
   await selectIoConnection("dj");
-  const activeBeforeQuickAction = await evaluatePageFunction(client, () =>
+  const activeBeforeDmxTab = await evaluatePageFunction(client, () =>
     document.querySelector('[data-io-primary-connection] > button[role="tab"][aria-selected="true"]')
       ?.closest("[data-io-primary-connection]")?.getAttribute("data-io-primary-connection") ?? null,
   );
-  const quickActionGeometry = await client.evaluate(`(() => {
-    const action = document.querySelector('[data-io-primary-connection="dmx"] > .setupIoConnectionMeta > .setupIoConnectionAction > button');
-    if (!(action instanceof HTMLElement)) return { found: false, hitTestable: false };
-    const rect = action.getBoundingClientRect();
+  const dmxTabGeometry = await client.evaluate(`(() => {
+    const tab = document.querySelector('[data-io-primary-connection="dmx"] > button[role="tab"]');
+    if (!(tab instanceof HTMLElement)) return { found: false, hitTestable: false };
+    tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const rect = tab.getBoundingClientRect();
     const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
     return {
       found: rect.width > 0 && rect.height > 0,
-      hitTestable: target === action || action.contains(target),
+      hitTestable: target === tab || tab.contains(target),
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2,
     };
   })()`);
-  if (!quickActionGeometry.found || !quickActionGeometry.hitTestable) {
-    throw new Error(`Setup I/O inactive quick action is not hit-testable: ${JSON.stringify(quickActionGeometry)}`);
+  if (!dmxTabGeometry.found || !dmxTabGeometry.hitTestable) {
+    throw new Error(`Setup I/O DMX tab is not hit-testable: ${JSON.stringify(dmxTabGeometry)}`);
   }
-  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: quickActionGeometry.x, y: quickActionGeometry.y });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dmxTabGeometry.x, y: dmxTabGeometry.y });
   await client.send("Input.dispatchMouseEvent", {
-    type: "mousePressed", x: quickActionGeometry.x, y: quickActionGeometry.y,
+    type: "mousePressed", x: dmxTabGeometry.x, y: dmxTabGeometry.y,
     button: "left", buttons: 1, clickCount: 1,
   });
   await client.send("Input.dispatchMouseEvent", {
-    type: "mouseReleased", x: quickActionGeometry.x, y: quickActionGeometry.y,
+    type: "mouseReleased", x: dmxTabGeometry.x, y: dmxTabGeometry.y,
     button: "left", buttons: 0, clickCount: 1,
   });
   await sleep(80);
-  const activeAfterQuickAction = await evaluatePageFunction(client, () =>
-    document.querySelector('[data-io-primary-connection] > button[role="tab"][aria-selected="true"]')
-      ?.closest("[data-io-primary-connection]")?.getAttribute("data-io-primary-connection") ?? null,
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-io-primary-connection="dmx"] > button[role="tab"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-io-connection-workbench="dmx"] [data-io-zone="dmx"]') !== null`,
+    "Setup I/O DMX tab workbench selection",
   );
+  const dmxTabState = await readState("dmx");
+  const dmxTabCard = dmxTabState.cards.find((card) => card.id === "dmx");
+  const dmxTabReachesWorkbench =
+    activeBeforeDmxTab === "dj" &&
+    dmxTabState.selectedIds.length === 1 &&
+    dmxTabState.selectedIds[0] === "dmx" &&
+    dmxTabState.panelConnection === "dmx" &&
+    dmxTabCard?.zoneNames.length === 1 &&
+    dmxTabCard.zoneNames[0] === "dmx";
 
   await selectIoConnection("dmx");
   const dmxPointerFocus = await evaluatePageFunction(client, () => {
     const button = document.querySelector('[data-io-primary-connection="dmx"] > button[role="tab"]');
     return button instanceof HTMLElement && document.activeElement === button;
   });
+  await pressKey(client, "ArrowRight", "ArrowRight");
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-io-primary-connection="audio"] > button[role="tab"]')?.getAttribute('aria-selected') === 'true' && document.activeElement === document.querySelector('[data-io-primary-connection="audio"] > button[role="tab"]')`,
+    "Setup I/O ArrowRight keyboard selection of Audio",
+  );
+  const arrowRightAudioState = await readState("audio");
   await pressKey(client, "ArrowRight", "ArrowRight");
   await waitForClientCondition(
     client,
@@ -458,10 +480,11 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
     everyWorkbenchHasStrictOverflowProbe: cardResults.every((result) => result.bodyOverflowProbePassed),
     everyWorkbenchOwnsOnlyScroll: cardResults.every((result) => result.nestedScrollportCount === 0 && result.nestedOverflowStyleCount === 0),
     activeId: finalState.selectedIds[0] ?? null,
-    fifthTabPointerHitTestable,
-    inactiveQuickActionPreservesSelection: activeBeforeQuickAction === "dj" && activeAfterQuickAction === "dj",
+    lastTabPointerHitTestable,
+    dmxTabReachesWorkbench,
     keyboardNavigatesFromDmxToMidiAndDj:
       dmxPointerFocus &&
+      arrowRightAudioState.selectedIds.length === 1 && arrowRightAudioState.selectedIds[0] === "audio" &&
       arrowRightState.selectedIds.length === 1 && arrowRightState.selectedIds[0] === "midi" &&
       endState.selectedIds.length === 1 && endState.selectedIds[0] === "dj",
     keyboardHomeReturnsToDmx:

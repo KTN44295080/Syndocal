@@ -4063,6 +4063,21 @@ const fn default_timeline_follow_trans_cadence_bars() -> u16 {
     4
 }
 
+/// Logical destination for authored Timeline Audio Clips.
+///
+/// This is deliberately project-portable: it identifies the mix bus only and
+/// must never be used to persist a physical output device or channel.  The
+/// default is the one-way legacy migration for clips written before this
+/// field existed.  Serde intentionally has no catch-all variant, so an
+/// explicit unknown or future value is rejected rather than silently routed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TimelineAudioOutputBus {
+    #[default]
+    Program,
+    Cue,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineAudioClipSummary {
     #[serde(default)]
@@ -4085,6 +4100,10 @@ pub struct TimelineAudioClipSummary {
     pub fade_in_ms: u64,
     #[serde(default)]
     pub fade_out_ms: u64,
+    /// Logical `PROGRAM` (stereo audience/broadcast) or `CUE` (performer
+    /// cue) destination. Missing legacy data is canonically PROGRAM.
+    #[serde(default)]
+    pub output_bus: TimelineAudioOutputBus,
 }
 
 /// The interpolation used between two authored Timeline tempo points.  The
@@ -4369,6 +4388,7 @@ impl Default for TimelineAudioClipSummary {
             gain: default_timeline_audio_clip_gain(),
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: TimelineAudioOutputBus::Program,
         }
     }
 }
@@ -13117,6 +13137,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 250,
                 fade_out_ms: 250,
+                output_bus: super::TimelineAudioOutputBus::Program,
             }],
             phases: vec![
                 super::TimelinePhaseSummary {
@@ -14106,6 +14127,7 @@ mod tests {
         assert_eq!(clip.gain, 1.0);
         assert_eq!(clip.fade_in_ms, 0);
         assert_eq!(clip.fade_out_ms, 0);
+        assert_eq!(clip.output_bus, super::TimelineAudioOutputBus::Program);
     }
 
     #[test]
@@ -14122,6 +14144,7 @@ mod tests {
                 gain: 1.25,
                 fade_in_ms: 500,
                 fade_out_ms: 750,
+                output_bus: super::TimelineAudioOutputBus::Cue,
             }],
             audio_offset_ms: -250,
             audio_muted: true,
@@ -14132,6 +14155,69 @@ mod tests {
         let decoded: super::TimelineSnapshot = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, snapshot);
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap()["audio_clips"][0]["output_bus"],
+            "CUE"
+        );
+    }
+
+    #[test]
+    fn timeline_audio_clip_output_bus_rejects_explicit_unknown_values() {
+        let legacy: super::TimelineAudioClipSummary = serde_json::from_value(serde_json::json!({
+            "id": 4,
+            "layer_id": 12,
+            "path": "music/show.wav",
+            "duration_ms": 8_000
+        }))
+        .unwrap();
+        assert_eq!(legacy.output_bus, super::TimelineAudioOutputBus::Program);
+
+        for output_bus in ["cue_v2", "SIDECHAIN", "program"] {
+            let error =
+                serde_json::from_value::<super::TimelineAudioClipSummary>(serde_json::json!({
+                    "id": 4,
+                    "layer_id": 12,
+                    "path": "music/show.wav",
+                    "duration_ms": 8_000,
+                    "output_bus": output_bus
+                }))
+                .unwrap_err();
+            assert!(error.to_string().contains("unknown variant"));
+        }
+    }
+
+    #[test]
+    fn timeline_audio_clip_persists_only_logical_bus_not_physical_output_mapping() {
+        let clip = super::TimelineAudioClipSummary {
+            id: 4,
+            layer_id: 12,
+            media_asset_id: None,
+            path: "music/cue.wav".to_string(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 8_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            output_bus: super::TimelineAudioOutputBus::Cue,
+        };
+        let encoded = serde_json::to_value(clip).unwrap();
+
+        assert_eq!(encoded["output_bus"], "CUE");
+        for forbidden in [
+            "backend",
+            "driver",
+            "device",
+            "program_left",
+            "program_right",
+            "cue_channel",
+            "spare_channel",
+        ] {
+            assert!(
+                encoded.get(forbidden).is_none(),
+                "portable Timeline Audio Clip must not carry {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -17174,6 +17260,7 @@ mod tests {
                     gain: 0.75,
                     fade_in_ms: 50,
                     fade_out_ms: 80,
+                    output_bus: super::TimelineAudioOutputBus::Cue,
                 }],
                 duration_ms: 1_000,
                 ..super::ChildTimelineSummary::default()
@@ -20399,6 +20486,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: super::TimelineAudioOutputBus::Program,
             }
         }
 

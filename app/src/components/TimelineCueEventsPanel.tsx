@@ -5,6 +5,7 @@ import type {
   MediaAssetAvailability,
   MediaAssetSummary,
   TimelineAudioClipSummary,
+  TimelineAudioOutputBus,
   TimelineCueEventSummary,
   TimelineLayerKind,
   TimelineLayerSummary,
@@ -224,6 +225,7 @@ interface TimelineCueEventsPanelProps {
   onApplyAudioBpm: () => void | Promise<void>;
   onAddAudioClip: (layerId: number) => void | Promise<void>;
   onUpdateAudioClip: (clip: TimelineAudioClipSummary) => void | Promise<void>;
+  onSetAudioClipOutputBus: (clip: TimelineAudioClipSummary, outputBus: TimelineAudioOutputBus) => void | Promise<void>;
   onUpdateVideoClip: (clip: TimelineVideoClipSummary) => void | Promise<void>;
   onGroupItems: (items: TimelineItemRef[]) => void | Promise<void>;
   onUngroupItem: (item: TimelineItemRef) => void | Promise<void>;
@@ -1990,6 +1992,20 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             return (
               <div class="timelineAudioClipProperties" data-timeline-audio-clip-properties={clip().id}>
                 <strong data-no-localize>{clip().path.replaceAll("\\", "/").split("/").pop()}</strong>
+                <label>
+                  Output Bus
+                  <select
+                    value={clip().output_bus ?? "PROGRAM"}
+                    data-timeline-audio-output-bus
+                    onChange={(event) => void props.onSetAudioClipOutputBus(
+                      clip(),
+                      event.currentTarget.value as TimelineAudioOutputBus,
+                    )}
+                  >
+                    <option value="PROGRAM">PROGRAM</option>
+                    <option value="CUE">CUE</option>
+                  </select>
+                </label>
                 <label>
                   Start (ms)
                   <input class="tabularNums" type="number" min="0" step="1" value={clip().start_ms}

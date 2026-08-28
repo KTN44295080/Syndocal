@@ -15,10 +15,12 @@ use std::sync::atomic::AtomicBool;
 
 mod control_plane;
 mod move_path;
+mod timeline_audio_live_fence;
 mod timeline_follow_hold;
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
+pub use timeline_audio_live_fence::TimelineAudioLiveFence;
 use timeline_follow_hold::{
     destination_first_measure_hold_plan, resolve_follow_duration_ms,
     source_admission_measure_duration_ms, TimelineFollowHoldPlan,
@@ -136,8 +138,8 @@ use protocol::{
     PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
     RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAudioOutputBus,
+    TimelineAutomationSummary, TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
     TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
     TimelineFollowSettlementConsumerSummary, TimelineFollowSettlementDomain,
@@ -3606,6 +3608,23 @@ impl Default for TimelineAudioProjectionAuthority {
     }
 }
 
+/// Aggregate the exact Timeline audio liveness projected by a published
+/// `VideoAudioRuntimeSnapshot`.  Keep this beside the publication model so
+/// the atomic live fence and the public snapshot cannot drift into separate
+/// definitions of "playing".
+fn timeline_audio_is_live_in_snapshot(snapshot: &EngineSnapshot) -> bool {
+    snapshot.timeline.playing
+        || snapshot
+            .direct_child_timeline_transports
+            .iter()
+            .any(|transport| transport.playing || transport.count_in_remaining_ms > 0)
+        || matches!(
+            snapshot.timeline.follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+                | protocol::TimelineFollowRuntimeStatus::Settling
+        )
+}
+
 #[derive(Debug)]
 pub struct TimelineTransportPublicationCompletion {
     ack: mpsc::SyncSender<Result<(), String>>,
@@ -4185,6 +4204,16 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Changes only a nested child-timeline clip's portable logical bus.
+    /// Full child replacements intentionally never own this field: a stale
+    /// IPC snapshot must not undo a dedicated bus edit.
+    SetCueChildTimelineAudioClipOutputBus {
+        cue_id: CueId,
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetCueColor {
         cue_id: CueId,
         color: Option<String>,
@@ -4450,6 +4479,14 @@ define_engine_command! {
     },
     UpdateTimelineAudioClip {
         clip: TimelineAudioClipSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Changes the authored logical destination without accepting a stale
+    /// full-clip replacement from an IPC snapshot.
+    SetTimelineAudioClipOutputBus {
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -5340,6 +5377,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetCueStepsPublished { .. }
             | EngineCommand::SetCueDetailsPublished { .. }
             | EngineCommand::SetCueChildTimeline { .. }
+            | EngineCommand::SetCueChildTimelineAudioClipOutputBus { .. }
             | EngineCommand::SetCueColor { .. }
             | EngineCommand::SetGroupColor { .. }
             | EngineCommand::SetCueMetadata { .. }
@@ -5396,6 +5434,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::ReorderTimelineLayers { .. }
             | EngineCommand::AddTimelineAudioClip { .. }
             | EngineCommand::UpdateTimelineAudioClip { .. }
+            | EngineCommand::SetTimelineAudioClipOutputBus { .. }
             | EngineCommand::RemoveTimelineAudioClip { .. }
             | EngineCommand::SetTimelineAudioMaster { .. }
             | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
@@ -5893,6 +5932,9 @@ struct EngineSharedTelemetry {
     queue_push_failure_count: AtomicU64,
     requested_live_audio_clear_generation: AtomicU64,
     live_audio_take_gate: Mutex<()>,
+    /// Central non-persistent Timeline audio liveness authority shared by the
+    /// public handle and the single engine worker.
+    timeline_audio_live_fence: TimelineAudioLiveFence,
     /// Serializes the exact linearization point for a priority S0 enqueue
     /// against show-route publication.  A route may commit only while this
     /// gate proves that no S0 request has already been enqueued.
@@ -5911,6 +5953,7 @@ impl EngineSharedTelemetry {
             queue_push_failure_count: AtomicU64::new(0),
             requested_live_audio_clear_generation: AtomicU64::new(0),
             live_audio_take_gate: Mutex::new(()),
+            timeline_audio_live_fence: TimelineAudioLiveFence::default(),
             safety_blackout_enqueue_gate: Mutex::new(()),
             open_dmx_safety_write_gate: OpenDmxSafetyWriteGate::new(),
             safety_blackout: Mutex::new(SafetyBlackoutAuthority {
@@ -6210,6 +6253,13 @@ impl EngineHandle {
 
     pub fn safety_blackout_authority(&self) -> SafetyBlackoutAuthority {
         self.shared_telemetry.safety_blackout_authority()
+    }
+
+    /// Return the central Timeline audio liveness authority shared with the
+    /// engine worker. The returned clone is another read-only handle to the
+    /// same atomic word, not a copied value.
+    pub fn timeline_audio_live_fence(&self) -> TimelineAudioLiveFence {
+        self.shared_telemetry.timeline_audio_live_fence.clone()
     }
 
     fn start_with_output_ownership(
@@ -8216,6 +8266,31 @@ impl EngineHandle {
             .map_err(|error| format!("Cue child-timeline acknowledgement failed: {error}"))?
     }
 
+    /// Changes only the current child clip's logical bus. This queue boundary
+    /// is authoritative: callers must not read-modify-write an entire child
+    /// timeline merely to change one output destination.
+    pub fn set_cue_child_timeline_audio_clip_output_bus(
+        &self,
+        cue_id: CueId,
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id,
+            clip_id,
+            output_bus,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Cue child-timeline audio clip output-bus acknowledgement failed: {error}")
+            })?
+    }
+
     pub fn set_cue_color_published(
         &self,
         cue_id: CueId,
@@ -8904,6 +8979,29 @@ impl EngineHandle {
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| {
                 format!("Timeline audio clip update acknowledgement failed: {error}")
+            })?
+    }
+
+    /// Changes only the portable logical bus on the current authoritative
+    /// clip. Callers must not read-modify-write a complete clip to set this
+    /// field because an unrelated edit may have committed after their read.
+    pub fn set_timeline_audio_clip_output_bus(
+        &self,
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id,
+            output_bus,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Timeline audio clip output-bus acknowledgement failed: {error}")
             })?
     }
 
@@ -10077,7 +10175,7 @@ impl EngineHandle {
                 let direct_playing = snapshot
                     .direct_child_timeline_transports
                     .iter()
-                    .find(|transport| transport.playing);
+                    .find(|transport| transport.playing || transport.count_in_remaining_ms > 0);
                 let transport_revision = snapshot.direct_child_timeline_transports.iter().fold(
                     snapshot.timeline.audio_transport_revision,
                     |revision, transport| revision.wrapping_add(transport.generation),
@@ -10253,6 +10351,7 @@ impl EngineHandle {
                     } else {
                         (false, 0, 0, None)
                     };
+                let timeline_audio_live = timeline_audio_is_live_in_snapshot(&snapshot);
                 VideoAudioRuntimeSnapshot {
                     // Timeline MediaAsset AV groups own their audio through
                     // `timeline_audio.clips`.  Do not also open the same
@@ -10272,9 +10371,7 @@ impl EngineHandle {
                     timeline_audio: TimelineAudioRuntimeSnapshot {
                         clips: root_clips,
                         child_clips,
-                        playing: snapshot.timeline.playing
-                            || direct_playing.is_some()
-                            || follow_transitioning,
+                        playing: timeline_audio_live,
                         position_ms: if snapshot.timeline.playing || follow_transitioning {
                             snapshot.timeline.position_ms
                         } else {
@@ -10448,6 +10545,7 @@ impl EngineHandle {
                 child_timeline: None,
                 ..
             } => {}
+            EngineCommand::SetCueChildTimelineAudioClipOutputBus { .. } => {}
             EngineCommand::DuplicateCue { cue_id, .. } => {
                 maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
             }
@@ -10864,6 +10962,7 @@ impl EngineHandle {
             | EngineCommand::ReconformTimelineToBpm { .. }
             | EngineCommand::RemoveTimelineLayer { .. }
             | EngineCommand::ReorderTimelineLayers { .. }
+            | EngineCommand::SetTimelineAudioClipOutputBus { .. }
             | EngineCommand::RemoveTimelineAudioClip { .. }
             | EngineCommand::SetTimelineAudioMaster { .. }
             | EngineCommand::RemoveTimelineAutomation(_)
@@ -21224,6 +21323,7 @@ impl EngineRuntime {
                     | EngineCommand::SetCueStepsPublished { .. }
                     | EngineCommand::SetCueDetailsPublished { .. }
                     | EngineCommand::SetCueChildTimeline { .. }
+                    | EngineCommand::SetCueChildTimelineAudioClipOutputBus { .. }
                     | EngineCommand::ReconformTimelineToBpm { .. }
                     | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
                     | EngineCommand::ApplyTimelineBankPublished { .. }
@@ -24388,6 +24488,53 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Cue child-timeline update was rolled back",
                 });
             }
+            EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+                cue_id,
+                clip_id,
+                output_bus,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreCueRemoval {
+                    cues: self.cues.clone(),
+                    cue_lists: self.cue_lists.clone(),
+                    cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
+                    active_group_cue_ids: self.active_group_cue_ids.clone(),
+                    cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    active_cue_id: self.active_cue_id,
+                    active_fade: self.active_fade.clone(),
+                    pending_cues: self.pending_cues.clone(),
+                    timeline_position_ms: self.timeline_position_ms,
+                    timeline_playhead_boundary_armed: self.timeline_playhead_boundary_armed,
+                    timeline_evaluated_boundary_position_ms: self
+                        .timeline_evaluated_boundary_position_ms,
+                    timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Cue child-timeline audio clip output-bus update expired before engine execution".to_string())
+                } else {
+                    self.set_cue_child_timeline_audio_clip_output_bus_state(
+                        cue_id, clip_id, output_bus,
+                    )
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Cue child-timeline audio clip output-bus update was rolled back",
+                });
+            }
             EngineCommand::SetCueColor {
                 cue_id,
                 color,
@@ -25705,6 +25852,47 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; Timeline audio clip update was rolled back",
+                });
+            }
+            EngineCommand::SetTimelineAudioClipOutputBus {
+                clip_id,
+                output_bus,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreTimelineLayers {
+                    timeline_layers: self.timeline_layers.clone(),
+                    timeline_events: self.timeline_events.clone(),
+                    timeline_automations: self.timeline_automations.clone(),
+                    timeline_video_automations: self.timeline_video_automations.clone(),
+                    timeline_audio: self.timeline_audio.clone(),
+                    timeline_audio_clips: self.timeline_audio_clips.clone(),
+                    timeline_video_clips: self.timeline_video_clips.clone(),
+                    timeline_audio_clips_derived: self.timeline_audio_clips_derived,
+                    timeline_audio_duration_ms: self.timeline_audio_duration_ms,
+                    timeline_position_ms: self.timeline_position_ms,
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err(
+                        "Timeline audio clip output-bus update expired before engine execution"
+                            .to_string(),
+                    )
+                } else {
+                    self.set_timeline_audio_clip_output_bus_state(clip_id, output_bus)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline audio clip output-bus update was rolled back",
                 });
             }
             EngineCommand::RemoveTimelineAudioClip {
@@ -28324,24 +28512,59 @@ impl EngineRuntime {
                     let mut guard = snapshot
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *guard = self.build_snapshot(queue_depth);
+                    let next_snapshot = self.build_snapshot(queue_depth);
+                    let timeline_audio_live = timeline_audio_is_live_in_snapshot(&next_snapshot);
+                    if timeline_audio_live {
+                        self.shared_telemetry
+                            .timeline_audio_live_fence
+                            .enter_before_publication();
+                    }
+                    *guard = next_snapshot;
                     self.commit_timeline_audio_commit_publication(prepared_audio_commit.take());
                     self.commit_timeline_audio_projection_publication(
                         prepared_audio_projection.take(),
                     );
+                    drop(guard);
+                    #[cfg(test)]
+                    self.shared_telemetry
+                        .timeline_audio_live_fence
+                        .notify_after_snapshot_guard_drop_for_tests();
+                    if !timeline_audio_live {
+                        self.shared_telemetry
+                            .timeline_audio_live_fence
+                            .exit_after_publication();
+                    }
                     true
                 } else {
                     let deadline = Instant::now() + Duration::from_millis(5);
                     loop {
                         match snapshot.try_write() {
                             Ok(mut guard) => {
-                                *guard = self.build_snapshot(queue_depth);
+                                let next_snapshot = self.build_snapshot(queue_depth);
+                                let timeline_audio_live =
+                                    timeline_audio_is_live_in_snapshot(&next_snapshot);
+                                if timeline_audio_live {
+                                    self.shared_telemetry
+                                        .timeline_audio_live_fence
+                                        .enter_before_publication();
+                                }
+                                *guard = next_snapshot;
                                 self.commit_timeline_audio_commit_publication(
                                     prepared_audio_commit.take(),
                                 );
                                 self.commit_timeline_audio_projection_publication(
                                     prepared_audio_projection.take(),
                                 );
+                                drop(guard);
+                                #[cfg(test)]
+                                self.shared_telemetry
+                                    .timeline_audio_live_fence
+                                    .notify_after_snapshot_guard_drop_for_tests();
+                                if !timeline_audio_live {
+                                    self.shared_telemetry
+                                        .timeline_audio_live_fence
+                                        .exit_after_publication();
+                                }
                                 break true;
                             }
                             Err(std::sync::TryLockError::WouldBlock)
@@ -28554,6 +28777,12 @@ impl EngineRuntime {
             // only moves/swaps, Copy assignments, atomic stores and the
             // receipt transition. Old variable-size images are retained and
             // dropped only after Finished has been published.
+            let timeline_audio_live = timeline_audio_is_live_in_snapshot(&prepared_snapshot);
+            if timeline_audio_live {
+                self.shared_telemetry
+                    .timeline_audio_live_fence
+                    .enter_before_publication();
+            }
             let old_snapshot = std::mem::replace(&mut *snapshot_guard, prepared_snapshot);
             let old_audio_commit_signature =
                 prepared_audio_commit.take().map(|(generation, signature)| {
@@ -28583,6 +28812,11 @@ impl EngineRuntime {
             }
             drop(projection_guard);
             drop(snapshot_guard);
+            if !timeline_audio_live {
+                self.shared_telemetry
+                    .timeline_audio_live_fence
+                    .exit_after_publication();
+            }
             drop(old_snapshot);
             drop(old_audio_commit_signature);
             drop(old_audio_projection_signature);
@@ -30568,7 +30802,14 @@ impl EngineRuntime {
             } else {
                 std::mem::take(&mut guard.touch_surface)
             };
-            *guard = self.build_snapshot_with_touch_surface(queue_depth, touch_surface);
+            let next_snapshot = self.build_snapshot_with_touch_surface(queue_depth, touch_surface);
+            let timeline_audio_live = timeline_audio_is_live_in_snapshot(&next_snapshot);
+            if timeline_audio_live {
+                self.shared_telemetry
+                    .timeline_audio_live_fence
+                    .enter_before_publication();
+            }
+            *guard = next_snapshot;
             self.commit_timeline_audio_commit_publication(prepared_audio_commit);
             self.commit_timeline_audio_projection_publication(prepared_audio_projection);
             // Plain (non-acknowledged) presentation commands are published by
@@ -30576,6 +30817,16 @@ impl EngineRuntime {
             // fence the configuration token here, strictly after the mutated
             // snapshot became visible.
             self.fence_video_presentation_config_after_publication();
+            drop(guard);
+            #[cfg(test)]
+            self.shared_telemetry
+                .timeline_audio_live_fence
+                .notify_after_snapshot_guard_drop_for_tests();
+            if !timeline_audio_live {
+                self.shared_telemetry
+                    .timeline_audio_live_fence
+                    .exit_after_publication();
+            }
         }
     }
 
@@ -31668,9 +31919,67 @@ impl EngineRuntime {
             .position(|cue| cue.id == cue_id)
             .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
         if let Some(child) = child_timeline.as_mut() {
+            // A complete child-timeline update still carries the bus for
+            // serialization, but it cannot author it. Preserve the bus from
+            // the engine-current clip before normalizing this candidate so a
+            // stale non-bus edit cannot undo the dedicated field command.
+            if let Some(current) = self.cues[cue_index].child_timeline.as_ref() {
+                let current_buses = current
+                    .audio_clips
+                    .iter()
+                    .map(|clip| (clip.id, clip.output_bus))
+                    .collect::<HashMap<_, _>>();
+                for clip in &mut child.audio_clips {
+                    if let Some(output_bus) = current_buses.get(&clip.id) {
+                        clip.output_bus = *output_bus;
+                    }
+                }
+            }
             self.normalize_and_validate_child_timeline(cue_id, child)?;
         }
         self.cues[cue_index].child_timeline = child_timeline;
+        Ok(())
+    }
+
+    fn set_cue_child_timeline_audio_clip_output_bus_state(
+        &mut self,
+        cue_id: CueId,
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
+    ) -> Result<(), String> {
+        let cue = self
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let child = cue
+            .child_timeline
+            .as_mut()
+            .ok_or_else(|| format!("Cue {cue_id} has no child timeline"))?;
+        let clip_index = child
+            .audio_clips
+            .iter()
+            .position(|clip| clip.id == clip_id)
+            .ok_or_else(|| {
+                format!("Cue {cue_id} child timeline audio clip {clip_id} was not found")
+            })?;
+        let layer_id = child.audio_clips[clip_index].layer_id;
+        let layer = child.layers.iter().find(|layer| layer.id == layer_id).ok_or_else(|| {
+            format!(
+                "Cue {cue_id} child timeline audio clip {clip_id} references missing timeline layer {layer_id}"
+            )
+        })?;
+        if layer.kind != TimelineLayerKind::Audio {
+            return Err(format!(
+                "Cue {cue_id} child timeline audio clip {clip_id} must use Audio timeline layer {layer_id}"
+            ));
+        }
+        if layer.locked {
+            return Err(format!(
+                "Cue {cue_id} child timeline layer {layer_id} is locked; unlock it before editing audio clip {clip_id}"
+            ));
+        }
+        child.audio_clips[clip_index].output_bus = output_bus;
         Ok(())
     }
 
@@ -35473,6 +35782,7 @@ impl EngineRuntime {
         &mut self,
         clip: TimelineAudioClipSummary,
     ) -> Result<(), String> {
+        self.materialize_timeline_audio_clips_for_edit();
         let index = self
             .timeline_audio_clips
             .iter()
@@ -35487,13 +35797,41 @@ impl EngineRuntime {
                 self.timeline_audio_clips[index].layer_id, clip.id
             ));
         }
-        self.materialize_timeline_audio_clips_for_edit();
-        let clip = self.sanitize_timeline_audio_clip(clip)?;
+        let current_output_bus = self.timeline_audio_clips[index].output_bus;
+        let mut clip = self.sanitize_timeline_audio_clip(clip)?;
+        // Full updates are deliberately non-bus updates. This value is read
+        // only at engine execution, after any dedicated bus command that may
+        // have committed since the caller's snapshot was taken.
+        clip.output_bus = current_output_bus;
         self.timeline_audio_clips[index] = clip;
         self.timeline_audio_clips
             .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
         self.refresh_timeline_audio_duration();
         self.clamp_timeline_position_after_edit();
+        Ok(())
+    }
+
+    fn set_timeline_audio_clip_output_bus_state(
+        &mut self,
+        clip_id: TimelineAudioClipId,
+        output_bus: TimelineAudioOutputBus,
+    ) -> Result<(), String> {
+        self.materialize_timeline_audio_clips_for_edit();
+        let clip_index = self
+            .timeline_audio_clips
+            .iter()
+            .position(|clip| clip.id == clip_id)
+            .ok_or_else(|| format!("Timeline audio clip {clip_id} was not found"))?;
+        let layer_id = self.timeline_audio_clips[clip_index].layer_id;
+        if self
+            .timeline_audio_layer(layer_id)
+            .is_some_and(|layer| layer.locked)
+        {
+            return Err(format!(
+                "Timeline layer {layer_id} is locked; unlock it before editing audio clip {clip_id}"
+            ));
+        }
+        self.timeline_audio_clips[clip_index].output_bus = output_bus;
         Ok(())
     }
 
@@ -35708,8 +36046,24 @@ impl EngineRuntime {
         if timelines.is_empty() {
             return Err("Timeline bank requires at least one Timeline".to_string());
         }
+        // A bank image may have been captured before a dedicated bus edit was
+        // committed. Keep that edit authoritative only for the same
+        // (Timeline, clip) identity; another Timeline may intentionally reuse
+        // the clip ID with a different logical destination. Clips introduced
+        // by this image retain their candidate bus. Validation still sees the
+        // complete candidate image below.
+        let current_audio_buses = timeline_audio_clip_output_bus_authority(
+            &self.timeline_bank_snapshot(),
+            self.timeline_id,
+            &self.timeline_audio_clips,
+        );
         let mut prepared = Vec::with_capacity(timelines.len());
-        for timeline in timelines {
+        for mut timeline in timelines {
+            preserve_current_timeline_audio_clip_output_buses(
+                &current_audio_buses,
+                timeline.id,
+                &mut timeline.audio_clips,
+            );
             prepared.push(self.prepare_timeline_bank_entry(timeline)?);
         }
         let active_index = prepared
@@ -35755,7 +36109,7 @@ impl EngineRuntime {
 
     fn apply_timeline_advanced_authoring_state(
         &mut self,
-        candidate: TimelineAdvancedAuthoringSummary,
+        mut candidate: TimelineAdvancedAuthoringSummary,
     ) -> Result<(), String> {
         let revision_successors = 1 + u64::from(self.timeline_follow_is_abortable());
         let next_audio_transport_revision =
@@ -35911,6 +36265,21 @@ impl EngineRuntime {
         if locked_video_changed || locked_audio_changed {
             return Err("Timeline media on a locked lane cannot be changed".to_string());
         }
+
+        // The full authoring image is intentionally not the owner of this
+        // field. Re-read the engine-current bus after validation and lock
+        // checks so a stale image can still apply its unrelated clip edits,
+        // while a clip introduced by the image keeps its candidate bus.
+        let current_audio_buses = timeline_audio_clip_output_bus_authority(
+            &self.timeline_bank_snapshot(),
+            self.timeline_id,
+            &self.timeline_audio_clips,
+        );
+        preserve_current_timeline_audio_clip_output_buses(
+            &current_audio_buses,
+            self.timeline_id,
+            &mut candidate.audio_clips,
+        );
 
         if let Some(request) = candidate.snap_request.clone() {
             self.snap_timeline_items_state(request)?;
@@ -47939,6 +48308,7 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
             | EngineCommand::SetCueEffectTargetsPublished { .. }
             | EngineCommand::SetCueStepsPublished { .. }
             | EngineCommand::SetCueChildTimeline { .. }
+            | EngineCommand::SetCueChildTimelineAudioClipOutputBus { .. }
             | EngineCommand::DuplicateCue { .. }
             | EngineCommand::RemoveCue(_)
             | EngineCommand::RemoveCuePublished { .. }
@@ -49902,6 +50272,7 @@ fn legacy_timeline_audio_clip(
         gain: 1.0,
         fade_in_ms: 0,
         fade_out_ms: 0,
+        output_bus: TimelineAudioOutputBus::Program,
     }
 }
 
@@ -50095,6 +50466,42 @@ fn normalize_and_validate_timeline_audio_clips(
     }
     clips.sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
     Ok(())
+}
+
+fn preserve_current_timeline_audio_clip_output_buses(
+    current: &HashMap<(TimelineId, TimelineAudioClipId), TimelineAudioOutputBus>,
+    timeline_id: TimelineId,
+    candidate: &mut [TimelineAudioClipSummary],
+) {
+    for clip in candidate {
+        if let Some(output_bus) = current.get(&(timeline_id, clip.id)) {
+            clip.output_bus = *output_bus;
+        }
+    }
+}
+
+fn timeline_audio_clip_output_bus_authority(
+    current_bank: &[TimelineSnapshot],
+    active_timeline_id: TimelineId,
+    active_projection: &[TimelineAudioClipSummary],
+) -> HashMap<(TimelineId, TimelineAudioClipId), TimelineAudioOutputBus> {
+    let mut authority = current_bank
+        .iter()
+        .find(|timeline| timeline.id == active_timeline_id)
+        .into_iter()
+        .flat_map(|timeline| {
+            timeline
+                .audio_clips
+                .iter()
+                .map(|clip| ((timeline.id, clip.id), clip.output_bus))
+        })
+        .collect::<HashMap<_, _>>();
+    // The active projection is the engine-current value. It must win over the
+    // authored bank entry, which may lag a dedicated bus command in memory.
+    for clip in active_projection {
+        authority.insert((active_timeline_id, clip.id), clip.output_bus);
+    }
+    authority
 }
 
 fn validate_project_child_tempo_meter_maps(cues: &[CueSummary]) -> Result<(), String> {
@@ -62457,10 +62864,11 @@ fn write_byte(frame: &mut [u8; 512], fixture_start_address: u16, offset: u16, by
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timeline_audio_live_fence::TimelineAudioLiveFenceTestPoint;
     use io::{artnet::parse_art_dmx_packet, sacn::parse_sacn_dmx_packet};
     use protocol::{AudioWaveformPoint, DmxModeSummary, GeometrySummary, Vec3, VideoMediaMetadata};
     use std::net::UdpSocket;
-    use std::sync::Barrier;
+    use std::sync::{atomic::AtomicUsize, Barrier};
 
     #[path = "dj_link_release.rs"]
     mod dj_link_release_tests;
@@ -110318,6 +110726,8 @@ mod tests {
             prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
             let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+            let live_fence = engine.timeline_audio_live_fence();
+            let fence_before_cancel = live_fence.word();
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
             let (release_tx, release_rx) = mpsc::sync_channel(1);
             let release_rx = Arc::new(Mutex::new(release_rx));
@@ -110370,6 +110780,11 @@ mod tests {
             release_tx.send(()).unwrap();
             engine.persistence_snapshot().unwrap();
             assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+            assert_eq!(
+                live_fence.word(),
+                fence_before_cancel,
+                "DJ cancellation before commit must not move the live fence"
+            );
             thread::sleep(Duration::from_millis(25));
             assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
         }
@@ -110382,6 +110797,8 @@ mod tests {
             prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
             let before_audio = engine.video_audio_runtime_snapshot().timeline_audio;
+            let live_fence = engine.timeline_audio_live_fence();
+            let fence_before_cancel = live_fence.word();
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
             let (release_tx, release_rx) = mpsc::sync_channel(1);
             let release_rx = Arc::new(Mutex::new(release_rx));
@@ -110433,6 +110850,11 @@ mod tests {
             release_tx.send(()).unwrap();
             engine.persistence_snapshot().unwrap();
             assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
+            assert_eq!(
+                live_fence.word(),
+                fence_before_cancel,
+                "DJ cancellation after reservation must not move the live fence"
+            );
             thread::sleep(Duration::from_millis(25));
             assert_dj_link_exact_a(operation, &before, &before_audio, &engine);
         }
@@ -110444,6 +110866,8 @@ mod tests {
             let engine = dj_link_transaction_test_engine();
             prepare_dj_link_transaction_test_operation(&engine, operation);
             let before = engine.snapshot();
+            let live_fence = engine.timeline_audio_live_fence();
+            let fence_before_commit = live_fence.word();
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
             let (release_tx, release_rx) = mpsc::sync_channel(1);
             let release_rx = Arc::new(Mutex::new(release_rx));
@@ -110486,6 +110910,18 @@ mod tests {
                 Duration::from_secs(1),
             ));
             assert_dj_link_canonical_b(operation, &before, &engine);
+            assert_eq!(
+                live_fence.active(),
+                engine.video_audio_runtime_snapshot().timeline_audio.playing,
+                "committed DJ publication must match the aggregate audio live fence"
+            );
+            if live_fence.active() == timeline_audio_is_live_in_snapshot(&before) {
+                assert_eq!(
+                    live_fence.word(),
+                    fence_before_commit,
+                    "same aggregate liveness must not advance the DJ live epoch"
+                );
+            }
         }
     }
 
@@ -111491,6 +111927,9 @@ mod tests {
         engine
             .dj_link_start_timeline_at_with_canonical_snapshot(TimelineId(2), 3_500)
             .unwrap();
+        let live_fence = engine.timeline_audio_live_fence();
+        assert!(live_fence.active());
+        let fence_before_failure = live_fence.word();
         let mut before = engine.snapshot().timeline;
         for _ in 0..20 {
             if !before.layers.is_empty() {
@@ -111505,6 +111944,11 @@ mod tests {
             .expect_err("forced DJ Link publication failure must be definitive");
         assert!(error.contains("rolled back"), "unexpected error: {error}");
         assert_eq!(engine.snapshot().timeline, before);
+        assert_eq!(
+            live_fence.word(),
+            fence_before_failure,
+            "cancelled/failed DJ publication must leave the live fence unchanged"
+        );
     }
 
     #[test]
@@ -111768,6 +112212,9 @@ mod tests {
         });
         engine.load_project_snapshot_and_wait(seeded).unwrap();
         let persistence_before = engine.persistence_snapshot().unwrap();
+        let live_fence = engine.timeline_audio_live_fence();
+        let fence_before_failure = live_fence.word();
+        assert_eq!(fence_before_failure, 2, "epoch 1 starts inactive");
         let assert_transport_persistence_unchanged = |snapshot: EngineSnapshot| {
             assert_eq!(snapshot.timeline, persistence_before.timeline);
             assert_eq!(snapshot.timeline_bank, persistence_before.timeline_bank);
@@ -111797,6 +112244,11 @@ mod tests {
             authority_before.epoch
         );
         assert!(!engine.snapshot().timeline.playing);
+        assert_eq!(
+            live_fence.word(),
+            fence_before_failure,
+            "failed publication must not move the live fence"
+        );
         assert_transport_persistence_unchanged(engine.persistence_snapshot().unwrap());
 
         let applied = engine
@@ -111814,6 +112266,8 @@ mod tests {
         assert_eq!(applied.generation_after, generation_before + 1);
         assert_eq!(applied.epoch_after, authority_before.epoch);
         assert!(engine.snapshot().timeline.playing);
+        assert!(live_fence.active());
+        assert_eq!(live_fence.word(), fence_before_failure + 3);
         assert_eq!(
             engine.timeline_transport_generation(),
             applied.generation_after
@@ -111835,6 +112289,21 @@ mod tests {
         assert_eq!(noop.generation_after, applied.generation_after);
         assert_eq!(noop.epoch_after, applied.epoch_after);
         assert_transport_persistence_unchanged(engine.persistence_snapshot().unwrap());
+
+        let paused = engine
+            .set_timeline_playing_published(
+                applied.epoch_after,
+                applied.generation_after,
+                false,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(
+            paused.disposition,
+            TimelineTransportSetPlayingDisposition::Applied
+        );
+        assert!(!live_fence.active());
+        assert_eq!(live_fence.word(), fence_before_failure + 2);
 
         let stale = engine
             .set_timeline_playing_published(
@@ -112657,6 +113126,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             }],
             video_clips: vec![TimelineVideoClipSummary {
                 id: TimelineVideoClipId(502),
@@ -112704,6 +113174,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             }],
             video_clips: vec![TimelineVideoClipSummary {
                 id: TimelineVideoClipId(504),
@@ -112891,7 +113362,7 @@ mod tests {
         runtime
     }
 
-    fn timeline_follow_settling_runtime(
+    fn timeline_follow_transitioning_runtime(
         fault_policy: protocol::TimelineFollowFaultPolicy,
         now: Instant,
     ) -> EngineRuntime {
@@ -112907,6 +113378,7 @@ mod tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: TimelineAudioOutputBus::Program,
         };
         let target_clip = TimelineAudioClipSummary {
             id: 80_902,
@@ -112926,6 +113398,14 @@ mod tests {
                 now,
             )
             .unwrap();
+        runtime
+    }
+
+    fn timeline_follow_settling_runtime(
+        fault_policy: protocol::TimelineFollowFaultPolicy,
+        now: Instant,
+    ) -> EngineRuntime {
+        let mut runtime = timeline_follow_transitioning_runtime(fault_policy, now);
         runtime.advance_timeline_follow(now + Duration::from_millis(100));
         assert!(matches!(
             runtime.timeline_follow_runtime.status,
@@ -113140,6 +113620,7 @@ mod tests {
             path: "target-hold.wav".to_string(),
             start_ms: 50,
             duration_ms: 1_000,
+            output_bus: TimelineAudioOutputBus::Cue,
             ..TimelineAudioClipSummary::default()
         }];
         target.events = vec![TimelineCueEventSummary {
@@ -113228,6 +113709,10 @@ mod tests {
         let released_output = consumer.video_audio_runtime_snapshot().timeline_audio;
         assert_eq!(released_output.position_ms, 100);
         assert!(released_output.clips.iter().any(|clip| clip.id == 8_120));
+        assert!(released_output
+            .clips
+            .iter()
+            .any(|clip| clip.id == 8_120 && clip.output_bus == TimelineAudioOutputBus::Cue));
     }
 
     #[test]
@@ -113630,6 +114115,7 @@ mod tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: TimelineAudioOutputBus::Program,
         };
         let audio_layer = default_timeline_audio_layer(2);
         runtime.timeline_layers = vec![audio_layer.clone()];
@@ -113840,6 +114326,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..TimelineSnapshot::default()
@@ -114054,6 +114541,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             };
             let source_clips = if source_has_audio {
                 vec![make_clip(80_300, "source.wav")]
@@ -114136,6 +114624,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             };
             let leaf_cue = if nested { 80_323 } else { 80_322 };
             create_effect_only_cue(&mut runtime, leaf_cue, Vec::new());
@@ -115595,6 +116084,7 @@ mod tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: TimelineAudioOutputBus::Program,
         };
         let incoming_clip = TimelineAudioClipSummary {
             id: 602,
@@ -115741,6 +116231,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             },
             TimelineAudioClipSummary {
                 id: 702,
@@ -115753,6 +116244,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             },
         ];
         snapshot.timeline.playing = true;
@@ -115983,6 +116475,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: TimelineAudioOutputBus::Program,
             }],
             item_groups: vec![TimelineItemGroupSummary {
                 id: TimelineItemGroupId(103),
@@ -121008,6 +121501,7 @@ mod tests {
             gain: 1.0,
             fade_in_ms: 200,
             fade_out_ms: 300,
+            output_bus: TimelineAudioOutputBus::Program,
         }
     }
 
@@ -122265,6 +122759,621 @@ mod tests {
         runtime.publish_pending_command_acks(0, &published);
         assert_eq!(remove_receiver.recv().unwrap(), Ok(()));
         assert!(runtime.timeline_audio_clips.is_empty());
+    }
+
+    #[test]
+    fn timeline_audio_clip_bus_field_authority_survives_reversed_stale_full_update() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            10,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddTimelineAudioClip {
+            clip: timeline_test_audio_clip(70, 10),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let prior_authority = runtime.timeline_audio_projection_authority;
+        let prior_commit_generation = runtime.timeline_audio_publication_generation;
+
+        // Simulate an unrelated edit committing after an IPC caller read an
+        // older snapshot. The subsequent field command must preserve this
+        // exact current clip instead of replaying that stale snapshot.
+        let mut concurrent_edit = timeline_test_audio_clip(70, 10);
+        concurrent_edit.path = "concurrent-current.wav".to_string();
+        concurrent_edit.start_ms = 750;
+        concurrent_edit.offset_ms = 125;
+        concurrent_edit.duration_ms = 1_500;
+        concurrent_edit.gain = 1.25;
+        concurrent_edit.fade_in_ms = 200;
+        concurrent_edit.fade_out_ms = 300;
+        let (concurrent_ack, concurrent_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineAudioClip {
+            clip: concurrent_edit.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: concurrent_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(concurrent_receiver.recv().unwrap(), Ok(()));
+
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id: 70,
+            output_bus: TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime.timeline_audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+        let mut expected = concurrent_edit;
+        expected.output_bus = TimelineAudioOutputBus::Cue;
+        assert_eq!(runtime.timeline_audio_clips, vec![expected]);
+        assert_ne!(runtime.timeline_audio_projection_authority, prior_authority);
+        assert!(
+            runtime.timeline_audio_publication_generation > prior_commit_generation,
+            "a logical-bus edit must retire the preceding audio commit generation"
+        );
+        assert_eq!(
+            runtime.timeline_audio_commit_signature.projection.clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+
+        // Reverse the order: this normal full-clip update was composed from
+        // the original PROGRAM snapshot, but executes after the dedicated
+        // CUE command commits. Its unrelated field edits still land, while
+        // its stale bus payload is never authoritative.
+        let mut stale_non_bus_update = timeline_test_audio_clip(70, 10);
+        stale_non_bus_update.path = "reversed-order-current.wav".to_string();
+        stale_non_bus_update.start_ms = 1_250;
+        stale_non_bus_update.offset_ms = 225;
+        stale_non_bus_update.duration_ms = 2_000;
+        stale_non_bus_update.gain = 0.65;
+        stale_non_bus_update.fade_in_ms = 150;
+        stale_non_bus_update.fade_out_ms = 250;
+        stale_non_bus_update.output_bus = TimelineAudioOutputBus::Program;
+        let (stale_ack, stale_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateTimelineAudioClip {
+            clip: stale_non_bus_update.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: stale_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(stale_receiver.recv().unwrap(), Ok(()));
+        stale_non_bus_update.output_bus = TimelineAudioOutputBus::Cue;
+        assert_eq!(runtime.timeline_audio_clips, vec![stale_non_bus_update]);
+        assert_eq!(
+            runtime.timeline_audio_commit_signature.projection.clips[0].output_bus,
+            TimelineAudioOutputBus::Cue,
+            "a stale ordinary update cannot revert the committed CUE destination"
+        );
+
+        let unchanged = runtime.timeline_audio_clips.clone();
+        let (invalid_ack, invalid_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id: 71,
+            output_bus: TimelineAudioOutputBus::Program,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: invalid_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(invalid_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("was not found"));
+        assert_eq!(runtime.timeline_audio_clips, unchanged);
+    }
+
+    #[test]
+    fn timeline_advanced_full_replacement_preserves_reversed_stale_audio_bus() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            10,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let current_clip = timeline_test_audio_clip(80, 10);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddTimelineAudioClip {
+            clip: current_clip,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+
+        // Capture and edit the full image before the dedicated bus command,
+        // leaving PROGRAM in the stale payload for the existing clip.
+        let mut stale_timeline = runtime.authored_timeline_snapshot();
+        stale_timeline.audio_clips[0].path = "advanced-stale.wav".to_string();
+        stale_timeline.audio_clips[0].gain = 0.75;
+        assert_eq!(
+            stale_timeline.audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Program
+        );
+        let mut introduced_clip = timeline_test_audio_clip(82, 10);
+        introduced_clip.output_bus = TimelineAudioOutputBus::Cue;
+        stale_timeline.audio_clips.push(introduced_clip);
+        let stale_candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
+            snap_request: None,
+            video_clips: stale_timeline.video_clips,
+            audio_clips: stale_timeline.audio_clips,
+            phases: stale_timeline.phases,
+            item_groups: stale_timeline.item_groups,
+            loop_region: stale_timeline.loop_region,
+            follow: stale_timeline.follow,
+            guide_enabled: stale_timeline.guide_enabled,
+        };
+
+        let (bus_ack, bus_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id: 80,
+            output_bus: TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: bus_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(bus_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime.timeline_audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+
+        let before_stale_apply = (
+            runtime.timeline_audio_projection_authority,
+            runtime.timeline_audio_publication_generation,
+            runtime.timeline_audio_transport_revision,
+        );
+        let (stale_ack, stale_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineAdvancedAuthoringPublished {
+            candidate: stale_candidate,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: stale_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(stale_receiver.recv().unwrap(), Ok(()));
+
+        let clip = runtime
+            .timeline_audio_clips
+            .iter()
+            .find(|clip| clip.id == 80)
+            .expect("existing clip remains installed");
+        assert_eq!(clip.output_bus, TimelineAudioOutputBus::Cue);
+        assert_eq!(clip.path, "advanced-stale.wav");
+        assert_eq!(clip.gain, 0.75);
+        assert_eq!(
+            runtime
+                .timeline_audio_clips
+                .iter()
+                .find(|clip| clip.id == 82)
+                .expect("new clip is installed")
+                .output_bus,
+            TimelineAudioOutputBus::Cue,
+            "a newly introduced clip retains its candidate bus"
+        );
+        assert_ne!(
+            runtime.timeline_audio_projection_authority, before_stale_apply.0,
+            "the advanced replacement must publish a new projection authority"
+        );
+        assert!(
+            runtime.timeline_audio_publication_generation > before_stale_apply.1,
+            "the advanced replacement must publish a new audio generation"
+        );
+        assert!(
+            runtime.timeline_audio_transport_revision > before_stale_apply.2,
+            "the advanced replacement must advance the audio transport revision"
+        );
+    }
+
+    #[test]
+    fn timeline_bank_full_replacement_preserves_reversed_stale_audio_bus() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            10,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let current_clip = timeline_test_audio_clip(81, 10);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddTimelineAudioClip {
+            clip: current_clip,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+
+        // The bank image is captured before the dedicated bus command and
+        // therefore still carries the legacy PROGRAM payload.
+        let mut stale_timeline = runtime.authored_timeline_snapshot();
+        stale_timeline.audio_clips[0].path = "bank-stale.wav".to_string();
+        stale_timeline.audio_clips[0].gain = 0.6;
+        assert_eq!(
+            stale_timeline.audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Program
+        );
+
+        let (bus_ack, bus_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id: 81,
+            output_bus: TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: bus_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(bus_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            runtime.timeline_audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+
+        let before_stale_apply = (
+            runtime.timeline_audio_projection_authority,
+            runtime.timeline_audio_publication_generation,
+            runtime.timeline_audio_transport_revision,
+        );
+        let (stale_ack, stale_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineBankPublished {
+            timelines: vec![stale_timeline],
+            active_timeline_id: TimelineId(1),
+            play: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: stale_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(stale_receiver.recv().unwrap(), Ok(()));
+
+        let clip = runtime
+            .timeline_audio_clips
+            .iter()
+            .find(|clip| clip.id == 81)
+            .expect("existing bank clip remains installed");
+        assert_eq!(clip.output_bus, TimelineAudioOutputBus::Cue);
+        assert_eq!(clip.path, "bank-stale.wav");
+        assert_eq!(clip.gain, 0.6);
+        assert_eq!(
+            runtime.timeline_bank[0].audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue,
+            "the persisted bank image must carry the engine-current bus"
+        );
+        assert_ne!(
+            runtime.timeline_audio_projection_authority, before_stale_apply.0,
+            "the bank replacement must publish a new projection authority"
+        );
+        assert!(
+            runtime.timeline_audio_publication_generation > before_stale_apply.1,
+            "the bank replacement must publish a new audio generation"
+        );
+        assert!(
+            runtime.timeline_audio_transport_revision > before_stale_apply.2,
+            "the bank replacement must advance the audio transport revision"
+        );
+    }
+
+    #[test]
+    fn timeline_bank_full_replacement_scopes_stale_bus_by_timeline_and_clip_id() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let audio_layer = timeline_test_layer(10, 0, false, false, false, TimelineLayerKind::Audio);
+        let active = TimelineSnapshot {
+            id: TimelineId(101),
+            label: "Active A".to_string(),
+            layers: vec![audio_layer.clone()],
+            audio_clips: vec![timeline_test_audio_clip(90, 10)],
+            ..TimelineSnapshot::default()
+        };
+        let mut inactive = active.clone();
+        inactive.id = TimelineId(102);
+        inactive.label = "Inactive B".to_string();
+        inactive.audio_clips[0].path = "inactive-current.wav".to_string();
+        inactive.audio_clips[0].output_bus = TimelineAudioOutputBus::Cue;
+        runtime
+            .apply_timeline_bank_state(vec![active, inactive], TimelineId(101), false)
+            .unwrap();
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        // Both bank entries intentionally reuse clip ID 90. The stale image
+        // carries independent candidate bus values for A and B.
+        let mut stale_bank = runtime.timeline_bank_snapshot();
+        let stale_a = stale_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == TimelineId(101))
+            .expect("active A is in the current bank");
+        stale_a.audio_clips[0].path = "active-stale.wav".to_string();
+        stale_a.audio_clips[0].gain = 0.65;
+        stale_a.audio_clips[0].output_bus = TimelineAudioOutputBus::Program;
+        let stale_b = stale_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == TimelineId(102))
+            .expect("inactive B is in the current bank");
+        stale_b.audio_clips[0].path = "inactive-stale.wav".to_string();
+        stale_b.audio_clips[0].gain = 0.55;
+        stale_b.audio_clips[0].output_bus = TimelineAudioOutputBus::Program;
+
+        let (bus_ack, bus_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetTimelineAudioClipOutputBus {
+            clip_id: 90,
+            output_bus: TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: bus_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(bus_receiver.recv().unwrap(), Ok(()));
+
+        let before_stale_apply = (
+            runtime.timeline_audio_projection_authority,
+            runtime.timeline_audio_publication_generation,
+            runtime.timeline_audio_transport_revision,
+        );
+        let (stale_ack, stale_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineBankPublished {
+            timelines: stale_bank,
+            active_timeline_id: TimelineId(101),
+            play: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: stale_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(stale_receiver.recv().unwrap(), Ok(()));
+
+        let installed_a = runtime
+            .timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == TimelineId(101))
+            .expect("active A remains in the installed bank");
+        assert_eq!(
+            installed_a.audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+        assert_eq!(installed_a.audio_clips[0].path, "active-stale.wav");
+        assert_eq!(installed_a.audio_clips[0].gain, 0.65);
+        let installed_b = runtime
+            .timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == TimelineId(102))
+            .expect("inactive B remains in the installed bank");
+        assert_eq!(
+            installed_b.audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Program,
+            "the same clip ID on another Timeline keeps its candidate bus"
+        );
+        assert_eq!(installed_b.audio_clips[0].path, "inactive-stale.wav");
+        assert_eq!(installed_b.audio_clips[0].gain, 0.55);
+        assert_eq!(
+            runtime.timeline_audio_clips[0].output_bus,
+            TimelineAudioOutputBus::Cue
+        );
+        assert_ne!(
+            runtime.timeline_audio_projection_authority, before_stale_apply.0,
+            "the scoped bank replacement must publish a new projection authority"
+        );
+        assert!(
+            runtime.timeline_audio_publication_generation > before_stale_apply.1,
+            "the scoped bank replacement must publish a new audio generation"
+        );
+        assert!(
+            runtime.timeline_audio_transport_revision > before_stale_apply.2,
+            "the scoped bank replacement must advance the audio transport revision"
+        );
+
+        // Invalid bank topology remains fail-closed and leaves the installed
+        // state untouched; the bus merge must not weaken bank validation.
+        let before_invalid_bank = runtime.build_snapshot(0);
+        let mut invalid_bank = runtime.timeline_bank_snapshot();
+        invalid_bank.push(invalid_bank[0].clone());
+        let (invalid_ack, invalid_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineBankPublished {
+            timelines: invalid_bank,
+            active_timeline_id: TimelineId(101),
+            play: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: invalid_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(invalid_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("Timeline bank IDs must be unique"));
+        assert_eq!(runtime.build_snapshot(0), before_invalid_bank);
+
+        // A stale full advanced image still cannot alter media on a locked
+        // lane merely because its bus payload differs.
+        runtime.timeline_layers[0].locked = true;
+        let mut locked_timeline = runtime.authored_timeline_snapshot();
+        locked_timeline.audio_clips[0].path = "locked-stale.wav".to_string();
+        locked_timeline.audio_clips[0].output_bus = TimelineAudioOutputBus::Program;
+        let locked_candidate = TimelineAdvancedAuthoringSummary {
+            layers: None,
+            snap_request: None,
+            video_clips: locked_timeline.video_clips,
+            audio_clips: locked_timeline.audio_clips,
+            phases: locked_timeline.phases,
+            item_groups: locked_timeline.item_groups,
+            loop_region: locked_timeline.loop_region,
+            follow: locked_timeline.follow,
+            guide_enabled: locked_timeline.guide_enabled,
+        };
+        let before_locked = runtime.build_snapshot(0);
+        let (locked_ack, locked_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ApplyTimelineAdvancedAuthoringPublished {
+            candidate: locked_candidate,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: locked_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(locked_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("locked lane"));
+        assert_eq!(runtime.build_snapshot(0), before_locked);
+    }
+
+    #[test]
+    fn child_timeline_audio_clip_bus_field_authority_survives_stale_full_update() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.cues = vec![runtime_cue_from_summary(&CueSummary {
+            id: 41,
+            label: "Nested audio".to_string(),
+            child_timeline: Some(ChildTimelineSummary {
+                layers: vec![timeline_test_layer(
+                    17,
+                    0,
+                    false,
+                    false,
+                    false,
+                    TimelineLayerKind::Audio,
+                )],
+                audio_clips: vec![timeline_test_audio_clip(71, 17)],
+                duration_ms: 1_000,
+                ..ChildTimelineSummary::default()
+            }),
+            ..CueSummary::default()
+        })];
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let stale_child = runtime.cues[0]
+            .child_timeline
+            .clone()
+            .expect("child timeline fixture");
+
+        let (bus_ack, bus_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id: 41,
+            clip_id: 71,
+            output_bus: TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: bus_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(bus_receiver.recv().unwrap(), Ok(()));
+
+        let mut stale_full_child_update = stale_child;
+        let clip = &mut stale_full_child_update.audio_clips[0];
+        clip.path = "nested-current.wav".to_string();
+        clip.start_ms = 375;
+        clip.offset_ms = 50;
+        clip.duration_ms = 1_400;
+        clip.gain = 0.7;
+        clip.fade_in_ms = 120;
+        clip.fade_out_ms = 180;
+        clip.output_bus = TimelineAudioOutputBus::Program;
+        let (full_ack, full_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueChildTimeline {
+            cue_id: 41,
+            child_timeline: Some(stale_full_child_update),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: full_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(full_receiver.recv().unwrap(), Ok(()));
+
+        let child = runtime.cues[0]
+            .child_timeline
+            .as_ref()
+            .expect("child timeline remains present");
+        let current = &child.audio_clips[0];
+        assert_eq!(current.output_bus, TimelineAudioOutputBus::Cue);
+        assert_eq!(
+            (
+                current.path.as_str(),
+                current.start_ms,
+                current.offset_ms,
+                current.duration_ms,
+                current.gain,
+                current.fade_in_ms,
+                current.fade_out_ms,
+            ),
+            ("nested-current.wav", 375, 50, 1_400, 0.7, 120, 180),
+            "the stale full child update may retain unrelated field authority only"
+        );
+
+        let unchanged = child.clone();
+        let (missing_clip_ack, missing_clip_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id: 41,
+            clip_id: 72,
+            output_bus: TimelineAudioOutputBus::Program,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: missing_clip_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(missing_clip_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("audio clip 72 was not found"));
+        assert_eq!(
+            runtime.cues[0].child_timeline.as_ref(),
+            Some(&unchanged),
+            "invalid child clip IDs fail closed without a partial update"
+        );
+
+        let (missing_cue_ack, missing_cue_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id: 42,
+            clip_id: 71,
+            output_bus: TimelineAudioOutputBus::Program,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: missing_cue_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(missing_cue_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("Cue 42 was not found"));
+        assert_eq!(runtime.cues[0].child_timeline.as_ref(), Some(&unchanged));
+
+        runtime.cues[0]
+            .child_timeline
+            .as_mut()
+            .expect("child timeline remains present")
+            .layers[0]
+            .locked = true;
+        let locked = runtime.cues[0]
+            .child_timeline
+            .clone()
+            .expect("locked child timeline fixture");
+        let (locked_ack, locked_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id: 41,
+            clip_id: 71,
+            output_bus: TimelineAudioOutputBus::Program,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: locked_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(locked_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("is locked"));
+        assert_eq!(runtime.cues[0].child_timeline.as_ref(), Some(&locked));
     }
 
     #[test]
@@ -123542,6 +124651,253 @@ mod tests {
     }
 
     #[test]
+    fn timeline_audio_live_fence_tracks_direct_child_count_in_and_stop_at_tick() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime.clock.bpm = 120.0;
+        runtime.direct_child_transports[0].metronome_enabled = true;
+        runtime.direct_child_transports[0].count_in_beats = 4;
+        let started_at = Instant::now();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let live_fence = runtime.shared_telemetry.timeline_audio_live_fence.clone();
+        assert!(!live_fence.active());
+
+        runtime.set_direct_child_timeline_playing(1, true, started_at);
+        runtime.tick(0, &published);
+        assert!(live_fence.active());
+        assert!(published
+            .read()
+            .unwrap()
+            .direct_child_timeline_transports
+            .iter()
+            .any(|transport| transport.playing && transport.count_in_remaining_ms > 0));
+
+        runtime.set_direct_child_timeline_playing(1, false, started_at);
+        runtime.tick(0, &published);
+        assert!(!live_fence.active());
+        assert!(!timeline_audio_is_live_in_snapshot(
+            &published.read().unwrap()
+        ));
+    }
+
+    #[test]
+    fn timeline_audio_live_fence_tracks_follow_transition_and_settling() {
+        let now = Instant::now();
+        let mut runtime =
+            timeline_follow_settling_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let live_fence = runtime.shared_telemetry.timeline_audio_live_fence.clone();
+        assert!(!live_fence.active());
+
+        runtime.tick(0, &published);
+        assert!(live_fence.active());
+        assert!(matches!(
+            published.read().unwrap().timeline.follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+                | protocol::TimelineFollowRuntimeStatus::Settling
+        ));
+    }
+
+    #[test]
+    fn timeline_audio_live_fence_stays_live_through_follow_settlement_then_faults_idle() {
+        let now = Instant::now();
+        let mut runtime =
+            timeline_follow_transitioning_runtime(protocol::TimelineFollowFaultPolicy::Hold, now);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let live_fence = runtime.shared_telemetry.timeline_audio_live_fence.clone();
+
+        runtime.tick(0, &published);
+        assert!(matches!(
+            published.read().unwrap().timeline.follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Transitioning
+        ));
+        assert!(live_fence.active());
+
+        let settling_at = now + Duration::from_millis(100);
+        runtime.advance_timeline_follow(settling_at);
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ));
+        runtime.tick(0, &published);
+        assert!(live_fence.active());
+        assert!(matches!(
+            published.read().unwrap().timeline.follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Settling
+        ));
+
+        let generation = runtime.timeline_follow_runtime.generation;
+        runtime
+            .acknowledge_timeline_follow_settlement(
+                TimelineFollowSettlementAck {
+                    epoch: runtime.output_ownership_gate.status().epoch,
+                    generation,
+                    domain: TimelineFollowSettlementDomain::Audio,
+                    consumer_id: TimelineFollowSettlementConsumerId::Audio,
+                    result: TimelineFollowSettlementAckResult::Fault {
+                        fault: "deterministic audio settlement fault".to_string(),
+                    },
+                },
+                settling_at,
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.timeline_follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        runtime.tick(0, &published);
+        assert!(!live_fence.active());
+        let published = published.read().unwrap();
+        assert!(matches!(
+            published.timeline.follow_runtime.status,
+            protocol::TimelineFollowRuntimeStatus::Held
+        ));
+        assert!(!timeline_audio_is_live_in_snapshot(&published));
+    }
+
+    #[test]
+    fn timeline_audio_live_fence_tracks_direct_child_play_without_count_in() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime.direct_child_transports[0].metronome_enabled = false;
+        runtime.direct_child_transports[0].count_in_beats = 0;
+        let started_at = Instant::now();
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let live_fence = runtime.shared_telemetry.timeline_audio_live_fence.clone();
+
+        runtime.set_direct_child_timeline_playing(1, true, started_at);
+        runtime.tick(0, &published);
+        assert!(live_fence.active());
+        let published_snapshot = published.read().unwrap();
+        let direct = published_snapshot
+            .direct_child_timeline_transports
+            .iter()
+            .find(|transport| transport.cue_id == 1)
+            .expect("direct child transport must be published");
+        assert!(direct.playing);
+        assert_eq!(direct.count_in_remaining_ms, 0);
+        drop(published_snapshot);
+
+        runtime.set_direct_child_timeline_playing(1, false, started_at);
+        runtime.tick(0, &published);
+        assert!(!live_fence.active());
+        assert!(!timeline_audio_is_live_in_snapshot(
+            &published.read().unwrap()
+        ));
+    }
+
+    #[test]
+    fn timeline_audio_live_fence_bounded_ack_has_snapshot_and_guard_direction() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let published = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+        let live_fence = runtime.shared_telemetry.timeline_audio_live_fence.clone();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_enter_tx, release_enter_rx) = mpsc::sync_channel(1);
+        let (after_active_tx, after_active_rx) = mpsc::sync_channel(1);
+        let (release_active_tx, release_active_rx) = mpsc::sync_channel(1);
+        let (after_inactive_tx, after_inactive_rx) = mpsc::sync_channel(1);
+        let (release_inactive_tx, release_inactive_rx) = mpsc::sync_channel(1);
+        let (exited_tx, exited_rx) = mpsc::sync_channel(1);
+        let release_enter_rx = Arc::new(Mutex::new(release_enter_rx));
+        let release_active_rx = Arc::new(Mutex::new(release_active_rx));
+        let release_inactive_rx = Arc::new(Mutex::new(release_inactive_rx));
+        let after_count = Arc::new(AtomicUsize::new(0));
+        live_fence.set_test_hook(Some(Arc::new({
+            let release_enter_rx = Arc::clone(&release_enter_rx);
+            let release_active_rx = Arc::clone(&release_active_rx);
+            let release_inactive_rx = Arc::clone(&release_inactive_rx);
+            let after_count = Arc::clone(&after_count);
+            move |point| match point {
+                TimelineAudioLiveFenceTestPoint::EnteredBeforeSnapshot => {
+                    entered_tx.send(()).unwrap();
+                    release_enter_rx.lock().unwrap().recv().unwrap();
+                }
+                TimelineAudioLiveFenceTestPoint::AfterSnapshotGuardDrop => {
+                    let index = after_count.fetch_add(1, Ordering::AcqRel);
+                    if index == 0 {
+                        after_active_tx.send(()).unwrap();
+                        release_active_rx.lock().unwrap().recv().unwrap();
+                    } else {
+                        after_inactive_tx.send(()).unwrap();
+                        release_inactive_rx.lock().unwrap().recv().unwrap();
+                    }
+                }
+                TimelineAudioLiveFenceTestPoint::ExitedAfterSnapshot => {
+                    exited_tx.send(()).unwrap();
+                }
+            }
+        })));
+
+        runtime.timeline_playing = true;
+        let (active_ack, active_result) = mpsc::sync_channel(1);
+        runtime.pending_command_acks.push(PendingCommandAck {
+            ack: PendingCommandAckSender::Plain(active_ack),
+            result: Ok(()),
+            rollback: PendingCommandRollback::KeepApplied,
+            publication_error: "bounded Timeline audio fence test publication failed",
+        });
+        let (inactive_ack, inactive_result) = mpsc::sync_channel(1);
+        let worker = thread::spawn({
+            let published = Arc::clone(&published);
+            move || {
+                runtime.publish_pending_command_acks(0, published.as_ref());
+                runtime.timeline_playing = false;
+                runtime.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(inactive_ack),
+                    result: Ok(()),
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error: "bounded Timeline audio fence test publication failed",
+                });
+                runtime.publish_pending_command_acks(0, published.as_ref());
+            }
+        });
+
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(live_fence.active());
+        assert!(matches!(
+            published.try_read(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        release_enter_tx.send(()).unwrap();
+
+        after_active_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(live_fence.active());
+        assert!(published.read().unwrap().timeline.playing);
+        assert!(matches!(
+            active_result.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release_active_tx.send(()).unwrap();
+        assert_eq!(
+            active_result.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(())
+        );
+
+        after_inactive_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(live_fence.active());
+        assert!(!published.read().unwrap().timeline.playing);
+        assert!(matches!(
+            inactive_result.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release_inactive_tx.send(()).unwrap();
+        assert_eq!(
+            inactive_result
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap(),
+            Ok(())
+        );
+        exited_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!live_fence.active());
+        worker.join().unwrap();
+        live_fence.set_test_hook(None);
+    }
+
+    #[test]
     fn direct_child_operator_transport_publishes_pauses_seeks_and_resumes() {
         let mut runtime =
             direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
@@ -124189,6 +125545,7 @@ mod tests {
         let mut clip = timeline_test_audio_clip(77, 50);
         clip.start_ms = 750;
         clip.duration_ms = 500;
+        clip.output_bus = TimelineAudioOutputBus::Cue;
         child.audio_clips = vec![clip];
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
@@ -124202,6 +125559,7 @@ mod tests {
         );
         assert_eq!(mapped[0].position_ms, 1_000);
         assert_eq!(mapped[0].clip.id, 77);
+        assert_eq!(mapped[0].clip.output_bus, TimelineAudioOutputBus::Cue);
 
         let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
         child.audio_clips.clear();
@@ -124336,6 +125694,7 @@ mod tests {
         let mut clip = timeline_test_audio_clip(77, 50);
         clip.start_ms = 750;
         clip.duration_ms = 500;
+        clip.output_bus = TimelineAudioOutputBus::Cue;
         child.audio_clips = vec![clip];
         snapshot.timeline.active_child_transports = vec![ChildTimelineTransportRuntimeSummary {
             owner_cue_id: snapshot.cues[0].id,
@@ -124358,6 +125717,7 @@ mod tests {
         );
         assert_eq!(mapped[0].position_ms, 1_000);
         assert_eq!(mapped[0].clip.id, 77);
+        assert_eq!(mapped[0].clip.output_bus, TimelineAudioOutputBus::Cue);
 
         snapshot.timeline.active_child_transports.clear();
         assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
@@ -124372,6 +125732,7 @@ mod tests {
         let mut clip = timeline_test_audio_clip(77, 50);
         clip.start_ms = 50;
         clip.duration_ms = 200;
+        clip.output_bus = TimelineAudioOutputBus::Cue;
         runtime
             .set_cue_child_timeline_state(
                 2,
@@ -124427,6 +125788,7 @@ mod tests {
         assert_eq!(mapped[0].path.as_ref(), nested_transport.path.as_slice());
         assert_eq!(mapped[0].position_ms, 100);
         assert_eq!(mapped[0].clip.id, 77);
+        assert_eq!(mapped[0].clip.output_bus, TimelineAudioOutputBus::Cue);
     }
 
     #[test]

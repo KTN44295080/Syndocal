@@ -128,6 +128,22 @@ use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod asio_bridge_v2;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_bridge_v3;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_output_preflight_command;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_output_runtime;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_program_cue;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_program_cue_render;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_timeline_output;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod asio_timeline_transport;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod audio_output_router;
 mod authored_control_plane;
 mod capture_transport;
 mod control_plane;
@@ -144,6 +160,8 @@ mod dvc_stage_layout;
 mod e3_native_acceptance;
 mod live_audio_ipc_v1;
 mod ndi_transport;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+mod normal_audio_output;
 mod output_lease;
 mod scene_creation;
 mod serial_dmx_machine;
@@ -1984,6 +2002,17 @@ struct AppState {
     /// native ASIO open.
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     asio_input_selection: Mutex<AsioInputSelectionState>,
+    /// Process-local exclusive admission owner for normal and show-ASIO
+    /// output routes. It is intentionally not reconstructed from project or
+    /// machine settings; a missing owner fails show-ASIO closed.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    audio_output_router: Option<Arc<audio_output_router::RouterSlot>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_runtime: Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_session_generation: AtomicU64,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_machine: Mutex<AsioOutputMachineState>,
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
     video_recording: Mutex<VideoRecordingRuntime>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
@@ -10249,6 +10278,7 @@ fn timeline_advanced_candidate_for_request(
                     gain: 1.0,
                     fade_in_ms: 0,
                     fade_out_ms: 0,
+                    output_bus: protocol::TimelineAudioOutputBus::Program,
                 });
                 if let Some(video_clip_id) = video_clip_id {
                     authoring.item_groups.push(TimelineItemGroupSummary {
@@ -13003,10 +13033,32 @@ struct TimelineCueEngineIdentity {
     playing: bool,
 }
 
+enum TimelineCueAudioAttachmentOutput {
+    Legacy {
+        mixer: rodio::mixer::Mixer,
+        _explicit_stream: Option<rodio::OutputStream>,
+    },
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    AsioCue {
+        identity: asio_timeline_output::TimelineOutputIdentity,
+        sink: rodio::Sink,
+    },
+}
+
+impl TimelineCueAudioAttachmentOutput {
+    fn retire(self) {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if let Self::AsioCue { sink, .. } = self {
+            sink.stop();
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        let _ = self;
+    }
+}
+
 struct TimelineCueAudioAttachment {
     control: timeline_cue_audio::TimelineCueAudioControl,
-    mixer: rodio::mixer::Mixer,
-    _explicit_stream: Option<rodio::OutputStream>,
+    output: TimelineCueAudioAttachmentOutput,
     route: timeline_cue_audio::TimelineCueAudioRoute,
     settings_revision: u64,
     program_device_generation: Option<u64>,
@@ -13022,6 +13074,13 @@ struct TimelineCueAudioAttachment {
     last_output_progress_at: Instant,
 }
 
+impl TimelineCueAudioAttachment {
+    fn retire(self) {
+        self.control.retire();
+        self.output.retire();
+    }
+}
+
 struct TimelineCueAudioRuntimeState {
     runtime_incarnation: u64,
     status_revision: u64,
@@ -13034,6 +13093,8 @@ struct TimelineCueAudioRuntimeState {
     attachment: Option<TimelineCueAudioAttachment>,
     prepare_job: Option<TimelineCueAudioPrepareJob>,
     topology_probe: Option<TimelineCueAudioTopologyProbe>,
+    retired_workers: Vec<std::thread::JoinHandle<()>>,
+    normal_admission_open: bool,
     last_topology_probe_at: Instant,
     blocked_settings_revision: Option<u64>,
     resolved_device_name: Option<String>,
@@ -13042,6 +13103,8 @@ struct TimelineCueAudioRuntimeState {
     endpoints: Vec<TimelineCueAudioEndpointSummary>,
     next_output_clock_epoch: u64,
     next_source_fence: u64,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_retry_barrier: Option<TimelineCueEngineIdentity>,
     last_error: Option<String>,
     rotation_count: u64,
     stall_count: u64,
@@ -13062,6 +13125,8 @@ impl Default for TimelineCueAudioRuntimeState {
             attachment: None,
             prepare_job: None,
             topology_probe: None,
+            retired_workers: Vec::new(),
+            normal_admission_open: true,
             last_topology_probe_at: Instant::now(),
             blocked_settings_revision: None,
             resolved_device_name: None,
@@ -13070,6 +13135,8 @@ impl Default for TimelineCueAudioRuntimeState {
             endpoints: Vec::new(),
             next_output_clock_epoch: 1,
             next_source_fence: 1,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_retry_barrier: None,
             last_error: None,
             rotation_count: 0,
             stall_count: 0,
@@ -13103,12 +13170,14 @@ struct TimelineCueAudioPrepareJob {
         >,
     >,
     timed_out: bool,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 struct TimelineCueAudioTopologyProbe {
     started_at: Instant,
     timed_out: bool,
     receiver: mpsc::Receiver<Result<(String, Vec<TimelineCueAudioEndpointSummary>), String>>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 struct TimelineCueProgramDestination {
@@ -13187,7 +13256,7 @@ fn timeline_cue_program_destination(
     playback: &MediaAudioPlayback,
 ) -> Option<TimelineCueProgramDestination> {
     #[cfg(test)]
-    if playback.stream.is_none() {
+    if playback.active_program_mixer().is_none() {
         if let Some(mixer) = playback.timeline_test_mixer.as_ref() {
             return Some(TimelineCueProgramDestination {
                 mixer: mixer.clone(),
@@ -13198,11 +13267,24 @@ fn timeline_cue_program_destination(
             });
         }
     }
-    let stream = playback.stream.as_ref()?;
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    let (mixer, output_sample_rate, channels) = {
+        let output = playback.normal_output.as_ref()?;
+        (output.mixer(), output.sample_rate(), output.channels())
+    };
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+    let (mixer, output_sample_rate, channels) = {
+        let stream = playback.stream.as_ref()?;
+        (
+            stream.mixer().clone(),
+            stream.config().sample_rate(),
+            stream.config().channel_count(),
+        )
+    };
     Some(TimelineCueProgramDestination {
-        mixer: stream.mixer().clone(),
-        output_sample_rate: stream.config().sample_rate(),
-        channels: stream.config().channel_count(),
+        mixer,
+        output_sample_rate,
+        channels,
         device_generation: playback.audio_device_generation,
         resolved_device_name: playback.device_name.clone(),
     })
@@ -13411,7 +13493,198 @@ fn prepare_follow_program_timeline_cue_destination(
 
 const TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT: Duration = Duration::from_millis(750);
 
+#[cfg(any(
+    test,
+    all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+))]
+fn join_completed_timeline_cue_worker(
+    worker: &mut Option<std::thread::JoinHandle<()>>,
+) -> Result<(), String> {
+    let Some(worker) = worker.take() else {
+        return Err("Timeline cue audio worker handle was already consumed".to_string());
+    };
+    worker
+        .join()
+        .map_err(|_| "Timeline cue audio worker panicked".to_string())
+}
+
+fn take_finished_timeline_cue_workers(
+    state: &mut TimelineCueAudioRuntimeState,
+) -> Vec<std::thread::JoinHandle<()>> {
+    let mut retained = Vec::with_capacity(state.retired_workers.len());
+    let mut finished = Vec::new();
+    for worker in state.retired_workers.drain(..) {
+        if worker.is_finished() {
+            finished.push(worker);
+        } else {
+            retained.push(worker);
+        }
+    }
+    state.retired_workers = retained;
+    finished
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn clear_asio_retry_barrier(state: &mut TimelineCueAudioRuntimeState) {
+    state.asio_retry_barrier = None;
+}
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+fn clear_asio_retry_barrier(_state: &mut TimelineCueAudioRuntimeState) {}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn set_asio_retry_barrier(
+    state: &mut TimelineCueAudioRuntimeState,
+    identity: TimelineCueEngineIdentity,
+) {
+    state.asio_retry_barrier = Some(identity);
+}
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+fn set_asio_retry_barrier(
+    _state: &mut TimelineCueAudioRuntimeState,
+    _identity: TimelineCueEngineIdentity,
+) {
+}
+
 impl TimelineCueAudioRuntime {
+    fn reap_finished_timeline_cue_workers(&self) -> bool {
+        let finished = match self.state.lock() {
+            Ok(mut state) => take_finished_timeline_cue_workers(&mut state),
+            Err(_) => return true,
+        };
+        let panicked = finished.into_iter().any(|worker| worker.join().is_err());
+        if panicked {
+            let retired = self.state.lock().ok().and_then(|mut state| {
+                state.applied = None;
+                state.blocked_settings_revision = Some(state.settings_revision);
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some("Retired Timeline cue audio worker panicked".to_string());
+                state.attachment.take()
+            });
+            if let Some(attachment) = retired {
+                attachment.retire();
+            }
+        }
+        panicked
+    }
+
+    /// Close every legacy normal CUE publication before the Router may leave
+    /// Normal. A still-running prepare/probe is a pre-admission Busy result:
+    /// ASIO Start must not enter Quiescing until the worker has completed and
+    /// its JoinHandle plus late result can be reaped here.
+    #[cfg(any(
+        test,
+        all(target_os = "windows", target_arch = "x86_64", feature = "asio")
+    ))]
+    fn close_normal_routes_for_asio_start(&self) -> Result<(), String> {
+        let _admission = self
+            .settings_update
+            .lock()
+            .map_err(|_| "Timeline cue audio admission lock was poisoned".to_string())?;
+        if self.reap_finished_timeline_cue_workers() {
+            return Err("Retired Timeline cue audio worker panicked".to_string());
+        }
+        let (attachment, mut prepare_job, mut topology_probe, retired_workers, busy) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+            state.normal_admission_open = false;
+            let attachment = state.attachment.take();
+            clear_asio_retry_barrier(&mut state);
+            state.applied = None;
+            let busy = state
+                .prepare_job
+                .as_ref()
+                .and_then(|job| job.worker.as_ref())
+                .is_some_and(|worker| !worker.is_finished())
+                || state
+                    .topology_probe
+                    .as_ref()
+                    .and_then(|probe| probe.worker.as_ref())
+                    .is_some_and(|worker| !worker.is_finished())
+                || state
+                    .retired_workers
+                    .iter()
+                    .any(|worker| !worker.is_finished());
+            if busy {
+                // No Router transition has happened yet. Reopen the normal
+                // admission so the quarantined worker can finish and be
+                // reaped; the operator can retry Start afterward.
+                state.normal_admission_open = true;
+                state.lifecycle = TimelineCueAudioLifecycle::Stalled;
+                state.last_error = Some(
+                    "ASIO Start is waiting for a Timeline cue audio worker to finish".to_string(),
+                );
+                (attachment, None, None, Vec::new(), true)
+            } else {
+                state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+                state.last_error = None;
+                (
+                    attachment,
+                    state.prepare_job.take(),
+                    state.topology_probe.take(),
+                    std::mem::take(&mut state.retired_workers),
+                    false,
+                )
+            }
+        };
+        if let Some(attachment) = attachment {
+            attachment.retire();
+        }
+        if busy {
+            return Err(
+                "ASIO Start was not admitted because a Timeline cue audio worker is still running"
+                    .to_string(),
+            );
+        }
+        if let Some(job) = prepare_job.as_mut() {
+            join_completed_timeline_cue_worker(&mut job.worker)?;
+        }
+        if let Some(probe) = topology_probe.as_mut() {
+            join_completed_timeline_cue_worker(&mut probe.worker)?;
+        }
+        for worker in retired_workers {
+            worker
+                .join()
+                .map_err(|_| "Retired Timeline cue audio worker panicked".to_string())?;
+        }
+        // Dropping the completed receivers only after Join closes any late
+        // PreparedTimelineCueDestination (including its explicit stream).
+        drop(prepare_job);
+        drop(topology_probe);
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn reopen_normal_routes_after_explicit_selection(&self) -> Result<(), String> {
+        let _admission = self
+            .settings_update
+            .lock()
+            .map_err(|_| "Timeline cue audio admission lock was poisoned".to_string())?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+        if state.prepare_job.is_some()
+            || state.topology_probe.is_some()
+            || !state.retired_workers.is_empty()
+            || state.attachment.is_some()
+        {
+            return Err(
+                "Normal CUE admission cannot reopen while a retired route is still owned"
+                    .to_string(),
+            );
+        }
+        state.normal_admission_open = true;
+        state.blocked_settings_revision = None;
+        clear_asio_retry_barrier(&mut state);
+        state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+        state.last_error = None;
+        Ok(())
+    }
+
     fn initialize(
         &self,
         settings_path: PathBuf,
@@ -13454,6 +13727,7 @@ impl TimelineCueAudioRuntime {
                 .checked_add(1)
                 .ok_or_else(|| "Timeline cue audio settings revision is exhausted".to_string())?;
             let retired = state.attachment.take();
+            clear_asio_retry_barrier(&mut state);
             state.desired = settings;
             state.settings_revision = revision;
             state.applied = None;
@@ -13464,7 +13738,7 @@ impl TimelineCueAudioRuntime {
             (revision, retired)
         };
         if let Some(attachment) = retired {
-            attachment.control.retire();
+            attachment.retire();
         }
         Ok(revision)
     }
@@ -13548,8 +13822,20 @@ impl TimelineCueAudioRuntime {
         settings: timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
         program: Option<TimelineCueProgramDestination>,
     ) -> Result<(), String> {
+        let _admission = self
+            .settings_update
+            .lock()
+            .map_err(|_| "Timeline cue audio admission lock was poisoned".to_string())?;
+        if !self
+            .state
+            .lock()
+            .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?
+            .normal_admission_open
+        {
+            return Ok(());
+        }
         let (sender, receiver) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("syndocal-timeline-cue-audio-prepare".to_string())
             .spawn(move || {
                 let result = match settings.route {
@@ -13569,32 +13855,58 @@ impl TimelineCueAudioRuntime {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.prepare_job.is_none()
             && state.topology_probe.is_none()
             && state.settings_revision == fingerprint.settings_revision
+            && state.normal_admission_open
         {
             state.prepare_job = Some(TimelineCueAudioPrepareJob {
                 fingerprint,
                 started_at: Instant::now(),
                 receiver,
                 timed_out: false,
+                worker: Some(worker),
             });
             state.lifecycle = TimelineCueAudioLifecycle::Applying;
+        } else {
+            // The worker may already be inside device/asset preparation. Keep
+            // its JoinHandle owned until a later poll can reap it; dropping a
+            // handle here would detach a late normal-output publisher.
+            state.retired_workers.push(worker);
         }
         Ok(())
     }
 
     fn poll_or_spawn_topology_probe(&self) {
+        if self.reap_finished_timeline_cue_workers() {
+            return;
+        }
         let mut retired = None;
         let mut spawn = false;
+        let mut finished_worker = None;
         if let Ok(mut state) = self.state.lock() {
             if let Some(probe) = state.topology_probe.as_mut() {
                 match probe.receiver.try_recv() {
                     Ok(Ok((fingerprint, endpoints))) => {
                         let timed_out = probe.timed_out;
+                        finished_worker = probe.worker.take();
+                        let worker_result = finished_worker
+                            .as_ref()
+                            .map(|_| Ok(()))
+                            .unwrap_or_else(|| {
+                                Err("Timeline cue audio topology worker handle was already consumed".to_string())
+                        });
                         state.topology_probe = None;
                         state.last_topology_probe_at = Instant::now();
+                        if let Some(worker) = finished_worker.take() {
+                            state.retired_workers.push(worker);
+                        }
+                        if let Err(error) = worker_result {
+                            state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                            state.last_error = Some(error);
+                            return;
+                        }
                         if timed_out {
                             retired = state.attachment.take();
                             state.applied = None;
@@ -13629,21 +13941,36 @@ impl TimelineCueAudioRuntime {
                         }
                     }
                     Ok(Err(error)) => {
+                        finished_worker = probe.worker.take();
+                        let worker_result = finished_worker
+                            .as_ref()
+                            .map(|_| Ok(()))
+                            .unwrap_or_else(|| {
+                                Err("Timeline cue audio topology worker handle was already consumed".to_string())
+                            });
                         state.topology_probe = None;
                         retired = state.attachment.take();
                         state.applied = None;
                         state.blocked_settings_revision = Some(state.settings_revision);
                         state.lifecycle = TimelineCueAudioLifecycle::Fault;
-                        state.last_error = Some(error);
+                        state.last_error = Some(worker_result.err().unwrap_or(error));
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
+                        finished_worker = probe.worker.take();
+                        let worker_result = finished_worker
+                            .as_ref()
+                            .map(|_| Ok(()))
+                            .unwrap_or_else(|| {
+                                Err("Timeline cue audio topology worker handle was already consumed".to_string())
+                            });
                         state.topology_probe = None;
                         retired = state.attachment.take();
                         state.applied = None;
                         state.blocked_settings_revision = Some(state.settings_revision);
                         state.lifecycle = TimelineCueAudioLifecycle::Fault;
-                        state.last_error =
-                            Some("Timeline cue audio topology worker disconnected".to_string());
+                        state.last_error = Some(worker_result.err().unwrap_or_else(|| {
+                            "Timeline cue audio topology worker disconnected".to_string()
+                        }));
                     }
                     Err(mpsc::TryRecvError::Empty) => {
                         if !probe.timed_out
@@ -13662,7 +13989,8 @@ impl TimelineCueAudioRuntime {
                         }
                     }
                 }
-            } else if state.prepare_job.is_none()
+            } else if state.normal_admission_open
+                && state.prepare_job.is_none()
                 && state.attachment.as_ref().is_some_and(|attachment| {
                     attachment.route == timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice
                 })
@@ -13670,34 +13998,61 @@ impl TimelineCueAudioRuntime {
             {
                 spawn = true;
             }
+            if let Some(worker) = finished_worker.take() {
+                state.retired_workers.push(worker);
+            }
         }
         if let Some(attachment) = retired {
-            attachment.control.retire();
+            attachment.retire();
         }
         if !spawn {
             return;
         }
+        let _admission = match self.settings_update.lock() {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.fail_prepare("Timeline cue audio admission lock was poisoned".to_string());
+                return;
+            }
+        };
+        if !self
+            .state
+            .lock()
+            .map(|state| state.normal_admission_open)
+            .unwrap_or(false)
+        {
+            return;
+        }
         let (sender, receiver) = mpsc::sync_channel(1);
-        if std::thread::Builder::new()
+        let worker = match std::thread::Builder::new()
             .name("syndocal-timeline-cue-audio-topology".to_string())
             .spawn(move || {
                 let result = enumerate_timeline_cue_audio_outputs()
                     .map(|(_, fingerprint, endpoints)| (fingerprint, endpoints));
                 let _ = sender.send(result);
-            })
-            .is_err()
-        {
-            self.fail_prepare("Timeline cue audio topology worker could not start".to_string());
-            return;
-        }
-        if let Ok(mut state) = self.state.lock() {
-            if state.topology_probe.is_none() && state.prepare_job.is_none() {
-                state.topology_probe = Some(TimelineCueAudioTopologyProbe {
-                    started_at: Instant::now(),
-                    timed_out: false,
-                    receiver,
-                });
+            }) {
+            Ok(worker) => worker,
+            Err(_) => {
+                self.fail_prepare("Timeline cue audio topology worker could not start".to_string());
+                return;
             }
+        };
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.topology_probe.is_none()
+            && state.prepare_job.is_none()
+            && state.normal_admission_open
+        {
+            state.topology_probe = Some(TimelineCueAudioTopologyProbe {
+                started_at: Instant::now(),
+                timed_out: false,
+                receiver,
+                worker: Some(worker),
+            });
+        } else {
+            state.retired_workers.push(worker);
         }
     }
 
@@ -13706,23 +14061,453 @@ impl TimelineCueAudioRuntime {
         timeline: &engine::TimelineAudioRuntimeSnapshot,
         audio: &Arc<Mutex<MediaAudioPlayback>>,
     ) {
+        self.sync_normal(timeline, audio);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn sync_with_output_router(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        audio: &Arc<Mutex<MediaAudioPlayback>>,
+        output_router: Option<&Arc<audio_output_router::RouterSlot>>,
+        asio_output_runtime: Option<&Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
+    ) {
+        // The test seam has no process-wide Router/runtime and intentionally
+        // keeps the legacy in-memory mixer path. Production always supplies
+        // both owners from MediaAudioSyncRuntime::start.
+        if output_router.is_none() && asio_output_runtime.is_none() {
+            self.sync_normal(timeline, audio);
+            return;
+        }
+        let Some(output_router) = output_router else {
+            self.retire_timeline_cue_attachment_for_router_state(
+                TimelineCueAudioLifecycle::Fault,
+                "ASIO output router process owner is unavailable during Timeline cue sync"
+                    .to_string(),
+            );
+            return;
+        };
+        let router_state = match output_router.snapshot() {
+            Ok(snapshot) => snapshot.state,
+            Err(error) => {
+                self.retire_timeline_cue_attachment_for_router_state(
+                    TimelineCueAudioLifecycle::Fault,
+                    router_error("Timeline cue sync router snapshot", error),
+                );
+                return;
+            }
+        };
+        if router_state == audio_output_router::State::AsioActive {
+            let Some(asio_output_runtime) = asio_output_runtime else {
+                self.retire_timeline_cue_attachment_for_router_state(
+                    TimelineCueAudioLifecycle::Fault,
+                    "ASIO output runtime owner is unavailable during Timeline cue sync".to_string(),
+                );
+                return;
+            };
+            self.sync_asio_active(timeline, asio_output_runtime);
+        } else if router_state == audio_output_router::State::Normal {
+            // Normal is the only state that owns the legacy CUE admission.
+            // Every transitional/locked/faulted ASIO state stays silent and
+            // must not probe or open a normal device as an implicit fallback.
+            self.retire_incompatible_asio_cue_attachment();
+            self.sync_normal(timeline, audio);
+        } else {
+            self.retire_timeline_cue_attachment_for_router_state(
+                if router_state == audio_output_router::State::Fault {
+                    TimelineCueAudioLifecycle::Fault
+                } else {
+                    TimelineCueAudioLifecycle::WaitingForProgramOutput
+                },
+                format!(
+                    "Timeline cue audio is unavailable while the output router is {router_state:?}"
+                ),
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn retire_timeline_cue_attachment(&self) {
+        let retired = self.state.lock().ok().and_then(|mut state| {
+            let retired = state.attachment.take();
+            if retired.is_some() {
+                state.applied = None;
+                if state.lifecycle == TimelineCueAudioLifecycle::Running {
+                    state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+                }
+            }
+            retired
+        });
+        if let Some(attachment) = retired {
+            attachment.retire();
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn retire_incompatible_asio_cue_attachment(&self) {
+        let retired = self.state.lock().ok().and_then(|mut state| {
+            let is_asio = state.attachment.as_ref().is_some_and(|attachment| {
+                matches!(
+                    &attachment.output,
+                    TimelineCueAudioAttachmentOutput::AsioCue { .. }
+                )
+            });
+            if !is_asio {
+                return None;
+            }
+            state.applied = None;
+            state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+            state.last_error = Some(
+                "ASIO Timeline CUE attachment was retired before returning to Normal output"
+                    .to_string(),
+            );
+            state.blocked_settings_revision = None;
+            state.attachment.take()
+        });
+        if let Some(attachment) = retired {
+            attachment.retire();
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn retire_timeline_cue_attachment_for_router_state(
+        &self,
+        lifecycle: TimelineCueAudioLifecycle,
+        error: String,
+    ) {
+        let retired = self.state.lock().ok().and_then(|mut state| {
+            state.applied = None;
+            state.lifecycle = lifecycle;
+            state.blocked_settings_revision = Some(state.settings_revision);
+            state.last_error = Some(error);
+            state.attachment.take()
+        });
+        if let Some(attachment) = retired {
+            attachment.retire();
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn retire_asio_for_output_retry(
+        &self,
+        error: String,
+        fallback_identity: Option<TimelineCueEngineIdentity>,
+    ) {
+        let retired = self.state.lock().ok().and_then(|mut state| {
+            let barrier = state
+                .attachment
+                .as_ref()
+                .map(|attachment| attachment.engine_identity.clone())
+                .or(fallback_identity);
+            state.asio_retry_barrier = barrier;
+            state.applied = None;
+            state.lifecycle = TimelineCueAudioLifecycle::Applying;
+            state.last_error = Some(error);
+            state.attachment.take()
+        });
+        if let Some(attachment) = retired {
+            attachment.retire();
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn create_asio_attachment(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+        expected_output_identity: asio_timeline_output::TimelineOutputIdentity,
+        settings: &timeline_cue_audio::MachineTimelineCueAudioSettingsV1,
+        settings_revision: u64,
+    ) -> Result<TimelineCueAudioAttachment, String> {
+        // Validate the complete engine authority before allocating or
+        // publishing a source.  A malformed/stale event batch must not leave
+        // an otherwise valid ASIO sink behind when construction is rejected.
+        let engine_identity = timeline_cue_engine_identity(timeline)?;
+        let canonical_anchor_frame = timeline_cue_canonical_frame(timeline.position_ms)?;
+        let (output_clock_epoch, source_fence) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
+            (
+                state
+                    .next_output_clock_epoch
+                    .checked_add(1)
+                    .ok_or_else(|| "Timeline cue audio output epoch is exhausted".to_string())?,
+                state
+                    .next_source_fence
+                    .checked_add(1)
+                    .ok_or_else(|| "Timeline cue audio source fence is exhausted".to_string())?,
+            )
+        };
+        let authority = timeline_cue_audio::TimelineCueAuthority {
+            fence: timeline_cue_audio::TimelineCueFence {
+                output_clock_epoch,
+                schedule_generation: engine_identity.schedule_generation,
+                source_fence,
+            },
+            clock: timeline_cue_audio::TimelineCueClockMap {
+                canonical_anchor_frame,
+                output_anchor_frame: 0,
+            },
+        };
+        let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(
+            timeline_cue_audio::TIMELINE_CUE_CANONICAL_SAMPLE_RATE,
+        )?;
+        let (control, source) = timeline_cue_audio::create_timeline_cue_audio_source(
+            timeline_cue_audio::TIMELINE_CUE_CANONICAL_SAMPLE_RATE,
+            2,
+            timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+            assets,
+            authority,
+            settings.click_gain,
+            settings.guide_gain,
+        )?;
+        let sink_result = match asio_output_runtime.lock() {
+            Ok(mut runtime) => {
+                let current = runtime
+                    .current_output_identity(protocol::TimelineAudioOutputBus::Cue)
+                    .map_err(|error| error.to_string());
+                match current {
+                    Ok(current) if current == expected_output_identity => runtime
+                        .attach_source(expected_output_identity, source, false),
+                    Ok(current) => Err(format!(
+                        "ASIO CUE output identity changed before attachment: expected {expected_output_identity:?}, got {current:?}"
+                    )),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(_) => Err("ASIO output runtime lock was poisoned".to_string()),
+        };
+        let sink = match sink_result {
+            Ok(sink) => sink,
+            Err(error) => {
+                control.retire();
+                return Err(error);
+            }
+        };
+        Ok(TimelineCueAudioAttachment {
+            control,
+            output: TimelineCueAudioAttachmentOutput::AsioCue {
+                identity: expected_output_identity,
+                sink,
+            },
+            route: settings.route,
+            settings_revision,
+            program_device_generation: None,
+            engine_identity,
+            output_clock_epoch,
+            source_fence,
+            next_sequence: 1,
+            last_click_key: None,
+            last_guide_generation: None,
+            last_guide_sequence: 0,
+            blocked_event_identity: None,
+            last_observed_output_frame: 0,
+            last_output_progress_at: Instant::now(),
+        })
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn sync_asio_active(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    ) {
+        if self.reap_finished_timeline_cue_workers() {
+            return;
+        }
+        let project_enabled = timeline.metronome_enabled || timeline.guide_enabled;
+        let (settings, settings_revision) = {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            if state.normal_admission_open
+                || state.prepare_job.is_some()
+                || state.topology_probe.is_some()
+                || !state.retired_workers.is_empty()
+            {
+                let retired = state.attachment.take();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.blocked_settings_revision = Some(state.settings_revision);
+                state.last_error = Some(
+                    "ASIO Active encountered a legacy Timeline cue audio worker; normal route is quarantined"
+                        .to_string(),
+                );
+                drop(state);
+                if let Some(attachment) = retired {
+                    attachment.retire();
+                }
+                return;
+            }
+            if !state.initialized {
+                return;
+            }
+            if !project_enabled {
+                let retired = state.attachment.take();
+                state.asio_retry_barrier = None;
+                state.lifecycle = TimelineCueAudioLifecycle::DisabledByProject;
+                state.applied = None;
+                drop(state);
+                if let Some(attachment) = retired {
+                    attachment.retire();
+                }
+                return;
+            }
+            if state.blocked_settings_revision == Some(state.settings_revision) {
+                let retired = state.attachment.take();
+                drop(state);
+                if let Some(attachment) = retired {
+                    attachment.retire();
+                }
+                return;
+            }
+            (state.desired.clone(), state.settings_revision)
+        };
+
+        // This is the authoritative ASIO session/transport observation.  It
+        // both rejects a non-Active/faulted runtime and lets us retire a sink
+        // that became stale even when the engine identity did not change.
+        let current_output_identity_result = match asio_output_runtime.lock() {
+            Ok(mut runtime) => {
+                runtime.current_output_identity(protocol::TimelineAudioOutputBus::Cue)
+            }
+            Err(_) => Err("ASIO output runtime lock was poisoned".to_string()),
+        };
+        let current_output_identity = match current_output_identity_result {
+            Ok(identity) => identity,
+            Err(error) => {
+                self.retire_timeline_cue_attachment();
+                self.fail_prepare(error);
+                return;
+            }
+        };
+        let (should_attach, output_identity_rotated) = self
+            .state
+            .lock()
+            .map(|state| {
+                let output_identity_rotated = state.attachment.as_ref().is_some_and(|attachment| {
+                    matches!(
+                        &attachment.output,
+                        TimelineCueAudioAttachmentOutput::AsioCue { identity, .. }
+                            if *identity != current_output_identity
+                    )
+                });
+                let should_attach = !state.attachment.as_ref().is_some_and(|attachment| {
+                    matches!(
+                        &attachment.output,
+                        TimelineCueAudioAttachmentOutput::AsioCue { identity, .. }
+                            if *identity == current_output_identity
+                    ) && attachment.settings_revision == settings_revision
+                });
+                (should_attach, output_identity_rotated)
+            })
+            .unwrap_or((true, false));
+
+        if should_attach {
+            let mut attachment = match self.create_asio_attachment(
+                timeline,
+                asio_output_runtime,
+                current_output_identity,
+                &settings,
+                settings_revision,
+            ) {
+                Ok(attachment) => attachment,
+                Err(error) => {
+                    if error.contains("identity changed") {
+                        self.retire_asio_for_output_retry(
+                            error,
+                            timeline_cue_engine_identity(timeline).ok(),
+                        );
+                    } else {
+                        self.retire_timeline_cue_attachment();
+                        self.fail_prepare(error);
+                    }
+                    return;
+                }
+            };
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    attachment.retire();
+                    return;
+                }
+            };
+            if state.normal_admission_open
+                || state.settings_revision != settings_revision
+                || state.blocked_settings_revision == Some(settings_revision)
+            {
+                drop(state);
+                attachment.retire();
+                return;
+            }
+            let suppress_current_events = state
+                .asio_retry_barrier
+                .as_ref()
+                .is_some_and(|barrier| barrier == &attachment.engine_identity)
+                || (output_identity_rotated
+                    && state
+                        .attachment
+                        .as_ref()
+                        .is_some_and(|old| old.engine_identity == attachment.engine_identity));
+            if let Some(old) = state.attachment.take() {
+                old.retire();
+            }
+            if suppress_current_events {
+                // A transport-only rotation can race one engine snapshot. Do
+                // not replay that snapshot into the fresh ASIO sink; the next
+                // engine authority change re-arms publication.
+                attachment.blocked_event_identity = Some(attachment.engine_identity.clone());
+            }
+            state.asio_retry_barrier = None;
+            state.next_output_clock_epoch = attachment.output_clock_epoch;
+            state.next_source_fence = attachment.source_fence;
+            state.rotation_count = state.rotation_count.saturating_add(1);
+            state.applied = Some(settings);
+            state.lifecycle = TimelineCueAudioLifecycle::Running;
+            state.last_error = None;
+            state.attachment = Some(attachment);
+        }
+        self.feed_attachment_with_asio(timeline, asio_output_runtime, current_output_identity);
+    }
+
+    fn sync_normal(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        audio: &Arc<Mutex<MediaAudioPlayback>>,
+    ) {
+        if self.reap_finished_timeline_cue_workers() {
+            return;
+        }
         let project_enabled = timeline.metronome_enabled || timeline.guide_enabled;
         let mut retired = None;
         if let Ok(mut state) = self.state.lock() {
-            if !state.initialized
+            if !state.normal_admission_open {
+                retired = state.attachment.take();
+                state.applied = None;
+                state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
+            } else if !state.initialized
                 || (state.blocked_settings_revision == Some(state.settings_revision)
                     && state.prepare_job.is_none())
             {
                 return;
-            }
-            if !project_enabled {
+            } else if !project_enabled {
                 retired = state.attachment.take();
                 state.lifecycle = TimelineCueAudioLifecycle::DisabledByProject;
                 state.applied = None;
             }
         }
         if let Some(attachment) = retired {
-            attachment.control.retire();
+            attachment.retire();
+        }
+        if self
+            .state
+            .try_lock()
+            .map(|state| !state.normal_admission_open)
+            .unwrap_or(true)
+        {
+            return;
         }
         if !project_enabled {
             return;
@@ -13754,18 +14539,43 @@ impl TimelineCueAudioRuntime {
 
         let mut completed = None;
         let mut spawn = None;
+        let mut retired_worker = None;
         if let Ok(mut state) = self.state.lock() {
             if let Some(job) = state.prepare_job.as_mut() {
                 match job.receiver.try_recv() {
                     Ok(result) => {
-                        completed = Some((job.fingerprint, job.timed_out, result));
+                        let fingerprint = job.fingerprint;
+                        let timed_out = job.timed_out;
+                        retired_worker = job.worker.take();
+                        let worker_result =
+                            retired_worker.as_ref().map(|_| Ok(())).unwrap_or_else(|| {
+                                Err(
+                                    "Timeline cue audio prepare worker handle was already consumed"
+                                        .to_string(),
+                                )
+                            });
+                        completed = Some((
+                            fingerprint,
+                            timed_out,
+                            worker_result.map(|()| result).unwrap_or_else(Err),
+                        ));
                         state.prepare_job = None;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
+                        retired_worker = job.worker.take();
+                        let worker_result =
+                            retired_worker.as_ref().map(|_| Ok(())).unwrap_or_else(|| {
+                                Err(
+                                    "Timeline cue audio prepare worker handle was already consumed"
+                                        .to_string(),
+                                )
+                            });
                         completed = Some((
                             job.fingerprint,
                             job.timed_out,
-                            Err("Timeline cue audio prepare worker disconnected".to_string()),
+                            Err(worker_result.err().unwrap_or_else(|| {
+                                "Timeline cue audio prepare worker disconnected".to_string()
+                            })),
                         ));
                         state.prepare_job = None;
                     }
@@ -13785,6 +14595,9 @@ impl TimelineCueAudioRuntime {
                     }
                 }
             }
+            if let Some(worker) = retired_worker.take() {
+                state.retired_workers.push(worker);
+            }
             if completed.is_none() {
                 let program_generation = program.as_ref().map(|value| value.device_generation);
                 let attachment_valid = state.attachment.as_ref().is_some_and(|attachment| {
@@ -13793,6 +14606,7 @@ impl TimelineCueAudioRuntime {
                         && attachment.program_device_generation == program_generation
                 });
                 if !attachment_valid
+                    && state.normal_admission_open
                     && state.prepare_job.is_none()
                     && state.topology_probe.is_none()
                 {
@@ -13840,14 +14654,14 @@ impl TimelineCueAudioRuntime {
         timeline: &engine::TimelineAudioRuntimeSnapshot,
         program: Option<&TimelineCueProgramDestination>,
     ) {
-        let current = self
-            .state
-            .try_lock()
-            .ok()
-            .map(|state| TimelineCueAudioPrepareFingerprint {
-                settings_revision: state.settings_revision,
-                program_device_generation: program.map(|value| value.device_generation),
-            });
+        let current = self.state.try_lock().ok().and_then(|state| {
+            state
+                .normal_admission_open
+                .then_some(TimelineCueAudioPrepareFingerprint {
+                    settings_revision: state.settings_revision,
+                    program_device_generation: program.map(|value| value.device_generation),
+                })
+        });
         if current != Some(fingerprint) {
             return;
         }
@@ -13876,6 +14690,9 @@ impl TimelineCueAudioRuntime {
             Ok(state) => state,
             Err(_) => return,
         };
+        if !state.normal_admission_open {
+            return;
+        }
         let Some(output_clock_epoch) = state.next_output_clock_epoch.checked_add(1) else {
             state.lifecycle = TimelineCueAudioLifecycle::Fault;
             state.last_error = Some("Timeline cue audio output epoch is exhausted".to_string());
@@ -13920,7 +14737,7 @@ impl TimelineCueAudioRuntime {
         };
         destination.mixer.add(source);
         if let Some(old) = state.attachment.take() {
-            old.control.retire();
+            old.retire();
         }
         state.next_output_clock_epoch = output_clock_epoch;
         state.next_source_fence = source_fence;
@@ -13936,8 +14753,10 @@ impl TimelineCueAudioRuntime {
         state.last_error = None;
         state.attachment = Some(TimelineCueAudioAttachment {
             control,
-            mixer: destination.mixer,
-            _explicit_stream: destination.explicit_stream,
+            output: TimelineCueAudioAttachmentOutput::Legacy {
+                mixer: destination.mixer,
+                _explicit_stream: destination.explicit_stream,
+            },
             route: settings.route,
             settings_revision: state.settings_revision,
             program_device_generation: destination.program_device_generation,
@@ -13977,12 +14796,75 @@ impl TimelineCueAudioRuntime {
         timeline: &engine::TimelineAudioRuntimeSnapshot,
         program: Option<&TimelineCueProgramDestination>,
     ) {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        self.feed_attachment_inner(timeline, program, None, None);
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        self.feed_attachment_inner(timeline, program);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn feed_attachment_with_asio(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+        expected_output_identity: asio_timeline_output::TimelineOutputIdentity,
+    ) {
+        self.feed_attachment_inner(
+            timeline,
+            None,
+            Some(asio_output_runtime),
+            Some(expected_output_identity),
+        );
+    }
+
+    fn feed_attachment_inner(
+        &self,
+        timeline: &engine::TimelineAudioRuntimeSnapshot,
+        program: Option<&TimelineCueProgramDestination>,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        asio_output_runtime: Option<&Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        expected_output_identity: Option<asio_timeline_output::TimelineOutputIdentity>,
+    ) {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let mut asio_runtime_guard = match asio_output_runtime {
+            Some(runtime) => match runtime.lock() {
+                Ok(runtime) => Some(runtime),
+                Err(_) => {
+                    self.retire_timeline_cue_attachment();
+                    self.fail_prepare("ASIO output runtime lock was poisoned".to_string());
+                    return;
+                }
+            },
+            None => None,
+        };
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if let (Some(runtime), Some(expected)) =
+            (asio_runtime_guard.as_mut(), expected_output_identity)
+        {
+            match runtime.current_output_identity(protocol::TimelineAudioOutputBus::Cue) {
+                Ok(current) if current == expected => {}
+                Ok(current) => {
+                    drop(asio_runtime_guard);
+                    self.retire_asio_for_output_retry(format!(
+                        "ASIO CUE output identity changed before Timeline cue publication: expected {expected:?}, got {current:?}"
+                    ), None);
+                    return;
+                }
+                Err(error) => {
+                    drop(asio_runtime_guard);
+                    self.retire_timeline_cue_attachment();
+                    self.fail_prepare(error);
+                    return;
+                }
+            }
+        }
         let identity = match timeline_cue_engine_identity(timeline) {
             Ok(identity) => identity,
             Err(error) => {
                 if let Ok(mut state) = self.state.try_lock() {
                     if let Some(attachment) = state.attachment.take() {
-                        attachment.control.retire();
+                        attachment.retire();
                     }
                     state.lifecycle = TimelineCueAudioLifecycle::Fault;
                     state.last_error = Some(error);
@@ -13998,13 +14880,40 @@ impl TimelineCueAudioRuntime {
         let Some(mut attachment) = state.attachment.take() else {
             return;
         };
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if let Some(expected) = expected_output_identity {
+            let attachment_identity = match &attachment.output {
+                TimelineCueAudioAttachmentOutput::AsioCue { identity, .. } => *identity,
+                TimelineCueAudioAttachmentOutput::Legacy { .. } => {
+                    attachment.retire();
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(
+                        "ASIO Active encountered a legacy Timeline cue attachment".to_string(),
+                    );
+                    state.blocked_settings_revision = Some(state.settings_revision);
+                    return;
+                }
+            };
+            if attachment_identity != expected {
+                let engine_identity = attachment.engine_identity.clone();
+                attachment.retire();
+                state.asio_retry_barrier = Some(engine_identity);
+                state.applied = None;
+                state.lifecycle = TimelineCueAudioLifecycle::Applying;
+                state.last_error = Some(
+                    "ASIO CUE attachment identity changed before Timeline cue publication"
+                        .to_string(),
+                );
+                return;
+            }
+        }
         let observed_output_frame = attachment.control.next_output_frame();
         if observed_output_frame != attachment.last_observed_output_frame {
             attachment.last_observed_output_frame = observed_output_frame;
             attachment.last_output_progress_at = Instant::now();
         } else if attachment.last_output_progress_at.elapsed() >= TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT
         {
-            attachment.control.retire();
+            attachment.retire();
             state.applied = None;
             state.blocked_settings_revision = Some(state.settings_revision);
             state.lifecycle = TimelineCueAudioLifecycle::Stalled;
@@ -14013,10 +14922,13 @@ impl TimelineCueAudioRuntime {
                 Some("Timeline cue audio callback has not advanced for 750 ms".to_string());
             return;
         }
-        if attachment.route == timeline_cue_audio::TimelineCueAudioRoute::FollowProgram
+        if matches!(
+            &attachment.output,
+            TimelineCueAudioAttachmentOutput::Legacy { .. }
+        ) && attachment.route == timeline_cue_audio::TimelineCueAudioRoute::FollowProgram
             && program.map(|value| value.device_generation) != attachment.program_device_generation
         {
-            attachment.control.retire();
+            attachment.retire();
             state.applied = None;
             state.lifecycle = TimelineCueAudioLifecycle::WaitingForProgramOutput;
             return;
@@ -14025,20 +14937,20 @@ impl TimelineCueAudioRuntime {
             let canonical_anchor_frame = match timeline_cue_canonical_frame(timeline.position_ms) {
                 Ok(frame) => frame,
                 Err(error) => {
-                    attachment.control.retire();
+                    attachment.retire();
                     state.lifecycle = TimelineCueAudioLifecycle::Fault;
                     state.last_error = Some(error);
                     return;
                 }
             };
             let Some(output_clock_epoch) = state.next_output_clock_epoch.checked_add(1) else {
-                attachment.control.retire();
+                attachment.retire();
                 state.lifecycle = TimelineCueAudioLifecycle::Fault;
                 state.last_error = Some("Timeline cue audio output epoch is exhausted".to_string());
                 return;
             };
             let Some(source_fence) = state.next_source_fence.checked_add(1) else {
-                attachment.control.retire();
+                attachment.retire();
                 state.lifecycle = TimelineCueAudioLifecycle::Fault;
                 state.last_error = Some("Timeline cue audio source fence is exhausted".to_string());
                 return;
@@ -14055,19 +14967,65 @@ impl TimelineCueAudioRuntime {
                 },
             };
             if let Err(error) = attachment.control.publish_authority(authority) {
-                attachment.control.retire();
+                attachment.retire();
                 state.lifecycle = TimelineCueAudioLifecycle::Fault;
                 state.last_error = Some(error);
                 return;
             }
-            match attachment.control.new_source() {
-                Ok(source) => attachment.mixer.add(source),
-                Err(error) => {
-                    attachment.control.retire();
-                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+            let source_result = attachment.control.new_source();
+            let output_result = match (source_result, &mut attachment.output) {
+                (Ok(source), TimelineCueAudioAttachmentOutput::Legacy { mixer, .. }) => {
+                    mixer.add(source);
+                    Ok(())
+                }
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                (
+                    Ok(source),
+                    TimelineCueAudioAttachmentOutput::AsioCue {
+                        identity: asio_identity,
+                        sink,
+                    },
+                ) => match asio_runtime_guard.as_mut() {
+                    Some(runtime) => (|| {
+                        let expected = expected_output_identity.ok_or_else(|| {
+                            "ASIO output identity is unavailable during Timeline cue rotation"
+                                .to_string()
+                        })?;
+                        if *asio_identity != expected {
+                            return Err(format!(
+                                "ASIO CUE attachment identity changed before rotation: expected {expected:?}, got {:?}",
+                                *asio_identity
+                            ));
+                        }
+                        // Keep the identity captured for this engine snapshot.
+                        // `attach_source` revalidates it immediately before
+                        // and after admission; a newer identity is never
+                        // substituted into this event batch.
+                        let next_sink = runtime.attach_source(*asio_identity, source, false)?;
+                        sink.stop();
+                        *sink = next_sink;
+                        Ok(())
+                    })(),
+                    None => Err(
+                        "ASIO output runtime owner is unavailable during Timeline cue rotation"
+                            .to_string(),
+                    ),
+                },
+                (Err(error), _) => Err(error),
+            };
+            if let Err(error) = output_result {
+                if error.contains("identity changed") {
+                    set_asio_retry_barrier(&mut state, attachment.engine_identity.clone());
+                    state.applied = None;
+                    state.lifecycle = TimelineCueAudioLifecycle::Applying;
                     state.last_error = Some(error);
+                    attachment.retire();
                     return;
                 }
+                attachment.retire();
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some(error);
+                return;
             }
             attachment.output_clock_epoch = output_clock_epoch;
             attachment.source_fence = source_fence;
@@ -14144,7 +15102,7 @@ impl TimelineCueAudioRuntime {
                 playback_rate_milli,
             });
             let Some(next) = next_sequence.checked_add(1) else {
-                attachment.control.retire();
+                attachment.retire();
                 state.lifecycle = TimelineCueAudioLifecycle::Fault;
                 state.last_error =
                     Some("Timeline cue audio event sequence is exhausted".to_string());
@@ -14152,8 +15110,70 @@ impl TimelineCueAudioRuntime {
             };
             next_sequence = next;
         }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if let (Some(runtime), Some(expected)) =
+            (asio_runtime_guard.as_mut(), expected_output_identity)
+        {
+            let attachment_identity = match &attachment.output {
+                TimelineCueAudioAttachmentOutput::AsioCue { identity, .. } => *identity,
+                TimelineCueAudioAttachmentOutput::Legacy { .. } => {
+                    attachment.retire();
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(
+                        "ASIO Active encountered a legacy Timeline cue attachment".to_string(),
+                    );
+                    state.blocked_settings_revision = Some(state.settings_revision);
+                    return;
+                }
+            };
+            match runtime.current_output_identity(protocol::TimelineAudioOutputBus::Cue) {
+                Ok(current) if current == expected && attachment_identity == expected => {}
+                Ok(current) => {
+                    let engine_identity = attachment.engine_identity.clone();
+                    attachment.retire();
+                    state.asio_retry_barrier = Some(engine_identity);
+                    state.applied = None;
+                    state.lifecycle = TimelineCueAudioLifecycle::Applying;
+                    state.last_error = Some(format!(
+                        "ASIO CUE output identity changed before Timeline cue enqueue: expected {expected:?}, got {current:?}"
+                    ));
+                    return;
+                }
+                Err(error) => {
+                    attachment.retire();
+                    state.applied = None;
+                    state.blocked_settings_revision = Some(state.settings_revision);
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(error);
+                    return;
+                }
+            }
+        }
         if !events.is_empty() {
             if let Err(error) = attachment.control.enqueue_batch(fence, &events) {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                let retire_faulted_attachment = matches!(
+                    &attachment.output,
+                    TimelineCueAudioAttachmentOutput::AsioCue { .. }
+                );
+                #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+                let retire_faulted_attachment = false;
+                if retire_faulted_attachment {
+                    // A failed ASIO publication is terminal for this source.
+                    // Keep no control or Sink that could retry a stale batch
+                    // after a transport/session/fault boundary; the next
+                    // explicit settings/engine admission creates a fresh
+                    // attachment.
+                    attachment.retire();
+                    state.applied = None;
+                    state.blocked_settings_revision = Some(state.settings_revision);
+                    state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                    state.last_error = Some(error);
+                    return;
+                }
+                // Preserve the legacy normal route's bounded retry behavior;
+                // its existing tests and operator retry rely on retaining the
+                // blocked attachment until the next admitted revision.
                 attachment.blocked_event_identity = Some(identity.clone());
                 state.lifecycle = TimelineCueAudioLifecycle::Fault;
                 state.last_error = Some(error);
@@ -14187,6 +15207,16 @@ impl TimelineCueAudioRuntime {
 
 #[derive(Default)]
 struct MediaAudioPlayback {
+    /// On the Windows ASIO product path, the PROGRAM stream is sealed in a
+    /// router-issued lease. It must never be replaced or dropped directly by
+    /// media playback.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    normal_output: Option<normal_audio_output::NormalAudioOutput>,
+    /// A failed Router retirement retains the exact stream for an explicit
+    /// retry. Keeping only an error string here would leak an exclusive route.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    pending_normal_output_retirements: Vec<PendingNormalOutputRetirement>,
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     stream: Option<rodio::OutputStream>,
     #[cfg(test)]
     timeline_test_mixer: Option<rodio::mixer::Mixer>,
@@ -14258,6 +15288,10 @@ struct TimelineAudioSourceConfig {
     path: PathBuf,
     gain: f32,
     offset_ms: u64,
+    /// This is a logical source identity. Device/channel selection remains a
+    /// separate machine-local router concern; until that integration lands,
+    /// a PROGRAM/CUE change must still retire the old sink before rebuilding.
+    output_bus: protocol::TimelineAudioOutputBus,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14307,18 +15341,323 @@ struct TimelineAudioSyncPlan {
     errors: Vec<String>,
 }
 
-struct PreparedMediaAudioOutput {
-    stream: rodio::OutputStream,
+enum PreparedMediaAudioOutput {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    Router(normal_audio_output::NormalAudioOutput),
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+    Direct {
+        stream: rodio::OutputStream,
+        mixer: rodio::mixer::Mixer,
+        device_name: Option<String>,
+        requested_device_name: Option<String>,
+    },
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    Test { mixer: rodio::mixer::Mixer },
+}
+
+impl PreparedMediaAudioOutput {
+    fn mixer(&self) -> rodio::mixer::Mixer {
+        match self {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            Self::Router(output) => output.mixer(),
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+            Self::Direct { mixer, .. } => mixer.clone(),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+            Self::Test { mixer } => mixer.clone(),
+        }
+    }
+}
+
+/// Owns a newly-published PROGRAM output until the timeline prepare commit has
+/// transferred it into `MediaAudioPlayback`. Every early return remains
+/// router-governed: the Drop path only retires the sealed lease after the
+/// playback mutex is no longer held.
+struct PreparedMediaAudioOutputGuard {
+    output: Option<PreparedMediaAudioOutput>,
+    audio: Arc<Mutex<MediaAudioPlayback>>,
+}
+
+impl PreparedMediaAudioOutputGuard {
+    fn empty(audio: Arc<Mutex<MediaAudioPlayback>>) -> Self {
+        Self {
+            output: None,
+            audio,
+        }
+    }
+
+    fn install_candidate(&mut self, output: PreparedMediaAudioOutput) {
+        debug_assert!(self.output.is_none());
+        self.output = Some(output);
+    }
+
+    fn output_mut(&mut self) -> &mut Option<PreparedMediaAudioOutput> {
+        &mut self.output
+    }
+}
+
+impl Drop for PreparedMediaAudioOutputGuard {
+    fn drop(&mut self) {
+        if let Some(output) = self.output.take() {
+            retire_uncommitted_prepared_media_output(&self.audio, output);
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn with_media_audio_retirement_owner<T>(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    update: impl FnOnce(&mut MediaAudioPlayback) -> T,
+) -> T {
+    let mut playback = audio
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update(&mut playback)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn record_pending_normal_output_retirement(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    pending: PendingNormalOutputRetirement,
+    detail: String,
+) {
+    // A poisoned media mutex still owns a valid playback value.  This path is
+    // the last owner of a Router retirement lease, so abandoning `pending`
+    // here would separate the Router receipt from the live OS resource. Keep
+    // the lease in the same explicit reaper queue even after poison; callers
+    // continue to fail closed and surface the diagnostic.
+    with_media_audio_retirement_owner(audio, |playback| {
+        playback.pending_normal_output_retirements.push(pending);
+        playback.last_sync_error = Some(detail);
+    });
+}
+
+fn retire_uncommitted_prepared_media_output(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    output: PreparedMediaAudioOutput,
+) {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    {
+        // In the ASIO product build Router is the only prepared-output
+        // variant. Keep this a direct destructure so the compiler cannot
+        // mistake a fail-closed retirement path for an optional branch.
+        match output {
+            PreparedMediaAudioOutput::Router(output) => {
+                retire_normal_output_lease(audio, output, "stale prepared PROGRAM output");
+            }
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+            PreparedMediaAudioOutput::Test { .. } => {}
+        }
+    }
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+    {
+        // The ordinary Rodio route is intentionally retired by its owning
+        // direct output. The Router-specific guard has nothing to do here.
+        let _ = (audio, output);
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn retire_normal_output_lease(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    output: normal_audio_output::NormalAudioOutput,
+    context: &str,
+) {
+    match output.into_retirement() {
+        Ok(task) => match task.perform() {
+            normal_audio_output::NormalAudioOutputRetirement::Retired => {}
+            normal_audio_output::NormalAudioOutputRetirement::Retry(pending) => {
+                record_pending_normal_output_retirement(
+                    audio,
+                    pending,
+                    format!("{context}: normal PROGRAM retirement requires retry"),
+                );
+            }
+        },
+        Err((output, error)) => record_pending_normal_output_retirement(
+            audio,
+            PendingNormalOutputRetirement::Unadmitted(output),
+            format!("{context}: {error}"),
+        ),
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn retry_pending_normal_output_retirements(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+) -> Result<(), String> {
+    loop {
+        let pending = {
+            let mut playback = audio
+                .lock()
+                .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
+            playback.pending_normal_output_retirements.pop()
+        };
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let task = pending.into_retirement().map_err(|(pending, error)| {
+            record_pending_normal_output_retirement(
+                audio,
+                pending,
+                format!("normal PROGRAM retirement retry admission: {error}"),
+            );
+            error
+        })?;
+        match task.perform() {
+            normal_audio_output::NormalAudioOutputRetirement::Retired => {}
+            normal_audio_output::NormalAudioOutputRetirement::Retry(pending) => {
+                let detail = "normal PROGRAM retirement retry failed; route remains fail-closed";
+                record_pending_normal_output_retirement(audio, pending, detail.to_string());
+                return Err(detail.to_string());
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+struct NormalProgramOutputBinding {
     mixer: rodio::mixer::Mixer,
-    device_name: Option<String>,
+    generation: u64,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn take_active_normal_program_output(
+    playback: &mut MediaAudioPlayback,
+) -> Result<Option<(normal_audio_output::NormalAudioOutput, Vec<rodio::Sink>)>, String> {
+    let Some(_) = playback.normal_output.as_ref() else {
+        return Ok(None);
+    };
+    let next_generation = playback.next_audio_device_generation()?;
+    // Detach every sink while holding state, then stop them after the mutex
+    // is released and before the Router receives the stream retirement. Rodio
+    // control calls must never turn a media state lock into an OS-I/O lock.
+    let mut sinks = playback
+        .sinks
+        .drain()
+        .map(|(_, sink)| sink)
+        .collect::<Vec<_>>();
+    #[cfg(test)]
+    {
+        playback.timeline_stop_count = playback
+            .timeline_stop_count
+            .saturating_add(playback.timeline_sinks.len() as u64);
+    }
+    sinks.extend(playback.timeline_sinks.drain().map(|(_, sink)| sink));
+    playback.sources.clear();
+    playback.last_resync_at.clear();
+    playback.timeline_sources.clear();
+    playback.timeline_failures.clear();
+    playback.timeline_last_resync_at.clear();
+    playback.timeline_source_projection_authority = None;
+    playback.device_name = None;
+    playback.requested_device_name = None;
+    playback.audio_device_generation = next_generation;
+    Ok(playback.normal_output.take().map(|output| (output, sinks)))
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn retire_active_normal_program_output(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    context: &str,
+) -> Result<(), String> {
+    let detached = {
+        let mut playback = audio
+            .lock()
+            .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
+        take_active_normal_program_output(&mut playback)?
+    };
+    if let Some((output, sinks)) = detached {
+        for sink in sinks {
+            sink.stop();
+        }
+        retire_normal_output_lease(audio, output, context);
+    }
+    retry_pending_normal_output_retirements(audio)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn ensure_normal_program_output(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    slot: &Arc<audio_output_router::RouterSlot>,
     requested_device_name: Option<String>,
+) -> Result<NormalProgramOutputBinding, String> {
+    retry_pending_normal_output_retirements(audio)?;
+    let requested_device_name = requested_device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    let existing = {
+        let playback = audio
+            .lock()
+            .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
+        playback.normal_output.as_ref().and_then(|output| {
+            (playback.requested_device_name == requested_device_name).then(|| {
+                NormalProgramOutputBinding {
+                    mixer: output.mixer(),
+                    generation: playback.audio_device_generation,
+                }
+            })
+        })
+    };
+    if let Some(binding) = existing {
+        return Ok(binding);
+    }
+    retire_active_normal_program_output(audio, "normal PROGRAM replacement")?;
+    let output = match normal_audio_output::NormalAudioOutput::open(slot, requested_device_name) {
+        Ok(output) => output,
+        Err(error) => {
+            let detail = error.detail().to_string();
+            for pending in error.into_pending_retirements() {
+                record_pending_normal_output_retirement(audio, pending, detail.clone());
+            }
+            return Err(detail);
+        }
+    };
+    let mut prepared = Some(PreparedMediaAudioOutput::Router(output));
+    let installed = {
+        let mut playback = audio
+            .lock()
+            .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
+        playback
+            .install_prepared_output(&mut prepared)
+            .map(|_| NormalProgramOutputBinding {
+                mixer: playback
+                    .active_program_mixer()
+                    .expect("installed normal PROGRAM output exposes a mixer"),
+                generation: playback.audio_device_generation,
+            })
+    };
+    if let Some(prepared) = prepared.take() {
+        retire_uncommitted_prepared_media_output(audio, prepared);
+    }
+    installed
 }
 
 struct PreparedTimelineAudioClip {
     request: TimelineAudioPrepareRequest,
-    sink: rodio::Sink,
+    sink: Option<rodio::Sink>,
     decoder: Option<rodio::Decoder<std::io::BufReader<fs::File>>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_identity: Option<asio_timeline_output::TimelineOutputIdentity>,
 }
+
+impl PreparedTimelineAudioClip {
+    fn stop(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            sink.stop();
+        }
+    }
+}
+
+fn stop_prepared_timeline_audio_clips(prepared_clips: Vec<PreparedTimelineAudioClipResult>) {
+    for mut prepared in prepared_clips.into_iter().flatten() {
+        prepared.stop();
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+type PendingNormalOutputRetirement = normal_audio_output::PendingNormalAudioOutputRetirement;
 
 type PreparedTimelineAudioClipError = (TimelineAudioPrepareRequest, String);
 type PreparedTimelineAudioClipResult =
@@ -14367,6 +15706,23 @@ struct ProgramAudioHandoffPlan {
     layer_id: VideoLayerId,
     volume: f32,
     device_name: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+struct ProgramAudioSourceRequest {
+    layer_id: VideoLayerId,
+    path: PathBuf,
+    position_ms: u64,
+    speed: f32,
+    volume: f32,
+    requested_device_name: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+struct PreparedProgramAudioHandoff {
+    request: ProgramAudioSourceRequest,
+    output_generation: u64,
+    sink: rodio::Sink,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14715,12 +16071,18 @@ struct TimelineAudioPrepareCommitState {
 fn sync_timeline_audio_without_blocking_playback_lock(
     engine: &EngineHandle,
     audio: &Arc<Mutex<MediaAudioPlayback>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    output_router: Option<Arc<audio_output_router::RouterSlot>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_runtime: Option<Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
     timeline: &engine::TimelineAudioRuntimeSnapshot,
     commit_state: &Arc<Mutex<TimelineAudioPrepareCommitState>>,
     mut before_prepare: impl FnMut(),
     mut before_commit_lock: impl FnMut(),
 ) -> Result<engine::TimelineAudioProjectionAuthority, TimelineAudioPrepareFault> {
     let transaction_deadline = Instant::now() + TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET;
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    retry_pending_normal_output_retirements(audio).map_err(TimelineAudioPrepareFault::ordinary)?;
     let mut plan = audio
         .lock()
         .map_err(|_| "Timeline audio playback lock was poisoned".to_string())?
@@ -14747,43 +16109,119 @@ fn sync_timeline_audio_without_blocking_playback_lock(
         ));
     }
 
-    let mut prepared_output = None;
-    let mixer = if plan.prepares.is_empty() {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    let use_asio_output = if plan.prepares.is_empty() {
+        false
+    } else if cfg!(test) && output_router.is_none() && plan.mixer.is_some() {
+        // Unit tests install an in-memory mixer without acquiring the
+        // process-global Windows output Router. This path is not reachable in
+        // production and must not weaken the AsioActive/Normal authority gate.
+        false
+    } else {
+        let slot = output_router.as_ref().ok_or_else(|| {
+            TimelineAudioPrepareFault::ordinary(
+                "Audio output router process owner is unavailable during Timeline preparation",
+            )
+        })?;
+        match slot
+            .snapshot()
+            .map_err(|error| TimelineAudioPrepareFault::ordinary(router_error("snapshot", error)))?
+            .state
+        {
+            audio_output_router::State::Normal => false,
+            audio_output_router::State::AsioActive => true,
+            state => {
+                return Err(TimelineAudioPrepareFault::ordinary(format!(
+                    "Timeline audio preparation is blocked while the output router is {state:?}"
+                )))
+            }
+        }
+    };
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+    let use_asio_output = false;
+
+    let mut prepared_output = PreparedMediaAudioOutputGuard::empty(Arc::clone(audio));
+    let mixer = if use_asio_output {
+        None
+    } else if plan.prepares.is_empty() {
         plan.mixer.clone()
     } else if let Some(mixer) = plan.mixer.clone() {
         Some(mixer)
     } else {
-        let output = prepare_media_audio_output(plan.requested_device_name.as_deref())?;
-        let mixer = output.mixer.clone();
-        prepared_output = Some(output);
-        Some(mixer)
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        {
+            let slot = output_router.as_ref().ok_or_else(|| {
+                TimelineAudioPrepareFault::ordinary(
+                    "Normal PROGRAM output router process owner is unavailable",
+                )
+            })?;
+            let output = match normal_audio_output::NormalAudioOutput::open(
+                slot,
+                plan.requested_device_name.clone(),
+            ) {
+                Ok(output) => output,
+                Err(error) => {
+                    let detail = error.detail().to_string();
+                    for pending in error.into_pending_retirements() {
+                        record_pending_normal_output_retirement(audio, pending, detail.clone());
+                    }
+                    return Err(TimelineAudioPrepareFault::ordinary(detail));
+                }
+            };
+            let output = PreparedMediaAudioOutput::Router(output);
+            let mixer = output.mixer();
+            prepared_output.install_candidate(output);
+            Some(mixer)
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        {
+            let output = prepare_media_audio_output(plan.requested_device_name.as_deref())?;
+            let mixer = output.mixer();
+            prepared_output.install_candidate(output);
+            Some(mixer)
+        }
     };
     let mut prepared_clips: Vec<PreparedTimelineAudioClipResult> =
         Vec::with_capacity(plan.prepares.len());
-    if let Some(mixer) = mixer.as_ref() {
-        for request in std::mem::take(&mut plan.prepares) {
-            if Instant::now() >= transaction_deadline {
-                drop(request);
-                for prepared in prepared_clips.into_iter().flatten() {
-                    prepared.sink.stop();
-                }
-                for seek in std::mem::take(&mut plan.seeks) {
-                    seek.sink.stop();
-                }
-                return Err(TimelineAudioPrepareFault::budget(
-                    "Timeline audio decoder preparation transaction exceeded its budget",
-                ));
+    for request in std::mem::take(&mut plan.prepares) {
+        if Instant::now() >= transaction_deadline {
+            drop(request);
+            stop_prepared_timeline_audio_clips(prepared_clips);
+            for seek in std::mem::take(&mut plan.seeks) {
+                seek.sink.stop();
             }
-            if !authority_is_current() {
+            return Err(TimelineAudioPrepareFault::budget(
+                "Timeline audio decoder preparation transaction exceeded its budget",
+            ));
+        }
+        if !authority_is_current() {
+            prepared_clips.push(Err(Box::new((
+                request,
+                "Timeline audio source projection changed during decoder preparation".to_string(),
+            ))));
+            continue;
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if use_asio_output {
+            let Some(runtime) = asio_output_runtime.as_ref() else {
                 prepared_clips.push(Err(Box::new((
                     request,
-                    "Timeline audio source projection changed during decoder preparation"
-                        .to_string(),
+                    "show-ASIO output runtime owner is unavailable during Timeline preparation"
+                        .to_owned(),
                 ))));
                 continue;
-            }
-            prepared_clips.push(prepare_timeline_audio_clip(request, mixer));
+            };
+            prepared_clips.push(prepare_asio_timeline_audio_clip(request, runtime));
+            continue;
         }
+        let Some(mixer) = mixer.as_ref() else {
+            prepared_clips.push(Err(Box::new((
+                request,
+                "Normal PROGRAM output mixer is unavailable during Timeline preparation".to_owned(),
+            ))));
+            continue;
+        };
+        prepared_clips.push(prepare_timeline_audio_clip(request, mixer));
     }
     let seek_results = std::mem::take(&mut plan.seeks)
         .into_iter()
@@ -14806,13 +16244,11 @@ fn sync_timeline_audio_without_blocking_playback_lock(
     // fence and rejects the whole install below.
     before_commit_lock();
     let mut plan = Some(plan);
-    let mut prepared_output = Some(prepared_output);
     let mut seek_results = Some(seek_results);
+    let mut sources_attached = false;
     loop {
         if Instant::now() > transaction_deadline {
-            for prepared in prepared_clips.into_iter().flatten() {
-                prepared.sink.stop();
-            }
+            stop_prepared_timeline_audio_clips(prepared_clips);
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
@@ -14821,14 +16257,14 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                     .to_string(),
             ));
         }
-        prepared_clips =
-            rebase_prepared_timeline_audio_clips(&current.timeline_audio, prepared_clips);
-        prepared_clips = seek_prepared_timeline_audio_decoders(prepared_clips);
+        if !sources_attached {
+            prepared_clips =
+                rebase_prepared_timeline_audio_clips(&current.timeline_audio, prepared_clips);
+            prepared_clips = seek_prepared_timeline_audio_decoders(prepared_clips);
+        }
         let latest = engine.video_audio_runtime_snapshot();
         if latest.timeline_audio.source_projection_authority != authority {
-            for prepared in prepared_clips.into_iter().flatten() {
-                prepared.sink.stop();
-            }
+            stop_prepared_timeline_audio_clips(prepared_clips);
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
@@ -14837,9 +16273,7 @@ fn sync_timeline_audio_without_blocking_playback_lock(
             ));
         }
         if latest.timeline_audio.publication_generation != timeline.publication_generation {
-            for prepared in prepared_clips.into_iter().flatten() {
-                prepared.sink.stop();
-            }
+            stop_prepared_timeline_audio_clips(prepared_clips);
             for (seek, _) in seek_results.take().unwrap_or_default() {
                 seek.sink.stop();
             }
@@ -14847,9 +16281,41 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                 "Timeline audio transport changed before sink install",
             ));
         }
-        if prepared_timeline_audio_clips_need_rebase(&latest.timeline_audio, &prepared_clips) {
+        if !sources_attached
+            && prepared_timeline_audio_clips_need_rebase(&latest.timeline_audio, &prepared_clips)
+        {
             current = latest;
             continue;
+        }
+        if !sources_attached {
+            // Do not consume decoders into the ASIO-owned mixers while the
+            // short media commit lock is known to be busy. Keeping them
+            // detached lets ordinary 44 Hz position ticks rebase exactly;
+            // the probe guard is dropped before any ASIO runtime lock is
+            // acquired, preserving the runtime -> media drain lock order.
+            match audio.try_lock() {
+                Ok(probe) => drop(probe),
+                Err(TryLockError::WouldBlock) => {
+                    current = latest;
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    stop_prepared_timeline_audio_clips(prepared_clips);
+                    for (seek, _) in seek_results.take().unwrap_or_default() {
+                        seek.sink.stop();
+                    }
+                    return Err(TimelineAudioPrepareFault::ordinary(
+                        "Timeline audio playback lock was poisoned",
+                    ));
+                }
+            }
+            prepared_clips = append_prepared_timeline_audio_decoders(
+                prepared_clips,
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_output_runtime.as_ref(),
+            );
+            sources_attached = true;
         }
         let publication_generation = latest.timeline_audio.publication_generation;
         let attempt =
@@ -14874,12 +16340,9 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                 match audio.try_lock() {
                     Ok(mut playback) => {
                         if Instant::now() > transaction_deadline {
-                            for prepared in std::mem::take(&mut prepared_clips)
-                                .into_iter()
-                                .flatten()
-                            {
-                                prepared.sink.stop();
-                            }
+                            stop_prepared_timeline_audio_clips(std::mem::take(
+                                &mut prepared_clips,
+                            ));
                             for (seek, _) in seek_results.take().unwrap_or_default() {
                                 seek.sink.stop();
                             }
@@ -14894,17 +16357,12 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                         // coordinator waits for this short device commit and
                         // can no longer publish a contradictory timeout.
                         commit_state.finalized = true;
-                        let appended = append_prepared_timeline_audio_decoders(std::mem::take(
-                            &mut prepared_clips,
-                        ));
                         TimelineAudioCommitAttempt::Completed(
                             playback.commit_timeline_audio_sync(
                                 plan.take().expect("Timeline audio plan commits once"),
                                 &latest.timeline_audio,
-                                prepared_output
-                                    .take()
-                                    .expect("Timeline audio output commits once"),
-                                appended,
+                                prepared_output.output_mut(),
+                                std::mem::take(&mut prepared_clips),
                                 seek_results
                                     .take()
                                     .expect("Timeline audio seeks commit once"),
@@ -14928,7 +16386,13 @@ fn sync_timeline_audio_without_blocking_playback_lock(
                 current = engine.video_audio_runtime_snapshot();
                 std::thread::sleep(Duration::from_millis(2));
             }
-            Err(error) => return Err(TimelineAudioPrepareFault::ordinary(error)),
+            Err(error) => {
+                stop_prepared_timeline_audio_clips(prepared_clips);
+                for (seek, _) in seek_results.take().unwrap_or_default() {
+                    seek.sink.stop();
+                }
+                return Err(TimelineAudioPrepareFault::ordinary(error));
+            }
         }
     }
 }
@@ -14985,6 +16449,10 @@ enum TimelineAudioPreparePoll {
 struct TimelineAudioPrepareCoordinator {
     active: Option<TimelineAudioPrepareJob>,
     blocked: Option<TimelineAudioPrepareFingerprint>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    output_router: Option<Arc<audio_output_router::RouterSlot>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_runtime: Option<Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
     #[cfg(test)]
     before_prepare: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
@@ -14996,6 +16464,38 @@ struct TimelineAudioPrepareCoordinator {
 }
 
 impl TimelineAudioPrepareCoordinator {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn cancel_pending_commit(&mut self) {
+        let Some(job) = self.active.as_mut() else {
+            return;
+        };
+        if let Ok(mut commit_state) = job.commit_state.lock() {
+            if !commit_state.finalized {
+                commit_state.cancelled = true;
+            }
+        }
+    }
+
+    fn shutdown(&mut self) {
+        let Some(mut job) = self.active.take() else {
+            self.blocked = None;
+            return;
+        };
+        if let Ok(mut commit_state) = job.commit_state.lock() {
+            if !commit_state.finalized {
+                commit_state.cancelled = true;
+            }
+        }
+        if let Some(worker) = job.worker.take() {
+            let _ = worker.join();
+            #[cfg(test)]
+            {
+                self.reap_count = self.reap_count.saturating_add(1);
+            }
+        }
+        self.blocked = None;
+    }
+
     fn context(
         engine: &EngineHandle,
         audio: &Arc<Mutex<MediaAudioPlayback>>,
@@ -15130,6 +16630,10 @@ impl TimelineAudioPrepareCoordinator {
 
         let worker_engine = engine.clone();
         let worker_audio = Arc::clone(audio);
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let worker_output_router = self.output_router.clone();
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let worker_asio_output_runtime = self.asio_output_runtime.clone();
         let worker_timeline = timeline.clone();
         #[cfg(test)]
         let before_prepare = self.before_prepare.clone();
@@ -15144,6 +16648,10 @@ impl TimelineAudioPrepareCoordinator {
                 let result = sync_timeline_audio_without_blocking_playback_lock(
                     &worker_engine,
                     &worker_audio,
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    worker_output_router,
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    worker_asio_output_runtime,
                     &worker_timeline,
                     &worker_commit_state,
                     || {
@@ -15189,6 +16697,17 @@ impl TimelineAudioPrepareCoordinator {
     }
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn stop_timeline_audio_after_transport_failure(audio: &Arc<Mutex<MediaAudioPlayback>>) {
+    match audio.lock() {
+        Ok(mut playback) => playback.stop_all_timeline(),
+        // The poison marker is deliberately retained by consuming only this
+        // emergency guard. Normal sync still observes the poisoned mutex and
+        // refuses to publish new Timeline PROGRAM audio.
+        Err(poisoned) => poisoned.into_inner().stop_all_timeline(),
+    }
+}
+
 impl MediaAudioSyncRuntime {
     #[cfg(test)]
     fn idle_for_tests(program_handoff: Arc<ProgramAudioHandoffCoordinator>) -> Self {
@@ -15202,6 +16721,10 @@ impl MediaAudioSyncRuntime {
     fn start(
         engine: EngineHandle,
         audio: Arc<Mutex<MediaAudioPlayback>>,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        output_router: Option<Arc<audio_output_router::RouterSlot>>,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        asio_output_runtime: Option<Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
         program_handoff: Arc<ProgramAudioHandoffCoordinator>,
         timeline_cue_audio: Arc<TimelineCueAudioRuntime>,
     ) -> Self {
@@ -15209,10 +16732,25 @@ impl MediaAudioSyncRuntime {
         let worker_stop = Arc::clone(&stop);
         let worker_handoff = Arc::clone(&program_handoff);
         let worker_timeline_cue_audio = Arc::clone(&timeline_cue_audio);
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let worker_output_router = output_router;
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        let worker_asio_output_runtime = asio_output_runtime;
         let worker = std::thread::Builder::new()
             .name("syndocal-media-audio-sync".to_string())
             .spawn(move || {
-                let mut timeline_prepare = TimelineAudioPrepareCoordinator::default();
+                let mut timeline_prepare = TimelineAudioPrepareCoordinator {
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    output_router: worker_output_router.clone(),
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    asio_output_runtime: worker_asio_output_runtime.clone(),
+                    ..TimelineAudioPrepareCoordinator::default()
+                };
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                let mut asio_timeline_transport =
+                    asio_timeline_transport::AsioTimelineTransportObserver::new();
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                let mut last_asio_timeline_transport_error: Option<String> = None;
                 while !worker_stop.load(Ordering::Acquire) {
                     let mut snapshot = engine.video_audio_runtime_snapshot();
                     let job = worker_handoff.state.lock().ok().and_then(|mut state| {
@@ -15228,6 +16766,12 @@ impl MediaAudioSyncRuntime {
                         execute_program_audio_job(
                             &worker_handoff,
                             &audio,
+                            #[cfg(all(
+                                target_os = "windows",
+                                target_arch = "x86_64",
+                                feature = "asio"
+                            ))]
+                            worker_output_router.as_ref(),
                             snapshot.layers.as_slice(),
                             job,
                         );
@@ -15245,24 +16789,123 @@ impl MediaAudioSyncRuntime {
                             playback.sync_to_video_layers(&snapshot.layers);
                         }
                     }
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    let asio_timeline_transport_error = match (
+                        worker_output_router.as_ref(),
+                        worker_asio_output_runtime.as_ref(),
+                    ) {
+                        (Some(slot), Some(runtime)) => match slot.snapshot() {
+                            Ok(router)
+                                if router.state == audio_output_router::State::AsioActive =>
+                            {
+                                let semantic = asio_timeline_transport::TimelineSemanticStamp::new(
+                                    snapshot.timeline_audio.source_projection_authority.epoch,
+                                    snapshot
+                                        .timeline_audio
+                                        .source_projection_authority
+                                        .generation,
+                                    snapshot.timeline_audio.publication_generation,
+                                    snapshot.timeline_audio.transport_revision,
+                                    snapshot.timeline_audio.playing,
+                                );
+                                match runtime.lock() {
+                                    Ok(mut runtime) => {
+                                        asio_timeline_transport::synchronize_active_runtime(
+                                            &mut asio_timeline_transport,
+                                            &mut runtime,
+                                            semantic,
+                                        )
+                                        .err()
+                                    }
+                                    Err(_) => Some(
+                                        "ASIO Timeline transport runtime lock was poisoned"
+                                            .to_owned(),
+                                    ),
+                                }
+                            }
+                            Ok(_) => None,
+                            Err(error) => {
+                                Some(router_error("Timeline transport observation", error))
+                            }
+                        },
+                        (Some(slot), None) => match slot.snapshot() {
+                            Ok(router)
+                                if router.state == audio_output_router::State::AsioActive =>
+                            {
+                                Some(
+                                    "ASIO Timeline transport runtime owner is unavailable"
+                                        .to_owned(),
+                                )
+                            }
+                            Ok(_) => None,
+                            Err(error) => {
+                                Some(router_error("Timeline transport observation", error))
+                            }
+                        },
+                        (None, _) => None,
+                    };
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    if let Some(error) = asio_timeline_transport_error.as_ref() {
+                        // Prevent a decoder prepared against the retired
+                        // semantic image from installing after this output
+                        // fence failed. The commit-state lock is the same short
+                        // linearization point used by timeout cancellation.
+                        timeline_prepare.cancel_pending_commit();
+                        stop_timeline_audio_after_transport_failure(&audio);
+                        worker_timeline_cue_audio.retire_timeline_cue_attachment();
+                        worker_timeline_cue_audio.fail_prepare(error.clone());
+                        if last_asio_timeline_transport_error.as_deref() != Some(error.as_str()) {
+                            eprintln!("ASIO Timeline transport failed closed: {error}");
+                        }
+                    }
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    {
+                        last_asio_timeline_transport_error = asio_timeline_transport_error.clone();
+                    }
                     let applied_projection_authority =
                         snapshot.timeline_audio.source_projection_authority;
-                    let mut timeline_sync_result = match timeline_prepare.poll_or_spawn(
-                        &engine,
-                        &audio,
-                        &snapshot.timeline_audio,
-                    ) {
-                        TimelineAudioPreparePoll::Completed { context, result } => {
-                            Some((context, result))
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    let allow_timeline_audio_sync = asio_timeline_transport_error.is_none();
+                    #[cfg(not(all(
+                        target_os = "windows",
+                        target_arch = "x86_64",
+                        feature = "asio"
+                    )))]
+                    let allow_timeline_audio_sync = true;
+                    let mut timeline_sync_result = if allow_timeline_audio_sync {
+                        match timeline_prepare.poll_or_spawn(
+                            &engine,
+                            &audio,
+                            &snapshot.timeline_audio,
+                        ) {
+                            TimelineAudioPreparePoll::Completed { context, result } => {
+                                Some((context, result))
+                            }
+                            TimelineAudioPreparePoll::TimedOut { context, error } => {
+                                Some((context, Err(error)))
+                            }
+                            TimelineAudioPreparePoll::Pending
+                            | TimelineAudioPreparePoll::Quarantined
+                            | TimelineAudioPreparePoll::Obsolete => None,
                         }
-                        TimelineAudioPreparePoll::TimedOut { context, error } => {
-                            Some((context, Err(error)))
-                        }
-                        TimelineAudioPreparePoll::Pending
-                        | TimelineAudioPreparePoll::Quarantined
-                        | TimelineAudioPreparePoll::Obsolete => None,
+                    } else {
+                        None
                     };
                     let current = engine.video_audio_runtime_snapshot();
+                    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                    if allow_timeline_audio_sync {
+                        worker_timeline_cue_audio.sync_with_output_router(
+                            &current.timeline_audio,
+                            &audio,
+                            worker_output_router.as_ref(),
+                            worker_asio_output_runtime.as_ref(),
+                        );
+                    }
+                    #[cfg(not(all(
+                        target_os = "windows",
+                        target_arch = "x86_64",
+                        feature = "asio"
+                    )))]
                     worker_timeline_cue_audio.sync(&current.timeline_audio, &audio);
                     let active = audio
                         .try_lock()
@@ -15332,6 +16975,11 @@ impl MediaAudioSyncRuntime {
                         Err(_) => std::thread::sleep(wait_for),
                     }
                 }
+                // Never detach the nested decoder/output prepare worker when
+                // the owning media runtime stops. Cancellation closes its
+                // short commit window; joining here keeps every filesystem,
+                // decoder and Router lease owned until the outer worker exits.
+                timeline_prepare.shutdown();
             })
             .expect("failed to start media audio sync worker");
         Self {
@@ -15352,9 +17000,295 @@ impl Drop for MediaAudioSyncRuntime {
     }
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn program_audio_source_request(
+    layers: &[protocol::VideoLayerSummary],
+    plan: &ProgramAudioHandoffPlan,
+) -> Result<Option<ProgramAudioSourceRequest>, String> {
+    let Some(layer) = layers.iter().find(|layer| layer.id == plan.layer_id) else {
+        return Err(format!(
+            "Auto VJ Program audio target layer {} was not found",
+            plan.layer_id
+        ));
+    };
+    let has_monitorable_audio = layer.source.kind == VideoSourceKind::File
+        && layer
+            .source
+            .metadata
+            .map(|metadata| metadata.has_audio)
+            .unwrap_or(true);
+    let Some(path) = layer
+        .source
+        .path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .filter(|_| has_monitorable_audio)
+    else {
+        return Ok(None);
+    };
+    if layer.state.speed < 0.0 {
+        return Err(
+            "Reverse video audio monitoring is not supported for Auto VJ Program audio".to_string(),
+        );
+    }
+    Ok(Some(ProgramAudioSourceRequest {
+        layer_id: plan.layer_id,
+        path: PathBuf::from(path),
+        position_ms: layer.state.position_ms,
+        speed: layer.state.speed,
+        volume: plan.volume.clamp(0.0, 2.0),
+        requested_device_name: plan
+            .device_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+    }))
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn prepare_program_audio_handoff(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    slot: &Arc<audio_output_router::RouterSlot>,
+    request: ProgramAudioSourceRequest,
+) -> Result<PreparedProgramAudioHandoff, String> {
+    let output = ensure_normal_program_output(audio, slot, request.requested_device_name.clone())?;
+    // File/device decoding is intentionally outside `media_audio`: a slow
+    // filesystem or decoder may not hold the playback state mutex.
+    let file = fs::File::open(&request.path).map_err(|error| {
+        format!(
+            "Failed to open media audio '{}': {error}",
+            request.path.display()
+        )
+    })?;
+    let decoder = rodio::Decoder::try_from(file).map_err(|error| {
+        format!(
+            "Failed to decode media audio '{}': {error}",
+            request.path.display()
+        )
+    })?;
+    let sink = rodio::Sink::connect_new(&output.mixer);
+    sink.append(decoder);
+    sink.set_volume(request.volume);
+    sink.set_speed(if request.speed > f32::EPSILON {
+        request.speed.clamp(0.25, 4.0)
+    } else {
+        1.0
+    });
+    if request.position_ms > 0 {
+        sink.try_seek(Duration::from_millis(request.position_ms))
+            .map_err(|error| format!("Failed to seek media audio: {error}"))?;
+    }
+    Ok(PreparedProgramAudioHandoff {
+        request,
+        output_generation: output.generation,
+        sink,
+    })
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn commit_program_audio_handoff(
+    coordinator: &ProgramAudioHandoffCoordinator,
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    generation: u64,
+    prepared: PreparedProgramAudioHandoff,
+) -> bool {
+    let mut prepared = Some(prepared);
+    let mut retired_sinks = Vec::new();
+    let committed = audio
+        .lock()
+        .map(|mut playback| {
+            let Some(prepared_ref) = prepared.as_ref() else {
+                return false;
+            };
+            if coordinator.generation.load(Ordering::Acquire) != generation
+                || playback.audio_device_generation != prepared_ref.output_generation
+                || playback.normal_output.is_none()
+                || !playback.pending_normal_output_retirements.is_empty()
+            {
+                return false;
+            }
+            let prepared = prepared.take().expect("prepared PROGRAM sink commits once");
+            let active_layer_ids = playback.sinks.keys().copied().collect::<Vec<_>>();
+            for layer_id in active_layer_ids {
+                if layer_id != prepared.request.layer_id {
+                    if let Some(sink) = playback.sinks.remove(&layer_id) {
+                        retired_sinks.push(sink);
+                    }
+                    playback.sources.remove(&layer_id);
+                    playback.last_resync_at.remove(&layer_id);
+                }
+            }
+            if let Some(previous) = playback.sinks.remove(&prepared.request.layer_id) {
+                retired_sinks.push(previous);
+            }
+            playback.sources.insert(
+                prepared.request.layer_id,
+                MediaAudioSourceConfig {
+                    path: prepared.request.path.clone(),
+                    volume: prepared.request.volume,
+                    requested_device_name: prepared.request.requested_device_name.clone(),
+                },
+            );
+            playback
+                .last_resync_at
+                .insert(prepared.request.layer_id, Instant::now());
+            playback
+                .sinks
+                .insert(prepared.request.layer_id, prepared.sink);
+            playback.last_sync_error = None;
+            true
+        })
+        .unwrap_or(false);
+    for sink in retired_sinks {
+        sink.stop();
+    }
+    if let Some(prepared) = prepared {
+        prepared.sink.stop();
+    }
+    committed
+}
+
+/// Detaches a single PROGRAM monitor sink under the state mutex and performs
+/// the Rodio stop only after releasing it. Error paths use this too, so a
+/// failed decode/authority check cannot accidentally reintroduce OS work
+/// under `media_audio`.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn stop_program_audio_layer_outside_lock(
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    layer_id: VideoLayerId,
+    detail: Option<String>,
+) {
+    let sink = audio.lock().ok().and_then(|mut playback| {
+        playback.sources.remove(&layer_id);
+        playback.last_resync_at.remove(&layer_id);
+        playback.last_sync_error = detail;
+        playback.sinks.remove(&layer_id)
+    });
+    if let Some(sink) = sink {
+        sink.stop();
+    }
+}
+
+/// Used by ASIO quiesce and explicit PROGRAM stop. It clears state first but
+/// preserves the stop-before-stream-retirement ordering at the caller.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn stop_all_program_audio_sinks_outside_lock(audio: &Arc<Mutex<MediaAudioPlayback>>) {
+    let sinks = audio
+        .lock()
+        .map(|mut playback| {
+            playback.sources.clear();
+            playback.last_resync_at.clear();
+            playback
+                .sinks
+                .drain()
+                .map(|(_, sink)| sink)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for sink in sinks {
+        sink.stop();
+    }
+}
+
+/// Rebuilds PROGRAM monitoring through the Router when its selected normal
+/// device changes. The old lease is explicitly drained first; every decode or
+/// commit failure is surfaced after the route has been retired, never hidden
+/// by leaving an old stream under a changed device selection.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn reconfigure_normal_program_audio_route(
+    coordinator: &ProgramAudioHandoffCoordinator,
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    slot: &Arc<audio_output_router::RouterSlot>,
+    layers: &[protocol::VideoLayerSummary],
+    generation: u64,
+    previous_volume: f32,
+    volume: f32,
+    device_name: Option<&str>,
+) -> Result<(), String> {
+    let requested_device_name = device_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    let requests = {
+        let mut playback = audio
+            .lock()
+            .map_err(|_| "Media audio playback lock was poisoned".to_string())?;
+        if coordinator.generation.load(Ordering::Acquire) != generation {
+            return Err("PROGRAM audio reconfigure became stale before planning".to_string());
+        }
+        if playback.requested_device_name == requested_device_name {
+            let volumes = playback
+                .sources
+                .iter()
+                .filter_map(|(layer_id, source)| {
+                    let layer = layers.iter().find(|layer| layer.id == *layer_id)?;
+                    Some((
+                        *layer_id,
+                        reconfigured_program_audio_volume(
+                            source.volume,
+                            previous_volume,
+                            volume,
+                            layer.state.opacity,
+                        ),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            for (layer_id, next_volume) in volumes {
+                if let Some(sink) = playback.sinks.get(&layer_id) {
+                    sink.set_volume(next_volume);
+                }
+                if let Some(source) = playback.sources.get_mut(&layer_id) {
+                    source.volume = next_volume;
+                    source.requested_device_name = requested_device_name.clone();
+                }
+            }
+            return Ok(());
+        }
+        playback
+            .sources
+            .iter()
+            .filter_map(|(layer_id, source)| {
+                let layer = layers.iter().find(|layer| layer.id == *layer_id)?;
+                (layer.state.speed >= 0.0).then(|| ProgramAudioSourceRequest {
+                    layer_id: *layer_id,
+                    path: source.path.clone(),
+                    position_ms: layer.state.position_ms,
+                    speed: layer.state.speed,
+                    volume: reconfigured_program_audio_volume(
+                        source.volume,
+                        previous_volume,
+                        volume,
+                        layer.state.opacity,
+                    ),
+                    requested_device_name: requested_device_name.clone(),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    retire_active_normal_program_output(audio, "normal PROGRAM device replacement")?;
+    if requests.is_empty() {
+        // A selected device change still installs the route deliberately so
+        // its availability is validated now rather than deferred to a later
+        // video-layer handoff.
+        ensure_normal_program_output(audio, slot, requested_device_name)?;
+        return Ok(());
+    }
+    for request in requests {
+        let prepared = prepare_program_audio_handoff(audio, slot, request)?;
+        if !commit_program_audio_handoff(coordinator, audio, generation, prepared) {
+            return Err("PROGRAM audio reconfigure became stale before commit".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn execute_program_audio_job(
     coordinator: &ProgramAudioHandoffCoordinator,
-    audio: &Mutex<MediaAudioPlayback>,
+    audio: &Arc<Mutex<MediaAudioPlayback>>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    output_router: Option<&Arc<audio_output_router::RouterSlot>>,
     layers: &[protocol::VideoLayerSummary],
     job: ProgramAudioJob,
 ) {
@@ -15364,6 +17298,44 @@ fn execute_program_audio_job(
     }
     let ownership = match job.kind {
         ProgramAudioJobKind::Handoff(plan) => {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            let active = match program_audio_source_request(layers, &plan) {
+                Ok(Some(request)) => match output_router {
+                    Some(slot) => match prepare_program_audio_handoff(audio, slot, request) {
+                        Ok(prepared) => {
+                            commit_program_audio_handoff(coordinator, audio, generation, prepared)
+                        }
+                        Err(error) => {
+                            stop_program_audio_layer_outside_lock(
+                                audio,
+                                plan.layer_id,
+                                Some(error),
+                            );
+                            false
+                        }
+                    },
+                    None => {
+                        stop_program_audio_layer_outside_lock(
+                            audio,
+                            plan.layer_id,
+                            Some(
+                                "Normal PROGRAM output router process owner is unavailable"
+                                    .to_string(),
+                            ),
+                        );
+                        false
+                    }
+                },
+                Ok(None) => {
+                    stop_program_audio_layer_outside_lock(audio, plan.layer_id, None);
+                    false
+                }
+                Err(error) => {
+                    stop_program_audio_layer_outside_lock(audio, plan.layer_id, Some(error));
+                    false
+                }
+            };
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
             let active = audio
                 .lock()
                 .map(|mut audio| {
@@ -15382,6 +17354,14 @@ fn execute_program_audio_job(
             Some((active.then_some(plan.layer_id), Some(plan.layer_id)))
         }
         ProgramAudioJobKind::StopAll => {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            {
+                if coordinator.generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                stop_all_program_audio_sinks_outside_lock(audio);
+            }
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
             if let Ok(mut audio) = audio.lock() {
                 if coordinator.generation.load(Ordering::Acquire) != generation {
                     return;
@@ -15395,11 +17375,35 @@ fn execute_program_audio_job(
             volume,
             device_name,
         } => {
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
             if let Ok(mut audio) = audio.lock() {
                 if coordinator.generation.load(Ordering::Acquire) != generation {
                     return;
                 }
                 audio.reconfigure_active(layers, previous_volume, volume, device_name.as_deref());
+            }
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            {
+                let result = match output_router {
+                    Some(slot) => reconfigure_normal_program_audio_route(
+                        coordinator,
+                        audio,
+                        slot,
+                        layers,
+                        generation,
+                        previous_volume,
+                        volume,
+                        device_name.as_deref(),
+                    ),
+                    None => {
+                        Err("Normal PROGRAM output router process owner is unavailable".to_string())
+                    }
+                };
+                if let Err(error) = result {
+                    if let Ok(mut playback) = audio.lock() {
+                        playback.last_sync_error = Some(error);
+                    }
+                }
             }
             None
         }
@@ -16200,6 +18204,7 @@ impl Drop for LiveAudioInput {
     }
 }
 
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
 fn prepare_media_audio_output(
     requested_device_name: Option<&str>,
 ) -> Result<PreparedMediaAudioOutput, String> {
@@ -16224,7 +18229,7 @@ fn prepare_media_audio_output(
         .and_then(|builder| builder.open_stream_or_fallback())
         .map_err(|error| format!("Failed to open audio output: {error}"))?;
     let mixer = stream.mixer().clone();
-    Ok(PreparedMediaAudioOutput {
+    Ok(PreparedMediaAudioOutput::Direct {
         stream,
         mixer,
         device_name: requested_device_name.map(str::to_string).or(resolved_name),
@@ -16261,8 +18266,51 @@ fn prepare_timeline_audio_clip(
     sink.set_volume(request.volume.clamp(0.0, 2.0));
     Ok(PreparedTimelineAudioClip {
         request,
-        sink,
+        sink: Some(sink),
         decoder: Some(decoder),
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        asio_identity: None,
+    })
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn prepare_asio_timeline_audio_clip(
+    request: TimelineAudioPrepareRequest,
+    runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+) -> PreparedTimelineAudioClipResult {
+    let identity = match runtime
+        .lock()
+        .map_err(|_| "show-ASIO output runtime lock was poisoned".to_owned())
+        .and_then(|mut runtime| runtime.current_output_identity(request.source.output_bus))
+    {
+        Ok(identity) => identity,
+        Err(error) => return Err(Box::new((request, error))),
+    };
+    let file = match fs::File::open(&request.clip.path) {
+        Ok(file) => file,
+        Err(error) => {
+            let message = format!(
+                "Timeline audio clip {} could not open '{}': {error}",
+                request.clip.id, request.clip.path
+            );
+            return Err(Box::new((request, message)));
+        }
+    };
+    let decoder = match rodio::Decoder::try_from(file) {
+        Ok(decoder) => decoder,
+        Err(error) => {
+            let message = format!(
+                "Timeline audio clip {} could not decode '{}': {error}",
+                request.clip.id, request.clip.path
+            );
+            return Err(Box::new((request, message)));
+        }
+    };
+    Ok(PreparedTimelineAudioClip {
+        request,
+        sink: None,
+        decoder: Some(decoder),
+        asio_identity: Some(identity),
     })
 }
 
@@ -16308,7 +18356,7 @@ fn seek_prepared_timeline_audio_decoders(
         .map(|prepared| {
             let mut prepared = prepared?;
             let Some(decoder) = prepared.decoder.as_mut() else {
-                prepared.sink.stop();
+                prepared.stop();
                 return Err(Box::new((
                     prepared.request,
                     "Timeline audio decoder was already consumed before sink install".to_string(),
@@ -16318,7 +18366,7 @@ fn seek_prepared_timeline_audio_decoders(
                 if let Err(error) =
                     decoder.try_seek(Duration::from_millis(prepared.request.source_position_ms))
                 {
-                    prepared.sink.stop();
+                    prepared.stop();
                     let message = format!(
                         "Timeline audio clip {} decoder seek failed: {error}",
                         prepared.request.clip.id
@@ -16333,19 +18381,48 @@ fn seek_prepared_timeline_audio_decoders(
 
 fn append_prepared_timeline_audio_decoders(
     prepared_clips: Vec<PreparedTimelineAudioClipResult>,
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_runtime: Option<&Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>>,
 ) -> Vec<PreparedTimelineAudioClipResult> {
     prepared_clips
         .into_iter()
         .map(|prepared| {
             let mut prepared = prepared?;
             let Some(decoder) = prepared.decoder.take() else {
-                prepared.sink.stop();
+                prepared.stop();
                 return Err(Box::new((
                     prepared.request,
                     "Timeline audio decoder was already consumed before sink append".to_string(),
                 )));
             };
-            prepared.sink.append(decoder);
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            if let Some(identity) = prepared.asio_identity.take() {
+                let Some(runtime) = asio_output_runtime else {
+                    return Err(Box::new((
+                        prepared.request,
+                        "show-ASIO output runtime owner is unavailable during Timeline source attachment"
+                            .to_owned(),
+                    )));
+                };
+                let sink = match runtime
+                    .lock()
+                    .map_err(|_| "show-ASIO output runtime lock was poisoned".to_owned())
+                    .and_then(|mut runtime| runtime.attach_source(identity, decoder, true))
+                {
+                    Ok(sink) => sink,
+                    Err(error) => return Err(Box::new((prepared.request, error))),
+                };
+                sink.set_volume(prepared.request.volume.clamp(0.0, 2.0));
+                prepared.sink = Some(sink);
+                return Ok(prepared);
+            }
+            let Some(sink) = prepared.sink.as_ref() else {
+                return Err(Box::new((
+                    prepared.request,
+                    "Timeline audio sink was missing before source append".to_owned(),
+                )));
+            };
+            sink.append(decoder);
             Ok(prepared)
         })
         .collect()
@@ -16380,6 +18457,32 @@ fn prepared_timeline_audio_clips_need_rebase(
 }
 
 impl MediaAudioPlayback {
+    fn active_program_mixer(&self) -> Option<rodio::mixer::Mixer> {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        {
+            self.normal_output
+                .as_ref()
+                .map(normal_audio_output::NormalAudioOutput::mixer)
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        {
+            self.stream.as_ref().map(|stream| stream.mixer().clone())
+        }
+    }
+
+    fn playback_mixer(&self) -> Option<rodio::mixer::Mixer> {
+        self.active_program_mixer().or_else(|| {
+            #[cfg(test)]
+            {
+                self.timeline_test_mixer.clone()
+            }
+            #[cfg(not(test))]
+            {
+                None
+            }
+        })
+    }
+
     fn accept_timeline_source_projection_authority(
         &mut self,
         current: engine::TimelineAudioProjectionAuthority,
@@ -16415,7 +18518,15 @@ impl MediaAudioPlayback {
         self.timeline_source_projection_authority = None;
     }
 
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     fn ensure_output_stream(&mut self, requested_device_name: Option<&str>) -> Result<(), String> {
+        // Unit tests inject an in-memory mixer. It is not an OS route and is
+        // therefore safe to exercise the timeline state machine without
+        // asking a test-held mutex to publish a real Router lease.
+        #[cfg(test)]
+        if self.timeline_test_mixer.is_some() {
+            return Ok(());
+        }
         let requested_device_name = requested_device_name
             .map(str::trim)
             .filter(|name| !name.is_empty());
@@ -16423,8 +18534,37 @@ impl MediaAudioPlayback {
             return Ok(());
         }
         let prepared = prepare_media_audio_output(requested_device_name)?;
-        self.install_prepared_output(prepared)?;
+        let mut prepared = Some(prepared);
+        self.install_prepared_output(&mut prepared)?;
         Ok(())
+    }
+
+    /// The ASIO build never opens a Rodio stream while `media_audio` is held.
+    /// Callers must first perform Router admission through the external
+    /// coordinator, then this method may only confirm the installed lease.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    fn ensure_output_stream(&mut self, requested_device_name: Option<&str>) -> Result<(), String> {
+        // Unit tests inject an in-memory mixer and must never publish a real
+        // Windows output route. Keep this test-only seam symmetric with the
+        // non-ASIO implementation while production remains Router-only.
+        #[cfg(test)]
+        if self.timeline_test_mixer.is_some() {
+            return Ok(());
+        }
+        let requested_device_name = requested_device_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if self.normal_output.is_some()
+            && self.requested_device_name.as_deref() == requested_device_name
+            && self.pending_normal_output_retirements.is_empty()
+        {
+            Ok(())
+        } else {
+            Err(
+                "Normal PROGRAM output requires Router admission outside the media playback lock"
+                    .to_string(),
+            )
+        }
     }
 
     fn next_audio_device_generation(&self) -> Result<u64, String> {
@@ -16436,30 +18576,75 @@ impl MediaAudioPlayback {
 
     fn install_prepared_output(
         &mut self,
-        prepared: PreparedMediaAudioOutput,
+        prepared: &mut Option<PreparedMediaAudioOutput>,
     ) -> Result<(), String> {
         // Reserve the next ABA fence before stopping any sink or replacing the
         // stream. Exhaustion is a permanent fail-closed boundary; generation
         // zero/one can never be recycled after u64::MAX.
         let next_device_generation = self.next_audio_device_generation()?;
-        for (_, sink) in self.sinks.drain() {
-            sink.stop();
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if self.normal_output.is_some() || !self.pending_normal_output_retirements.is_empty() {
+            return Err(
+                "Normal PROGRAM output replacement requires explicit Router retirement first"
+                    .to_string(),
+            );
         }
-        for (_, sink) in self.timeline_sinks.drain() {
-            sink.stop();
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        if !self.sinks.is_empty() || !self.timeline_sinks.is_empty() {
+            return Err(
+                "Normal PROGRAM output install cannot stop active sinks while the media lock is held"
+                    .to_string(),
+            );
+        }
+        // All fail-closed preconditions must run before ownership leaves the
+        // caller's PreparedMediaAudioOutputGuard.  Once taken, a Router lease
+        // may only be installed below; an early return would otherwise drop
+        // the live resource without its retirement receipt.
+        let prepared = prepared
+            .take()
+            .ok_or_else(|| "Prepared media audio output was missing at install".to_string())?;
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+        {
+            for (_, sink) in self.sinks.drain() {
+                sink.stop();
+            }
+            for (_, sink) in self.timeline_sinks.drain() {
+                sink.stop();
+            }
         }
         self.sources.clear();
         self.last_resync_at.clear();
         self.timeline_sources.clear();
         self.timeline_failures.clear();
         self.timeline_last_resync_at.clear();
-        self.stream = Some(prepared.stream);
-        self.device_name = prepared.device_name;
-        self.requested_device_name = prepared.requested_device_name;
+        match prepared {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            PreparedMediaAudioOutput::Router(output) => {
+                self.device_name = output.device_name();
+                self.requested_device_name = output.requested_device_name();
+                self.normal_output = Some(output);
+            }
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+            PreparedMediaAudioOutput::Direct {
+                stream,
+                device_name,
+                requested_device_name,
+                ..
+            } => {
+                self.stream = Some(stream);
+                self.device_name = device_name;
+                self.requested_device_name = requested_device_name;
+            }
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+            PreparedMediaAudioOutput::Test { mixer } => {
+                self.timeline_test_mixer = Some(mixer);
+            }
+        }
         self.audio_device_generation = next_device_generation;
         Ok(())
     }
 
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     fn apply_program_handoff(
         &mut self,
         layers: &[protocol::VideoLayerSummary],
@@ -16546,11 +18731,10 @@ impl MediaAudioPlayback {
         let decoder = rodio::Decoder::try_from(file).map_err(|error| {
             format!("Failed to decode media audio '{}': {error}", path.display())
         })?;
-        let stream = self
-            .stream
-            .as_ref()
+        let mixer = self
+            .playback_mixer()
             .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
-        let sink = rodio::Sink::connect_new(stream.mixer());
+        let sink = rodio::Sink::connect_new(&mixer);
         sink.append(decoder);
         sink.set_volume(volume.clamp(0.0, 2.0));
         sink.set_speed(if speed > f32::EPSILON {
@@ -16626,11 +18810,10 @@ impl MediaAudioPlayback {
             );
         }
         self.ensure_output_stream(requested_device_name.as_deref())?;
-        let stream = self
-            .stream
-            .as_ref()
+        let mixer = self
+            .playback_mixer()
             .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
-        let sink = rodio::Sink::connect_new(stream.mixer());
+        let sink = rodio::Sink::connect_new(&mixer);
         sink.append(decoder);
         sink.set_volume(volume.clamp(0.0, 2.0));
         if source_position_ms > 0 {
@@ -16645,6 +18828,7 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                output_bus: clip.output_bus,
             },
         );
         self.timeline_last_resync_at.insert(key, Instant::now());
@@ -16713,20 +18897,16 @@ impl MediaAudioPlayback {
             authority: timeline.source_projection_authority,
             device_generation: self.audio_device_generation,
             requested_device_name: self.requested_device_name.clone(),
-            mixer: self
-                .stream
-                .as_ref()
-                .map(|stream| stream.mixer().clone())
-                .or_else(|| {
-                    #[cfg(test)]
-                    {
-                        self.timeline_test_mixer.clone()
-                    }
-                    #[cfg(not(test))]
-                    {
-                        None
-                    }
-                }),
+            mixer: self.active_program_mixer().or_else(|| {
+                #[cfg(test)]
+                {
+                    self.timeline_test_mixer.clone()
+                }
+                #[cfg(not(test))]
+                {
+                    None
+                }
+            }),
             prepares: Vec::new(),
             seeks: Vec::new(),
             errors: Vec::new(),
@@ -16762,9 +18942,12 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                output_bus: clip.output_bus,
             };
             let source_changed = self.timeline_sources.get(&key).is_some_and(|current| {
-                current.path != source.path || current.offset_ms != source.offset_ms
+                current.path != source.path
+                    || current.offset_ms != source.offset_ms
+                    || current.output_bus != source.output_bus
             });
             if source_changed {
                 self.stop_timeline_clip(key.clone());
@@ -16796,6 +18979,7 @@ impl MediaAudioPlayback {
             if let Some(source_state) = self.timeline_sources.get_mut(&key) {
                 source_state.gain = clip.gain.clamp(0.0, 2.0);
                 source_state.offset_ms = clip.offset_ms;
+                source_state.output_bus = clip.output_bus;
             }
             let Some(sink) = self.timeline_sinks.get(&key) else {
                 continue;
@@ -16834,7 +19018,7 @@ impl MediaAudioPlayback {
         &mut self,
         plan: TimelineAudioSyncPlan,
         current: &engine::TimelineAudioRuntimeSnapshot,
-        prepared_output: Option<PreparedMediaAudioOutput>,
+        prepared_output: &mut Option<PreparedMediaAudioOutput>,
         prepared_clips: Vec<PreparedTimelineAudioClipResult>,
         seek_results: Vec<(TimelineAudioSeekRequest, Result<(), String>)>,
     ) -> Result<(), String> {
@@ -16843,9 +19027,7 @@ impl MediaAudioPlayback {
             || self.audio_device_generation != plan.device_generation
             || self.requested_device_name != plan.requested_device_name
         {
-            for prepared in prepared_clips.into_iter().flatten() {
-                prepared.sink.stop();
-            }
+            stop_prepared_timeline_audio_clips(prepared_clips);
             for (seek, _) in seek_results {
                 seek.sink.stop();
             }
@@ -16855,8 +19037,8 @@ impl MediaAudioPlayback {
             );
         }
 
-        if let Some(output) = prepared_output {
-            self.install_prepared_output(output)?;
+        if prepared_output.is_some() {
+            self.install_prepared_output(prepared_output)?;
             self.timeline_source_projection_authority = Some(plan.authority);
         }
         let active = timeline_audio_active_clips(current)
@@ -16866,6 +19048,7 @@ impl MediaAudioPlayback {
                     path: PathBuf::from(&clip.path),
                     gain: clip.gain.clamp(0.0, 2.0),
                     offset_ms: clip.offset_ms,
+                    output_bus: clip.output_bus,
                 };
                 (key, (clip, position_ms, source))
             })
@@ -16897,21 +19080,37 @@ impl MediaAudioPlayback {
         }
         for prepared in prepared_clips {
             match prepared {
-                Ok(prepared) => {
+                Ok(mut prepared) => {
                     let Some((current_clip, current_position_ms, current_source)) =
                         active.get(&prepared.request.key)
                     else {
-                        prepared.sink.stop();
+                        prepared.stop();
                         continue;
                     };
                     if current_source.path != prepared.request.source.path
                         || current_source.offset_ms != prepared.request.source.offset_ms
+                        || current_source.output_bus != prepared.request.source.output_bus
                         || self.timeline_sinks.contains_key(&prepared.request.key)
                     {
-                        prepared.sink.stop();
+                        prepared.stop();
                         continue;
                     }
-                    prepared.sink.set_volume(
+                    let Some(sink) = prepared.sink.take() else {
+                        let error = format!(
+                            "Timeline audio clip {} had no attached sink at commit",
+                            prepared.request.clip.id
+                        );
+                        self.timeline_failures.insert(
+                            prepared.request.key,
+                            TimelineAudioPlaybackFailure {
+                                source: prepared.request.source,
+                                error: error.clone(),
+                            },
+                        );
+                        errors.push(error);
+                        continue;
+                    };
+                    sink.set_volume(
                         timeline_audio_clip_volume(current_clip, *current_position_ms)
                             .clamp(0.0, 2.0),
                     );
@@ -16920,14 +19119,13 @@ impl MediaAudioPlayback {
                         prepared.request.key.clone(),
                         prepared.request.source_position_ms,
                     );
-                    prepared.sink.play();
+                    sink.play();
                     self.timeline_sources
                         .insert(prepared.request.key.clone(), current_source.clone());
                     self.timeline_last_resync_at
                         .insert(prepared.request.key.clone(), now);
                     self.timeline_failures.remove(&prepared.request.key);
-                    self.timeline_sinks
-                        .insert(prepared.request.key, prepared.sink);
+                    self.timeline_sinks.insert(prepared.request.key, sink);
                 }
                 Err(error) => {
                     let (request, error) = *error;
@@ -17053,9 +19251,12 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                output_bus: clip.output_bus,
             };
             let source_changed = self.timeline_sources.get(&key).is_some_and(|source| {
-                source.path.as_path() != Path::new(&clip.path) || source.offset_ms != clip.offset_ms
+                source.path.as_path() != Path::new(&clip.path)
+                    || source.offset_ms != clip.offset_ms
+                    || source.output_bus != clip.output_bus
             });
             if source_changed {
                 self.stop_timeline_clip(key.clone());
@@ -17092,6 +19293,7 @@ impl MediaAudioPlayback {
             if let Some(source) = self.timeline_sources.get_mut(&key) {
                 source.gain = clip.gain.clamp(0.0, 2.0);
                 source.offset_ms = clip.offset_ms;
+                source.output_bus = clip.output_bus;
             }
             let Some(sink) = self.timeline_sinks.get(&key) else {
                 continue;
@@ -17138,6 +19340,7 @@ impl MediaAudioPlayback {
         self.sync_to_timeline_audio_evidenced_with_fence(timeline, || true)
     }
 
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     fn reconfigure_active(
         &mut self,
         layers: &[protocol::VideoLayerSummary],
@@ -17303,7 +19506,16 @@ impl MediaAudioPlayback {
         let mut active_layer_ids = self.sinks.keys().copied().collect::<Vec<_>>();
         active_layer_ids.sort_unstable();
         VideoAudioMonitorStatus {
-            output_open: self.stream.is_some(),
+            output_open: {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                {
+                    self.normal_output.is_some()
+                }
+                #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+                {
+                    self.stream.is_some()
+                }
+            },
             device_name: self.device_name.clone(),
             active_layer_ids,
             resync_count: self.resync_count,
@@ -19172,6 +21384,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "learn_dmx_control",
     "learn_midi_control",
     "learn_osc_control",
+    "list_asio_output_drivers",
     "load_custom_fixture_profile",
     "load_gdtf_model_file",
     "load_gdtf_wheel_media",
@@ -19196,26 +21409,33 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "relinquish_output_lease_v2",
     "renew_output_lease_v2",
     "request_dj_link_operator_return_to_dj_control",
+    "reselect_asio_output_profile",
+    "revalidate_asio_program_cue_output",
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
+    "select_normal_audio_output",
     "select_serial_dmx_machine_binding_v1",
     "send_art_rdm_request",
     "send_dmx_routes_test_frame",
     "send_dmx_test_frame",
     "send_midi_feedback",
     "send_usb_rdm_request",
+    "set_asio_output_solo",
+    "set_asio_output_test",
     "set_display_output_window_open_v2",
     "set_machine_timeline_cue_audio_settings",
     "set_midi_feedback_auto",
     "set_timeline_transport_playing_runtime_v1",
     "stage_vj_preview_layer",
     "start_art_rdm_full_discovery",
+    "start_asio_program_cue_output",
     "start_dmx_input",
     "start_live_audio_input",
     "start_osc_input",
     "start_remote_control",
     "start_standby_sync",
     "start_video_output_recording",
+    "stop_close_asio_program_cue_output",
     "stop_dmx_input",
     "stop_live_audio_input",
     "stop_osc_input",
@@ -19730,7 +21950,12 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetVideoOutputBlackout { .. }
         | EngineCommand::SetVideoOutputMapping { .. }
         | EngineCommand::SetVideoOutputMappingField { .. }
-        | EngineCommand::ApplyVideoOutputMappingPreset { .. } => {
+        | EngineCommand::ApplyVideoOutputMappingPreset { .. }
+        // A child clip's PROGRAM/CUE selection changes the output source
+        // identity. External callbacks have neither local OutputControl R4
+        // confirmation nor a machine-local router lease, so they cannot
+        // enqueue this dedicated authoring command.
+        | EngineCommand::SetCueChildTimelineAudioClipOutputBus { .. } => {
             Some("legacy or output-affecting command; use OutputControl R4")
         }
         EngineCommand::PatchFixture { .. }
@@ -19871,6 +22096,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::ReorderTimelineLayers { .. }
         | EngineCommand::AddTimelineAudioClip { .. }
         | EngineCommand::UpdateTimelineAudioClip { .. }
+        | EngineCommand::SetTimelineAudioClipOutputBus { .. }
         | EngineCommand::RemoveTimelineAudioClip { .. }
         | EngineCommand::SetTimelineAudioMaster { .. }
         | EngineCommand::ApplyTimelineAdvancedAuthoringPublished { .. }
@@ -20047,6 +22273,22 @@ mod legacy_output_control_route_tests {
         assert!(forbidden
             .iter()
             .all(|command| external_output_command_requires_local_r4(command).is_some()));
+    }
+
+    #[test]
+    fn child_audio_bus_callback_ingress_is_r4_blocked() {
+        let (ack, _receiver) = mpsc::sync_channel(1);
+        let command = EngineCommand::SetCueChildTimelineAudioClipOutputBus {
+            cue_id: 41,
+            clip_id: 302,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        };
+        assert!(
+            external_output_command_requires_local_r4(&command).is_some(),
+            "an external callback cannot alter a nested PROGRAM/CUE source identity"
+        );
     }
 
     #[test]
@@ -23667,6 +25909,7 @@ fn add_timeline_audio_clip(
             gain,
             fade_in_ms,
             fade_out_ms,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         },
     )?;
     state.engine.add_timeline_audio_clip(clip)?;
@@ -23687,8 +25930,16 @@ fn update_timeline_audio_clip(
     fade_in_ms: u64,
     fade_out_ms: u64,
 ) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    let output_bus = snapshot
+        .timeline
+        .audio_clips
+        .iter()
+        .find(|clip| clip.id == id)
+        .map(|clip| clip.output_bus)
+        .ok_or_else(|| format!("Timeline audio clip {id} was not found"))?;
     let clip = sanitize_timeline_audio_clip_request(
-        &state.engine.snapshot(),
+        &snapshot,
         TimelineAudioClipSummary {
             id,
             layer_id,
@@ -23700,9 +25951,23 @@ fn update_timeline_audio_clip(
             gain,
             fade_in_ms,
             fade_out_ms,
+            output_bus,
         },
     )?;
     state.engine.update_timeline_audio_clip(clip)
+}
+
+/// Changes only the project-portable logical bus. Physical device/channel
+/// routing remains an explicit seam for the later machine-local router.
+#[tauri::command]
+fn set_timeline_audio_clip_output_bus(
+    state: State<'_, AppState>,
+    id: TimelineAudioClipId,
+    output_bus: protocol::TimelineAudioOutputBus,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_timeline_audio_clip_output_bus(id, output_bus)
 }
 
 #[tauri::command]
@@ -28780,6 +31045,21 @@ fn set_cue_child_timeline(
     state.engine.set_cue_child_timeline(cue_id, child_timeline)
 }
 
+/// Changes only the project-portable logical bus for one nested child clip.
+/// Physical device/channel routing is intentionally left to the later
+/// machine-local router integration.
+#[tauri::command]
+fn set_cue_child_timeline_audio_clip_output_bus(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    clip_id: TimelineAudioClipId,
+    output_bus: protocol::TimelineAudioOutputBus,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_cue_child_timeline_audio_clip_output_bus(cue_id, clip_id, output_bus)
+}
+
 #[tauri::command]
 fn set_cue_steps(
     state: State<'_, AppState>,
@@ -29729,8 +32009,98 @@ fn reconform_timeline_to_bpm(state: State<'_, AppState>) -> Result<(), String> {
     state.engine.reconform_timeline_to_bpm()
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn set_timeline_playing_asio_linearized(
+    engine: &EngineHandle,
+    slot: &Arc<audio_output_router::RouterSlot>,
+    asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    playing: bool,
+) -> Result<(), String> {
+    let router = slot
+        .snapshot()
+        .map_err(|error| router_error("Timeline Play state", error))?;
+    if router.state != audio_output_router::State::AsioActive {
+        return Err(format!(
+            "ASIO Timeline Play requires exact AsioActive router state (got {:?})",
+            router.state
+        ));
+    }
+
+    // This runtime guard is the single owner boundary shared with Test/Solo.
+    // Capture the engine authority only after acquiring it, then keep it held
+    // through preflight admission and the engine's published acknowledgement.
+    let mut runtime = asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_string())?;
+    let router = slot
+        .snapshot()
+        .map_err(|error| router_error("Timeline Play revalidation", error))?;
+    if router.state != audio_output_router::State::AsioActive {
+        return Err(format!(
+            "ASIO Timeline Play router changed before admission (got {:?})",
+            router.state
+        ));
+    }
+    let authority = engine.timeline_transport_authority();
+    let identity = runtime.current_preflight_identity()?;
+    if playing {
+        runtime.admit_timeline_live_playback_for_identity(identity)?;
+        // A failed acknowledgement intentionally leaves the live gate set;
+        // callers must observe the failure and explicitly Pause/Stop before
+        // any preflight selection can be admitted again.
+        engine
+            .set_timeline_playing_published(
+                authority.epoch,
+                authority.generation,
+                true,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .map(|_| ())
+    } else {
+        let acknowledged = engine.set_timeline_playing_published(
+            authority.epoch,
+            authority.generation,
+            false,
+            Instant::now() + Duration::from_secs(2),
+        )?;
+        runtime
+            .set_preflight_live_playback_for_identity(identity, false)
+            .map(|_| ())
+            .map_err(|error| {
+                format!(
+                    "Timeline Pause was acknowledged but ASIO live-playback cleanup failed: {error}"
+                )
+            })?;
+        let _ = acknowledged;
+        Ok(())
+    }
+}
+
 #[tauri::command]
 fn set_timeline_playing(state: State<'_, AppState>, playing: bool) -> Result<(), String> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    {
+        let router_state = state
+            .audio_output_router
+            .as_ref()
+            .map(|slot| {
+                slot.snapshot()
+                    .map(|snapshot| snapshot.state)
+                    .map_err(|error| router_error("Timeline Play state", error))
+            })
+            .transpose()?;
+        if router_state == Some(audio_output_router::State::AsioActive) {
+            let slot = state.audio_output_router.as_ref().ok_or_else(|| {
+                "ASIO audio-output router process owner is unavailable".to_string()
+            })?;
+            return set_timeline_playing_asio_linearized(
+                &state.engine,
+                slot,
+                &state.asio_output_runtime,
+                playing,
+            );
+        }
+    }
     state
         .engine
         .send(EngineCommand::SetTimelinePlaying(playing))
@@ -37166,6 +39536,22 @@ fn play_video_layer_audio_monitor(
 
 #[tauri::command]
 async fn list_audio_output_devices(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    {
+        let slot = state
+            .audio_output_router
+            .as_ref()
+            .ok_or_else(|| "Normal audio output router process owner is unavailable".to_string())?;
+        let snapshot = slot
+            .snapshot()
+            .map_err(|error| router_error("normal device inventory", error))?;
+        if !matches!(snapshot.state, audio_output_router::State::Normal) {
+            return Err(format!(
+                "Normal audio device inventory is unavailable while router state is {:?}; explicitly stop/close ASIO and select Normal first",
+                snapshot.state
+            ));
+        }
+    }
     let runtime = Arc::clone(&state.timeline_cue_audio);
     tauri::async_runtime::spawn_blocking(move || {
         let (devices, fingerprint, endpoints) = enumerate_timeline_cue_audio_outputs()?;
@@ -38297,6 +40683,775 @@ struct AsioInputSelectionState {
     path: Option<PathBuf>,
     selection: Option<asio_bridge_v2::PersistedAsioSelection>,
     status: Option<AsioPersistedSelectionStatus>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+const ASIO_OUTPUT_PROFILE_FILE: &str = "asio-output-profile.v1.json";
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+struct AsioOutputMachineState {
+    path: Option<PathBuf>,
+    profile: asio_program_cue::MachineAsioOutputProfileState,
+    catalog_generation: u64,
+    last_error: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+impl Default for AsioOutputMachineState {
+    fn default() -> Self {
+        Self {
+            path: None,
+            profile: asio_program_cue::MachineAsioOutputProfileState::Locked {
+                original_bytes: Vec::new(),
+                reason: asio_program_cue::OutputProfileLock::Invalid(
+                    "No machine-local ASIO output profile has been selected".to_owned(),
+                ),
+            },
+            catalog_generation: 0,
+            last_error: None,
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AsioOutputStatusReply {
+    schema_version: u32,
+    kind: &'static str,
+    abi_version: u32,
+    backend: &'static str,
+    built: bool,
+    state: &'static str,
+    router_state: String,
+    catalog_generation: u64,
+    profile_ready: bool,
+    last_error: Option<String>,
+    lifecycle: String,
+    callbacks: Option<u64>,
+    xruns: Option<u64>,
+    terminal_fault: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AsioOutputTelemetryV3 {
+    schema_version: u32,
+    kind: String,
+    callbacks: u64,
+    xruns: u64,
+    terminal_fault: Option<String>,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn telemetry_from_runtime(
+    runtime: &asio_output_runtime::AsioOutputRuntime,
+) -> Result<(Option<u64>, Option<u64>, Option<String>), String> {
+    if !matches!(
+        runtime.lifecycle(),
+        asio_output_runtime::AsioOutputLifecycle::Active
+    ) {
+        return Ok((None, None, None));
+    }
+    let raw = runtime.telemetry_text()?;
+    let telemetry: AsioOutputTelemetryV3 = serde_json::from_str(&raw)
+        .map_err(|error| format!("ASIO output telemetry JSON is invalid: {error}"))?;
+    if telemetry.schema_version != 3
+        || telemetry.kind != "telemetry"
+        || telemetry.terminal_fault.as_ref().is_some_and(|value| {
+            value.len() > 128 || value.trim() != value || value.chars().any(char::is_control)
+        })
+    {
+        return Err("ASIO output telemetry is not an exact v3 snapshot".to_owned());
+    }
+    Ok((
+        Some(telemetry.callbacks),
+        Some(telemetry.xruns),
+        telemetry.terminal_fault,
+    ))
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn asio_output_status_reply(
+    app: &AppState,
+    machine: &AsioOutputMachineState,
+    runtime: &asio_output_runtime::AsioOutputRuntime,
+    state: &'static str,
+) -> Result<AsioOutputStatusReply, String> {
+    let (callbacks, xruns, terminal_fault) = telemetry_from_runtime(runtime)?;
+    Ok(AsioOutputStatusReply {
+        schema_version: 3,
+        kind: "status",
+        abi_version: 3,
+        backend: "asio-sdk-v3-rt",
+        built: true,
+        state,
+        router_state: current_asio_output_router_state(app)?,
+        catalog_generation: machine.catalog_generation,
+        profile_ready: matches!(
+            machine.profile,
+            asio_program_cue::MachineAsioOutputProfileState::Ready(_)
+        ),
+        last_error: machine.last_error.clone(),
+        lifecycle: format!("{:?}", runtime.lifecycle()),
+        callbacks,
+        xruns,
+        terminal_fault,
+    })
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn asio_output_profile_storage_path(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join(ASIO_OUTPUT_PROFILE_FILE)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn restore_asio_output_machine_state(path: PathBuf) -> AsioOutputMachineState {
+    let profile = match fs::read(&path) {
+        Ok(bytes) => asio_program_cue::MachineAsioOutputProfile::restore_storage_bytes(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            AsioOutputMachineState::default().profile
+        }
+        Err(error) => asio_program_cue::MachineAsioOutputProfileState::Locked {
+            original_bytes: Vec::new(),
+            reason: asio_program_cue::OutputProfileLock::Invalid(format!(
+                "ASIO output profile could not be read and remains locked: {error}"
+            )),
+        },
+    };
+    AsioOutputMachineState {
+        path: Some(path),
+        profile,
+        ..AsioOutputMachineState::default()
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn persist_asio_output_profile(state: &AsioOutputMachineState) -> Result<(), String> {
+    let path = state
+        .path
+        .as_ref()
+        .ok_or_else(|| "ASIO output profile storage is not initialized".to_owned())?;
+    let bytes = state
+        .profile
+        .serialize_ready()
+        .map_err(|error| error.to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "ASIO output profile storage parent is missing".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create ASIO output profile directory: {error}"))?;
+    let temporary = parent.join(format!(
+        ".{}-{}.tmp",
+        ASIO_OUTPUT_PROFILE_FILE,
+        std::process::id()
+    ));
+    fs::write(&temporary, bytes)
+        .map_err(|error| format!("Unable to write ASIO output profile temporary: {error}"))?;
+    if let Err(error) = replace_file_atomically(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AsioOutputDriverRequest {
+    driver_id: String,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AsioOutputProfileRequest {
+    profile_json: String,
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn load_show_asio_v3_bridge() -> Result<asio_bridge_v3::BridgeV3Module, String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        format!("Unable to resolve Syndocal executable for ASIO bridge: {error}")
+    })?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "Syndocal executable has no parent directory".to_owned())?;
+    asio_bridge_v3::BridgeV3Module::load_at(&directory.join("syndocal_asio_bridge.dll"))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn profile_from_machine(
+    machine: &AsioOutputMachineState,
+) -> Result<asio_program_cue::MachineAsioOutputProfile, String> {
+    match &machine.profile {
+        asio_program_cue::MachineAsioOutputProfileState::Ready(profile) => Ok(profile.clone()),
+        asio_program_cue::MachineAsioOutputProfileState::Locked { reason, .. } => {
+            Err(format!("ASIO output profile is locked: {reason}"))
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn output_router_diagnostic(
+    code: &str,
+    detail: impl Into<String>,
+) -> audio_output_router::BridgeDiagnostic {
+    let detail = detail.into();
+    audio_output_router::BridgeDiagnostic::checked(code, detail.clone()).unwrap_or_else(|_| {
+        audio_output_router::BridgeDiagnostic::checked(
+            "asio_output_failure",
+            "ASIO output lifecycle operation failed.",
+        )
+        .expect("constant diagnostic is valid")
+    })
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn router_error(operation: &str, error: audio_output_router::Error) -> String {
+    format!("ASIO output router {operation} was rejected: {error:?}")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn allocate_asio_output_session_generation(counter: &AtomicU64) -> Result<u64, String> {
+    let mut observed = counter.load(Ordering::Acquire);
+    loop {
+        let Some(next) = observed.checked_add(1) else {
+            return Err("ASIO output session generation counter was exhausted".to_owned());
+        };
+        match counter.compare_exchange_weak(observed, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return Ok(next),
+            Err(seen) => observed = seen,
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn current_asio_output_router_state(state: &AppState) -> Result<String, String> {
+    state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?
+        .snapshot()
+        .map(|snapshot| format!("{:?}", snapshot.state))
+        .map_err(|error| router_error("status", error))
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn get_asio_output_status(state: State<'_, AppState>) -> Result<AsioOutputStatusReply, String> {
+    let machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    let profile_ready = matches!(
+        machine.profile,
+        asio_program_cue::MachineAsioOutputProfileState::Ready(_)
+    );
+    asio_output_status_reply(
+        &state,
+        &machine,
+        &runtime,
+        if matches!(
+            runtime.lifecycle(),
+            asio_output_runtime::AsioOutputLifecycle::Active
+        ) {
+            "active"
+        } else if profile_ready {
+            "ready"
+        } else {
+            "locked"
+        },
+    )
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn list_asio_output_drivers(state: State<'_, AppState>) -> Result<String, String> {
+    let bridge = load_show_asio_v3_bridge()?;
+    let catalog = bridge
+        .driver_catalog_text()
+        .map_err(|error| error.to_string())?;
+    let mut machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    machine.catalog_generation = machine
+        .catalog_generation
+        .checked_add(1)
+        .ok_or_else(|| "ASIO output catalog generation is exhausted".to_owned())?;
+    Ok(catalog)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn get_asio_output_capabilities(
+    args: FlatInvokeArgs<Value>,
+    _state: State<'_, AppState>,
+) -> Result<String, String> {
+    let request: AsioOutputDriverRequest = args.get_required("request")?;
+    if request.driver_id.trim() != request.driver_id || !request.driver_id.starts_with("asio:") {
+        return Err(
+            "ASIO output driverId must be an explicit exact asio:<driver> identity".to_owned(),
+        );
+    }
+    let bridge = load_show_asio_v3_bridge()?;
+    let text = bridge
+        .capabilities_text(&request.driver_id)
+        .map_err(|error| error.to_string())?;
+    let _ = asio_output_runtime::OutputCapabilitiesV3::parse(&text)?;
+    Ok(text)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn reselect_asio_output_profile(
+    args: FlatInvokeArgs<Value>,
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let request: AsioOutputProfileRequest = args.get_required("request")?;
+    let profile =
+        asio_program_cue::MachineAsioOutputProfile::parse_storage_text(&request.profile_json)
+            .map_err(|error| error.to_string())?;
+    let bridge = load_show_asio_v3_bridge()?;
+    let capabilities = bridge
+        .capabilities_text(profile.driver_id())
+        .map_err(|error| error.to_string())?;
+    let capabilities = asio_output_runtime::OutputCapabilitiesV3::parse(&capabilities)?;
+    capabilities.validate_profile(&profile)?;
+    let mut machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    if machine.catalog_generation == 0 || profile.catalog_generation() != machine.catalog_generation
+    {
+        return Err("ASIO output profile catalogGeneration is stale; enumerate drivers and explicitly reselect current outputs".to_owned());
+    }
+    machine.profile = asio_program_cue::MachineAsioOutputProfileState::Ready(profile);
+    machine.last_error = None;
+    persist_asio_output_profile(&machine)?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(&state, &machine, &runtime, "ready")
+}
+
+/// Revalidation is a distinct Locked -> Ready admission. It performs bridge
+/// I/O after the router mutex is released and only installs a fresh opaque
+/// ticket after the router receives its matching receipt.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn revalidate_asio_program_cue_output(
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let profile = {
+        let machine = state
+            .asio_output_machine
+            .lock()
+            .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+        profile_from_machine(&machine)?
+    };
+    let bridge = load_show_asio_v3_bridge()?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    let result = slot
+        .into_revalidation_with(|| {
+            let text = bridge
+                .capabilities_text(profile.driver_id())
+                .map_err(|error| output_router_diagnostic("asio_caps", error.to_string()))?;
+            let capabilities = asio_output_runtime::OutputCapabilitiesV3::parse(&text)
+                .map_err(|error| output_router_diagnostic("asio_caps", error))?;
+            capabilities
+                .validate_profile(&profile)
+                .map_err(|error| output_router_diagnostic("asio_profile", error))
+        })
+        .map_err(|error| router_error("revalidation admission", error))?
+        .perform();
+    if !result.succeeded() {
+        return Err("ASIO output revalidation failed; the output remains locked".to_owned());
+    }
+    let mut machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    machine.last_error = None;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(&state, &machine, &runtime, "ready")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn start_asio_program_cue_output(
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let profile = {
+        let machine = state
+            .asio_output_machine
+            .lock()
+            .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+        let profile = profile_from_machine(&machine)?;
+        if machine.catalog_generation == 0
+            || profile.catalog_generation() != machine.catalog_generation
+        {
+            return Err(
+                "ASIO output profile is stale; enumerate and reselect before Start".to_owned(),
+            );
+        }
+        profile
+    };
+    let bridge = load_show_asio_v3_bridge()?;
+    let capabilities = asio_output_runtime::OutputCapabilitiesV3::parse(
+        &bridge
+            .capabilities_text(profile.driver_id())
+            .map_err(|error| error.to_string())?,
+    )?;
+    capabilities.validate_profile(&profile)?;
+    // Every Start attempt consumes a fresh process-local session root. A
+    // failed native/open admission is never allowed to reuse the identity that
+    // an in-flight or retired callback may still carry.
+    let session_generation =
+        allocate_asio_output_session_generation(&state.asio_output_session_generation)?;
+    let mut runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    let router_state = slot
+        .snapshot()
+        .map_err(|error| router_error("Start state", error))?
+        .state;
+    if matches!(router_state, audio_output_router::State::Normal) {
+        state
+            .timeline_cue_audio
+            .close_normal_routes_for_asio_start()?;
+        // Quiesce is state-only, but it refuses any still-published normal
+        // route. Stop every PROGRAM sink and retire its sealed lease before
+        // ASIO admission; a retry/fault is visible and leaves ASIO untouched.
+        if let Err(error) =
+            retire_active_normal_program_output(&state.media_audio, "ASIO Start PROGRAM drain")
+        {
+            if slot.snapshot().ok().map(|snapshot| snapshot.state)
+                == Some(audio_output_router::State::Normal)
+            {
+                let _ = state
+                    .timeline_cue_audio
+                    .reopen_normal_routes_after_explicit_selection();
+            }
+            return Err(error);
+        }
+        if let Err(error) = slot.quiesce() {
+            if slot.snapshot().ok().map(|snapshot| snapshot.state)
+                == Some(audio_output_router::State::Normal)
+            {
+                let _ = state
+                    .timeline_cue_audio
+                    .reopen_normal_routes_after_explicit_selection();
+            }
+            return Err(router_error("Normal quiesce", error));
+        }
+    }
+    let task = if matches!(router_state, audio_output_router::State::AsioReady) {
+        slot.into_validated_start_with(|| {
+            runtime
+                .start(&bridge, profile, 0, session_generation)
+                .map_err(|error| output_router_diagnostic("asio_start", error))
+        })
+    } else {
+        slot.into_admitted_start_with(|| {
+            runtime
+                .start(&bridge, profile, 0, session_generation)
+                .map_err(|error| output_router_diagnostic("asio_start", error))
+        })
+    }
+    .map_err(|error| router_error("ASIO Start admission", error))?;
+    if !task.perform().succeeded() {
+        return Err("ASIO output Start failed; output remains faulted and silent".to_owned());
+    }
+    // All status readers take machine -> runtime. Release the lifecycle guard
+    // before reacquiring that canonical pair so parallel UI commands cannot
+    // form a runtime -> machine / machine -> runtime deadlock.
+    drop(runtime);
+    let machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(&state, &machine, &runtime, "active")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn stop_close_asio_program_cue_output(
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let mut runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    let task = slot
+        .into_stop_with(|| {
+            runtime.stop_and_close().map_err(|error| {
+                audio_output_router::BridgeStopFailureDetail::close(output_router_diagnostic(
+                    "asio_stop_close",
+                    error,
+                ))
+            })
+        })
+        .map_err(|error| router_error("Stop/Close admission", error))?;
+    if !task.perform().succeeded() {
+        return Err("ASIO output Stop/Close failed; output remains faulted and silent".to_owned());
+    }
+    // Stop/Close has reached the router's terminal success receipt. Retire
+    // the Timeline CUE control and Sink before any status/Normal-selection
+    // observer can observe the Locked state.
+    drop(runtime);
+    state.timeline_cue_audio.retire_timeline_cue_attachment();
+    {
+        let mut playback = state
+            .media_audio
+            .lock()
+            .map_err(|_| "Media audio playback lock was poisoned during ASIO Stop".to_owned())?;
+        playback.stop_all();
+        playback.stop_all_timeline();
+    }
+    let machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(&state, &machine, &runtime, "locked")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn require_asio_active_router_slot(
+    slot: &audio_output_router::RouterSlot,
+    operation: &str,
+) -> Result<(), String> {
+    let router = slot
+        .snapshot()
+        .map_err(|error| router_error(operation, error))?;
+    if router.state != audio_output_router::State::AsioActive {
+        return Err(format!(
+            "ASIO output {operation} requires exact AsioActive router state (got {:?})",
+            router.state
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn active_asio_output_status(state: &AppState) -> Result<AsioOutputStatusReply, String> {
+    let machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(state, &machine, &runtime, "active")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn set_asio_output_test_for_active_state(
+    engine: &EngineHandle,
+    slot: &Arc<audio_output_router::RouterSlot>,
+    asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    target: asio_program_cue::PreflightTarget,
+) -> Result<(), String> {
+    require_asio_active_router_slot(slot, "Test")?;
+    let mut runtime = asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    require_asio_active_router_slot(slot, "Test revalidation")?;
+    let playing = engine.video_audio_runtime_snapshot().timeline_audio.playing;
+    // The engine's media snapshot is published by a separate worker and may
+    // still lag immediately after the published Play acknowledgement.  The
+    // ASIO live gate is committed under this same runtime lock, so it is the
+    // authoritative linearization fence for Test/Solo admission in that
+    // interval (and for a failed Play acknowledgement, which deliberately
+    // keeps the gate fail-closed).
+    let live_playback = runtime
+        .preflight_status(asio_program_cue_render::preflight_now_ms())?
+        .live_playback_active();
+    if playing || live_playback {
+        if live_playback {
+            if target != asio_program_cue::PreflightTarget::Off {
+                return Err(
+                    "ASIO output Test is blocked while Timeline playback is active".to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        runtime.set_preflight_test(
+            asio_program_cue::PreflightTarget::Off,
+            asio_program_cue_render::preflight_now_ms(),
+            1,
+        )?;
+        runtime.set_preflight_solo(
+            asio_program_cue::PreflightSolo::None,
+            asio_program_cue_render::preflight_now_ms(),
+        )?;
+        runtime.set_preflight_live_playback(true)?;
+        if target != asio_program_cue::PreflightTarget::Off {
+            return Err("ASIO output Test is blocked while Timeline playback is active".to_owned());
+        }
+    } else {
+        runtime.set_preflight_live_playback(false)?;
+        runtime.set_preflight_test(
+            target,
+            asio_program_cue_render::preflight_now_ms(),
+            asio_output_preflight_command::OPERATOR_TEST_DURATION_MS,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn set_asio_output_test(
+    args: FlatInvokeArgs<Value>,
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let request: asio_output_preflight_command::AsioOutputTestRequest =
+        args.get_required("request")?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    set_asio_output_test_for_active_state(
+        &state.engine,
+        slot,
+        &state.asio_output_runtime,
+        request.target(),
+    )?;
+    active_asio_output_status(&state)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn set_asio_output_solo_for_active_state(
+    engine: &EngineHandle,
+    slot: &Arc<audio_output_router::RouterSlot>,
+    asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    mode: asio_program_cue::PreflightSolo,
+) -> Result<(), String> {
+    require_asio_active_router_slot(slot, "Solo")?;
+    let mut runtime = asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    require_asio_active_router_slot(slot, "Solo revalidation")?;
+    let playing = engine.video_audio_runtime_snapshot().timeline_audio.playing;
+    // The runtime live gate is the shared lock/ack boundary and must win over
+    // a lagging engine media snapshot, just as in the Test helper above.
+    let live_playback = runtime
+        .preflight_status(asio_program_cue_render::preflight_now_ms())?
+        .live_playback_active();
+    if playing || live_playback {
+        if live_playback {
+            if mode != asio_program_cue::PreflightSolo::None {
+                return Err(
+                    "ASIO output Solo is blocked while Timeline playback is active".to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        runtime.set_preflight_test(
+            asio_program_cue::PreflightTarget::Off,
+            asio_program_cue_render::preflight_now_ms(),
+            1,
+        )?;
+        runtime.set_preflight_solo(
+            asio_program_cue::PreflightSolo::None,
+            asio_program_cue_render::preflight_now_ms(),
+        )?;
+        runtime.set_preflight_live_playback(true)?;
+        if mode != asio_program_cue::PreflightSolo::None {
+            return Err("ASIO output Solo is blocked while Timeline playback is active".to_owned());
+        }
+    } else {
+        runtime.set_preflight_live_playback(false)?;
+        runtime.set_preflight_solo(mode, asio_program_cue_render::preflight_now_ms())?;
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn set_asio_output_solo(
+    args: FlatInvokeArgs<Value>,
+    state: State<'_, AppState>,
+) -> Result<AsioOutputStatusReply, String> {
+    let request: asio_output_preflight_command::AsioOutputSoloRequest =
+        args.get_required("request")?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO output router process owner is unavailable".to_owned())?;
+    set_asio_output_solo_for_active_state(
+        &state.engine,
+        slot,
+        &state.asio_output_runtime,
+        request.mode(),
+    )?;
+    active_asio_output_status(&state)
+}
+
+/// Explicitly returns the machine output admission to Normal only after a
+/// successful ASIO Stop/Close has reached Locked. This never constructs a
+/// Rodio/WASAPI device; normal routes require their own later admission.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[tauri::command]
+fn select_normal_audio_output(state: State<'_, AppState>) -> Result<AsioOutputStatusReply, String> {
+    {
+        let mut playback = state.media_audio.lock().map_err(|_| {
+            "Media audio playback lock was poisoned during Normal selection".to_owned()
+        })?;
+        playback.stop_all();
+        playback.stop_all_timeline();
+    }
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    slot.select_normal()
+        .map_err(|error| router_error("explicit Normal selection", error))?;
+    state
+        .timeline_cue_audio
+        .reopen_normal_routes_after_explicit_selection()?;
+    let machine = state
+        .asio_output_machine
+        .lock()
+        .map_err(|_| "ASIO output machine state lock was poisoned".to_owned())?;
+    let runtime = state
+        .asio_output_runtime
+        .lock()
+        .map_err(|_| "ASIO output runtime lock was poisoned".to_owned())?;
+    asio_output_status_reply(&state, &machine, &runtime, "normal")
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -41646,6 +44801,20 @@ fn query_timeline_transport_authority_v1(
     control_plane_runtime::issue_timeline_transport_authority(&window, &state, &query_state)
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn timeline_transport_runtime_rejection(
+    request: &RuntimeCommandRequestV1,
+    code: protocol::control_plane_command::RuntimeCommandErrorCodeV1,
+) -> RuntimeCommandResponseV1 {
+    RuntimeCommandResponseV1::Rejected(protocol::control_plane_command::RuntimeCommandRejectionV1 {
+        operation_id: protocol::control_plane_command::TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID
+            .to_string(),
+        request_id: request.request_id,
+        fence_before: request.expected_fence.clone(),
+        error: RuntimeCommandErrorV1::new(code),
+    })
+}
+
 #[tauri::command]
 fn set_timeline_transport_playing_runtime_v1(
     window: WebviewWindow,
@@ -41653,6 +44822,112 @@ fn set_timeline_transport_playing_runtime_v1(
     query_state: State<'_, ControlPlaneQueryState>,
     request: RuntimeCommandRequestV1,
 ) -> RuntimeCommandResponseV1 {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    if request.validate().is_ok() {
+        let router_state = match state
+            .audio_output_router
+            .as_ref()
+            .map(|slot| {
+                slot.snapshot()
+                    .map(|snapshot| snapshot.state)
+                    .map_err(|error| router_error("Timeline runtime Play state", error))
+            })
+            .transpose()
+        {
+            Ok(router_state) => router_state,
+            Err(_) => {
+                return timeline_transport_runtime_rejection(
+                    &request,
+                    protocol::control_plane_command::RuntimeCommandErrorCodeV1::Internal,
+                )
+            }
+        };
+        if router_state == Some(audio_output_router::State::AsioActive) {
+            let mut runtime = match state.asio_output_runtime.lock() {
+                Ok(runtime) => runtime,
+                Err(_) => {
+                    return timeline_transport_runtime_rejection(
+                        &request,
+                        protocol::control_plane_command::RuntimeCommandErrorCodeV1::Internal,
+                    )
+                }
+            };
+            let router = match state
+                .audio_output_router
+                .as_ref()
+                .and_then(|slot| slot.snapshot().ok())
+            {
+                Some(router) => router,
+                None => {
+                    return timeline_transport_runtime_rejection(
+                        &request,
+                        protocol::control_plane_command::RuntimeCommandErrorCodeV1::Internal,
+                    )
+                }
+            };
+            if router.state != audio_output_router::State::AsioActive {
+                return timeline_transport_runtime_rejection(
+                    &request,
+                    protocol::control_plane_command::RuntimeCommandErrorCodeV1::Conflict,
+                );
+            }
+            let authority = state.engine.timeline_transport_authority();
+            let identity = match runtime.current_preflight_identity() {
+                Ok(identity) => identity,
+                Err(_) => {
+                    return timeline_transport_runtime_rejection(
+                        &request,
+                        protocol::control_plane_command::RuntimeCommandErrorCodeV1::Internal,
+                    )
+                }
+            };
+            if request.expected_fence.source_runtime_epoch != authority.epoch
+                || request.expected_fence.source_runtime_generation != authority.generation
+            {
+                return timeline_transport_runtime_rejection(
+                    &request,
+                    protocol::control_plane_command::RuntimeCommandErrorCodeV1::StaleFence,
+                );
+            }
+            if request.payload.playing {
+                if runtime
+                    .admit_timeline_live_playback_for_identity(identity)
+                    .is_err()
+                {
+                    return timeline_transport_runtime_rejection(
+                        &request,
+                        protocol::control_plane_command::RuntimeCommandErrorCodeV1::PublicationFailed,
+                    );
+                }
+                // Keep the owner guard across the canonical engine enqueue and
+                // acknowledgement. A rejection leaves the live gate set so a
+                // failed Play cannot silently re-admit Test/Solo output.
+                return control_plane_runtime::set_timeline_transport_playing(
+                    &window,
+                    &state,
+                    &query_state,
+                    request,
+                );
+            }
+            let response = control_plane_runtime::set_timeline_transport_playing(
+                &window,
+                &state,
+                &query_state,
+                request.clone(),
+            );
+            if response.receipt().is_some()
+                && runtime
+                    .set_preflight_live_playback_for_identity(identity, false)
+                    .is_err()
+            {
+                return timeline_transport_runtime_rejection(
+                    &request,
+                    protocol::control_plane_command::RuntimeCommandErrorCodeV1::Internal,
+                );
+            }
+            return response;
+        }
+    }
     control_plane_runtime::set_timeline_transport_playing(&window, &state, &query_state, request)
 }
 
@@ -77538,6 +80813,7 @@ pub(crate) mod tests {
                 }],
             )))
             .unwrap();
+        let worker = std::thread::spawn(|| {});
         {
             let mut state = runtime.state.lock().unwrap();
             state.lifecycle = TimelineCueAudioLifecycle::Running;
@@ -77545,6 +80821,7 @@ pub(crate) mod tests {
                 started_at: Instant::now() - Duration::from_secs(1),
                 timed_out: true,
                 receiver,
+                worker: Some(worker),
             });
         }
 
@@ -77653,6 +80930,683 @@ pub(crate) mod tests {
         assert!(stalled.status_revision > first.status_revision);
         assert_eq!(stalled.next_output_frame, 0);
         assert!(runtime.state.lock().unwrap().attachment.is_none());
+    }
+
+    #[test]
+    fn timeline_cue_asio_preflight_retires_follow_attachment_and_closes_admission() {
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let (mixer, _) = rodio::mixer::mixer(2, 48_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            audio_device_generation: 17,
+            ..MediaAudioPlayback::default()
+        }));
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        for _ in 0..100 {
+            runtime.sync(&timeline, &audio);
+            if runtime.state.lock().unwrap().attachment.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(runtime.state.lock().unwrap().attachment.is_some());
+
+        runtime.close_normal_routes_for_asio_start().unwrap();
+
+        let state = runtime.state.lock().unwrap();
+        assert!(!state.normal_admission_open);
+        assert!(state.attachment.is_none());
+        assert!(state.prepare_job.is_none());
+        assert!(state.topology_probe.is_none());
+        assert!(state.retired_workers.is_empty());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    static TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK: LazyLock<Mutex<()>> =
+        LazyLock::new(|| Mutex::new(()));
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    static TIMELINE_CUE_ASIO_ROUTER: LazyLock<Arc<audio_output_router::RouterSlot>> =
+        LazyLock::new(audio_output_router::RouterSlot::test_slot);
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn start_test_asio_router() -> Arc<audio_output_router::RouterSlot> {
+        let slot = Arc::clone(&TIMELINE_CUE_ASIO_ROUTER);
+        match slot.snapshot().unwrap().state {
+            audio_output_router::State::Normal => {
+                slot.quiesce().unwrap();
+                assert!(slot
+                    .into_admitted_start_with(|| Ok(()))
+                    .unwrap()
+                    .perform()
+                    .succeeded());
+            }
+            audio_output_router::State::Locked => {
+                assert!(slot
+                    .into_revalidation_with(|| Ok(()))
+                    .unwrap()
+                    .perform()
+                    .succeeded());
+                assert!(slot
+                    .into_validated_start_with(|| Ok(()))
+                    .unwrap()
+                    .perform()
+                    .succeeded());
+            }
+            audio_output_router::State::AsioActive => {}
+            state => panic!("test ASIO router was left in unexpected state {state:?}"),
+        }
+        assert_eq!(
+            slot.snapshot().unwrap().state,
+            audio_output_router::State::AsioActive
+        );
+        slot
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn select_test_normal_router() -> Arc<audio_output_router::RouterSlot> {
+        let slot = Arc::clone(&TIMELINE_CUE_ASIO_ROUTER);
+        match slot.snapshot().unwrap().state {
+            audio_output_router::State::AsioActive => {
+                assert!(slot
+                    .into_stop_with(|| Ok(()))
+                    .unwrap()
+                    .perform()
+                    .succeeded());
+            }
+            audio_output_router::State::Locked => {}
+            audio_output_router::State::Normal => return slot,
+            state => panic!("test ASIO router was left in unexpected state {state:?}"),
+        }
+        slot.select_normal().unwrap();
+        assert_eq!(
+            slot.snapshot().unwrap().state,
+            audio_output_router::State::Normal
+        );
+        slot
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn active_asio_command_parts() -> (
+        EngineHandle,
+        Arc<audio_output_router::RouterSlot>,
+        Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    ) {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        wait_for_test_engine_startup(&engine);
+        let slot = start_test_asio_router();
+        let (runtime, _context, _program, _cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory_with_live_fence(
+                211,
+                77,
+                engine.timeline_audio_live_fence(),
+            )
+            .unwrap();
+        (engine, slot, Arc::new(Mutex::new(runtime)))
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn assert_asio_preflight_is_clear_and_live(
+        asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
+    ) {
+        let mut runtime = asio_output_runtime.lock().unwrap();
+        let status = runtime
+            .preflight_status(asio_program_cue_render::preflight_now_ms())
+            .unwrap();
+        assert_eq!(status.test(), None);
+        assert_eq!(status.solo(), asio_program_cue::PreflightSolo::None);
+        assert!(status.live_playback_active());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn arm_asio_test(asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>) {
+        let mut runtime = asio_output_runtime.lock().unwrap();
+        runtime.set_preflight_live_playback(false).unwrap();
+        runtime
+            .set_preflight_test(
+                asio_program_cue::PreflightTarget::Cue,
+                asio_program_cue_render::preflight_now_ms(),
+                5_000,
+            )
+            .unwrap();
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    fn arm_asio_solo(asio_output_runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>) {
+        let mut runtime = asio_output_runtime.lock().unwrap();
+        runtime.set_preflight_live_playback(false).unwrap();
+        runtime
+            .set_preflight_solo(
+                asio_program_cue::PreflightSolo::CueOnly,
+                asio_program_cue_render::preflight_now_ms(),
+            )
+            .unwrap();
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_timeline_play_linearizes_after_test_and_keeps_domains_separate() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (engine, slot, asio_output_runtime) = active_asio_command_parts();
+        let engine_authority = engine.timeline_transport_authority();
+        let runtime_identity = asio_output_runtime
+            .lock()
+            .unwrap()
+            .current_preflight_identity()
+            .unwrap();
+        assert_ne!(
+            runtime_identity.transport_generation(),
+            engine_authority.generation
+        );
+        arm_asio_test(&asio_output_runtime);
+
+        set_timeline_playing_asio_linearized(&engine, &slot, &asio_output_runtime, true).unwrap();
+
+        assert!(engine.video_audio_runtime_snapshot().timeline_audio.playing);
+        assert_asio_preflight_is_clear_and_live(&asio_output_runtime);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_timeline_play_linearizes_after_solo_and_clears_both_selections() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (engine, slot, asio_output_runtime) = active_asio_command_parts();
+        // Keep the real public Play/Pause transition live long enough for the
+        // parallel ASIO suite. An empty Timeline reaches its terminal boundary
+        // on the next engine tick and can otherwise clear the live snapshot
+        // before this linearization assertion observes it.
+        let mut timeline = engine.snapshot().timeline;
+        timeline.phases = vec![protocol::TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "ASIO solo live-fence test body".to_owned(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        engine
+            .apply_timeline_bank_published(vec![timeline.clone()], timeline.id, false)
+            .expect("seed a non-empty Timeline for the public solo Play transition");
+        arm_asio_solo(&asio_output_runtime);
+
+        set_timeline_playing_asio_linearized(&engine, &slot, &asio_output_runtime, true).unwrap();
+
+        assert!(engine.video_audio_runtime_snapshot().timeline_audio.playing);
+        assert_asio_preflight_is_clear_and_live(&asio_output_runtime);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn asio_timeline_play_first_rejects_production_test_and_solo_requests() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (engine, slot, asio_output_runtime) = active_asio_command_parts();
+
+        set_timeline_playing_asio_linearized(&engine, &slot, &asio_output_runtime, true).unwrap();
+        assert!(set_asio_output_test_for_active_state(
+            &engine,
+            &slot,
+            &asio_output_runtime,
+            asio_program_cue::PreflightTarget::Cue
+        )
+        .is_err());
+        assert!(set_asio_output_solo_for_active_state(
+            &engine,
+            &slot,
+            &asio_output_runtime,
+            asio_program_cue::PreflightSolo::CueOnly
+        )
+        .is_err());
+        assert_asio_preflight_is_clear_and_live(&asio_output_runtime);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn timeline_cue_asio_active_publishes_click_and_guide_to_cue_only() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        runtime.state.lock().unwrap().normal_admission_open = false;
+
+        let (asio_runtime, _context, mut program, mut cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory(11, 7).unwrap();
+        let asio_runtime = Arc::new(Mutex::new(asio_runtime));
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let slot = start_test_asio_router();
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            guide_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            guide_cues: vec![protocol::TimelineGuideCueSummary {
+                generation: 1,
+                sequence: 1,
+                at_ms: 0,
+                label: "Verse".to_string(),
+                cue: protocol::TimelineGuideCueKind::Looping,
+                asset: protocol::TimelineGuideAssetKey::Verse,
+                playback_rate_milli: 1_000,
+                sample_frame: 0,
+                epoch: 41,
+                transport_generation: 73,
+                schedule_generation: 3,
+                source: TimelineScheduleSource::Root,
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        assert_eq!(
+            slot.snapshot().unwrap().state,
+            audio_output_router::State::AsioActive
+        );
+
+        let state = runtime.state.lock().unwrap();
+        let attachment = state.attachment.as_ref().expect("ASIO CUE attachment");
+        match &attachment.output {
+            TimelineCueAudioAttachmentOutput::AsioCue { identity, .. } => {
+                assert_eq!(identity.bus(), protocol::TimelineAudioOutputBus::Cue);
+                assert_eq!(identity.session_generation(), 11);
+                assert_eq!(identity.transport_generation(), 7);
+            }
+            TimelineCueAudioAttachmentOutput::Legacy { .. } => {
+                panic!("ASIO Active must not publish a legacy Timeline cue output")
+            }
+        }
+        assert!(state.prepare_job.is_none());
+        assert!(state.topology_probe.is_none());
+        assert!(state.retired_workers.is_empty());
+        drop(state);
+
+        let program_peak = (0..9_600)
+            .filter_map(|_| program.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(
+            program_peak, 0.0,
+            "ASIO Timeline CUE events must never reach the PROGRAM mixer"
+        );
+        let peak = (0..9_600)
+            .filter_map(|_| cue.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.01, "Click/Guide batch did not reach the CUE mixer");
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn timeline_cue_normal_ticks_keep_the_same_legacy_attachment() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let (mixer, mut observer) = rodio::mixer::mixer(2, 48_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            audio_device_generation: 17,
+            ..MediaAudioPlayback::default()
+        }));
+        let slot = select_test_normal_router();
+        let (asio_runtime, _context, _program, _cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory(11, 7).unwrap();
+        let asio_runtime = Arc::new(Mutex::new(asio_runtime));
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        for _ in 0..100 {
+            runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+            if runtime.state.lock().unwrap().attachment.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let first = runtime.status().unwrap();
+        assert_eq!(first.lifecycle, TimelineCueAudioLifecycle::Running);
+        assert_eq!(first.rotation_count, 1);
+        assert!(matches!(
+            &runtime
+                .state
+                .lock()
+                .unwrap()
+                .attachment
+                .as_ref()
+                .unwrap()
+                .output,
+            TimelineCueAudioAttachmentOutput::Legacy { .. }
+        ));
+
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        let second = runtime.status().unwrap();
+        assert_eq!(second.rotation_count, first.rotation_count);
+        assert_eq!(second.config_count, first.config_count);
+        let peak = (0..9_600)
+            .filter_map(|_| observer.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.01, "Normal CUE audio did not remain audible");
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn timeline_cue_asio_transport_rotation_does_not_replay_stale_events() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        runtime.state.lock().unwrap().normal_admission_open = false;
+
+        let (asio_runtime, context, mut program, mut cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory(11, 7).unwrap();
+        let asio_runtime = Arc::new(Mutex::new(asio_runtime));
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let slot = start_test_asio_router();
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        assert!(runtime.state.lock().unwrap().attachment.is_some());
+
+        let initial_program_peak = (0..9_600)
+            .filter_map(|_| program.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        let initial_cue_peak = (0..9_600)
+            .filter_map(|_| cue.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(
+            initial_program_peak, 0.0,
+            "the pre-rotation CUE event must not reach PROGRAM"
+        );
+        assert!(
+            initial_cue_peak > 0.01,
+            "the pre-rotation CUE event did not reach CUE"
+        );
+
+        context.transport().rotate().unwrap();
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+
+        let post_rotation_program_peak = (0..9_600)
+            .filter_map(|_| program.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        let post_rotation_cue_peak = (0..9_600)
+            .filter_map(|_| cue.next())
+            .map(f32::abs)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(
+            post_rotation_program_peak, 0.0,
+            "a stale post-rotation event must not reach PROGRAM"
+        );
+        assert_eq!(
+            post_rotation_cue_peak, 0.0,
+            "a queued pre-rotation event must not replay on CUE"
+        );
+
+        let state = runtime.state.lock().unwrap();
+        let attachment = state.attachment.as_ref().expect("rotated CUE attachment");
+        assert!(attachment.blocked_event_identity.is_some());
+        assert!(state.prepare_job.is_none());
+        assert!(state.topology_probe.is_none());
+        assert!(state.retired_workers.is_empty());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn timeline_cue_non_active_router_state_retires_legacy_attachment() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        runtime.state.lock().unwrap().normal_admission_open = false;
+        let (asio_runtime, _context, _program, _cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory(11, 7).unwrap();
+        let asio_runtime = Arc::new(Mutex::new(asio_runtime));
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let slot = start_test_asio_router();
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        {
+            let mut state = runtime.state.lock().unwrap();
+            let attachment = state.attachment.as_mut().expect("ASIO attachment");
+            let (legacy_mixer, _) = rodio::mixer::mixer(2, 48_000);
+            attachment.output = TimelineCueAudioAttachmentOutput::Legacy {
+                mixer: legacy_mixer,
+                _explicit_stream: None,
+            };
+        }
+
+        assert!(slot
+            .into_stop_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        assert_eq!(
+            slot.snapshot().unwrap().state,
+            audio_output_router::State::Locked
+        );
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        assert!(runtime.state.lock().unwrap().attachment.is_none());
+        let status = runtime.status().unwrap();
+        assert_eq!(status.applied_settings, None);
+        assert_ne!(status.lifecycle, TimelineCueAudioLifecycle::Running);
+        assert!(!status.callback_live);
+        assert!(status.last_error.is_some());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[test]
+    fn timeline_cue_transport_failure_stops_program_after_poison_and_retires_cue() {
+        let _router_test_guard = TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        runtime.state.lock().unwrap().normal_admission_open = false;
+        let (asio_runtime, _context, mut program, mut cue) =
+            asio_output_runtime::AsioOutputRuntime::active_in_memory(11, 7).unwrap();
+        let asio_runtime = Arc::new(Mutex::new(asio_runtime));
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+        let slot = start_test_asio_router();
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        assert!(runtime.state.lock().unwrap().attachment.is_some());
+        let (program_mixer, _) = rodio::mixer::mixer(2, 48_000);
+        let sink = rodio::Sink::connect_new(&program_mixer);
+        sink.append(rodio::buffer::SamplesBuffer::new(
+            2,
+            48_000,
+            vec![0.5_f32; 9_600],
+        ));
+        sink.play();
+        audio
+            .lock()
+            .unwrap()
+            .timeline_sinks
+            .insert(TimelineAudioSinkKey::Root(99), sink);
+        let poisoned_audio = Arc::clone(&audio);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poisoned_audio.lock().unwrap();
+            panic!("inject media audio poison");
+        }));
+
+        stop_timeline_audio_after_transport_failure(&audio);
+        runtime.retire_timeline_cue_attachment();
+        assert!(audio.lock().is_err(), "poison visibility must be retained");
+        let playback = match audio.lock() {
+            Ok(_) => panic!("media audio poison unexpectedly cleared"),
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(
+            (0..9_600)
+                .filter_map(|_| program.next())
+                .map(f32::abs)
+                .fold(0.0_f32, f32::max),
+            0.0
+        );
+        assert_eq!(
+            (0..9_600)
+                .filter_map(|_| cue.next())
+                .map(f32::abs)
+                .fold(0.0_f32, f32::max),
+            0.0
+        );
+        let status = runtime.status().unwrap();
+        assert_eq!(status.applied_settings, None);
+        assert!(!status.callback_live);
+        assert!(runtime.state.lock().unwrap().attachment.is_none());
+    }
+
+    #[test]
+    fn timeline_cue_asio_preflight_rejects_unfinished_worker_before_quiesce() {
+        let runtime = TimelineCueAudioRuntime::default();
+        let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let _ = release_receiver.recv();
+            let _ = result_sender.send(Err("released test worker".to_string()));
+        });
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.topology_probe = Some(TimelineCueAudioTopologyProbe {
+                started_at: Instant::now(),
+                timed_out: false,
+                receiver: result_receiver,
+                worker: Some(worker),
+            });
+        }
+
+        let error = runtime.close_normal_routes_for_asio_start().unwrap_err();
+
+        assert!(error.contains("worker is still running"));
+        assert!(runtime.state.lock().unwrap().normal_admission_open);
+        release_sender.send(()).unwrap();
+        for _ in 0..100 {
+            runtime.poll_or_spawn_topology_probe();
+            if runtime.state.lock().unwrap().topology_probe.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(runtime.state.lock().unwrap().topology_probe.is_none());
     }
 
     #[test]
@@ -77847,6 +81801,16 @@ pub(crate) mod tests {
                 live_audio_input: Mutex::new(None),
                 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
                 asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                audio_output_router: None,
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_output_runtime: Arc::new(Mutex::new(
+                    asio_output_runtime::AsioOutputRuntime::default(),
+                )),
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_output_session_generation: AtomicU64::new(0),
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_output_machine: Mutex::new(AsioOutputMachineState::default()),
                 video_preview: Arc::new(Mutex::new(
                     video::VideoPreviewRenderer::with_frame_provider(
                         video::VideoRuntimeConfig::default(),
@@ -81065,7 +85029,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 149);
+        assert_eq!(runtime_routes.len(), 157);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -106432,6 +110396,7 @@ f 1 2 3
             gain: 0.8,
             fade_in_ms: 500,
             fade_out_ms: 750,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
         }];
         project.snapshot.timeline.audio_offset_ms = -125;
         project.snapshot.timeline.audio_muted = true;
@@ -106445,6 +110410,11 @@ f 1 2 3
         );
         assert_eq!(roundtrip.snapshot.timeline.audio_offset_ms, -125);
         assert!(roundtrip.snapshot.timeline.audio_muted);
+        assert_eq!(
+            roundtrip.snapshot.timeline.audio_clips[0].output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "the SDC save/reload image retains the root logical CUE identity"
+        );
         validate_project_file(&roundtrip).unwrap();
         let warnings = project_validation_warnings(&roundtrip);
         assert_eq!(warnings.len(), 1);
@@ -106465,6 +110435,96 @@ f 1 2 3
         assert_eq!(clip.gain, 2.0);
         assert_eq!(clip.fade_in_ms, 5_000);
         assert_eq!(clip.fade_out_ms, 3_000);
+    }
+
+    #[test]
+    fn dvc_timeline_audio_initializer_is_exact_program() {
+        let patch = br#"<PATCH NBFIXTURE="0"/>"#;
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(patch).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let mut qcompressed = Vec::with_capacity(compressed.len() + 4);
+        qcompressed.extend_from_slice(&(patch.len() as u32).to_be_bytes());
+        qcompressed.extend_from_slice(&compressed);
+        let patch_data = base64::engine::general_purpose::STANDARD.encode(qcompressed);
+        let dvc = format!(
+            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="logical-bus-test" VERSIONFILE="2"><PATCHS DATA="{patch_data}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="Bank 1" COLOR="#ff112233"><SCENE DASUID="scene-audio" NAME="Imported Audio" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK><TIMELINES><TIMELINE DASUID="lane-audio" NAME="Audio" INDEX="0" DASTLLOCKED="0" DASTLMUTED="0" DASTLFOLDED="0"><BLOCKS><BLOCK TYPE="2" NAME="Imported Track" START="0" END="1000" POSITION="0" FADEIN="0" FADEOUT="0" DASTLMEDIAPATH="C:/missing-imported.mp3"/></BLOCKS></TIMELINE></TIMELINES></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##
+        );
+        let path = env::temp_dir().join(format!(
+            "syndocal-logical-bus-dvc-{}-{}.dvc",
+            std::process::id(),
+            current_unix_ms()
+        ));
+        fs::write(&path, dvc).unwrap();
+        let outcome = dvc_import::import_path(&path).expect("minimal DVC audio fixture imports");
+        let _ = fs::remove_file(&path);
+        let clip = &outcome.project.snapshot.cues[0]
+            .child_timeline
+            .as_ref()
+            .expect("DVC Super Scene creates a child timeline")
+            .audio_clips[0];
+        assert_eq!(
+            clip.output_bus,
+            protocol::TimelineAudioOutputBus::Program,
+            "Daslight has no PROGRAM/CUE source field, so its initializer is exact PROGRAM"
+        );
+    }
+
+    #[test]
+    fn timeline_audio_output_bus_invocation_payload_is_exact_and_fail_closed() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct InvocationPayload {
+            id: TimelineAudioClipId,
+            output_bus: protocol::TimelineAudioOutputBus,
+        }
+
+        let payload: InvocationPayload = serde_json::from_value(serde_json::json!({
+            "id": 700,
+            "outputBus": "CUE"
+        }))
+        .unwrap();
+        assert_eq!(payload.id, 700);
+        assert_eq!(payload.output_bus, protocol::TimelineAudioOutputBus::Cue);
+        for invalid in [
+            serde_json::json!({ "id": 700, "outputBus": "CUE_V2" }),
+            serde_json::json!({ "id": 700 }),
+            serde_json::json!({ "outputBus": "CUE" }),
+            serde_json::json!({ "id": 700, "output_bus": "CUE" }),
+            serde_json::json!({ "id": 700, "outputBus": "CUE", "extra": true }),
+        ] {
+            assert!(serde_json::from_value::<InvocationPayload>(invalid).is_err());
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct ChildInvocationPayload {
+            cue_id: CueId,
+            clip_id: TimelineAudioClipId,
+            output_bus: protocol::TimelineAudioOutputBus,
+        }
+
+        let child: ChildInvocationPayload = serde_json::from_value(serde_json::json!({
+            "cueId": 41,
+            "clipId": 302,
+            "outputBus": "CUE"
+        }))
+        .unwrap();
+        assert_eq!(child.cue_id, 41);
+        assert_eq!(child.clip_id, 302);
+        assert_eq!(child.output_bus, protocol::TimelineAudioOutputBus::Cue);
+        for invalid in [
+            serde_json::json!({ "cueId": 41, "clipId": 302, "outputBus": "CUE_V2" }),
+            serde_json::json!({ "cueId": 41, "clipId": 302 }),
+            serde_json::json!({ "cueId": 41, "outputBus": "CUE" }),
+            serde_json::json!({ "cue_id": 41, "clipId": 302, "outputBus": "CUE" }),
+            serde_json::json!({ "cueId": 41, "clip_id": 302, "outputBus": "CUE" }),
+            serde_json::json!({ "cueId": 41, "clipId": 302, "output_bus": "CUE" }),
+            serde_json::json!({ "cueId": 41, "clipId": 302, "outputBus": "CUE", "extra": true }),
+        ] {
+            assert!(serde_json::from_value::<ChildInvocationPayload>(invalid).is_err());
+        }
     }
 
     #[test]
@@ -106526,6 +110586,7 @@ f 1 2 3
                 gain: 0.8,
                 fade_in_ms: 200,
                 fade_out_ms: 300,
+                output_bus: protocol::TimelineAudioOutputBus::Cue,
             }],
             duration_ms: 4_000,
             ..ChildTimelineSummary::default()
@@ -106546,6 +110607,16 @@ f 1 2 3
                 .audio_clips[0]
                 .id,
             302
+        );
+        assert_eq!(
+            roundtrip.snapshot.cues[0]
+                .child_timeline
+                .as_ref()
+                .unwrap()
+                .audio_clips[0]
+                .output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "the SDC save/reload image retains the child logical CUE identity"
         );
 
         let mut legacy = serde_json::to_value(project).unwrap();
@@ -115280,7 +119351,8 @@ f 1 2 3
             enabled: false,
             ..DmxOutputConfig::default()
         });
-        let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let initial_snapshot = wait_for_test_engine_startup(&engine);
+        let mut coordinator = project_coordinator_for_initial_snapshot(initial_snapshot);
         let mut mapping = dj_link_test_mapping(
             "invalid-timeline",
             protocol::DjTrackSelector {
@@ -115520,7 +119592,8 @@ f 1 2 3
             enabled: false,
             ..DmxOutputConfig::default()
         });
-        let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+        let initial_snapshot = wait_for_test_engine_startup(&engine);
+        let coordinator = project_coordinator_for_initial_snapshot(initial_snapshot);
         let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
         let coordinator = Mutex::new(coordinator);
         let admission = ProjectExternalCommandAdmission::default();
@@ -116394,8 +120467,7 @@ mod live_audio_input_tests {
         }
     }
 
-    #[test]
-    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    #[cfg(all(test, target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     const ASIO_CONTRACT_DRIVER: &str = "asio:TOPPING Pro USB Audio Device";
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -116847,7 +120919,10 @@ mod live_audio_input_tests {
             "stale-generation callbacks must never reach the application hooks"
         );
         let snapshot = session.context().snapshot();
-        assert_eq!(snapshot.stale_callbacks_total, 1);
+        assert_eq!(
+            snapshot.stale_callbacks_total, 2,
+            "the stale sample and stale event are independently counted while both stay fenced from hooks",
+        );
         assert_eq!(snapshot.latched_terminal_kind, None);
         assert!(!snapshot.safety_zero_requested);
         drop(session);
@@ -118879,6 +122954,7 @@ mod live_audio_input_tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..TimelineSnapshot::default()
@@ -118912,6 +122988,7 @@ mod live_audio_input_tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..TimelineSnapshot::default()
@@ -119400,6 +123477,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         });
         timeline.video_clips.push(TimelineVideoClipSummary {
             id: protocol::TimelineVideoClipId(32),
@@ -119808,6 +123886,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 400,
             fade_out_ms: 400,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         });
         timeline
             .automations
@@ -120112,6 +124191,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 120,
             fade_out_ms: 180,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
         });
         timeline
             .automations
@@ -120322,6 +124402,14 @@ mod live_audio_input_tests {
             ),
             (120, 0, 0, 180),
             "a split preserves the Audio envelope without manufacturing a cut fade"
+        );
+        assert_eq!(
+            (timeline.audio_clips[0].output_bus, right_audio.output_bus),
+            (
+                protocol::TimelineAudioOutputBus::Cue,
+                protocol::TimelineAudioOutputBus::Cue
+            ),
+            "split preserves CUE on both exact source segments"
         );
         assert_eq!(
             right_audio.start_ms - right_video.start_ms,
@@ -120807,6 +124895,11 @@ mod live_audio_input_tests {
             original.video_clips[0].start_ms + 120
         );
         assert_eq!(moved.audio_clips[0].layer_id, 6);
+        assert_eq!(
+            moved.audio_clips[0].output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "lane movement preserves the Audio logical bus"
+        );
         assert_eq!(
             moved.audio_clips[0].start_ms,
             original.audio_clips[0].start_ms + 120
@@ -121906,6 +125999,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
         });
         authoring.item_groups.push(TimelineItemGroupSummary {
             id: harness.state.engine.allocate_timeline_item_group_id(),
@@ -122343,6 +126437,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 100,
             fade_out_ms: 100,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
         });
         authoring.item_groups.push(TimelineItemGroupSummary {
             id: harness.state.engine.allocate_timeline_item_group_id(),
@@ -122540,6 +126635,7 @@ mod live_audio_input_tests {
             gain: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
         });
         authoring.item_groups.push(TimelineItemGroupSummary {
             id: TimelineItemGroupId(9_103),
@@ -122610,6 +126706,17 @@ mod live_audio_input_tests {
                 .unwrap()
                 .start_ms,
             2_500
+        );
+        assert_eq!(
+            duplicated
+                .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == duplicate_audio_clip_id)
+                .unwrap()
+                .output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "duplicate preserves the exact logical bus"
         );
 
         let duplicate_retried = apply_timeline_advanced_authoritative_command_impl(
@@ -122812,6 +126919,17 @@ mod live_audio_input_tests {
         assert_eq!(
             pasted
                 .authoring
+                .audio_clips
+                .iter()
+                .find(|clip| clip.id == pasted_audio_clip_id)
+                .unwrap()
+                .output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "paste preserves the exact logical bus"
+        );
+        assert_eq!(
+            pasted
+                .authoring
                 .video_clips
                 .iter()
                 .find(|clip| clip.id == pasted_video_clip_id)
@@ -122935,6 +127053,7 @@ mod live_audio_input_tests {
                 (clip.start_ms, clip.offset_ms, clip.duration_ms),
                 (1_000, 250, 750)
             );
+            assert_eq!(clip.output_bus, protocol::TimelineAudioOutputBus::Cue);
         }
         let clip = trimmed
             .authoring
@@ -123017,6 +127136,11 @@ mod live_audio_input_tests {
         assert_eq!(persisted.timeline.video_clips.len(), 1);
         assert_eq!(persisted.timeline.audio_clips.len(), 1);
         assert_eq!(persisted.timeline.item_groups.len(), 1);
+        assert_eq!(
+            persisted.timeline.audio_clips[0].output_bus,
+            protocol::TimelineAudioOutputBus::Cue,
+            "the project save image retains CUE after duplicate/paste/trim"
+        );
         b3_assert_authority_matches_persistence(&harness);
     }
 
@@ -126402,11 +130526,26 @@ fn main() {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let app_video_decoder = app_video_decoder.with_spout_inputs(Arc::clone(&spout_inputs));
     let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    let audio_output_router = audio_output_router::RouterSlot::acquire_process_owner()
+        .expect("ASIO output router must be acquired before media audio workers start");
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    let asio_output_runtime = {
+        let mut runtime = asio_output_runtime::AsioOutputRuntime::default();
+        runtime
+            .bind_timeline_audio_live_fence(&engine.timeline_audio_live_fence())
+            .expect("engine Timeline audio live fence must bind before ASIO Start");
+        Arc::new(Mutex::new(runtime))
+    };
     let timeline_cue_audio = Arc::new(TimelineCueAudioRuntime::default());
     let program_audio_handoff = Arc::new(ProgramAudioHandoffCoordinator::default());
     let media_audio_sync = MediaAudioSyncRuntime::start(
         engine.clone(),
         Arc::clone(&media_audio),
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        Some(Arc::clone(&audio_output_router)),
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        Some(Arc::clone(&asio_output_runtime)),
         Arc::clone(&program_audio_handoff),
         Arc::clone(&timeline_cue_audio),
     );
@@ -126601,6 +130740,9 @@ fn main() {
             // against a fresh catalog and capabilities.
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             {
+                // One process-owned output router fences every normal/ASIO
+                // constructor. Acquisition failure is a show-ASIO lock, never
+                // permission to construct a default Rodio device.
                 let asio_local_data_dir = app
                     .path()
                     .app_local_data_dir()
@@ -126618,6 +130760,13 @@ fn main() {
                     asio_selection_path,
                     restore_outcome,
                 );
+                drop(asio_selection);
+                let output_profile_path = asio_output_profile_storage_path(&asio_local_data_dir);
+                let mut output_machine = state
+                    .asio_output_machine
+                    .lock()
+                    .map_err(|_| "ASIO output machine state lock was poisoned during setup".to_string())?;
+                *output_machine = restore_asio_output_machine_state(output_profile_path);
             }
             // Install the single media-operation reaper up front so expired
             // prepared handles are released at TTL for the whole session.
@@ -126701,6 +130850,14 @@ fn main() {
             live_audio_input: Mutex::new(None),
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            audio_output_router: Some(audio_output_router),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_output_runtime,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_output_session_generation: AtomicU64::new(0),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_output_machine: Mutex::new(AsioOutputMachineState::default()),
             video_preview: Arc::new(Mutex::new(
                 video::VideoPreviewRenderer::with_frame_provider(
                     video::VideoRuntimeConfig::default(),
@@ -126904,6 +131061,7 @@ fn main() {
             analyze_timeline_audio_clip_path,
             add_timeline_audio_clip,
             update_timeline_audio_clip,
+            set_timeline_audio_clip_output_bus,
             remove_timeline_audio_clip,
             set_timeline_audio_master,
             clear_timeline_audio,
@@ -126932,6 +131090,26 @@ fn main() {
             start_osc_input,
             stop_osc_input,
             remote_access_urls,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            get_asio_output_status,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            list_asio_output_drivers,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            get_asio_output_capabilities,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            reselect_asio_output_profile,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            revalidate_asio_program_cue_output,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            start_asio_program_cue_output,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            stop_close_asio_program_cue_output,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            set_asio_output_test,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            set_asio_output_solo,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            select_normal_audio_output,
             list_dj_link_wired_candidates,
             get_dj_link_machine_status,
             arm_dj_link_machine,
@@ -126976,6 +131154,7 @@ fn main() {
             add_cue_owned_effect,
             set_cue_metadata,
             set_cue_child_timeline,
+            set_cue_child_timeline_audio_clip_output_bus,
             set_cue_steps,
             set_cue_color,
             set_cue_live_modifier,

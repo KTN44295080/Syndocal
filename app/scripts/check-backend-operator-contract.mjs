@@ -508,13 +508,21 @@ assert.match(
   "only the main App may own startup and app-wide queued project opens",
 );
 const listenerIndex = startupOpenOwnership.indexOf('listen<string[]>("syndocal://open-project"');
-const barrierIndex = startupOpenOwnership.indexOf("await awaitProjectTransactionOwnerRegistrationBarrier();");
+const authorityGateIndex = startupOpenOwnership.indexOf("await establishProjectOpenBootstrapAuthority({");
+const barrierBindingIndex = startupOpenOwnership.indexOf(
+  "awaitOwnerRegistration: awaitProjectTransactionOwnerRegistrationBarrier",
+);
 const startupIndex = startupOpenOwnership.indexOf("await loadStartupProject();");
 const readyIndex = startupOpenOwnership.indexOf("queuedOpenProjectDrainReady = true;");
 const drainIndex = startupOpenOwnership.indexOf("await loadQueuedOpenProjects();");
 assert.ok(
-  listenerIndex >= 0 && listenerIndex < barrierIndex && barrierIndex < startupIndex && startupIndex < readyIndex && readyIndex < drainIndex,
-  "main queued-open listener must install first, then register, load startup, mark ready, and serially drain",
+  listenerIndex >= 0
+    && listenerIndex < authorityGateIndex
+    && authorityGateIndex < barrierBindingIndex
+    && barrierBindingIndex < startupIndex
+    && startupIndex < readyIndex
+    && readyIndex < drainIndex,
+  "main queued-open listener must install first, pass registration into the authority gate, load startup, mark ready, and serially drain",
 );
 assert.match(
   startupOpenOwnership,

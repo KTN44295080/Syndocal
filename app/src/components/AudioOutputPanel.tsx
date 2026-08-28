@@ -1,0 +1,481 @@
+import { For, Show } from "solid-js";
+import "./AudioOutputPanel.css";
+
+export type AudioOutputBackend = "normal-wasapi" | "show-asio";
+export type AudioOutputState = "Ready" | "Locked" | "Active" | "Fault";
+export type AudioOutputTest =
+  | "program-left"
+  | "program-right"
+  | "program-stereo"
+  | "cue"
+  | "spare";
+export type AudioOutputSoloMode = "none" | "program-only" | "cue-only";
+
+export interface AudioOutputBackendOption {
+  value: AudioOutputBackend;
+  label: string;
+}
+
+export interface AudioOutputDriverOption {
+  id: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface AudioOutputRateOption {
+  value: number;
+  label?: string;
+}
+
+export interface AudioOutputBufferOption {
+  value: number;
+  label?: string;
+}
+
+/** Channel indexes are zero-based at the application/backend boundary. */
+export interface AudioOutputChannelOption {
+  index: number;
+  disabled?: boolean;
+}
+
+export interface AudioOutputOptions {
+  drivers: readonly AudioOutputDriverOption[];
+  sampleRates: readonly AudioOutputRateOption[];
+  bufferFrames: readonly AudioOutputBufferOption[];
+  channels: readonly AudioOutputChannelOption[];
+  hasSpare: boolean;
+}
+
+/** A presentation-ready snapshot; the parent adapts its backend DTO to this shape. */
+export interface AudioOutputView {
+  backend: AudioOutputBackend;
+  driverId: string;
+  sampleRate: number | null;
+  bufferFrames: number | null;
+  programLeft: number | null;
+  programRight: number | null;
+  cue: number | null;
+  spare: number | null;
+  catalogGeneration: number;
+  state: AudioOutputState;
+  reason: string;
+}
+
+type AudioOutputAction = () => void | Promise<void>;
+
+export interface AudioOutputPanelProps {
+  view: AudioOutputView;
+  options: AudioOutputOptions;
+  busy: boolean;
+  canRefresh: boolean;
+  canRevalidate: boolean;
+  canStart: boolean;
+  canStop: boolean;
+  canReturnToNormal: boolean;
+  canTest: boolean;
+  canSolo: boolean;
+  livePlaybackActive: boolean;
+  testMode: AudioOutputTest | null;
+  soloMode: AudioOutputSoloMode;
+  onBackendChange: (backend: AudioOutputBackend) => void;
+  onDriverChange: (driverId: string) => void;
+  onSampleRateChange: (sampleRate: number | null) => void;
+  onBufferFramesChange: (bufferFrames: number | null) => void;
+  onProgramLeftChange: (channelIndex: number | null) => void;
+  onProgramRightChange: (channelIndex: number | null) => void;
+  onCueChange: (channelIndex: number | null) => void;
+  onSpareChange: (channelIndex: number | null) => void;
+  onRefresh: AudioOutputAction;
+  onRevalidate: AudioOutputAction;
+  onStart: AudioOutputAction;
+  onStop: AudioOutputAction;
+  onReturnToNormal: AudioOutputAction;
+  onTest: (test: AudioOutputTest | null) => void | Promise<void>;
+  onSoloModeChange: (mode: AudioOutputSoloMode) => void;
+}
+
+export const AUDIO_OUTPUT_BACKEND_OPTIONS: readonly AudioOutputBackendOption[] = [
+  { value: "normal-wasapi", label: "Normal WASAPI" },
+  { value: "show-asio", label: "Show ASIO" },
+];
+
+const channelOptionLabel = (option: AudioOutputChannelOption): string =>
+  `Output ${option.index + 1}`;
+
+const parseNullableChannelIndex = (value: string): number | null => {
+  if (value.trim() === "") return null;
+  const index = Number(value);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+};
+
+const rateOptionLabel = (option: AudioOutputRateOption): string =>
+  option.label ?? `${option.value.toLocaleString()} Hz`;
+
+const bufferOptionLabel = (option: AudioOutputBufferOption): string =>
+  option.label ?? `${option.value.toLocaleString()} frames`;
+
+interface AudioOutputChannelSelectProps {
+  field: "program-left" | "program-right" | "cue" | "spare";
+  label: string;
+  value: number | null;
+  disabled: boolean;
+  options: readonly AudioOutputChannelOption[];
+  onChange: (channelIndex: number | null) => void;
+}
+
+function AudioOutputChannelSelect(props: AudioOutputChannelSelectProps) {
+  const selectedChannelIsListed = () =>
+    props.value === null || props.options.some((option) => option.index === props.value);
+
+  return (
+    <label class="audioOutputField" data-audio-output-field={props.field}>
+      <span>{props.label}</span>
+      <select
+        aria-label={`${props.label} output channel`}
+        disabled={props.disabled}
+        value={props.value ?? ""}
+        onInput={(event) => props.onChange(parseNullableChannelIndex(event.currentTarget.value))}
+      >
+        <option value="">Select Output</option>
+        <Show when={!selectedChannelIsListed() && props.value !== null}>
+          <option value={props.value!} disabled>
+            Unavailable {`Output ${props.value! + 1}`}
+          </option>
+        </Show>
+        <For each={props.options}>
+          {(option) => (
+            <option value={option.index} disabled={option.disabled ?? false}>
+              {channelOptionLabel(option)}
+            </option>
+          )}
+        </For>
+      </select>
+    </label>
+  );
+}
+
+const testLabel = (test: AudioOutputTest): string => {
+  switch (test) {
+    case "program-left":
+      return "Test PROGRAM L";
+    case "program-right":
+      return "Test PROGRAM R";
+    case "program-stereo":
+      return "Test PROGRAM Stereo";
+    case "cue":
+      return "Test CUE";
+    case "spare":
+      return "Test Spare";
+  }
+};
+
+const testKinds: readonly AudioOutputTest[] = [
+  "program-left",
+  "program-right",
+  "program-stereo",
+  "cue",
+  "spare",
+];
+
+export function AudioOutputPanel(props: AudioOutputPanelProps) {
+  const selectedDriverIsListed = () =>
+    props.view.driverId === "" || props.options.drivers.some((option) => option.id === props.view.driverId);
+  const configurationDisabled = () =>
+    props.busy || props.view.state === "Active" || props.view.state === "Fault";
+  const refreshDisabled = () =>
+    props.busy || !props.canRefresh || props.view.state === "Active" || props.view.state === "Fault";
+  const revalidateDisabled = () =>
+    props.busy || !props.canRevalidate || props.view.state === "Active" || props.view.state === "Fault";
+  const startDisabled = () =>
+    props.busy || !props.canStart || props.view.state !== "Ready";
+  const stopDisabled = () =>
+    props.busy ||
+    !props.canStop ||
+    (props.view.state !== "Active" && props.view.state !== "Fault");
+  const returnToNormalDisabled = () =>
+    props.busy ||
+    !props.canReturnToNormal ||
+    props.view.backend !== "show-asio" ||
+    props.view.state === "Active" ||
+    props.view.state === "Fault";
+  const testDisabled = (test: AudioOutputTest): boolean => {
+    if (props.testMode === test) return props.busy;
+    if (props.testMode !== null && props.testMode !== test) return true;
+    if (test === "spare" && !props.options.hasSpare) return true;
+    return (
+      props.busy ||
+      !props.canTest ||
+      props.livePlaybackActive ||
+      props.view.state !== "Active"
+    );
+  };
+  const soloDisabled = () =>
+    props.busy ||
+    !props.canSolo ||
+    props.livePlaybackActive ||
+    props.testMode !== null ||
+    props.view.state === "Fault";
+
+  return (
+    <section
+      class="audioOutputPanel"
+      data-audio-output-panel
+      data-audio-output-backend={props.view.backend}
+      data-audio-output-state={props.view.state}
+      aria-labelledby="audio-output-panel-title"
+    >
+      <header class="audioOutputPanelHeader">
+        <div>
+          <h3 id="audio-output-panel-title">Audio</h3>
+          <p>PROGRAM stereo and CUE output control</p>
+        </div>
+        <output
+          class={`audioOutputState audioOutputState--${props.view.state.toLowerCase()}`}
+          data-audio-output-status
+          aria-live="polite"
+        >
+          <strong>{props.view.state}</strong>
+          <span data-audio-output-reason>{props.view.reason}</span>
+        </output>
+      </header>
+
+      <div class="audioOutputActions" aria-label="Audio output actions">
+        <button
+          type="button"
+          data-audio-output-action="refresh"
+          disabled={refreshDisabled()}
+          aria-label="Refresh audio output"
+          onClick={() => void props.onRefresh()}
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          data-audio-output-action="revalidate"
+          disabled={revalidateDisabled()}
+          aria-label="Revalidate audio output"
+          onClick={() => void props.onRevalidate()}
+        >
+          Revalidate
+        </button>
+        <button
+          type="button"
+          class="primary"
+          data-audio-output-action="start"
+          disabled={startDisabled()}
+          aria-label="Start audio output"
+          onClick={() => void props.onStart()}
+        >
+          Start
+        </button>
+        <button
+          type="button"
+          data-audio-output-action="stop"
+          disabled={stopDisabled()}
+          aria-label="Stop audio output"
+          onClick={() => void props.onStop()}
+        >
+          Stop
+        </button>
+        <button
+          type="button"
+          data-audio-output-action="return-to-normal"
+          disabled={returnToNormalDisabled()}
+          aria-label="Return audio output to normal"
+          onClick={() => void props.onReturnToNormal()}
+        >
+          Return to normal
+        </button>
+      </div>
+
+      <details class="audioOutputDisclosure" data-audio-output-disclosure="configuration" open>
+        <summary>Output configuration</summary>
+        <div class="audioOutputDisclosureBody">
+          <div class="audioOutputFieldGrid audioOutputFieldGrid--backend">
+            <label class="audioOutputField" data-audio-output-field="backend">
+              <span>Backend</span>
+              <select
+                aria-label="Audio output backend"
+                disabled={configurationDisabled() || props.view.backend === "show-asio"}
+                value={props.view.backend}
+                onInput={(event) =>
+                  props.onBackendChange(event.currentTarget.value as AudioOutputBackend)
+                }
+              >
+                <For each={AUDIO_OUTPUT_BACKEND_OPTIONS}>
+                  {(option) => <option value={option.value}>{option.label}</option>}
+                </For>
+              </select>
+            </label>
+            <label class="audioOutputField" data-audio-output-field="driver">
+              <span>Driver</span>
+              <select
+                aria-label="Audio output driver"
+                disabled={configurationDisabled() || props.view.backend !== "show-asio"}
+                value={props.view.driverId}
+                onInput={(event) => props.onDriverChange(event.currentTarget.value)}
+              >
+                <Show when={props.view.backend === "show-asio"}>
+                  <Show when={!selectedDriverIsListed() && props.view.driverId !== ""}>
+                    <option value={props.view.driverId} disabled>
+                      Unavailable: {props.view.driverId}
+                    </option>
+                  </Show>
+                  <Show when={props.options.drivers.length > 0}>
+                    <For each={props.options.drivers}>
+                      {(option) => (
+                        <option value={option.id} disabled={option.disabled ?? false}>
+                          {option.label}
+                        </option>
+                      )}
+                    </For>
+                  </Show>
+                  <Show when={props.options.drivers.length === 0}>
+                    <option value="">No driver enumerated</option>
+                  </Show>
+                </Show>
+                <Show when={props.view.backend === "normal-wasapi"}>
+                  <option value="">Normal WASAPI</option>
+                </Show>
+              </select>
+            </label>
+            <label class="audioOutputField" data-audio-output-field="sample-rate">
+              <span>Sample rate</span>
+              <select
+                aria-label="Audio output sample rate"
+                disabled={configurationDisabled()}
+                value={props.view.sampleRate ?? ""}
+                onInput={(event) => {
+                  const value = event.currentTarget.value;
+                  props.onSampleRateChange(value === "" ? null : Number(value));
+                }}
+              >
+                <option value="">Select rate</option>
+                <For each={props.options.sampleRates}>
+                  {(option) => <option value={option.value}>{rateOptionLabel(option)}</option>}
+                </For>
+              </select>
+            </label>
+            <label class="audioOutputField" data-audio-output-field="buffer">
+              <span>Buffer</span>
+              <select
+                aria-label="Audio output buffer"
+                disabled={configurationDisabled()}
+                value={props.view.bufferFrames ?? ""}
+                onInput={(event) => {
+                  const value = event.currentTarget.value;
+                  props.onBufferFramesChange(value === "" ? null : Number(value));
+                }}
+              >
+                <option value="">Select buffer</option>
+                <For each={props.options.bufferFrames}>
+                  {(option) => <option value={option.value}>{bufferOptionLabel(option)}</option>}
+                </For>
+              </select>
+            </label>
+          </div>
+
+          <div class="audioOutputChannelGrid" aria-label="Audio output channels">
+            <AudioOutputChannelSelect
+              field="program-left"
+              label="PROGRAM L"
+              value={props.view.programLeft}
+              disabled={configurationDisabled()}
+              options={props.options.channels}
+              onChange={props.onProgramLeftChange}
+            />
+            <AudioOutputChannelSelect
+              field="program-right"
+              label="PROGRAM R"
+              value={props.view.programRight}
+              disabled={configurationDisabled()}
+              options={props.options.channels}
+              onChange={props.onProgramRightChange}
+            />
+            <AudioOutputChannelSelect
+              field="cue"
+              label="CUE"
+              value={props.view.cue}
+              disabled={configurationDisabled()}
+              options={props.options.channels}
+              onChange={props.onCueChange}
+            />
+            <Show when={props.options.hasSpare}>
+              <AudioOutputChannelSelect
+                field="spare"
+                label="Spare"
+                value={props.view.spare}
+                disabled={configurationDisabled()}
+                options={props.options.channels}
+                onChange={props.onSpareChange}
+              />
+            </Show>
+          </div>
+        </div>
+      </details>
+
+      <details class="audioOutputDisclosure" data-audio-output-disclosure="preflight" open>
+        <summary>Preflight and tests</summary>
+        <div class="audioOutputDisclosureBody">
+          <label class="audioOutputField audioOutputSoloField">
+            <span>Routing preflight / solo</span>
+            <select
+              aria-label="PROGRAM and CUE routing preflight"
+              disabled={soloDisabled()}
+              value={props.soloMode}
+              onInput={(event) =>
+                props.onSoloModeChange(event.currentTarget.value as AudioOutputSoloMode)
+              }
+            >
+              <option value="none">No solo</option>
+              <option value="program-only">PROGRAM-only</option>
+              <option value="cue-only">CUE-only</option>
+            </select>
+          </label>
+
+          <Show when={!props.canTest || !props.canSolo}>
+            <p class="audioOutputDisconnected" data-audio-output-disconnected>
+              Not connected: native test and solo controls are unavailable.
+            </p>
+          </Show>
+
+          <fieldset class="audioOutputTestFieldset" aria-label="Safe audio output tests">
+            <legend>Safe tests · one at a time</legend>
+            <div class="audioOutputTestGrid">
+              <For each={testKinds}>
+                {(test) => (
+                  <button
+                    type="button"
+                    class={props.testMode === test ? "active" : undefined}
+                    data-audio-output-test={test}
+                    aria-label={testLabel(test)}
+                    aria-pressed={props.testMode === test}
+                    disabled={testDisabled(test)}
+                    onClick={() =>
+                      void props.onTest(props.testMode === test ? null : test)
+                    }
+                  >
+                    {testLabel(test)}
+                  </button>
+                )}
+              </For>
+            </div>
+            <Show when={props.testMode !== null}>
+              <button
+                type="button"
+                class="audioOutputStopTest"
+                data-audio-output-action="stop-test"
+                disabled={props.busy}
+                aria-label="Stop audio test"
+                onClick={() => void props.onTest(null)}
+              >
+                Stop test
+              </button>
+            </Show>
+            <p class="audioOutputTestHint">Tests use a bounded safe level and the selected channels.</p>
+          </fieldset>
+        </div>
+      </details>
+    </section>
+  );
+}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syndocal.invalid/schemas/windows-show-asio-local-manifest-v1.json",
+  "$id": "https://syndocal.invalid/schemas/windows-show-asio-local-manifest-v3.json",
   "title": "Syndocal same-host unbundled Windows Show ASIO artifact manifest",
   "type": "object",
   "additionalProperties": false,
@@ -11,6 +11,7 @@
     "productVersion",
     "commit",
     "commitShort",
+    "sourceBranch",
     "distributionApproved",
     "sameHostOnly",
     "unbundled",
@@ -24,7 +25,7 @@
     "files"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 3 },
     "artifactFlavor": { "const": "windows-show-asio-local-only" },
     "platform": { "const": "windows-x86_64" },
     "productVersion": {
@@ -33,6 +34,7 @@
     },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "commitShort": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+    "sourceBranch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
     "distributionApproved": { "const": false },
     "sameHostOnly": { "const": true },
     "unbundled": { "const": true },
@@ -62,8 +64,8 @@
     },
     "sourceFiles": {
       "type": "array",
-      "minItems": 22,
-      "maxItems": 22,
+      "minItems": 70,
+      "maxItems": 70,
       "items": { "$ref": "#/$defs/sourceFile" }
     },
     "restrictions": {
@@ -152,7 +154,7 @@
         "byteSize": { "type": "integer", "minimum": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
         "pe": { "$ref": "#/$defs/pe" },
-        "bridgeAbiVersion": { "const": 2 },
+        "bridgeAbiVersion": { "const": 3 },
         "exports": {
           "type": "array",
           "prefixItems": [
@@ -164,10 +166,19 @@
             { "const": "syndocal_asio_v2_start" },
             { "const": "syndocal_asio_v2_stop" },
             { "const": "syndocal_asio_v2_string_free" },
-            { "const": "syndocal_asio_v2_telemetry_json" }
+            { "const": "syndocal_asio_v2_telemetry_json" },
+            { "const": "syndocal_asio_v3_abi_version" },
+            { "const": "syndocal_asio_v3_build_flags" },
+            { "const": "syndocal_asio_v3_capabilities_json" },
+            { "const": "syndocal_asio_v3_close" },
+            { "const": "syndocal_asio_v3_drivers_json" },
+            { "const": "syndocal_asio_v3_start" },
+            { "const": "syndocal_asio_v3_stop" },
+            { "const": "syndocal_asio_v3_string_free" },
+            { "const": "syndocal_asio_v3_telemetry_json" }
           ],
-          "minItems": 9,
-          "maxItems": 9
+          "minItems": 18,
+          "maxItems": 18
         }
       }
     },

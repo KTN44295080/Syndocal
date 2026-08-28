@@ -1,6 +1,6 @@
 [package]
 name = "syndocal-asio-bridge"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
@@ -11,16 +11,20 @@ name = "syndocal_asio_bridge"
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.syndocal]
-abi_version = 2
+minimum_compatible_abi_version = 2
+maximum_abi_version = 3
 canonical_dll = "syndocal_asio_bridge.dll"
 
 [features]
 default = []
-asio = ["dep:cpal-asio"]
+asio = ["dep:cc", "dep:cpal-asio"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[build-dependencies]
+cc = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal-asio = { package = "cpal", version = "=0.18.1", default-features = false, features = ["asio"], optional = true }

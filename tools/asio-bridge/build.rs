@@ -57,4 +57,26 @@ fn main() {
             libclang.display()
         );
     }
+
+    #[cfg(feature = "asio")]
+    {
+        for relative in ["src/v3_sdk_backend.cpp", "src/v3_sdk_backend.h"] {
+            println!("cargo:rerun-if-changed={relative}");
+        }
+
+        cc::Build::new()
+            .cpp(true)
+            .std("c++17")
+            .define("NOMINMAX", None)
+            .flag_if_supported("/EHsc")
+            .warnings(true)
+            .warnings_into_errors(true)
+            .include(&sdk)
+            .include(sdk.join("common"))
+            .include(sdk.join("host"))
+            .include(sdk.join("host/pc"))
+            .include("src")
+            .file("src/v3_sdk_backend.cpp")
+            .compile("syndocal_asio_v3_sdk_backend");
+    }
 }

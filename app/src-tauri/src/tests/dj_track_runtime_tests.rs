@@ -2096,7 +2096,8 @@ fn dj_link_generic_engine_rejection_preserves_runtime_authority_atomically() {
         enabled: false,
         ..DmxOutputConfig::default()
     });
-    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let initial_snapshot = wait_for_test_engine_startup(&engine);
+    let mut coordinator = project_coordinator_for_initial_snapshot(initial_snapshot);
     coordinator.mappings.dj_track_triggers = vec![dj_link_test_mapping(
         "engine-rejection-generic",
         protocol::DjTrackSelector {

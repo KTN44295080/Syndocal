@@ -37,6 +37,7 @@ import {
   showAsioFeatures,
   showAsioManifestFilename,
   showAsioPlatform,
+  assertShowAsioSourceBranch,
   showAsioSourceIdentityPaths,
 } from "./check-show-asio-artifact.mjs";
 
@@ -140,7 +141,7 @@ function assertExactInputPath(workspace, candidate, relativePath, label) {
 
 function assertExactExports(actual) {
   if (JSON.stringify(actual) !== JSON.stringify(showAsioBridgeExports)) {
-    throw new Error("Show-ASIO bridge exports differ from the exact ABI v2 set.");
+    throw new Error("Show-ASIO bridge exports differ from the exact ABI v2 plus v3 set.");
   }
 }
 
@@ -271,6 +272,7 @@ export function prepareShowAsioRuntime({
   workspace = workspaceRoot,
   version,
   commit,
+  sourceBranch,
   hostBindingSha256,
   sourceFiles,
   ffmpegDir,
@@ -283,6 +285,7 @@ export function prepareShowAsioRuntime({
   allowCargoRootDepsAliases = false,
   validateNormalBoundary = () => validateAsioPackagingBoundary(undefined, { workspace, verifyWindowsRuntimeSources: false }),
 } = {}) {
+  assertShowAsioSourceBranch(sourceBranch, "Show-ASIO source branch");
   validateNormalBoundary();
   if (existsSync(artifactDir)) throw new Error("Show-ASIO final artifact directory already exists and will never be overwritten: " + artifactDir);
   const exactArtifactDir = assertExactShowAsioArtifactDirectory(workspace, artifactDir, version, commit, { mustExist: false });
@@ -309,7 +312,7 @@ export function prepareShowAsioRuntime({
   const bridgeStaged = writeRecord(join(exactArtifactDir, "syndocal_asio_bridge.dll"), records.bridge.record);
   files.push(manifestFile("asio-bridge", "syndocal_asio_bridge.dll", bridgeStaged, {
     pe: records.bridge.pe,
-    bridgeAbiVersion: 2,
+    bridgeAbiVersion: 3,
     exports: [...showAsioBridgeExports],
   }));
   for (const { runtime, record } of records.runtimes) {
@@ -325,12 +328,13 @@ export function prepareShowAsioRuntime({
   const localNoticeStaged = writeRecord(join(exactArtifactDir, "ASIO_SHOW_LOCAL_ONLY.md"), records.localNotice);
   files.push(manifestFile("notice", "ASIO_SHOW_LOCAL_ONLY.md", localNoticeStaged));
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     artifactFlavor: showAsioArtifactFlavor,
     platform: showAsioPlatform,
     productVersion: version,
     commit,
     commitShort: commit.slice(0, 12),
+    sourceBranch,
     distributionApproved: false,
     sameHostOnly: true,
     unbundled: true,
@@ -349,6 +353,7 @@ export function prepareShowAsioRuntime({
     artifactDir: exactArtifactDir,
     expectedVersion: version,
     expectedCommit: commit,
+    expectedSourceBranch: sourceBranch,
     expectedHostBindingSha256: hostBindingSha256,
     inventory,
     exportInspector,
@@ -414,6 +419,7 @@ function makeFixture(root, label) {
   });
   const version = "1.2.0-alpha.99";
   const commit = "d".repeat(40);
+  const sourceBranch = "codex/syndocal-v1.2";
   const inventory = { runtime_dlls: runtimeDlls, common_resources: commonResources, known_asio_bridge_sha256: [] };
   return {
     workspace,
@@ -424,6 +430,7 @@ function makeFixture(root, label) {
     inventory,
     version,
     commit,
+    sourceBranch,
     artifactDir: resolve(workspace, expectedShowAsioArtifactRelativeDirectory(version, commit)),
     sourceFiles: collectShowAsioSourceIdentity(workspace),
   };
@@ -438,10 +445,15 @@ async function runSelfTest() {
   try {
     const valid = makeFixture(root, "valid");
     const inspect = () => [...showAsioBridgeExports];
+    pass(
+      valid.sourceFiles.length === 70 && valid.sourceFiles.some((entry) => entry.path === "app/src/uiLocalization.ts"),
+      "runtime staging carries the exact 70-path source identity including UI localization",
+    );
     const result = prepareShowAsioRuntime({
       workspace: valid.workspace,
       version: valid.version,
       commit: valid.commit,
+      sourceBranch: valid.sourceBranch,
       hostBindingSha256: "e".repeat(64),
       sourceFiles: valid.sourceFiles,
       ffmpegDir: valid.ffmpegDir,
@@ -459,6 +471,7 @@ async function runSelfTest() {
         workspace: valid.workspace,
         version: valid.version,
         commit: valid.commit,
+        sourceBranch: valid.sourceBranch,
         hostBindingSha256: "e".repeat(64),
         sourceFiles: valid.sourceFiles,
         ffmpegDir: valid.ffmpegDir,

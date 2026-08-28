@@ -2,20 +2,21 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.27**
+- 製品名: **Syndocal 1.2.0-alpha.28**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.27` on branch
-`codex/syndocal-v1.2`. This is a source-only checkpoint for the current App
-structural split and synchronized product metadata: the alpha.26 native build,
-artifact identity, launch, and native UI acceptance are not yet performed.
+Current product metadata is `1.2.0-alpha.28` on branch
+`codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
+machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
+native build. Alpha.28 is the active ASIO PROGRAM/CUE implementation tranche;
+its normal and dedicated show-ASIO native acceptance remains open.
 The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.26 acceptance. No alpha.26 artifact hash, size, source HEAD, or
-PID is accepted yet. The release metadata checker expects alpha.26 product and
-installer naming below; that naming does not assert an alpha.26 installer
+it is not alpha.28 acceptance. No alpha.28 artifact hash, size, source HEAD, or
+PID is accepted yet. The release metadata checker expects alpha.28 product and
+installer naming below; that naming does not assert an alpha.28 installer
 exists.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
@@ -140,7 +141,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.27_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.27_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.28_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.28_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

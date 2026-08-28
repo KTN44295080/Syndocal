@@ -61,7 +61,13 @@ Each cycle must apply the exact buffer, deliver at least two correctly sized fin
 emit no terminal or xrun event, report an xrun count of zero, and return typed success from Stop
 and Close. The SDK and Rust dependencies must already be present because the command is offline.
 
-## ABI v2 lifecycle
+## ABI v2 compatibility and ABI v3 contract
+
+The bridge crate is versioned independently from the normal Syndocal product:
+this crate is `3.0.0`, preserves the exact ABI v2 nine-symbol input surface,
+and declares supported ABI range 2 through 3 in its package metadata.  This is
+not a normal product version bump and does not put an ASIO artifact in the MIT/
+WASAPI build or installer.
 
 The canonical declarations are in `include/syndocal_asio_bridge.h`.
 
@@ -100,3 +106,50 @@ The canonical declarations are in `include/syndocal_asio_bridge.h`.
 
 JSON payloads are UTF-8 bytes without a trailing NUL. Always release successful output or error
 strings with `syndocal_asio_v2_string_free` in the same loaded DLL.
+
+### ABI v3 output/full-duplex boundary
+
+ABI v3 is a second exact nine-symbol surface under `syndocal_asio_v3_`.  It
+does not change, alias, or add fields to an ABI v2 request.  Its strict Start
+JSON fixes output-only versus full-duplex mode, separately validated input and
+output native tuples, fixed buffer width, first output frame, and session/render
+generations.  PROGRAM/CUE physical channel selection is machine-local
+application state and is absent from both v3 JSON and portable project data.
+Full-duplex input and output share the single ASIO device clock and callback:
+their `sampleRateHz` and `fixedBufferFrames` values must be exactly equal or
+Start is rejected before driver open. A rejected impossible tuple never yields
+an `actualInput` response.
+The Start request's session and render generations are immutable ASIO-session
+root fences echoed on every callback; only `firstOutputFrame` advances by the
+exact fixed block width. Transport or bus generation changes do not restart the
+ASIO device. The application callback context must instead hold its own
+lock-free current-generation fence and reject stale queued blocks before
+returning `ACCEPTED`.
+
+The public header freezes callback return values, terminal event codes,
+bridge-owned native-format conversion, output slot non-aliasing, exactly-once
+bridge-string release, and context lifetime. The ASIO-feature build now uses a
+purpose-built C++ SDK shim for v3 rather than CPAL/asio-sys' process callback
+registry. It opens the explicitly named driver, creates one device-width
+output-only or full-duplex buffer set and clock, and publishes one allocation-
+free callback dispatch. Stop disables client rendering, atomically unpublishes
+the session, drains all in-flight callback readers, then disposes buffers and
+exits the driver before caller context may be freed.
+
+ABI v2 and v3 share one process-wide lease. Enumeration and capability probes
+run only while the lease is Stopped. Cross-version or concurrent Start returns
+a visible busy error and never stops or substitutes the current owner. A
+terminal owner remains faulted until its explicit Stop and Close complete the
+drain. There is no automatic restart or fallback to CPAL, WASAPI, a default
+device, another driver, or another stream.
+
+The C++ shim and SDK link are compiled only with the non-default `asio` feature.
+`CPAL_ASIO_DIR` and `LIBCLANG_PATH` must already name the reviewed local SDK and
+toolchain. This bridge build script and shim never download or vendor the SDK;
+the supported preflight must set the explicit paths before Cargo can schedule
+the upstream v2 dependency build script, which still contains its own fallback.
+Direct ASIO-feature Cargo invocation without that preflight is unsupported. The
+resulting bridge remains GPL-3.0-only/local-show-only under the repository's
+separate licensing and distribution gate. Software tests cover the exact tuple,
+lease, callback, conversion, silence, and teardown contracts, but they do not
+claim a physical ASIO device, latency, disconnect, XRUN, or endurance result.

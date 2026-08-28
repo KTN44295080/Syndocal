@@ -8033,6 +8033,7 @@ fn parse_super_scenes(
                             gain: 1.0,
                             fade_in_ms: fade_in,
                             fade_out_ms: fade_out,
+                            output_bus: protocol::TimelineAudioOutputBus::Program,
                         });
                         next_audio_clip_id = next_audio_clip_id.saturating_add(1);
                         report.summary.timeline_audio_clips =

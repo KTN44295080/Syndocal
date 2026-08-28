@@ -1,7 +1,7 @@
 import { For, Show, createMemo, type JSX } from "solid-js";
 import "../setupIo.css";
 
-export type IoConnectionId = "dmx" | "midi" | "osc" | "web" | "dj";
+export type IoConnectionId = "dmx" | "audio" | "midi" | "osc" | "web" | "dj";
 export type IoConnectionStateTone = "ok" | "idle" | "warning" | "error";
 
 /**
@@ -33,6 +33,9 @@ export interface SetupIoConnectionDeckProps {
   onActiveId: (id: IoConnectionId) => void;
   renderWorkbench: (id: IoConnectionId) => JSX.Element;
   outputEnabled: boolean;
+  audioOutputSummary: string;
+  audioOutputState: string;
+  audioOutputStateTone?: IoConnectionStateTone;
   midiClockConnected: boolean;
   midiControlConnected: boolean;
   oscRunning: boolean;
@@ -189,6 +192,13 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Output routing and optional input",
       state: props.outputEnabled ? "Output enabled" : "Output disabled",
       stateTone: props.outputEnabled ? "ok" : "idle",
+    },
+    {
+      id: "audio",
+      label: "Audio",
+      summary: props.audioOutputSummary,
+      state: props.audioOutputState,
+      stateTone: props.audioOutputStateTone ?? "idle",
     },
     {
       id: "midi",

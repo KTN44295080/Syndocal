@@ -2148,7 +2148,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return (row?.top ?? 0) + 4 + blockHeightPx() / 2;
   };
   const audioClipVisibleName = (clip: TimelineAudioClipSummary) => {
-    const label = timelineAudioClipName(clip.path);
+    const outputBus = clip.output_bus ?? "PROGRAM";
+    const label = `${outputBus} · ${timelineAudioClipName(clip.path)}`;
     const maxCharacters = Math.floor(Math.max(0, audioClipPixelWidth(clip) - nameInsetPx * 2) / nameCharWidthPx);
     if (maxCharacters < 1) return "";
     return label.length <= maxCharacters ? label : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
@@ -2955,6 +2956,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               data-timeline-audio-gain={preview().gain}
               data-timeline-audio-fade-in-ms={preview().fade_in_ms}
               data-timeline-audio-fade-out-ms={preview().fade_out_ms}
+              data-timeline-audio-output-bus={preview().output_bus ?? "PROGRAM"}
               style={{
                 "--identity": identityCssColor(cueIdentityHue(stableTimelineAudioPathHash(clip.path)), "fill"),
                 "--identity-band": identityCssColor(cueIdentityHue(stableTimelineAudioPathHash(clip.path)), "band"),
@@ -3067,7 +3069,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 x={nameInsetPx}
                 y={-blockHeightPx() / 2 + blockUpperBandHeightPx() / 2}
                 dominant-baseline="central"
-                data-full-label={timelineAudioClipName(clip.path)}
+                data-full-label={`${clip.output_bus ?? "PROGRAM"} · ${timelineAudioClipName(clip.path)}`}
               >
                 {audioClipVisibleName(clip)}
               </text>

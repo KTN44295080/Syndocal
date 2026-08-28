@@ -35,8 +35,10 @@ import {
   expectedShowAsioArtifactRelativeDirectory,
   inspectBridgeExports,
   readWindowsMachineGuid,
+  assertShowAsioGitEnvironmentSafe,
   showAsioBridgeExports,
   showAsioFeatures,
+  showAsioSourceIdentityPaths,
 } from "./check-show-asio-artifact.mjs";
 import {
   prepareShowAsioRuntime,
@@ -190,18 +192,25 @@ export function validateGitState({ branch, head, upstream, status }) {
   return { branch, head, upstream, status };
 }
 
-function runGit(workspace, args, spawn = spawnSync) {
-  const result = spawn("git.exe", args, { cwd: workspace, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+function runGit(workspace, args, spawn = spawnSync, environment = process.env) {
+  assertShowAsioGitEnvironmentSafe(environment);
+  const result = spawn("git.exe", ["--no-replace-objects", ...args], {
+    cwd: workspace,
+    env: { ...environment },
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024,
+  });
   if (result.error || result.status !== 0) throw new Error("Git preflight failed for " + args.join(" ") + ".");
   return String(result.stdout ?? "").trimEnd();
 }
 
-export function captureGitState(workspace = workspaceRoot, spawn = spawnSync) {
+export function captureGitState(workspace = workspaceRoot, spawn = spawnSync, environment = process.env) {
   return validateGitState({
-    branch: runGit(workspace, ["symbolic-ref", "--quiet", "--short", "HEAD"], spawn).trim(),
-    head: runGit(workspace, ["rev-parse", "HEAD"], spawn).trim(),
-    upstream: runGit(workspace, ["rev-parse", "@{upstream}"], spawn).trim(),
-    status: runGit(workspace, ["status", "--porcelain=v1", "--untracked-files=all"], spawn),
+    branch: runGit(workspace, ["symbolic-ref", "--quiet", "--short", "HEAD"], spawn, environment).trim(),
+    head: runGit(workspace, ["rev-parse", "HEAD"], spawn, environment).trim(),
+    upstream: runGit(workspace, ["rev-parse", "@{upstream}"], spawn, environment).trim(),
+    status: runGit(workspace, ["status", "--porcelain=v1", "--untracked-files=all"], spawn, environment),
   });
 }
 
@@ -316,6 +325,7 @@ export function buildPlan(workspace = workspaceRoot, environment = process.env) 
   const blockers = [];
   let version = null;
   let commit = null;
+  let sourceBranch = null;
   try {
     version = readShowAsioProductVersion(workspace);
   } catch (error) {
@@ -340,11 +350,18 @@ export function buildPlan(workspace = workspaceRoot, environment = process.env) 
     blockers.push({ kind: "ENVIRONMENT_CONTRACT", message: error.message });
   }
   try {
-    const state = captureGitState(workspace);
+    const state = captureGitState(workspace, spawnSync, environment);
     commit = state.head;
+    sourceBranch = state.branch;
   } catch (error) {
     blockers.push({ kind: "GIT_CONTRACT", message: error.message });
-    const head = spawnSync("git.exe", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8", windowsHide: true });
+    assertShowAsioGitEnvironmentSafe(environment);
+    const head = spawnSync("git.exe", ["--no-replace-objects", "rev-parse", "HEAD"], {
+      cwd: workspace,
+      env: { ...environment },
+      encoding: "utf8",
+      windowsHide: true,
+    });
     const candidate = String(head.stdout ?? "").trim();
     if (commitPattern.test(candidate)) commit = candidate;
   }
@@ -360,6 +377,7 @@ export function buildPlan(workspace = workspaceRoot, environment = process.env) 
     processStopInvoked: false,
     version,
     commit,
+    sourceBranch,
     features: [...showAsioFeatures],
     applicationTarget: appTargetRelative,
     bridgeTarget: bridgeTargetRelative,
@@ -376,7 +394,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
   const ffmpegRoot = assertSafeExternalDirectory(environment.FFMPEG_DIR, "Show-ASIO FFMPEG_DIR");
   validatePinnedFfmpegRuntimeDirectory(resolve(ffmpegRoot, "bin"), "Show-ASIO FFMPEG_DIR/bin", inventory);
   assertExistingBuildTargetParents(workspace);
-  const gitBefore = captureGitState(workspace);
+  const gitBefore = captureGitState(workspace, spawnSync, environment);
   const sourceBefore = collectShowAsioSourceIdentity(workspace);
   const finalArtifact = resolve(workspace, expectedShowAsioArtifactRelativeDirectory(staticContract.version, gitBefore.head));
   if (existsSync(finalArtifact)) throw new Error("Show-ASIO final artifact directory already exists and cannot be overwritten: " + finalArtifact);
@@ -424,7 +442,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
   const bridgeSha256 = createHash("sha256").update(bridgeRecord.bytes).digest("hex");
   const exports = inspectBridgeExports(bridgePath, { environment: bridgeEnvironment });
   if (JSON.stringify(exports) !== JSON.stringify(showAsioBridgeExports)) {
-    throw new Error("Just-built Show-ASIO bridge exports are not the exact ABI v2 set.");
+    throw new Error("Just-built Show-ASIO bridge exports are not the exact ABI v2 plus v3 set.");
   }
 
   printAndVerifyLinker(applicationEnvironment);
@@ -445,7 +463,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
     { cwd: resolve(workspace, "app"), environment: applicationEnvironment },
   );
 
-  const gitAfter = captureGitState(workspace);
+  const gitAfter = captureGitState(workspace, spawnSync, environment);
   const sourceAfter = collectShowAsioSourceIdentity(workspace);
   assertSourceAndGitStable(gitBefore, gitAfter, sourceBefore, sourceAfter);
   const hostBinding = computeShowAsioHostBinding(workspace, readWindowsMachineGuid());
@@ -453,6 +471,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
     workspace,
     version: staticContract.version,
     commit: gitBefore.head,
+    sourceBranch: gitBefore.branch,
     hostBindingSha256: hostBinding,
     sourceFiles: sourceBefore,
     ffmpegDir: environment.FFMPEG_DIR,
@@ -473,6 +492,10 @@ async function runSelfTest() {
   pass(parseBuildMode([]) === "build", "no arguments select the fixed real build route");
   pass(parseBuildMode(["--plan"]) === "plan", "one exact plan argument is accepted");
   pass(parseBuildMode(["--self-test"]) === "self-test", "one exact self-test argument is accepted");
+  pass(
+    showAsioSourceIdentityPaths.length === 70 && showAsioSourceIdentityPaths.includes("app/src/uiLocalization.ts"),
+    "build authority carries the exact 70-path source identity including UI localization",
+  );
   for (const args of [["--features", "ndi"], ["--plan", "extra"], ["--bundle"], ["--target-dir", "elsewhere"]]) {
     rejects(() => parseBuildMode(args), /overrides are forbidden|Usage/, "extra/override arguments fail closed: " + args.join(" "));
   }
@@ -491,6 +514,47 @@ async function runSelfTest() {
   rejects(() => validateGitState({ ...cleanGit, status: " M tracked.txt" }), /completely clean/, "tracked dirt is rejected");
   rejects(() => validateGitState({ ...cleanGit, status: "?? untracked.txt" }), /completely clean/, "untracked files are rejected");
   rejects(() => validateGitState({ ...cleanGit, upstream: "b".repeat(40) }), /must equal its upstream/, "HEAD/upstream drift is rejected");
+  const capturedGitArguments = [];
+  const capturedGitEnvironments = [];
+  const syntheticGitStateSpawn = (_command, args, options) => {
+    capturedGitArguments.push(args);
+    capturedGitEnvironments.push(options?.env);
+    if (args[0] !== "--no-replace-objects") {
+      return { status: 0, stdout: "refs/replace/poisoned\n", stderr: "" };
+    }
+    const gitArgs = args[0] === "--no-replace-objects" ? args.slice(1) : args;
+    const key = gitArgs.join(" ");
+    const stdout = {
+      "symbolic-ref --quiet --short HEAD": "beta\n",
+      "rev-parse HEAD": "a".repeat(40) + "\n",
+      "rev-parse @{upstream}": "a".repeat(40) + "\n",
+      "status --porcelain=v1 --untracked-files=all": "",
+    }[key];
+    return { status: stdout === undefined ? 2 : 0, stdout: stdout ?? "", stderr: "" };
+  };
+  const capturedGitState = captureGitState("C:\\synthetic\\checkout", syntheticGitStateSpawn, { PATH: "C:\\safe\\bin" });
+  pass(capturedGitState.head === cleanGit.head, "build Git preflight accepts one clean pushed state through the exact synthetic runner");
+  pass(
+    capturedGitArguments.length === 4 && capturedGitArguments.every((args) => args[0] === "--no-replace-objects"),
+    "every build Git preflight subprocess disables refs/replace object substitution",
+  );
+  pass(
+    capturedGitEnvironments.every((environment) => Object.keys(environment ?? {}).every((name) => {
+      const upperName = name.toLocaleUpperCase("en-US");
+      return !upperName.startsWith("GIT_CONFIG_") && ![
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_OBJECT_DIRECTORY_RELATIVE",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
+        "GIT_NO_REPLACE_OBJECTS", "GIT_CONFIG",
+      ].includes(upperName);
+    })),
+    "every build Git preflight subprocess receives no repository/index/object/config authority override",
+  );
+  rejects(
+    () => captureGitState("C:\\synthetic\\checkout", syntheticGitStateSpawn, { GIT_DIR: "C:\\elsewhere" }),
+    /reject repository\/index\/object\/config authority environment overrides/,
+    "build Git preflight rejects inherited repository authority overrides before spawning",
+  );
   pass(validateVersionSet({ workspaceVersion: "1.2.0-alpha.27", lockVersion: "1.2.0-alpha.27", packageVersion: "1.2.0-alpha.27", tauriVersion: "1.2.0-alpha.27" }) === "1.2.0-alpha.27", "synchronized version set is accepted");
   rejects(() => validateVersionSet({ workspaceVersion: "1.2.0-alpha.27", lockVersion: "1.2.0-alpha.14", packageVersion: "1.2.0-alpha.27", tauriVersion: "1.2.0-alpha.27" }), /version drift/, "version drift is rejected");
   rejects(() => assertSourceAndGitStable(cleanGit, { ...cleanGit, head: "b".repeat(40) }, [], []), /Git identity/, "commit drift during build is rejected");

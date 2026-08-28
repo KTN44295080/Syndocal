@@ -1,0 +1,216 @@
+.audioOutputPanel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  color: #edf3fb;
+}
+
+.audioOutputPanelHeader {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.audioOutputPanelHeader h3 {
+  margin: 0;
+  text-wrap: balance;
+}
+
+.audioOutputPanelHeader p {
+  margin: 3px 0 0;
+  color: #aeb8c5;
+  text-wrap: pretty;
+}
+
+.audioOutputState {
+  display: grid;
+  min-width: 0;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
+}
+
+.audioOutputState strong {
+  white-space: nowrap;
+}
+
+.audioOutputState span {
+  max-width: 34ch;
+  overflow-wrap: anywhere;
+  color: #aeb8c5;
+  font-size: 12px;
+}
+
+.audioOutputState--ready strong {
+  color: #72d8b4;
+}
+
+.audioOutputState--locked strong,
+.audioOutputState--fault strong {
+  color: #ef8989;
+}
+
+.audioOutputState--active strong {
+  color: #f0bd72;
+}
+
+.audioOutputActions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.audioOutputActions button,
+.audioOutputTestGrid button,
+.audioOutputStopTest {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.audioOutputActions button[data-audio-output-action="return-to-normal"] {
+  color: #9ceccd;
+}
+
+.audioOutputDisclosure {
+  min-width: 0;
+  border: 1px solid #343d49;
+  border-radius: 6px;
+  background: #171d24;
+}
+
+.audioOutputDisclosure > summary {
+  min-height: 34px;
+  padding: 7px 10px;
+  color: #edf3fb;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.audioOutputDisclosureBody {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border-top: 1px solid #343d49;
+  padding: 10px;
+}
+
+.audioOutputFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.audioOutputFieldGrid--backend {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.audioOutputField {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #aeb8c5;
+}
+
+.audioOutputField > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioOutputField select {
+  min-width: 0;
+}
+
+.audioOutputChannelGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.audioOutputSoloField {
+  max-width: 360px;
+}
+
+.audioOutputDisconnected {
+  margin: 0;
+  color: #f0bd72;
+  text-wrap: pretty;
+}
+
+.audioOutputTestFieldset {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #343d49;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.audioOutputTestFieldset legend {
+  padding: 0 4px;
+  color: #aeb8c5;
+}
+
+.audioOutputTestGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.audioOutputTestGrid button.active {
+  border-color: #72d8b4;
+  color: #0d211a;
+  background: #72d8b4;
+}
+
+.audioOutputStopTest {
+  margin-top: 8px;
+}
+
+.audioOutputTestHint {
+  margin: 8px 0 0;
+  color: #aeb8c5;
+  text-wrap: pretty;
+}
+
+@media (max-width: 800px) {
+  .audioOutputActions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .audioOutputFieldGrid,
+  .audioOutputFieldGrid--backend,
+  .audioOutputChannelGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audioOutputTestGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .audioOutputPanelHeader {
+    display: grid;
+  }
+
+  .audioOutputState {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .audioOutputActions,
+  .audioOutputFieldGrid,
+  .audioOutputFieldGrid--backend,
+  .audioOutputChannelGrid,
+  .audioOutputTestGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .audioOutputSoloField {
+    max-width: none;
+  }
+}

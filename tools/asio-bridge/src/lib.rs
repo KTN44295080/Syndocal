@@ -1,5 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod asio_host_lease;
+mod v3_abi;
+#[cfg(any(test, all(target_os = "windows", feature = "asio")))]
+mod v3_native;
+mod v3_rt_backend;
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     ffi::c_void,
@@ -320,6 +326,9 @@ trait StreamLifecycle {
     fn stop(&mut self) -> Result<bool, BridgeError>;
     fn close(&mut self) -> Result<bool, BridgeError>;
     fn telemetry(&self) -> TelemetrySnapshot;
+    fn terminal_faulted(&self) -> bool {
+        false
+    }
 }
 
 fn open_stream_with<F>(
@@ -339,11 +348,54 @@ where
 {
     let inner = factory(request, sample_callback, event_callback, context)?;
     let actual_buffer_frames = inner.actual_buffer_frames()?;
-    Ok((SyndocalAsioHandle { inner }, actual_buffer_frames))
+    Ok((
+        SyndocalAsioHandle { inner, lease: None },
+        actual_buffer_frames,
+    ))
 }
 
 pub struct SyndocalAsioHandle {
     inner: Box<dyn StreamLifecycle>,
+    lease: Option<asio_host_lease::Ticket>,
+}
+
+impl Drop for SyndocalAsioHandle {
+    fn drop(&mut self) {
+        let Some(ticket) = self.lease.take() else {
+            return;
+        };
+        let _ = asio_host_lease::begin_stop(ticket);
+        if self.inner.close().is_ok() {
+            asio_host_lease::stop_succeeded(ticket);
+        } else {
+            asio_host_lease::stop_failed(ticket);
+        }
+    }
+}
+
+fn asio_host_busy(error: asio_host_lease::BusyState) -> BridgeError {
+    BridgeError::backend(format!(
+        "ASIO host is {}; the current v2/v3 owner must be explicitly stopped and closed before this operation",
+        error.label()
+    ))
+}
+
+fn required_handle_lease(
+    lease: Option<asio_host_lease::Ticket>,
+) -> Result<Option<asio_host_lease::Ticket>, BridgeError> {
+    if lease.is_some() {
+        return Ok(lease);
+    }
+    #[cfg(test)]
+    {
+        Ok(None)
+    }
+    #[cfg(not(test))]
+    {
+        Err(BridgeError::backend(
+            "ASIO handle has no process host lease",
+        ))
+    }
 }
 
 fn owned_bytes(bytes: Vec<u8>) -> SyndocalAsioStringV2 {
@@ -661,7 +713,12 @@ pub unsafe extern "C" fn syndocal_asio_v2_drivers_json(
     out_json: *mut SyndocalAsioStringV2,
     out_error_json: *mut SyndocalAsioStringV2,
 ) -> u32 {
-    ffi_guard(out_json, out_error_json, backend::drivers_json)
+    ffi_guard(out_json, out_error_json, || {
+        let inspection = asio_host_lease::Inspection::begin().map_err(asio_host_busy)?;
+        let result = backend::drivers_json();
+        inspection.complete();
+        result
+    })
 }
 
 #[no_mangle]
@@ -689,7 +746,10 @@ pub unsafe extern "C" fn syndocal_asio_v2_capabilities_json(
                 "driverId must be an exact persistent asio:<driver name> ID without surrounding whitespace",
             ));
         }
-        backend::capabilities_json(&request.driver_id)
+        let inspection = asio_host_lease::Inspection::begin().map_err(asio_host_busy)?;
+        let result = backend::capabilities_json(&request.driver_id);
+        inspection.complete();
+        result
     })
 }
 
@@ -734,13 +794,16 @@ pub unsafe extern "C" fn syndocal_asio_v2_start(
         let config: StartRequestJsonV2 =
             unsafe { parse_json(request_json, request_json_len, "start request") }?;
         let request = parse_start_request(config)?;
-        let (handle, actual_buffer_frames) = open_stream_with(
+        let guard = asio_host_lease::StartGuard::begin(asio_host_lease::Owner::V2)
+            .map_err(asio_host_busy)?;
+        let (mut handle, actual_buffer_frames) = open_stream_with(
             request,
             sample_callback,
             event_callback,
             context as usize,
             backend::start,
         )?;
+        handle.lease = Some(guard.activate());
         Ok((
             handle,
             StartResultJsonV2 {
@@ -768,7 +831,23 @@ pub unsafe extern "C" fn syndocal_asio_v2_stop(
         if handle.is_null() {
             return Err(BridgeError::invalid("handle must not be null"));
         }
-        let stream_was_active = unsafe { (*handle).inner.stop() }?;
+        let handle = unsafe { &mut *handle };
+        let ticket = required_handle_lease(handle.lease)?;
+        if let Some(ticket) = ticket {
+            if handle.inner.terminal_faulted() {
+                asio_host_lease::mark_fault(ticket);
+            }
+            asio_host_lease::begin_stop(ticket).map_err(asio_host_busy)?;
+        }
+        let stream_was_active = match handle.inner.stop() {
+            Ok(active) => active,
+            Err(error) => {
+                if let Some(ticket) = ticket {
+                    asio_host_lease::stop_failed(ticket);
+                }
+                return Err(error);
+            }
+        };
         Ok(StopResultJsonV2 {
             schema_version: JSON_SCHEMA_VERSION,
             kind: "stop",
@@ -802,7 +881,27 @@ pub unsafe extern "C" fn syndocal_asio_v2_close(
             return Err(BridgeError::invalid("handle already points to null"));
         }
         let mut owned = unsafe { Box::from_raw(raw) };
-        let stream_was_active = owned.inner.close()?;
+        let ticket = required_handle_lease(owned.lease.take())?;
+        if let Some(ticket) = ticket {
+            if owned.inner.terminal_faulted() {
+                asio_host_lease::mark_fault(ticket);
+            }
+            asio_host_lease::begin_stop(ticket).map_err(asio_host_busy)?;
+        }
+        let stream_was_active = match owned.inner.close() {
+            Ok(active) => {
+                if let Some(ticket) = ticket {
+                    asio_host_lease::stop_succeeded(ticket);
+                }
+                active
+            }
+            Err(error) => {
+                if let Some(ticket) = ticket {
+                    asio_host_lease::stop_failed(ticket);
+                }
+                return Err(error);
+            }
+        };
         drop(owned);
         Ok(CloseResultJsonV2 {
             schema_version: JSON_SCHEMA_VERSION,
@@ -829,7 +928,13 @@ pub unsafe extern "C" fn syndocal_asio_v2_telemetry_json(
         if handle.is_null() {
             return Err(BridgeError::invalid("handle must not be null"));
         }
-        let snapshot = unsafe { (*handle).inner.telemetry() };
+        let handle = unsafe { &*handle };
+        if handle.inner.terminal_faulted() {
+            if let Some(ticket) = handle.lease {
+                asio_host_lease::mark_fault(ticket);
+            }
+        }
+        let snapshot = handle.inner.telemetry();
         Ok(TelemetryJsonV2 {
             schema_version: JSON_SCHEMA_VERSION,
             kind: "telemetry",
@@ -1126,6 +1231,10 @@ mod backend {
                     .snapshot(callbacks),
                 capture_delay_ns: self.shared.telemetry.capture_delay_ns.snapshot(callbacks),
             }
+        }
+
+        fn terminal_faulted(&self) -> bool {
+            self.shared.terminal.load(Ordering::Acquire)
         }
     }
 
@@ -1866,6 +1975,7 @@ mod tests {
                 counters,
                 stopped: false,
             }),
+            lease: None,
         }))
     }
 

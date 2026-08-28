@@ -21,9 +21,14 @@ this route is not that decision and contains no fallback that pretends it is.
 - Final directory:
   `target/show-asio-local/Syndocal_Show_ASIO_<version>_<commit12>_x64`
 - Final executable: `syndocal-show-asio.exe`
-- Bridge: `syndocal_asio_bridge.dll`, ABI v2, exact nine v2 exports
+- Bridge: `syndocal_asio_bridge.dll`, maximum ABI v3, exact nine v2 plus nine v3 exports
 - Feature union: `libav,spout,show-asio`
-- Manifest: `show-asio-local-manifest.json`, schema v1
+- Manifest: `show-asio-local-manifest.json`, schema v3. The clean break from
+  v1/v2 records the exact artifact source commit and source branch alongside
+  the v2-nine plus v3-nine bridge boundary; legacy/future manifests are
+  rejected rather than migrated or rewritten. Evidence-only descendants must
+  pass the checker as `--artifact-source S --evidence-head E --source-branch B`
+  with `S` retained as the manifest commit.
 
 The final directory is never overwritten. A pre-existing directory is a hard
 failure and must be investigated; it is not deleted or reused automatically.
@@ -38,11 +43,14 @@ must pass immediately after manifest creation and again immediately before use.
 Any changed, missing, extra, linked, reparse-backed, ambiguous, or unverified
 entry fails closed.
 
-The source identity contains each trusted first-party helper in the complete
-local import closure, not a directory hash: `check-release-metadata.mjs`,
-`prepare-release-runtime.mjs`, `run-tauri.mjs`, `strict-json.mjs`, and
-`windows-runtime-inventory.mjs`. A post-build change to any one of those helpers
-invalidates the artifact before runtime payload inspection or acceptance.
+The source identity is one exact 70-path set containing the complete local
+import closure and runtime sources, not a directory hash. It includes the
+ASIO/PROGRAM/CUE AudioOutput UI execution-time localization source
+`app/src/uiLocalization.ts` and each trusted first-party helper:
+`check-release-metadata.mjs`, `prepare-release-runtime.mjs`, `run-tauri.mjs`,
+`strict-json.mjs`, and `windows-runtime-inventory.mjs`. A post-build change or
+missing entry in any source identity path invalidates the artifact before
+runtime payload inspection or acceptance.
 
 ## Commands
 
@@ -67,10 +75,11 @@ Actual local build, only after every prerequisite below is satisfied:
 node app/scripts/build-windows-show-asio.mjs
 ```
 
-Verification immediately before local use:
+Verification immediately before local use (replace `S`, `E`, and `B` with the
+exact artifact source commit, current evidence HEAD, and named source branch):
 
 ```powershell
-node app/scripts/check-show-asio-artifact.mjs
+node app/scripts/check-show-asio-artifact.mjs --artifact-source S --evidence-head E --source-branch B
 ```
 
 The actual build accepts no feature, target, bundle, signing, output, archive,
@@ -90,23 +99,36 @@ The actual route requires all of the following, with no guessing:
 - Windows x64 on the same host and canonical checkout path;
 - a completely clean worktree, including no untracked files;
 - `HEAD` exactly equal to its configured upstream;
+- no inherited Git repository, work-tree, index, object, namespace, graft,
+  shallow, replacement-object, or configuration authority override (`GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE`, related `GIT_*`, or `GIT_CONFIG_*`);
+- every checker, build-preflight, and three-display harness Git query disables
+  `refs/replace/*` with `--no-replace-objects`;
 - synchronized Cargo, lockfile, frontend, and Tauri product versions;
 - exact MSVC 14.44 x64 linker pin and `where.exe link.exe` first resolution;
 - explicit `FFMPEG_DIR`, `CPAL_ASIO_DIR`,
   `SYNDOCAL_ASIO_SDK_ARCHIVE_PATH`, and `LIBCLANG_PATH`;
 - the pinned FFmpeg seven-DLL inventory with no missing, extra, mutated,
   hard-linked, symlinked, or reparse-backed entry;
-- the pinned ASIO SDK provenance and one exact bridge DLL with ABI v2, exact
-  exports, AMD64 PE32+ DLL identity, and unchanged build hash;
+- the pinned ASIO SDK provenance and one exact bridge DLL with maximum ABI v3,
+  exact nine v2 plus nine v3 exports, AMD64 PE32+ DLL identity, and unchanged
+  build hash;
 - application integration feature `show-asio = ["asio"]`, while
   `default = ["libav", "spout"]` remains unchanged.
 
+## Historical alpha.12 build evidence (legacy schema v1)
+
+The following alpha.12 record is historical v1 evidence only. It is not the
+current local-only route or schema v3 authority, and its artifact must not be
+reused; current use requires a newly built schema v3 artifact and the exact
+S/E/B checker invocation above.
+
 The earlier `SHOW_ASIO_FEATURE_MISSING` and pre-build prerequisite blocks were
-resolved for exact committed/pushed checkpoint
+resolved for the historical committed/pushed checkpoint
 `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`.
 `app/src-tauri/Cargo.toml` defines the exact `show-asio = ["asio"]` feature while
 the normal defaults remain unchanged. That checkpoint built and
-manifest-verified
+manifest-verified under the legacy schema v1 route
 `target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.12_ff61a6dec6eb_x64`.
 Its application `syndocal-show-asio.exe` is 58,637,824 bytes, SHA-256
 `1D313900AB94A2429BF784B7D4CCA8E8EC39FBF17E11CB257D76A19656AA2F8D`;
@@ -115,15 +137,21 @@ its ABI-v2 `syndocal_asio_bridge.dll` is 813,568 bytes, SHA-256
 and `show-asio-local-manifest.json` has SHA-256
 `DCDFA0D381C851483D9E206637E803920ADDD6CC5B0C313780604FFC1D0EAAC4`.
 The manifest records `distributionApproved: false`, `sameHostOnly: true`, and
-`unbundled: true`. This closes the exact build/manifest checkpoint only. The
-dedicated checker must still pass immediately before use, and current physical
+`unbundled: true`. This closes that historical v1 build/manifest checkpoint
+only; it is not current schema v3 authority. The dedicated checker must still
+pass immediately before use for a newly built v3 artifact, and current physical
 native/operator, driver/recovery, formal matched 48 kHz, and measured-latency
 acceptance remain open. No installer, updater, copy, archive, or public
 distribution is approved.
 
-## Alpha.14 same-host physical evidence (2026-08-26 JST)
+## Historical alpha.14 same-host physical evidence (2026-08-26 JST)
 
-The current local-only artifact is bound to source commit
+The following records are historical evidence for the pre-v3/schema-v1
+artifact route. They are not the current artifact authority and are not
+reusable under schema v3; a new v3 artifact must be built and verified from
+its own source commit.
+
+The historical local-only artifact was bound to source commit
 `6b4cd1afb4d228158d04a15dbe3e4a73c922baeb`:
 `target/show-asio-local/Syndocal_Show_ASIO_1.2.0-alpha.14_6b4cd1afb4d2_x64`.
 Its application SHA-256 is
@@ -131,7 +159,8 @@ Its application SHA-256 is
 bridge SHA-256 is `40BB8D19C7B5C8DFA52C21C879C8887645CDE83DF6A4FAB5CF59D2A396546AE2`;
 and its manifest SHA-256 is
 `BBEA830122B999A7F985A8F0E88330361E74D3EEE9C5DF2E982EB932A4B687DD`.
-The dedicated checker passed with `files=14` and `distributionApproved=false`.
+The dedicated checker passed with `files=14` and `distributionApproved=false`
+under the historical route; this does not authorize reuse under schema v3.
 The official `node app/scripts/build-windows-show-asio.mjs` route passed with
 the exact VS Community 14.44 x64 linker pinned and first, `check:release` PASS,
 and first-party build warnings `0`.
@@ -148,9 +177,10 @@ and final Stop/Close again left both process counts `0`.
 
 This is not unplug, XRUN/fault, TOPPING, long-duration, matrix, or latency
 threshold evidence. The artifact remains `distributionApproved: false`. After
-a documentation commit changes HEAD, reuse requires a clean checkout detached
-at source `6b4cd1a`, or a rebuild from the new HEAD; no cross-source reuse is
-approved.
+an evidence-only descendant changes HEAD, reuse requires a clean checkout on
+the same named source branch and a checker invocation binding source `S` to
+the manifest and current evidence `E`; any source-identity change, including
+this notice, requires a rebuild from the new source commit.
 
 ## Unsupported cases
 

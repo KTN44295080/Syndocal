@@ -1764,6 +1764,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..protocol::TimelineSnapshot::default()
@@ -1929,6 +1930,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..protocol::TimelineSnapshot::default()
@@ -3239,6 +3241,7 @@ mod tests {
                 gain: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Program,
             }],
             duration_ms: 100,
             ..protocol::TimelineSnapshot::default()

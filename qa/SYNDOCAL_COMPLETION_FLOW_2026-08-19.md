@@ -2712,3 +2712,35 @@ re-proven, so cleanup remains fail-closed. `Candidates=[]`,
 `PlannedLogicalBytes=0`, and `ReclaimedLogicalBytes=0`; Apply was not run and
 no deletion occurred. The older `HardlinkDetected` cleanup result remains
 historical and is intentionally unchanged.
+
+## 59. 2026-08-29 CURRENT alpha.28 source/integration checkpoint
+
+The current source authority is branch `codex/syndocal-v1.2` at
+`8153ebb37a9517aad91c0da6ad06de9a80db2a1a`, equal to its upstream at this
+checkpoint. Product metadata is synchronized at `1.2.0-alpha.28`. The active
+alpha.28 implementation changes remain uncommitted; this documentation
+checkpoint makes no commit or push claim. Earlier sections retain their
+recorded evidence and are not relabelled; this section is the current alpha.28
+status.
+
+Current verified source evidence:
+
+- `pnpm --dir app run build` passed and the frontend build transformed `302`
+  modules.
+- `pnpm --dir app run check:release` passed, including release metadata, ASIO
+  packaging `169` assertions, ASIO v3 contract `22` assertions, Timeline
+  PROGRAM/CUE bus `11` assertions, and the existing video route/window gates.
+- Prior focused ASIO preflight evidence passed `17/17`, `11/11`, and `15/15`,
+  with first-party warnings `0`. This is preflight/source evidence only.
+
+Production code integration remains pending despite the isolated source and
+preflight results. The alpha.28 native release build, native launch/window
+acceptance, ASIO loader smoke, and all physical/hardware rows (including MOTU
+M4, M32/DL16, serial DMX, DJ/MIDI/pedal, real ACK, and reconnect) remain
+unverified. No historical native or hardware checkbox is changed or promoted
+by this section.
+
+The first safe resume action is to complete and independently review the
+alpha.28 production integration, rerun the exact gates from a stable tree,
+then perform the required native and hardware acceptance before any commit or
+push.
