@@ -1,0 +1,232 @@
+# ASIO PROGRAM / CUE Output Acceptance
+
+Updated: 2026-08-28
+
+## Show boundary
+
+This is a release-blocking gate for the DSF2026 show path. The software
+deadline is 2026-08-29 and the performance is 2026-08-30. The implementation
+must remain generic for supported multichannel ASIO devices; MOTU M4 is the
+DSF2026 acceptance device, not a hard-coded product dependency.
+
+The normal MIT/WASAPI build and installer remain separate from the locally
+licensed, non-default show-ASIO artifact described by
+`qa/ASIO_INPUT_ACCEPTANCE.md`. No ASIO SDK-linked DLL or feature may enter the
+normal installer, updater, repair path, or default build graph.
+
+## Architecture decision
+
+The existing ASIO bridge ABI/schema v2 is an input and Reactive Capture
+contract. Its request contains input-channel selection and its callback sends
+captured mono samples to the application. Playback output must not be hidden in
+that request or callback.
+
+Adopt a versioned output-capable boundary rather than adding optional output
+fields to ABI v2:
+
+- Keep ABI v2 input entry points and schema behavior unchanged.
+- Add ABI/schema v3 output/full-duplex entry points to the same canonical DLL,
+  while preserving the exact nine v2 input exports and their signatures. The
+  v3 block is the exact corresponding nine-operation surface
+  (`abi_version`, `build_flags`, `drivers_json`, `capabilities_json`,
+  `string_free`, `start`, `stop`, `close`, and `telemetry_json`) under the
+  `syndocal_asio_v3_` prefix. Header, binary-export, loader, and packaging tests
+  reject any missing, extra, retired, or unknown export.
+- Open one explicit ASIO driver as one multichannel output stream. PROGRAM and
+  CUE must share that stream and clock domain; two independent output devices or
+  streams are not an accepted implementation.
+- If Reactive Capture input and playback output are both active on the same
+  ASIO driver, v3 must own one full-duplex driver session. ASIO playback never
+  leaves an input-v2 session active in parallel. An already-active v2 session
+  makes v3 Start fail with a visible busy fault; there is no implicit stop or
+  migration of the live session.
+- The realtime callback may only consume prevalidated, preallocated audio state
+  and publish lock-free/bounded telemetry. Filesystem access, decoding, device
+  enumeration, UI work, blocking locks, allocation, and fallback selection are
+  forbidden in the callback.
+
+The v3 request describes the exact output stream width/rate/native format/fixed
+buffer and whether the stream is output-only or full-duplex. Full-duplex input
+fields are mandatory only in duplex mode. PROGRAM/CUE physical mapping remains
+application-owned machine state and is deliberately absent from the bridge
+wire schema.
+
+Rodio mixers are drained by a non-realtime render worker into a preallocated,
+bounded interleaved-frame SPSC. Rodio's mixer source is not pulled directly in
+the ASIO callback because its internal source management uses synchronization
+and dynamic collections. The ASIO callback only copies the next complete block
+or emits one complete silent block and latches a terminal fault; partial or
+mixed-authority frames are forbidden.
+
+The existing Timeline Cue Audio runtime for generated Click/Guide events is an
+input to the same logical CUE mixer. While show-ASIO output is active it must not
+use the existing `FollowProgram` route and must not open a second explicit OS
+output device. Normal MIT/WASAPI behavior remains unchanged when show-ASIO is
+not selected. This is one routing coordinator, not a parallel playback path.
+
+## Logical buses and persistence
+
+Project data stores logical routing only:
+
+- `PROGRAM`: stereo audience/broadcast material. This is the default for every
+  existing Timeline Audio Clip whose saved data has no bus field.
+- `CUE`: mono click/guide/performer cue material.
+
+Physical channel indices must never be written to a Timeline Item, Audio Clip,
+Media Asset, or portable show project. A one-way default/migration maps absent
+logical-bus data to PROGRAM. Invalid and future schema values fail closed.
+
+Machine-local audio configuration stores:
+
+- backend and exact ASIO driver identity;
+- sample rate and fixed/requested buffer settings;
+- PROGRAM L, PROGRAM R, CUE, and optional Spare physical output channels;
+- the capability/catalog generation used to validate the selection.
+
+The UI displays physical channels as one-based Output 1, Output 2, and so on.
+The internal zero-based boundary must have explicit off-by-one tests. Stale,
+missing, duplicated, ambiguous, or out-of-range mappings lock output until the
+operator reselects and explicitly starts it.
+
+## Mixing and channel mapping
+
+For each output frame the logical render is conceptually:
+
+```text
+PROGRAM = [program_left, program_right]
+CUE     = average(cue_left, cue_right) or the unchanged mono cue sample
+```
+
+The validated machine mapping places those values into the selected physical
+channels of the device-sized interleaved frame. Every other channel, including
+Spare during ordinary playback, is zero. The implementation is not fixed to
+four channels.
+
+Stereo CUE uses an average/gain-safe mono sum, never raw addition. PROGRAM and
+CUE may play simultaneously and must retain the existing Timeline seek, pause,
+resume, stop, loop, speed, fade, and synchronization semantics.
+
+## DSF2026 machine profile
+
+The machine-local starting profile is:
+
+- driver: `MOTU M Series ASIO` after exact live enumeration;
+- sample rate: 48,000 Hz;
+- PROGRAM L: Output 1;
+- PROGRAM R: Output 2;
+- CUE: Output 3;
+- Spare: Output 4.
+
+These values are an operator-selectable profile, not project data and not a
+device-name special case. A driver that cannot provide the exact rate, channel
+count, format, or buffer is rejected; no 44.1 kHz, other device, default device,
+or WASAPI substitution is permitted.
+
+## Fail-closed runtime contract
+
+The following conditions stop or reject the ASIO output and surface a visible,
+actionable fault:
+
+- explicit driver is absent or its identity/capabilities changed;
+- exact sample rate, native format, channel count, or buffer cannot be opened;
+- PROGRAM L/R or CUE is absent, duplicated, or outside the device channel set;
+- device loss, stream reset/resync, sample-rate or buffer-size change, XRUN,
+  malformed callback, callback gap, or realtime scheduling failure;
+- the application cannot sustain one authoritative stream/clock.
+
+CUE must never be downmixed or rerouted to PROGRAM. PROGRAM must never be
+rerouted to CUE. A fault must not switch to WASAPI, another ASIO device, an OS
+default, or another sample rate. Reconnection does not resume playback; the
+operator must revalidate and explicitly Start.
+
+## Operator UI
+
+The machine Audio settings must provide:
+
+- backend, driver, sample rate, buffer, PROGRAM L/R, CUE, and optional Spare
+  selectors based on the current enumerated capability set;
+- clear Ready, Locked/Invalid, Active, and Fault state with the exact reason;
+- safe-level Test PROGRAM L, Test PROGRAM R, Test CUE, Test Spare, and preferably
+  Test PROGRAM Stereo actions;
+- routing preflight/solo controls for PROGRAM-only and CUE-only playback;
+- optional PROGRAM L/R/CUE peak meters whose callback publication remains
+  bounded and realtime-safe.
+
+Timeline Audio Clip settings expose `Output Bus: PROGRAM | CUE`; existing clips
+show PROGRAM. A compact PROGRAM/CUE marker may be added to the item without
+shrinking unrelated UI controls.
+
+Test actions start at a bounded safe level, are mutually exclusive with live
+show playback, and use the same validated device/channel mapper as Timeline
+audio. A test path must not bypass stale-identity, duplicate-channel, exact-rate,
+or terminal-fault gates.
+
+No date or performance-day mode is stored in the product. A day that does not
+use CUE is operated by leaving CUE material unarmed or muted; it does not change
+the device schema or silently reroute CUE.
+
+## Deterministic software acceptance
+
+- [ ] Missing bus data deserializes/migrates to PROGRAM and reserializes
+      canonically.
+- [ ] Invalid or future bus/schema values fail closed.
+- [ ] Physical mappings exist only in machine-local state.
+- [ ] One-based UI channels map exactly once to zero-based callback channels.
+- [ ] PROGRAM stereo reaches only mapped PROGRAM L/R.
+- [ ] Mono CUE reaches only mapped CUE.
+- [ ] Stereo CUE is averaged safely and reaches only mapped CUE.
+- [ ] Simultaneous PROGRAM+CUE uses one frame clock and one ASIO output stream.
+- [ ] Existing generated Click and Guide events enter the same CUE mixer; no
+      second OS output stream is opened while show-ASIO is active.
+- [ ] PROGRAM silence is written to the CUE channel; CUE silence is written to
+      both PROGRAM channels for isolated bus tests.
+- [ ] Unmapped, duplicated, stale, and out-of-range physical channels reject
+      Start with a specific conflict/error.
+- [ ] Exact-rate mismatch rejects Start without fallback.
+- [ ] Disconnect/XRUN/reset/resync/rate-change/buffer-change/callback-gap enters
+      terminal Fault and requires explicit operator Start.
+- [ ] Seek, pause, resume, stop, loop, speed, fades, and nested Timeline playback
+      keep PROGRAM and CUE synchronized.
+- [ ] Project reload preserves logical bus; app restart restores then
+      revalidates machine mapping without auto-start.
+- [ ] A CUE-unused operating day is represented only by unarmed or muted CUE
+      content; no date-specific mode or physical mapping is written to project
+      data.
+- [ ] ABI/header/schema tests prove v2 input behavior is unchanged and the new
+      output ABI rejects unknown/future fields and revisions.
+- [ ] Packaging tests prove the default build/installer/updater contains no ASIO
+      SDK-linked artifact or enabled ASIO feature.
+- [ ] Focused Rust/UI tests pass with zero first-party warnings.
+- [ ] Exact Windows native gate and `pnpm --dir app tauri build --no-bundle`
+      pass before handoff.
+
+## Physical MOTU M4 acceptance
+
+- [ ] Enumerate and explicitly select MOTU M Series ASIO at 48 kHz.
+- [ ] Test PROGRAM L is audible only on M4 Output 1.
+- [ ] Test PROGRAM R is audible only on M4 Output 2.
+- [ ] Test CUE is audible only on M4 Output 3.
+- [ ] Test Spare is audible only on M4 Output 4.
+- [ ] PROGRAM stereo is audible only on Outputs 1/2.
+- [ ] CUE mono/stereo-source test is audible only on Output 3.
+- [ ] PROGRAM+CUE play simultaneously on Outputs 1/2+3 with no audible leak or
+      transport divergence.
+- [ ] Unplug enters Fault and silences output; reconnect does not auto-resume.
+
+## M32/DL16 system acceptance
+
+- [ ] M4 1/2 -> DL16 IN5/6 -> M32 Ch18/19 reaches Main L/R and Broadcast 9/10.
+- [ ] M4 3 -> DL16 IN7 -> M32 Ch20 reaches only IEM buses 4/5/6.
+- [ ] CUE is absent from Main, Broadcast, and Floor sends.
+
+M32 routing is external to Syndocal implementation, but these rows are required
+physical show evidence. They remain unchecked until observed on the actual
+system; software or simulated tests cannot close them.
+
+## Completion record
+
+At each checkpoint record branch/HEAD/upstream, adopted ABI and runtime design,
+changed files, schema and migration behavior, exact tests and warning counts,
+native artifact identity, unverified physical rows, blockers, commit SHA, and
+push result. Do not mark this gate complete while any required software, native,
+MOTU M4, or M32/DL16 row remains unverified.

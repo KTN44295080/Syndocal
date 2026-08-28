@@ -2,6 +2,11 @@
 
 Updated: 2026-08-26
 
+ASIO multi-output playback and the PROGRAM/CUE show routing gate are tracked
+separately in `qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md`. ABI/schema v2 in this
+document remains the input/Reactive Capture contract; output work must not
+silently change its request or callback semantics.
+
 ## Release boundary
 
 Syndocal's default MIT build remains on the validated WASAPI shared input path. ASIO must be a separately built Windows feature and must not enter the normal installer until one of these distribution paths is selected and recorded:
