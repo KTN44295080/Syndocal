@@ -99,6 +99,7 @@ pub(crate) struct AsioTimelineTransportPlan {
 }
 
 impl AsioTimelineTransportPlan {
+    #[cfg(test)]
     pub(crate) const fn kind(self) -> AsioTimelineTransportPlanKind {
         self.kind
     }
@@ -112,6 +113,7 @@ impl AsioTimelineTransportPlan {
     /// baseline/rebase/no-op it is the current runtime generation. A rebase may
     /// also adopt a newly observed semantic stamp, but never asks the runtime to
     /// rotate again.
+    #[cfg(test)]
     pub(crate) const fn confirmed_transport_generation(self) -> u64 {
         self.after.transport_generation
     }

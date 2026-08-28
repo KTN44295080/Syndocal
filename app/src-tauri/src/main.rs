@@ -2007,6 +2007,12 @@ struct AppState {
     /// machine settings; a missing owner fails show-ASIO closed.
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     audio_output_router: Option<Arc<audio_output_router::RouterSlot>>,
+    /// Serializes operator-visible ASIO lifecycle mutations. RouterSlot still
+    /// owns the authoritative route state; this lock prevents profile
+    /// reselection from racing Start/Revalidate between validation and
+    /// persistence.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+    asio_output_lifecycle: Mutex<()>,
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     asio_output_runtime: Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -14056,6 +14062,10 @@ impl TimelineCueAudioRuntime {
         }
     }
 
+    #[cfg(any(
+        test,
+        not(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))
+    ))]
     fn sync(
         &self,
         timeline: &engine::TimelineAudioRuntimeSnapshot,
@@ -41019,6 +41029,14 @@ fn reselect_asio_output_profile(
     let profile =
         asio_program_cue::MachineAsioOutputProfile::parse_storage_text(&request.profile_json)
             .map_err(|error| error.to_string())?;
+    let _lifecycle = state.asio_output_lifecycle.lock().map_err(|_| {
+        "ASIO output lifecycle lock was poisoned during profile reselection".to_owned()
+    })?;
+    let slot = state
+        .audio_output_router
+        .as_ref()
+        .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
+    prepare_asio_router_for_profile_reselection(slot)?;
     let bridge = load_show_asio_v3_bridge()?;
     let capabilities = bridge
         .capabilities_text(profile.driver_id())
@@ -41051,6 +41069,10 @@ fn reselect_asio_output_profile(
 fn revalidate_asio_program_cue_output(
     state: State<'_, AppState>,
 ) -> Result<AsioOutputStatusReply, String> {
+    let _lifecycle = state
+        .asio_output_lifecycle
+        .lock()
+        .map_err(|_| "ASIO output lifecycle lock was poisoned during revalidation".to_owned())?;
     let profile = {
         let machine = state
             .asio_output_machine
@@ -41096,6 +41118,10 @@ fn revalidate_asio_program_cue_output(
 fn start_asio_program_cue_output(
     state: State<'_, AppState>,
 ) -> Result<AsioOutputStatusReply, String> {
+    let _lifecycle = state
+        .asio_output_lifecycle
+        .lock()
+        .map_err(|_| "ASIO output lifecycle lock was poisoned during Start".to_owned())?;
     let profile = {
         let machine = state
             .asio_output_machine
@@ -41182,9 +41208,10 @@ fn start_asio_program_cue_output(
     if !task.perform().succeeded() {
         return Err("ASIO output Start failed; output remains faulted and silent".to_owned());
     }
-    // All status readers take machine -> runtime. Release the lifecycle guard
-    // before reacquiring that canonical pair so parallel UI commands cannot
-    // form a runtime -> machine / machine -> runtime deadlock.
+    // All status readers take machine -> runtime. Release the runtime guard
+    // before reacquiring that canonical pair; the lifecycle guard remains
+    // held until the command returns so no competing lifecycle mutation can
+    // interleave with the final status snapshot.
     drop(runtime);
     let machine = state
         .asio_output_machine
@@ -41202,6 +41229,10 @@ fn start_asio_program_cue_output(
 fn stop_close_asio_program_cue_output(
     state: State<'_, AppState>,
 ) -> Result<AsioOutputStatusReply, String> {
+    let _lifecycle = state
+        .asio_output_lifecycle
+        .lock()
+        .map_err(|_| "ASIO output lifecycle lock was poisoned during Stop/Close".to_owned())?;
     let mut runtime = state
         .asio_output_runtime
         .lock()
@@ -41421,12 +41452,58 @@ fn set_asio_output_solo(
     active_asio_output_status(&state)
 }
 
-/// Explicitly returns the machine output admission to Normal only after a
-/// successful ASIO Stop/Close has reached Locked. This never constructs a
-/// Rodio/WASAPI device; normal routes require their own later admission.
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn prepare_asio_router_for_profile_reselection(
+    slot: &audio_output_router::RouterSlot,
+) -> Result<(), String> {
+    let snapshot = slot
+        .snapshot()
+        .map_err(|error| router_error("profile reselection state", error))?;
+    match snapshot.state {
+        audio_output_router::State::Normal | audio_output_router::State::Locked => Ok(()),
+        audio_output_router::State::AsioReady => slot
+            .cancel_ready()
+            .map(|_| ())
+            .map_err(|error| router_error("profile reselection Ready cancellation", error)),
+        state => Err(format!(
+            "ASIO output profile reselection requires exact Normal, Locked, or AsioReady router state (got {state:?})"
+        )),
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn select_normal_audio_output_router(
+    slot: &audio_output_router::RouterSlot,
+) -> Result<audio_output_router::Snapshot, String> {
+    let snapshot = slot
+        .snapshot()
+        .map_err(|error| router_error("explicit Normal selection state", error))?;
+    match snapshot.state {
+        audio_output_router::State::Locked => {}
+        audio_output_router::State::AsioReady => {
+            slot.cancel_ready()
+                .map_err(|error| router_error("explicit Normal Ready cancellation", error))?;
+        }
+        state => {
+            return Err(format!(
+                "Explicit Normal selection requires exact Locked or AsioReady router state (got {state:?})"
+            ));
+        }
+    }
+    slot.select_normal()
+        .map_err(|error| router_error("explicit Normal selection", error))
+}
+
+/// Explicitly returns the machine output admission to Normal after a
+/// successful Stop/Close (Locked) or by cancelling an unused revalidated
+/// Ready ticket. This never constructs a Rodio/WASAPI device; normal routes
+/// require their own later admission.
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 #[tauri::command]
 fn select_normal_audio_output(state: State<'_, AppState>) -> Result<AsioOutputStatusReply, String> {
+    let _lifecycle = state.asio_output_lifecycle.lock().map_err(|_| {
+        "ASIO output lifecycle lock was poisoned during Normal selection".to_owned()
+    })?;
     {
         let mut playback = state.media_audio.lock().map_err(|_| {
             "Media audio playback lock was poisoned during Normal selection".to_owned()
@@ -41438,8 +41515,7 @@ fn select_normal_audio_output(state: State<'_, AppState>) -> Result<AsioOutputSt
         .audio_output_router
         .as_ref()
         .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
-    slot.select_normal()
-        .map_err(|error| router_error("explicit Normal selection", error))?;
+    select_normal_audio_output_router(slot)?;
     state
         .timeline_cue_audio
         .reopen_normal_routes_after_explicit_selection()?;
@@ -81039,6 +81115,68 @@ pub(crate) mod tests {
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    #[test]
+    fn asio_ready_profile_reselection_and_normal_return_cancel_the_ready_ticket() {
+        let slot = audio_output_router::RouterSlot::test_slot();
+        slot.quiesce().unwrap();
+        assert!(slot
+            .into_admitted_start_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        assert!(slot
+            .into_stop_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        assert!(slot
+            .into_revalidation_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        assert_eq!(
+            slot.snapshot().unwrap().state,
+            audio_output_router::State::AsioReady
+        );
+
+        prepare_asio_router_for_profile_reselection(&slot).unwrap();
+        let after_reselection = slot.snapshot().unwrap();
+        assert_eq!(after_reselection.state, audio_output_router::State::Locked);
+        assert!(after_reselection.operation.is_none());
+        assert!(after_reselection.session.is_none());
+        assert!(matches!(
+            slot.into_validated_start_with(|| Ok(())),
+            Err(audio_output_router::Error::ReadyMismatch)
+        ));
+
+        assert!(slot
+            .into_revalidation_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        let normal = select_normal_audio_output_router(&slot).unwrap();
+        assert_eq!(normal.state, audio_output_router::State::Normal);
+        assert!(normal.operation.is_none());
+        assert!(normal.session.is_none());
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
+    #[test]
+    fn profile_reselection_rejects_an_active_router_without_mutation() {
+        let slot = audio_output_router::RouterSlot::test_slot();
+        slot.quiesce().unwrap();
+        assert!(slot
+            .into_admitted_start_with(|| Ok(()))
+            .unwrap()
+            .perform()
+            .succeeded());
+        let before = slot.snapshot().unwrap();
+        let error = prepare_asio_router_for_profile_reselection(&slot).unwrap_err();
+        assert!(error.contains("requires exact Normal, Locked, or AsioReady"));
+        assert_eq!(slot.snapshot().unwrap(), before);
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio", test))]
     fn active_asio_command_parts() -> (
         EngineHandle,
         Arc<audio_output_router::RouterSlot>,
@@ -81803,6 +81941,8 @@ pub(crate) mod tests {
                 asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
                 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
                 audio_output_router: None,
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                asio_output_lifecycle: Mutex::new(()),
                 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
                 asio_output_runtime: Arc::new(Mutex::new(
                     asio_output_runtime::AsioOutputRuntime::default(),
@@ -130852,6 +130992,8 @@ fn main() {
             asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             audio_output_router: Some(audio_output_router),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            asio_output_lifecycle: Mutex::new(()),
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             asio_output_runtime,
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]

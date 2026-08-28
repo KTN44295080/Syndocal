@@ -37,10 +37,12 @@ impl TimelineOutputIdentity {
         Ok(identity)
     }
 
+    #[cfg(test)]
     pub(crate) fn session_generation(self) -> u64 {
         self.session_generation
     }
 
+    #[cfg(test)]
     pub(crate) fn transport_generation(self) -> u64 {
         self.transport_generation
     }
@@ -130,6 +132,7 @@ impl AsioTimelineOutputSelector {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn identity_for(&self, bus: TimelineAudioOutputBus) -> TimelineOutputIdentity {
         TimelineOutputIdentity {
             bus,
@@ -182,12 +185,13 @@ impl AsioTimelineOutputSelector {
 /// A `rodio::Source` that permanently ends when its transport generation is
 /// no longer current.
 ///
-/// The source stores the full logical identity for observability, while the
+/// The test build stores the full logical identity for observability, while the
 /// transport generation is the realtime admission fence.  A stale source is
 /// rejected before its first sample and cannot resume after a rotation.
 pub(crate) struct GenerationGuardedSource<S> {
     inner: S,
     transport: Arc<TransportGeneration>,
+    #[cfg(test)]
     identity: TimelineOutputIdentity,
     expected_transport_generation: u64,
     ended: bool,
@@ -207,15 +211,18 @@ where
             inner,
             transport,
             expected_transport_generation: identity.transport_generation,
+            #[cfg(test)]
             identity,
             ended: false,
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn identity(&self) -> TimelineOutputIdentity {
         self.identity
     }
 
+    #[cfg(test)]
     pub(crate) fn expected_transport_generation(&self) -> u64 {
         self.expected_transport_generation
     }

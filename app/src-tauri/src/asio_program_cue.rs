@@ -10,12 +10,11 @@ use serde::{
     de::{self, IgnoredAny, MapAccess, Visitor},
     Deserialize, Serialize,
 };
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use std::collections::{BTreeSet, HashSet};
+#[cfg(test)]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 const MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION: u32 = 1;
@@ -74,13 +73,6 @@ pub(crate) enum PreflightClearReason {
     EngineLive,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub(crate) enum LogicalAudioBus {
-    Program,
-    Cue,
-}
-
 /// Strict machine-only schema.  `deny_unknown_fields` deliberately preserves a
 /// future/corrupt file as Locked rather than rewriting it into a lossy shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +106,7 @@ pub(crate) enum OutputProfileLock {
 /// operator reselection.  It is intentionally non-serializable and captures
 /// every output tuple dimension whose drift would otherwise make a stored
 /// physical mapping unsafe.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct FreshOutputCapabilityProof {
     driver_id: String,
@@ -129,6 +122,7 @@ pub(crate) struct FreshOutputCapabilityProof {
     consumed: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
 impl FreshOutputCapabilityProof {
     pub(crate) fn from_live_revalidation(
         driver_id: String,
@@ -595,6 +589,7 @@ impl AsioPreflightIdentity {
 /// stale UI action cannot accidentally reach a new stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreflightPhase {
+    #[cfg(test)]
     Inactive,
     Active,
     Stopped,
@@ -615,7 +610,9 @@ pub(crate) enum PreflightStateError {
     Faulted {
         identity: AsioPreflightIdentity,
     },
+    #[cfg(test)]
     AlreadyActive,
+    #[cfg(test)]
     StaleSessionIdentity {
         previous: AsioPreflightIdentity,
         requested: AsioPreflightIdentity,
@@ -625,6 +622,7 @@ pub(crate) enum PreflightStateError {
     LivePlaybackBlockedBySolo(PreflightSolo),
     InvalidDuration,
     DurationOverflow,
+    #[cfg(test)]
     SpareUnavailable,
     TestAlreadyActive,
     TestBlockedBySolo(PreflightSolo),
@@ -662,7 +660,9 @@ impl std::fmt::Display for PreflightStateError {
                 identity.session_generation,
                 identity.transport_generation,
             ),
+            #[cfg(test)]
             Self::AlreadyActive => f.write_str("ASIO preflight session is already Active"),
+            #[cfg(test)]
             Self::StaleSessionIdentity { previous, requested } => write!(
                 f,
                 "ASIO preflight activation identity is stale: previous session {} / transport {}, requested session {} / transport {}",
@@ -689,6 +689,7 @@ impl std::fmt::Display for PreflightStateError {
             Self::DurationOverflow => {
                 f.write_str("ASIO preflight expiry exceeded the supported clock range")
             }
+            #[cfg(test)]
             Self::SpareUnavailable => {
                 f.write_str("ASIO preflight Spare target requires an explicitly selected Spare output")
             }
@@ -732,6 +733,7 @@ pub(crate) struct AsioPreflightState {
 }
 
 impl AsioPreflightState {
+    #[cfg(test)]
     pub(crate) fn new(
         session_generation: u64,
         transport_generation: u64,
@@ -747,6 +749,7 @@ impl AsioPreflightState {
     /// Construct a state holder before the ASIO session has been admitted.
     /// The identity is still retained so every later operation can be checked
     /// against the exact session/transport pair that the caller presents.
+    #[cfg(test)]
     pub(crate) fn inactive_from_identity(identity: AsioPreflightIdentity) -> Self {
         Self::from_identity_in_phase(identity, PreflightPhase::Inactive)
     }
@@ -764,6 +767,7 @@ impl AsioPreflightState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn identity(&self) -> AsioPreflightIdentity {
         self.identity
     }
@@ -814,6 +818,7 @@ impl AsioPreflightState {
     /// Admit a fresh ASIO session identity.  Reusing an identity from a
     /// stopped/faulted session is rejected so a stale UI/control message
     /// cannot arm preflight on a later stream.
+    #[cfg(test)]
     pub(crate) fn activate(
         &mut self,
         identity: AsioPreflightIdentity,
@@ -848,6 +853,7 @@ impl AsioPreflightState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn transport_generation(&self) -> u64 {
         self.identity.transport_generation
     }
@@ -868,6 +874,7 @@ impl AsioPreflightState {
 
     /// Arm one typed test for a bounded duration.  The caller supplies no
     /// physical channel, and an active non-Off solo blocks the test.
+    #[cfg(test)]
     pub(crate) fn begin_test(
         &mut self,
         target: PreflightTarget,
@@ -1003,6 +1010,7 @@ impl AsioPreflightState {
     /// Render the currently armed test, if any, through the profile-bound
     /// mapper.  A stale identity silences the destination and returns an error
     /// without mutating the state; expiry silences and returns `Ok(false)`.
+    #[cfg(test)]
     pub(crate) fn render_test(
         &mut self,
         mapper: &AsioPreflightMapper,
@@ -1064,6 +1072,7 @@ impl AsioPreflightState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_live_playback(
         &mut self,
         identity: AsioPreflightIdentity,
@@ -1071,6 +1080,7 @@ impl AsioPreflightState {
         self.set_live_playback_active(true, identity)
     }
 
+    #[cfg(test)]
     pub(crate) fn end_live_playback(
         &mut self,
         identity: AsioPreflightIdentity,
@@ -1147,6 +1157,7 @@ impl AsioPreflightState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn rotate_transport(
         &mut self,
         current: AsioPreflightIdentity,
@@ -1227,6 +1238,7 @@ fn checked_expiry(now_ms: u64, duration_ms: u64) -> Result<u64, PreflightStateEr
 }
 
 impl MachineAsioOutputProfileState {
+    #[cfg(test)]
     pub(crate) fn locked_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Ready(_) => None,
@@ -1250,6 +1262,7 @@ impl MachineAsioOutputProfileState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_from_explicit_reselection(
         &mut self,
         profile: MachineAsioOutputProfile,
@@ -1264,13 +1277,18 @@ impl MachineAsioOutputProfileState {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum CueFrame {
+    #[cfg(test)]
     Mono(f32),
-    Stereo { left: f32, right: f32 },
+    Stereo {
+        left: f32,
+        right: f32,
+    },
 }
 
 impl CueFrame {
     fn mono_gain_safe(self) -> Result<f32, OutputProfileLock> {
         let mono = match self {
+            #[cfg(test)]
             Self::Mono(value) => value,
             Self::Stereo { left, right } => left * 0.5 + right * 0.5,
         };
@@ -1523,8 +1541,6 @@ mod tests {
 
     #[test]
     fn logical_buses_remain_project_level_and_mono_cue_is_unchanged() {
-        assert_eq!(LogicalAudioBus::Program, LogicalAudioBus::Program);
-        assert_eq!(LogicalAudioBus::Cue, LogicalAudioBus::Cue);
         assert_eq!(CueFrame::Mono(0.25).mono_gain_safe().unwrap(), 0.25);
     }
 

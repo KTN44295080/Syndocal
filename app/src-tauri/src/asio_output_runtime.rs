@@ -148,6 +148,7 @@ pub(crate) struct AsioPreflightStatus {
 }
 
 impl AsioPreflightStatus {
+    #[cfg(test)]
     pub(crate) fn identity(self) -> AsioPreflightIdentity {
         self.identity
     }
@@ -156,10 +157,12 @@ impl AsioPreflightStatus {
         self.live_playback_active
     }
 
+    #[cfg(test)]
     pub(crate) fn test(self) -> Option<PreflightTarget> {
         self.test
     }
 
+    #[cfg(test)]
     pub(crate) fn solo(self) -> PreflightSolo {
         self.solo
     }

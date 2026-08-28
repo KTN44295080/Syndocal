@@ -1,8 +1,10 @@
 //! Concrete normal-output lease used by application media playback.
 //!
-//! A Rodio stream may only be opened in the router-admitted closure. The
-//! lease, rather than an untracked `OutputStream`, owns the OS resource until
-//! explicit retirement has received the router proof.
+//! The PROGRAM Rodio stream may only be opened in the router-admitted closure.
+//! Its lease, rather than an untracked `OutputStream`, owns the OS resource
+//! until explicit retirement has received the router proof. Timeline CUE has
+//! a separate admission fence which closes and joins its attachment/prepare
+//! workers before this PROGRAM router may leave Normal.
 
 use crate::audio_output_router::{
     self, BridgeDiagnostic, NormalRouteStart, Route, RouterSlot, SlotNormalRetirementLease,

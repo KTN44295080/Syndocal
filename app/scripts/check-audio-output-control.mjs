@@ -40,6 +40,7 @@ const initialReselectBody = functionSlice(
 );
 const refreshBody = functionSlice("const refresh =", "const setBackend =");
 const revalidateBody = functionSlice("const revalidate =", "const start =");
+const returnToNormalBody = functionSlice("const returnToNormal =", "const preflightActionIsAllowed =");
 const setDriverBody = functionSlice("const setDriver =", "const setSampleRate =");
 const requiredCommands = [
   "get_asio_output_status",
@@ -249,9 +250,29 @@ const assertions = [
     true,
   ],
   [
+    /nativeStatus\.routerState !== "Locked" && nativeStatus\.routerState !== "AsioReady"/u,
+    returnToNormalBody,
+    "Return to normal must admit only exact Locked or AsioReady router state",
+  ],
+  [
+    /const canReturnToNormal = createMemo\([\s\S]*?nativeStatus\.routerState === "Locked" \|\| nativeStatus\.routerState === "AsioReady"/u,
+    control,
+    "Return-to-Normal availability must include revalidated AsioReady without admitting other states",
+  ],
+  [
     /fn select_normal_audio_output\(/u,
     nativeMain,
     "Native Normal selection must use the canonical command function",
+  ],
+  [
+    /fn select_normal_audio_output_router\([\s\S]*?State::AsioReady[\s\S]*?slot\.cancel_ready\(\)[\s\S]*?slot\.select_normal\(\)/u,
+    nativeMain,
+    "Native AsioReady return must cancel the exact Ready ticket before selecting Normal",
+  ],
+  [
+    /fn reselect_asio_output_profile\([\s\S]*?asio_output_lifecycle[\s\S]*?prepare_asio_router_for_profile_reselection\(slot\)\?/u,
+    nativeMain,
+    "Profile reselection must serialize lifecycle mutation and invalidate an AsioReady ticket",
   ],
   [
     /select_normal_audio_output,/u,
@@ -373,6 +394,10 @@ const invoke = async (command, args) => {
       nativeState = "ready";
       profileReady = true;
       return status("ready", routerState, "Locked", true);
+    case "select_normal_audio_output":
+      routerState = "Normal";
+      nativeState = "normal";
+      return status("normal", routerState, "Closed", profileReady);
     case "set_asio_output_test": {
       const nextTest = args?.request?.test;
       if (!["off", "program-left", "program-right", "program-stereo", "cue", "spare"].includes(nextTest)) {
@@ -463,6 +488,26 @@ check(calls.slice(explicitCallStart).includes("revalidate_asio_program_cue_outpu
 check(!calls.slice(explicitCallStart).includes("reselect_asio_output_profile"), "explicit Revalidate does not substitute reselection");
 check(controller.view().state === "Ready", "native revalidation reaches Ready");
 check(controller.canStart(), "Start unlocks only after AsioReady revalidation");
+check(controller.canReturnToNormal(), "revalidated AsioReady permits an explicit return to Normal");
+const bridgeLifecycleCallsBeforeReturn = calls.filter((command) =>
+  command === "start_asio_program_cue_output" || command === "stop_close_asio_program_cue_output").length;
+await controller.returnToNormal();
+check(controller.view().backend === "normal-wasapi" && controller.view().state === "Ready",
+  "Revalidate followed by Return to normal publishes the exact Normal view");
+check(calls.filter((command) =>
+  command === "start_asio_program_cue_output" || command === "stop_close_asio_program_cue_output").length
+    === bridgeLifecycleCallsBeforeReturn,
+"AsioReady cancellation and Normal selection do not invoke bridge Start or Stop");
+controller.setBackend("show-asio");
+await settle();
+controller.setDriver("asio:mock");
+await settle();
+controller.setSampleRate(48000);
+controller.setBufferFrames(128);
+controller.setProgramLeft(3);
+controller.setProgramRight(1);
+controller.setCue(2);
+await settle();
 await controller.start();
 await controller.setTest("spare");
 check(controller.testMode() === "spare" && controller.canTest(), "native test remains available after a second Active transition");
@@ -479,6 +524,6 @@ const runtimeResult = await execFile(
   ["--no-warnings", "--conditions=browser", "--experimental-strip-types", "--input-type=module", "-e", runtimeRegression],
   { cwd: resolve(scriptDirectory, "..") },
 );
-assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(25 assertions\)/u);
+assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(28 assertions\)/u);
 
-console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 25 assertions)`);
+console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 28 assertions)`);

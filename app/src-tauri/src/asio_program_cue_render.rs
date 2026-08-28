@@ -113,6 +113,7 @@ impl PreflightRenderControl {
         self.selection_epoch.load(Ordering::Acquire)
     }
 
+    #[cfg(test)]
     pub(crate) fn test_epoch(&self) -> u64 {
         self.selection_epoch()
     }
@@ -220,6 +221,7 @@ impl PreflightRenderControl {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn advance_test_epoch(&self) -> Result<(), RenderFault> {
         self.advance_selection_epoch()
     }
@@ -419,6 +421,7 @@ pub(crate) struct AsioRenderContext {
 }
 
 impl AsioRenderContext {
+    #[cfg(test)]
     pub(crate) fn new(
         session_generation: u64,
         profile: &MachineAsioOutputProfile,
@@ -512,6 +515,7 @@ impl AsioRenderContext {
         &self.preflight_selection_epoch
     }
 
+    #[cfg(test)]
     pub(crate) fn preflight_test_epoch(&self) -> &Arc<AtomicU64> {
         self.preflight_selection_epoch()
     }

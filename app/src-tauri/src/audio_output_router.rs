@@ -101,6 +101,7 @@ pub(crate) struct NormalRouteResource<T, Retire> {
 pub(crate) enum NormalRouteStart<T> {
     Ready(T),
     FailedBeforeResource(BridgeDiagnostic),
+    #[cfg(test)]
     FailedWithResource {
         resource: T,
         diagnostic: BridgeDiagnostic,
@@ -164,6 +165,7 @@ where
         let (resource, startup_failure) = match result {
             NormalRouteStart::Ready(resource) => (resource, None),
             NormalRouteStart::FailedBeforeResource(diagnostic) => return Err(diagnostic),
+            #[cfg(test)]
             NormalRouteStart::FailedWithResource {
                 resource,
                 diagnostic,
@@ -200,6 +202,7 @@ where
         let (resource, startup_failure) = match result {
             NormalRouteStart::Ready(resource) => (resource, None),
             NormalRouteStart::FailedBeforeResource(diagnostic) => return Err(diagnostic),
+            #[cfg(test)]
             NormalRouteStart::FailedWithResource {
                 resource,
                 diagnostic,
@@ -332,9 +335,6 @@ impl AsioRevalidationLifecycle for AsioRevalidationAdapter<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Route {
     Program,
-    CueFollowProgram,
-    CueExplicitDevice,
-    PrepareWorker,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
@@ -354,6 +354,7 @@ pub(crate) enum Reason {
     AsioActive,
     AsioStartFailed,
     StopPending,
+    #[cfg(test)]
     DispatchFailed,
     DrainUnproven,
     CloseFailed,
@@ -690,6 +691,7 @@ impl<F: OutputFactory> PanicRecovery<F> {
             ),
         }
     }
+    #[cfg(test)]
     fn retry(self, router: &mut Router) -> Result<Self, (Self, Error)> {
         match router.begin_retire(self.ticket) {
             Ok(operation) => Ok(Self { operation, ..self }),
@@ -740,8 +742,11 @@ impl<R: OutputResource> Retire<R> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BridgeStopStage {
+    #[cfg(test)]
     Dispatch,
-    Drain { unresolved: NonZeroUsize },
+    Drain {
+        unresolved: NonZeroUsize,
+    },
     Close,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -750,6 +755,7 @@ pub(crate) struct BridgeStopFailureDetail {
     diagnostic: BridgeDiagnostic,
 }
 impl BridgeStopFailureDetail {
+    #[cfg(test)]
     pub(crate) fn dispatch(d: BridgeDiagnostic) -> Self {
         Self {
             stage: BridgeStopStage::Dispatch,
@@ -1040,11 +1046,11 @@ struct NormalPublicationResult<T, RetireFn> {
     router: Router,
     published: Option<NormalRouteHandle<T, RetireFn>>,
     retry: Option<NormalRetirementHandle<T, RetireFn>>,
-    succeeded: bool,
 }
 impl<T, RetireFn> NormalPublicationResult<T, RetireFn> {
+    #[cfg(test)]
     fn succeeded(&self) -> bool {
-        self.succeeded
+        self.router.snapshot.state != State::Fault
     }
     fn into_parts(
         self,
@@ -1064,11 +1070,11 @@ struct NormalRetirementCoordinator<T, RetireFn> {
 struct NormalRetirementResult<T, RetireFn> {
     router: Router,
     retry: Option<NormalRetirementHandle<T, RetireFn>>,
-    succeeded: bool,
 }
 impl<T, RetireFn> NormalRetirementResult<T, RetireFn> {
+    #[cfg(test)]
     fn succeeded(&self) -> bool {
-        self.succeeded
+        self.router.snapshot.state != State::Fault
     }
     fn into_parts(self) -> (Router, Option<NormalRetirementHandle<T, RetireFn>>) {
         (self.router, self.retry)
@@ -1088,15 +1094,13 @@ where
                     router: self.router,
                     published: Some(NormalRouteHandle { owned }),
                     retry: None,
-                    succeeded: true,
                 },
                 PublicationCommit::MustRetire(retire) => {
-                    let (retry, succeeded) = retire_normal_resource(&mut self.router, retire);
+                    let retry = retire_normal_resource(&mut self.router, retire);
                     NormalPublicationResult {
                         router: self.router,
                         published: None,
                         retry,
-                        succeeded,
                     }
                 }
                 PublicationCommit::Rejected(_prepared, _error) => {
@@ -1106,7 +1110,6 @@ where
                         router: self.router,
                         published: None,
                         retry: None,
-                        succeeded: false,
                     }
                 }
             },
@@ -1120,7 +1123,6 @@ where
                     router: self.router,
                     published: None,
                     retry: None,
-                    succeeded: false,
                 }
             }
             FactoryIo::Panicked(handle) => {
@@ -1134,28 +1136,25 @@ where
                             router: self.router,
                             published: None,
                             retry: None,
-                            succeeded: false,
                         };
                     }
                 };
                 match recovery.perform() {
                     PanicRecoveryIo::Recovered(retire) => {
-                        let (retry, succeeded) = retire_normal_resource(&mut self.router, retire);
+                        let retry = retire_normal_resource(&mut self.router, retire);
                         NormalPublicationResult {
                             router: self.router,
                             published: None,
                             retry,
-                            succeeded,
                         }
                     }
                     PanicRecoveryIo::RecoveredWithStartupFailure(retire, failure) => {
                         let _ = self.router.recovery_startup_failed(failure);
-                        let (retry, succeeded) = retire_normal_resource(&mut self.router, retire);
+                        let retry = retire_normal_resource(&mut self.router, retire);
                         NormalPublicationResult {
                             router: self.router,
                             published: None,
                             retry,
-                            succeeded,
                         }
                     }
                     PanicRecoveryIo::Failed(_, failure) | PanicRecoveryIo::Panicked(_, failure) => {
@@ -1164,7 +1163,6 @@ where
                             router: self.router,
                             published: None,
                             retry: None,
-                            succeeded: false,
                         }
                     }
                 }
@@ -1215,11 +1213,10 @@ where
     RetireFn: FnMut(&mut T) -> Result<(), BridgeDiagnostic>,
 {
     fn perform(mut self) -> NormalRetirementResult<T, RetireFn> {
-        let (retry, succeeded) = retire_normal_resource(&mut self.router, self.retire);
+        let retry = retire_normal_resource(&mut self.router, self.retire);
         NormalRetirementResult {
             router: self.router,
             retry,
-            succeeded,
         }
     }
 }
@@ -1227,15 +1224,20 @@ where
 fn retire_normal_resource<T, RetireFn>(
     router: &mut Router,
     retire: Retire<NormalRouteResource<T, RetireFn>>,
-) -> (Option<NormalRetirementHandle<T, RetireFn>>, bool)
+) -> Option<NormalRetirementHandle<T, RetireFn>>
 where
     RetireFn: FnMut(&mut T) -> Result<(), BridgeDiagnostic>,
 {
     match retire.perform() {
-        RetirementIo::Joined(receipt) => (None, router.complete_retire(receipt).is_ok()),
+        RetirementIo::Joined(receipt) => {
+            if router.complete_retire(receipt).is_err() {
+                router.coordinator_fault("normal_retirement_completion_mismatch");
+            }
+            None
+        }
         RetirementIo::Failed(owned, failure) | RetirementIo::Panicked(owned, failure) => {
             let _ = router.retire_failed(failure);
-            (Some(NormalRetirementHandle { owned }), false)
+            Some(NormalRetirementHandle { owned })
         }
     }
 }
@@ -1717,23 +1719,19 @@ impl Router {
     fn stop_failed(&mut self, f: StopFailure) -> Result<(), Error> {
         self.asio(f.ticket, State::Quiescing, Error::StopMismatch)?;
         let (reason, n) = match f.detail.stage {
+            #[cfg(test)]
             BridgeStopStage::Dispatch => (Reason::DispatchFailed, 1),
             BridgeStopStage::Drain { unresolved } => (Reason::DrainUnproven, unresolved.get()),
             BridgeStopStage::Close => (Reason::CloseFailed, 0),
         };
-        self.asio_fault(
-            f.ticket,
-            reason,
-            f.detail.diagnostic,
-            self.snapshot
-                .remaining_drains
-                .max(n)
-                .max(if reason == Reason::DispatchFailed {
-                    1
-                } else {
-                    0
-                }),
-        )
+        let remaining_drains = self.snapshot.remaining_drains.max(n);
+        #[cfg(test)]
+        let remaining_drains = remaining_drains.max(if reason == Reason::DispatchFailed {
+            1
+        } else {
+            0
+        });
+        self.asio_fault(f.ticket, reason, f.detail.diagnostic, remaining_drains)
     }
     fn begin_revalidation(&mut self) -> Result<ReadyTicket, Error> {
         if self.snapshot.state != State::Locked
@@ -2334,6 +2332,7 @@ impl RouterSlot {
 /// router, receipt, adapter, or lease; only an audited state snapshot.
 pub(crate) struct SlotIoResult {
     succeeded: bool,
+    #[cfg(test)]
     snapshot: Snapshot,
 }
 impl SlotIoResult {
@@ -2341,6 +2340,7 @@ impl SlotIoResult {
         self.succeeded
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
@@ -2379,10 +2379,12 @@ impl SlotAsioRevalidationTask<'_> {
 fn slot_io_result(slot: &RouterSlot, result: RouterIoResult) -> SlotIoResult {
     let succeeded = result.succeeded();
     let router = result.into_router();
+    #[cfg(test)]
     let snapshot = router.snapshot();
     slot.restore_after_io(router);
     SlotIoResult {
         succeeded,
+        #[cfg(test)]
         snapshot,
     }
 }
@@ -2406,12 +2408,14 @@ pub(crate) struct SlotNormalPublicationTask<T, Start, Recover, RetireFn> {
 }
 
 pub(crate) struct SlotNormalPublicationResult<T, RetireFn> {
+    #[cfg(test)]
     succeeded: bool,
     snapshot: Snapshot,
     published: Option<SlotNormalRouteLease<T, RetireFn>>,
     retry: Option<SlotNormalRetirementLease<T, RetireFn>>,
 }
 impl<T, RetireFn> SlotNormalPublicationResult<T, RetireFn> {
+    #[cfg(test)]
     pub(crate) fn succeeded(&self) -> bool {
         self.succeeded
     }
@@ -2439,11 +2443,13 @@ where
     pub(crate) fn perform(self) -> SlotNormalPublicationResult<T, RetireFn> {
         let SlotNormalPublicationTask { slot, operation } = self;
         let result = operation.perform();
+        #[cfg(test)]
         let succeeded = result.succeeded();
         let (router, published, retry) = result.into_parts();
         let snapshot = router.snapshot();
         slot.restore_after_io(router);
         SlotNormalPublicationResult {
+            #[cfg(test)]
             succeeded,
             snapshot,
             published: published.map(|handle| SlotNormalRouteLease {
@@ -2461,15 +2467,19 @@ pub(crate) struct SlotNormalRetirementTask<T, RetireFn> {
 }
 
 pub(crate) struct SlotNormalRetirementResult<T, RetireFn> {
+    #[cfg(test)]
     succeeded: bool,
+    #[cfg(test)]
     snapshot: Snapshot,
     retry: Option<SlotNormalRetirementLease<T, RetireFn>>,
 }
 impl<T, RetireFn> SlotNormalRetirementResult<T, RetireFn> {
+    #[cfg(test)]
     pub(crate) fn succeeded(&self) -> bool {
         self.succeeded
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
@@ -2537,12 +2547,16 @@ where
     pub(crate) fn perform(self) -> SlotNormalRetirementResult<T, RetireFn> {
         let SlotNormalRetirementTask { slot, operation } = self;
         let result = operation.perform();
+        #[cfg(test)]
         let succeeded = result.succeeded();
         let (router, retry) = result.into_parts();
+        #[cfg(test)]
         let snapshot = router.snapshot();
         slot.restore_after_io(router);
         SlotNormalRetirementResult {
+            #[cfg(test)]
             succeeded,
+            #[cfg(test)]
             snapshot,
             retry: retry.map(|handle| SlotNormalRetirementLease { slot, handle }),
         }

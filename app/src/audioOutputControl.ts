@@ -983,8 +983,10 @@ export const createAudioOutputController = (
       return;
     }
     if (dependencies.backendAvailable
-      && (!nativeStatus || !isSafeForEnumeration(nativeStatus) || nativeStatus.routerState !== "Locked")) {
-      setLocked("Return to normal is Locked until native Stop/Close leaves the router Locked.");
+      && (!nativeStatus
+        || !isSafeForEnumeration(nativeStatus)
+        || (nativeStatus.routerState !== "Locked" && nativeStatus.routerState !== "AsioReady"))) {
+      setLocked("Return to normal requires the native router to be Locked or AsioReady.");
       return;
     }
     if (!dependencies.backendAvailable) {
@@ -1150,7 +1152,7 @@ export const createAudioOutputController = (
     && (!dependencies.backendAvailable
       || (nativeStatus !== null
         && isSafeForEnumeration(nativeStatus)
-        && nativeStatus.routerState === "Locked")));
+        && (nativeStatus.routerState === "Locked" || nativeStatus.routerState === "AsioReady"))));
   const canTest = (): boolean =>
     dependencies.backendAvailable
     && !busy()

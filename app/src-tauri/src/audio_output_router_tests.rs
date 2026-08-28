@@ -233,7 +233,7 @@ fn late_prepare_completion_is_never_publishable_and_is_immediately_retired() {
     let count = Arc::new(AtomicUsize::new(0));
     let mut router = Router::test_router();
     let p = router
-        .begin_publication(Route::PrepareWorker, factory(&count, Mode::Ok))
+        .begin_publication(Route::Program, factory(&count, Mode::Ok))
         .unwrap();
     let q = router.quiesce().unwrap();
     let prepared = match p.perform_io() {
@@ -258,7 +258,7 @@ fn retirement_failure_retains_the_same_resource_for_a_fresh_retry_permit() {
     let count = Arc::new(AtomicUsize::new(0));
     let mut router = Router::test_router();
     let p = router
-        .begin_publication(Route::CueFollowProgram, factory(&count, Mode::StopFail))
+        .begin_publication(Route::Program, factory(&count, Mode::StopFail))
         .unwrap();
     let prepared = match p.perform_io() {
         FactoryIo::Prepared(value) => value,
@@ -622,11 +622,10 @@ fn every_identity_counter_fails_closed_before_wrapping() {
 
 #[test]
 fn failure_and_panic_result_variants_latch_exact_faults() {
-    let _ = Route::CueExplicitDevice;
     let count = Arc::new(AtomicUsize::new(0));
     let mut failed_publication = Router::test_router();
     let publication = failed_publication
-        .begin_publication(Route::CueExplicitDevice, factory(&count, Mode::FactoryFail))
+        .begin_publication(Route::Program, factory(&count, Mode::FactoryFail))
         .unwrap();
     let failure = match publication.perform_io() {
         FactoryIo::Failed(failure) => failure,
@@ -925,7 +924,7 @@ fn concrete_normal_start_error_keeps_its_partial_resource_for_router_governed_re
     );
     let mut router = Router::test_router();
     let prepared = match router
-        .begin_publication(Route::CueExplicitDevice, factory)
+        .begin_publication(Route::Program, factory)
         .unwrap()
         .perform_io()
     {
