@@ -6,6 +6,13 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
+- Alpha.35 source checkpoint `c7218c112b296652fa77f88c67e861c18d6aea1b`
+  (`Harden same-PC show output isolation`) is pushed to
+  `origin/codex/syndocal-v1.2`; immediately after push, local `HEAD`, upstream,
+  and that hash were equal and the worktree was clean. The next safe action is
+  the exact MSVC 14.44 alpha.35 native build after path-verifying and stopping
+  only the historical checkout-owned alpha.34 process PID `85492`.
+
 - Current product metadata is `1.2.0-alpha.35`. The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
@@ -23,6 +30,14 @@ This is the concise authoritative resume note for the final show-critical tranch
   passed with first-party warnings `0`. Independent Terra xHigh rereview is GO
   with P0/P1 `0`. The alpha.35 native build and physical Unity observation
   remain pending.
+
+- Checkpoint storage evidence after the full gates recorded
+  `145,081,024,512` free bytes on `C:`. The latest completed exact target
+  inventory remains the earlier recorded `428,244,808,551` logical bytes; a
+  fresh exact traversal was not promoted from a bounded/incomplete scan. Git
+  reports one `568 KiB` temporary-object garbage item. The recurring cleanup
+  harness is still not approved for Apply, so no harness-driven deletion or
+  manual deletion ran and reclaimed bytes are `0`.
 
 - The complete same-PC Art-Net/camera/fixed-Spout source checkpoint is clean and
   pushed at `138f6c3e7bd536c10a589bc644bb9bc6df269f7a` on
