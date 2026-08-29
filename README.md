@@ -11,8 +11,9 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 Current product metadata is `1.2.0-alpha.36` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.35 remains the latest accepted native product checkpoint;
-the current alpha.36 frontend/version tranche still requires its own rebuild.
+native build. Alpha.36 is the latest accepted native product checkpoint;
+same-PC Unity/GPU, audible audio-device, DJ, and camera hardware acceptance
+remain open.
 Alpha.32 established Timeline authoring monitor output, arbitrary PROGRAM/CUE
 device assignment, canonical child-Timeline
 audio varispeed, and fail-closed Windows candidate extraction/verification. `FollowProgram`
@@ -29,8 +30,12 @@ surface and status messages while keeping `Syndocal Background` and
 `Syndocal Foreground` byte-for-byte visible as external sender identifiers.
 Focused localization is `3632/3632` (`100.0%`); Timeline context-menu and I/O
 remote-scroll browser contracts plus TypeScript pass. Independent Terra xHigh
-rereview is GO with P0/P1/P2 `0`; a fresh alpha.36 native build is still
-required.
+rereview is GO with P0/P1/P2 `0`. From clean pushed HEAD `81a7a9c`, the exact
+MSVC 14.44 linker build completed in `3m30s` with first-party warnings `0`.
+The `61,049,856`-byte `1.2.0-alpha.36` executable has SHA-256
+`150C30FE218C6C32A50169EFE7638AD0C5D1CDD8DCFDF5BCFCCEB6434DD4E79E`;
+exactly one checkout-owned process, PID `109972`, is responsive with title
+`Syndocal`, and Win32 `IsZoomed` verified its exact window is maximized.
 
 The current alpha.36 integration carries the alpha.34/alpha.33 camera-capture source
 tranche, which replaces the old free-form DirectShow
@@ -43,8 +48,9 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
-alpha.34 native build passed, while the current alpha.36 rebuild, visual UI,
-and hardware probes remain pending.
+alpha.34 native build passed historically, while the current alpha.36 native
+build/maximized-window gate is complete. Camera UI interaction and hardware
+probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
@@ -120,6 +126,14 @@ authority barrier before active/live handoff. The focused pair gate passed
 `13/13`; full Syndocal passed no-default `1205/0/7` and default Spout/libav
 `1265/0/12`, with first-party warnings `0`. Independent Terra xHigh rereview
 returned GO with P0/P1 `0`.
+The current alpha.36 native build from clean pushed HEAD `81a7a9c` completed in
+`3m30s` with the exact MSVC 14.44 Community linker pinned and first, and with
+first-party warnings `0`. Its `61,049,856`-byte executable reports
+Product/FileVersion `1.2.0-alpha.36` and SHA-256
+`150C30FE218C6C32A50169EFE7638AD0C5D1CDD8DCFDF5BCFCCEB6434DD4E79E`.
+Exactly one checkout-owned PID `109972` is responsive with title `Syndocal`;
+Win32 `IsZoomed` is true. No Unity/GPU, audible device, DJ, or camera hardware
+acceptance is inferred from this native checkpoint.
 The exact-linker native build from clean pushed HEAD `31a577c` completed in
 `3m36s` with first-party warnings `0`. The resulting `61,045,760`-byte
 `1.2.0-alpha.35` executable has SHA-256

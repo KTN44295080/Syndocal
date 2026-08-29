@@ -111,7 +111,8 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The current alpha.35 source adds three independent Universe-0 isolation fences:
+The alpha.35 source, carried by current alpha.36, adds three independent
+Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
 strict mode rejects new U0 HTP/LTP input without inserting it; and the final
 render fence skips any stale U0 merge. `ClearDmxInput(0)` remains the explicit
@@ -147,7 +148,8 @@ updated with explicit variant assertions and the dead fixture was removed;
 focused proofs and the complete matrix then passed. Native build and Unity/GPU
 checks below remain open.
 
-The current alpha.35 hardening closes the remaining first-physical-frame
+The alpha.35 hardening, carried by current alpha.36, closes the remaining
+first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
 recheck its exact SDK name after lazy registration, and join the two-ACK plus
 final R4 authority barrier before active/live handoff. Failure, timeout, name
@@ -197,11 +199,12 @@ native artifact are accepted:
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
 - [x] Focused and full deterministic gates pass with zero first-party warnings.
-- [x] A fresh warning-free current alpha.35 native release is built with exact
-      MSVC 14.44 and launched from this checkout as exactly one responsive
-      process. The alpha.34 artifact is historical after the U0 isolation fix.
-- [ ] Computer Use verifies that exact native window as maximized. Its process
-      is responsive, but the helper did not expose it as a targetable window in
-      the first post-build attempt.
+- [x] A fresh warning-free current alpha.36 native release is built from clean
+      pushed HEAD `81a7a9c` with exact MSVC 14.44 and launched from this
+      checkout as exactly one responsive process. Alpha.35 and alpha.34 are
+      historical after the localization/version follow-up.
+- [x] Win32 `IsZoomed` verifies that exact alpha.36 native window as maximized
+      (PID `109972`, title `Syndocal`). This is window-state proof, not
+      content-level visual or Unity/GPU acceptance.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

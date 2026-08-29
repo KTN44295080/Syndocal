@@ -17,8 +17,20 @@ This is the concise authoritative resume note for the final show-critical tranch
   video routing R4, the exact 439-command frontend invoke inventory,
   TypeScript/Vite production build, Timeline context-menu, five I/O
   remote-scroll viewports, format, and diff gates passed. Independent Terra
-  xHigh rereview is GO with P0/P1/P2 `0`. The alpha.36 exact-linker native
-  build, responsive/maximized process, and physical acceptance remain pending.
+  xHigh rereview is GO with P0/P1/P2 `0`.
+
+- From clean pushed HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`,
+  the exact MSVC `14.44.35207` Community linker was pinned and first in
+  `where.exe`; Git's incompatible linker remained second. `pnpm --dir app
+  tauri build --no-bundle` completed in `3m30s` with first-party warnings `0`.
+  `target/release/syndocal.exe` is `61,049,856` bytes, reports
+  Product/FileVersion `1.2.0-alpha.36`, and has SHA-256
+  `150C30FE218C6C32A50169EFE7638AD0C5D1CDD8DCFDF5BCFCCEB6434DD4E79E`.
+  The path-verified historical alpha.35 PID `72448` alone was stopped before
+  the build. Exactly one checkout-owned alpha.36 PID `109972` is responsive
+  with title `Syndocal`, and Win32 `IsZoomed` verifies its exact window is
+  maximized. This proves the native/window gate only; no Unity/GPU, audible
+  device, DJ, or camera hardware acceptance is inferred.
 
 - Historical alpha.35 source checkpoint `c7218c112b296652fa77f88c67e861c18d6aea1b`
   (`Harden same-PC show output isolation`) is pushed to
@@ -37,10 +49,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 - Current product metadata is `1.2.0-alpha.36`; its localization/version source
   checkpoint is pushed at `ffdb289da1a3980883807a83b8074f0247ab3ea9` and the
-  exact-linker native rebuild must be completed before any new UI or physical
-  result is accepted as current. The responsive alpha.35
-  process above is historical execution evidence only after this source
-  change. The show boundary is same-PC
+  exact-linker native rebuild and responsive/maximized window gate are complete
+  as recorded above. The alpha.35 process is historical execution evidence
+  only after this source change. The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
   before strict activation, rejects active U0 HTP/LTP input without insertion,
@@ -133,7 +144,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is `1.2.0-alpha.36`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The alpha.34 same-PC output/camera native build and alpha.35 U0/Spout-hardening native build are historical after the alpha.36 source change; neither may be relabelled as current. The alpha.36 source checkpoint, exact-linker native build, responsive process, and maximized-window proof must be recorded in order before physical acceptance. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- KDMX product metadata is `1.2.0-alpha.36`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The alpha.34 same-PC output/camera native build and alpha.35 U0/Spout-hardening native build are also historical. The alpha.36 source checkpoint, exact-linker native build, responsive process, and maximized-window proof are current and recorded above. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
 
 ### 2026-08-29 historical alpha.34 same-PC output and camera integration
 
@@ -560,8 +571,8 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. From the clean pushed alpha.36 source checkpoint `ffdb289da1a3980883807a83b8074f0247ab3ea9`, complete the exact-linker native rebuild before same-PC output/camera acceptance. The responsive alpha.35 process is historical only; stop it by verified executable path immediately before the alpha.36 build. Then verify exactly one responsive checkout-owned alpha.36 process and its maximized UI before exact Art-Net/Spout activation, camera profile probes, camera start/stop, disconnect/replug, and bounded 4K30/1080p60 runs. Follow [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md) and [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md); do not infer sustained 4K or 120fps support from the one-frame probe.
-2. After the alpha.36 native launch and maximized-window proof, audibly verify that Timeline media-library clips plus Guide/Click share the still-enumerated `Music (Elgato Virtual Audio)` endpoint in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
+1. Keep the current alpha.36 PID `109972` running and maximized. After the operator saves Daslight/Easy View state and explicitly authorizes closing it, close Daslight PID `42752` so Unity can own UDP `6454`; do not close it before that approval. Then verify exact Art-Net/Spout activation, the ch1/ch5 red Mega PAR frame, channel 500 zero, both exact 1920×1080 Spout senders, and continuous black while stopped. Follow [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md).
+2. Audibly verify that Timeline media-library clips plus Guide/Click share the still-enumerated `Music (Elgato Virtual Audio)` endpoint in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
 3. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
 4. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
 5. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
@@ -574,6 +585,6 @@ integrated source checkpoint above is authoritative for current source status.
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - Keep the current Syndocal process alive for authoring; the DJ-Link PC may remain stopped until the final integration gate.
-- Alpha.35 source/full-regression, independent review, and native build gates are historical. The alpha.36 source checkpoint is pushed at `ffdb289da1a3980883807a83b8074f0247ab3ea9` with exact upstream equality; next perform the required exact-linker alpha.36 native build. Keep maximized same-PC output UI checks, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
-- Replace the historical alpha.35 process only at the verified-path alpha.36 build boundary. After launching and maximizing exactly one alpha.36 process, complete the `Music (Elgato Virtual Audio)` audition and run the v3 authority checker before the separate dedicated show-ASIO build; do not reuse or relabel historical alpha.31/alpha.32/alpha.35 artifacts.
+- Alpha.35 source/full-regression, independent review, and native build gates are historical. The alpha.36 source checkpoint is pushed at `ffdb289da1a3980883807a83b8074f0247ab3ea9`; exact-linker build and responsive/maximized process evidence from clean pushed HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded` are complete. Keep Unity/GPU, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
+- Keep the current alpha.36 PID `109972` alive for the next operator acceptance. Complete the `Music (Elgato Virtual Audio)` audition and run the v3 authority checker before the separate dedicated show-ASIO build; do not reuse or relabel historical alpha.31/alpha.32/alpha.35 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.
