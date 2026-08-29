@@ -111,7 +111,7 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The alpha.35 source, carried by current alpha.36, adds three independent
+The alpha.35 source, carried by current alpha.37, adds three independent
 Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
 strict mode rejects new U0 HTP/LTP input without inserting it; and the final
@@ -145,10 +145,10 @@ two separate test-maintenance defects: the new command variants were missing
 from the expected command-inventory count, and an older child-Timeline test
 installed an unreferenced Cue 3 state without creating Cue 3. The inventory was
 updated with explicit variant assertions and the dead fixture was removed;
-focused proofs and the complete matrix then passed. Native build and Unity/GPU
-checks below remain open.
+focused proofs and the complete matrix then passed. The current native build is
+closed below; Unity/GPU physical checks remain open.
 
-The alpha.35 hardening, carried by current alpha.36, closes the remaining
+The alpha.35 hardening, carried by current alpha.37, closes the remaining
 first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
 recheck its exact SDK name after lazy registration, and join the two-ACK plus
@@ -196,8 +196,8 @@ the two managed MP3 sidecars also retained their pinned hashes. The new copy
 contains disabled exact Art-Net routes in both persisted route fields, exactly
 two fixed Spout summaries, and Main composition output IDs `1,2`.
 
-The following gates remain open until the complete Spout integration and its
-native artifact are accepted:
+The following checklist records the accepted source/Spout/native gates and
+keeps the final Unity/GPU physical row explicitly open:
 
 - [x] Strict USB-serial show activation is completely replaced by exact
       `127.0.0.1:6454 / Art-Net / U0 / 512` activation.
@@ -227,8 +227,10 @@ native artifact are accepted:
 - [x] Win32 `IsZoomed` verifies that exact alpha.36 native window as maximized
       (PID `109972`, title `Syndocal`). This is window-state proof, not
       content-level visual or Unity/GPU acceptance.
-- [ ] A fresh warning-free alpha.37 native release is built from its clean,
-      pushed source checkpoint and launched as exactly one responsive,
-      maximized checkout-owned process.
+- [x] A fresh warning-free alpha.37 native release was built from clean pushed
+      HEAD `5626a96` with exact MSVC 14.44. The `61,116,416`-byte executable
+      has SHA-256 `7AC54394E41751126911E6DC338536B93E484A20934B4CA9A001EB8B9F3E209E`;
+      exactly one checkout-owned PID `50864` is responsive with title
+      `Syndocal`, and Computer Use verified the exact window is maximized.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

@@ -3,13 +3,14 @@
 Updated: 2026-08-30
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.37`.
 The warning-free alpha.37 source checkpoint
-`1636aeb440c718c628a953b58e4f0c59d4874e35` is pushed and upstream-equal, but
-is not yet a native or physical acceptance claim. The pushed alpha.36 source
+`1636aeb440c718c628a953b58e4f0c59d4874e35` and documentation checkpoint
+`5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
+alpha.37 native build from clean pushed HEAD `5626a9636003462a23daf0f3de67af3cc5060e29`
+passed, and exactly one checkout-owned responsive/maximized process is the
+current native authority. The pushed alpha.36 source
 checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume
 record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`.
-The exact-linker alpha.36 native build from that clean pushed HEAD passed and
-exactly one checkout-owned maximized process remains the current native
-authority until the alpha.37 rebuild. Earlier pushed authorities include
+Its exact-linker native build is now historical. Earlier pushed authorities include
 strict Universe-0/Spout hardening `c7218c112b296652fa77f88c67e861c18d6aea1b`,
 canonical Timeline-audio varispeed `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`,
 Windows candidate gate `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`,
@@ -57,9 +58,23 @@ the deterministic source-token seam. The entire seam is now `cfg(test)`, the
 release-profile check is warning-free, and final rereview is GO with P0/P1/P2
 `0`. One first post-fix full Spout run saw the unrelated production-remote-stop
 test return transient `Busy`; the exact test passed three consecutive reruns
-and a fresh complete Spout run passed `1276/0/12`. Native build/window, audible
-device, Unity/GPU, and DJ hardware gates remain open. The alpha.36 PID `109972`
-must remain untouched until the required exact-path native-build stop gate.
+and a fresh complete Spout run passed `1276/0/12`.
+
+The exact-linker alpha.37 native build ran from clean pushed HEAD
+`5626a9636003462a23daf0f3de67af3cc5060e29`. `pnpm --dir app tauri build
+--no-bundle` completed in `3m04s` with first-party warnings `0`. The resulting
+`61,116,416`-byte `target/release/syndocal.exe` reports Product/FileVersion
+`1.2.0-alpha.37` and SHA-256
+`7AC54394E41751126911E6DC338536B93E484A20934B4CA9A001EB8B9F3E209E`.
+The historical alpha.36 PID `109972` alone was path-verified and stopped before
+the build. Exactly one checkout-owned alpha.37 process, PID `50864`, is
+responsive with title `Syndocal`; Computer Use verified Restore enabled and
+Maximize disabled in its system menu, proving the exact window is maximized.
+An initial accessibility-window launch attempt left no process; launching the
+same exact executable directly then succeeded. Its visible runtime status is
+`trust_network_absent`, so DJ Link auto-start and DJ hardware readiness remain
+open. Audible device, Unity/GPU, camera hardware, installer/updater, dedicated
+Show-ASIO, and DJ hardware gates remain open.
 
 ## 2026-08-30 historical alpha.36 localization/native checkpoint (physical acceptance pending)
 
@@ -109,7 +124,7 @@ remains open. A `4096x2160` RGBA frame is about
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`; the Syndocal profile probe still proves one frame only, so
 sustained 4K remains unverified and
-no 4K60 or broad sustained-4K claim is made. Current alpha.36 camera UI actions
+no 4K60 or broad sustained-4K claim is made. Current-product camera UI actions
 and hardware probes remain pending.
 
 Alpha.35 closes a newly found show-safety boundary on the strict local Art-Net

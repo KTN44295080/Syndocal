@@ -4,7 +4,7 @@ Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-Product tranche: `1.2.0-alpha.36`
+Product tranche: `1.2.0-alpha.37`
 
 ## Current product boundary
 
@@ -82,8 +82,8 @@ The current implementation/source-review gate has established:
 - product command registration, typed frontend invocation inventory, and
   control-plane taxonomy agree.
 
-The final supervising exact-linker runs used MSVC `14.44.35207`, with the
-Community linker first in `where.exe`, and passed:
+The historical alpha.34 camera-tranche supervising exact-linker runs used MSVC
+`14.44.35207`, with the Community linker first in `where.exe`, and passed:
 
 - capture-filtered tests: `71 passed`, `0 failed`, `2 ignored`;
 - process-lifecycle tests: `3 passed`, `0 failed`, `0 ignored`;
@@ -115,8 +115,9 @@ deliberately open.
 The final independent read-only rereview is GO for this source checkpoint with
 no P0/P1/P2. Windows Job Object containment is not installed, so Syndocal
 process exit while a deferred reaper is pending remains an explicit unverified
-OS boundary. The tranche remains NO-GO for native/UI/sustained-4K acceptance until the
-unchecked gates below are observed on the versioned executable.
+OS boundary. Camera UI/profile and sustained-4K acceptance remain NO-GO until
+the unchecked gates below are observed on the current versioned executable;
+the general alpha.37 native build/window gate is separately complete below.
 
 The 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
 `14.44.35207` with the Community linker first in `where.exe` and passes the
@@ -138,7 +139,7 @@ the RGBA frame at a fixed 60 Hz. A `4096x2160` RGBA frame is approximately
 copy traffic before compositing and upload. The one-frame profile probe does
 not close that performance risk.
 
-Therefore alpha.36 may claim explicit 4K30 and 1080p60 profile selection and
+Therefore alpha.37 may claim explicit 4K30 and 1080p60 profile selection and
 probe after native evidence, but must not claim arbitrary sustained 4K stage
 output or 4K60. A future shared/pooled frame handoff with generation-based
 render pacing is required before broadening that claim.
@@ -148,10 +149,14 @@ render pacing is required before broadening that claim.
 - [x] Historical alpha.34 release build with MSVC 14.44, first-party warnings 0.
 - [x] Historical alpha.35 release rebuild with MSVC 14.44, first-party
   warnings 0.
-- [x] Exact current alpha.36 release rebuild from clean pushed HEAD `81a7a9c`
+- [x] Historical alpha.36 release rebuild from clean pushed HEAD `81a7a9c`
   with MSVC 14.44, first-party warnings 0.
-- [x] Exactly one responsive, maximized window from this checkout's alpha.36
-  release executable (PID `109972`, Win32 `IsZoomed=true`).
+- [x] Historical alpha.36 window was responsive and maximized before its exact
+  path was verified and PID `109972` was stopped for the next native build.
+- [x] Exact current alpha.37 release rebuild from clean pushed HEAD `5626a96`
+  with MSVC 14.44, first-party warnings 0.
+- [x] Exactly one responsive, maximized window from this checkout's alpha.37
+  release executable (PID `50864`; Computer Use system-menu proof).
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.
 - [ ] Exact `1920x1080` / `60.0002 fps` profile probe succeeds.
