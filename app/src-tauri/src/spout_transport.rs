@@ -452,12 +452,23 @@ impl Drop for SpoutPendingOutputStartup {
                     return;
                 };
                 if let Some(worker) = worker {
-                    let _ = worker.join();
+                    match worker.join() {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => eprintln!(
+                            "Spout pending startup reaper observed sender cleanup failure: {error}"
+                        ),
+                        Err(_) => eprintln!(
+                            "Spout pending startup reaper observed a sender worker panic during cleanup"
+                        ),
+                    }
                 }
                 drop(teardown_lease);
                 drop(failure_lease);
             });
         if reaper.is_err() {
+            eprintln!(
+                "Spout pending startup cleanup reaper could not start; retaining its sender worker and ownership leases"
+            );
             if let Some((worker, failure_lease, teardown_lease)) = payload
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1297,7 +1308,17 @@ impl Drop for SpoutRouteWorker {
         let undelivered_creation_lease = self.signal_retirement();
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            match worker.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => eprintln!(
+                    "Spout output worker '{}' Drop cleanup failed: {error}",
+                    self.endpoint_name.as_deref().unwrap_or("<unnamed>")
+                ),
+                Err(_) => eprintln!(
+                    "Spout output worker '{}' panicked during Drop cleanup",
+                    self.endpoint_name.as_deref().unwrap_or("<unnamed>")
+                ),
+            }
         }
         self.release_teardown_lease();
         drop(undelivered_creation_lease);
@@ -1775,7 +1796,7 @@ fn ensure_strict_show_spout_sender_name<S: SpoutOutputSender>(
 /// Sends the one required first opaque-black frame. Spout can suffix a sender
 /// when `SendImage` performs its lazy registration, so exact identity is
 /// checked immediately before and immediately after the SDK call.
-fn send_strict_show_spout_black<S: SpoutOutputSender>(
+pub(crate) fn send_strict_show_spout_black<S: SpoutOutputSender>(
     sender: &mut S,
     expected_name: &str,
     show_control: &ShowSpoutWorkerControl,

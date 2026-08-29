@@ -2,13 +2,13 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.34**
+- 製品名: **Syndocal 1.2.0-alpha.35**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.34` on branch
+Current product metadata is `1.2.0-alpha.35` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
 native build. Alpha.32 remains the latest accepted native product checkpoint
@@ -23,7 +23,7 @@ and output selection. Endpoint name/topology and session/generation are
 revalidated; missing, ambiguous, stale, changed, or failed state stays silent
 and fail-closed without default/PROGRAM fallback.
 
-The current alpha.34 integration includes the alpha.33 camera-capture source
+The current alpha.35 integration carries the alpha.34/alpha.33 camera-capture source
 tranche, which replaces the old free-form DirectShow
 camera route, which was fixed at `1280x720` / `30 fps`, with an explicit
 current-generation device/profile catalog, opaque endpoint identities, and an
@@ -33,8 +33,9 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 `120 fps` only when the device advertises that profile. Output presentation
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
-[qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the alpha.34
-native build passed, while visual UI and hardware probes remain pending.
+[qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
+alpha.34 native build passed, while the current alpha.35 rebuild, visual UI,
+and hardware probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
@@ -64,8 +65,8 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.34 product and
-installer naming below; that naming does not assert an alpha.34 installer
+acceptance. The release metadata checker expects alpha.35 product and
+installer naming below; that naming does not assert an alpha.35 installer
 exists.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
@@ -96,6 +97,21 @@ matrix passed Syndocal no-default `1205/0/7`, Syndocal default `1263/0/12`, and
 engine `920/0/2`; remaining workspace crates also exited successfully, with
 first-party warnings `0`. This show checkpoint is same-PC only. Remote Art-Net,
 NDI, and other cross-PC video transport are outside its acceptance boundary.
+Alpha.35 additionally rejects activation when Universe 0 already has a DMX
+input, rejects new U0 HTP/LTP input while the strict route is active, and skips
+any stale U0 merge at the final render fence. U1 and ordinary non-strict input
+merge remain available. Focused exact-linker proof passed `12/12` with
+first-party warnings `0`, and independent Terra xHigh rereview returned GO with
+no P0/P1/P2. The exact-linker full engine gate then passed
+`924 passed / 0 failed / 2 ignored`, first-party warnings `0`; a fresh
+alpha.35 native gate is still required.
+Alpha.35 also binds the strict Spout pair to a physical first-frame barrier:
+each sender must first transmit the cached 1920×1080 opaque-black RGBA frame,
+retain its exact post-send SDK name, and join the two-ACK plus final R4
+authority barrier before active/live handoff. The focused pair gate passed
+`13/13`; full Syndocal passed no-default `1205/0/7` and default Spout/libav
+`1265/0/12`, with first-party warnings `0`. Independent Terra xHigh rereview
+returned GO with P0/P1 `0`.
 The alpha.34 exact-linker native build from pushed HEAD `138f6c3` produced a
 `61,039,104`-byte `1.2.0-alpha.34` executable with SHA-256
 `1FCB899E2B118B94F92B5D87ECD7A5EA3FFE32D33448319FE697D39841FA642F`.
@@ -224,7 +240,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.34_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.34_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.35_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.35_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

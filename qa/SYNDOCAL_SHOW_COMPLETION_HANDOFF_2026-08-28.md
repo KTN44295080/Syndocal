@@ -1,10 +1,28 @@
 # Syndocal 2026-08-30 show completion handoff
 
-Status date: 2026-08-29 JST
+Status date: 2026-08-30 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
 ## Source authority
+
+- Current product metadata is `1.2.0-alpha.35`. The show boundary is same-PC
+  only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
+  are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
+  before strict activation, rejects active U0 HTP/LTP input without insertion,
+  and skips stale U0 merge at the final render fence. U1 and ordinary
+  non-strict merge remain supported. Exact MSVC 14.44 focused proof passed
+  `12/12`; the full engine gate passed `924/0/2`; first-party warnings were `0`.
+  Independent Terra xHigh rereview returned GO with P0/P1 `0`. Two additional
+  public-ACK/non-strict-U0 tests remain P2 proof debt. The strict Spout pair now
+  requires each worker's first physical frame to be cached 1920×1080 opaque
+  black, exact post-send SDK names, both first-black ACKs, and a final R4
+  authority revalidation before active/live handoff. Focused Spout passed
+  `13/0/0`; full Syndocal passed no-default `1205/0/7` and default libav/Spout
+  `1265/0/12`; TypeScript, production build, release, format, and diff gates
+  passed with first-party warnings `0`. Independent Terra xHigh rereview is GO
+  with P0/P1 `0`. The alpha.35 native build and physical Unity observation
+  remain pending.
 
 - The complete same-PC Art-Net/camera/fixed-Spout source checkpoint is clean and
   pushed at `138f6c3e7bd536c10a589bc644bb9bc6df269f7a` on
@@ -75,9 +93,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is `1.2.0-alpha.34`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The current alpha.34 same-PC output/camera integration is separate; its exact-linker native build and single responsive-process gate passed, while maximized UI and hardware probes remain open. The accepted alpha.31 Timeline-authoring native evidence is historical below and is not relabelled. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- KDMX product metadata is `1.2.0-alpha.35`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The alpha.34 same-PC output/camera native build is also historical after the alpha.35 U0/Spout hardening; it must not be relabelled as current. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
 
-### 2026-08-29 current alpha.34 same-PC output and camera integration (native built; UI/hardware pending)
+### 2026-08-29 historical alpha.34 same-PC output and camera integration
 
 The product identity is `1.2.0-alpha.34`; source and native build identity are
 fixed, while visual and hardware acceptance remain open. The old camera route accepted a free-form
@@ -119,7 +137,7 @@ and `1239/0/12` with default libav/Spout features. Those counts predate the
 current fixed two-Sender Spout integration and are not its full-regression
 evidence.
 
-The current committed alpha.34 Spout integration has focused exact-linker
+The historical committed alpha.34 Spout integration has focused exact-linker
 evidence of Syndocal show-Spout `20/0/0`, engine strict-pair `5/0/0`, and
 protocol v4 command `11/0/0`, all with first-party warnings `0`. It holds both
 senders on opaque black until the durable output lease commit, binds every

@@ -22679,9 +22679,16 @@ impl EngineRuntime {
                 values,
                 merge_mode,
             } => {
-                self.dmx_input_frames
-                    .insert(universe, RuntimeDmxInputFrame { values, merge_mode });
-                self.last_error = None;
+                if universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
+                    && show_artnet_loopback_route_is_exact_enabled(&self.output)
+                {
+                    self.last_error =
+                        Some(SHOW_ARTNET_LOOPBACK_U0_INPUT_MUTATION_ERROR.to_string());
+                } else {
+                    self.dmx_input_frames
+                        .insert(universe, RuntimeDmxInputFrame { values, merge_mode });
+                    self.last_error = None;
+                }
             }
             EngineCommand::ClearDmxInput(universe) => {
                 self.dmx_input_frames.remove(&universe);
@@ -31339,14 +31346,18 @@ impl EngineRuntime {
         let mut frame = [0u8; 512];
         if !(self.blackout || self.safety_blackout_engaged) {
             self.render_dmx_frame(&mut frame, universe, now);
-            if let Some(input) = self.dmx_input_frames.get(&universe) {
-                match input.merge_mode {
-                    DmxMergeMode::Htp => {
-                        for (output, input) in frame.iter_mut().zip(input.values.iter()) {
-                            *output = (*output).max(*input);
+            let strict_show_artnet_u0 = universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
+                && show_artnet_loopback_route_is_exact_enabled(&self.output);
+            if !strict_show_artnet_u0 {
+                if let Some(input) = self.dmx_input_frames.get(&universe) {
+                    match input.merge_mode {
+                        DmxMergeMode::Htp => {
+                            for (output, input) in frame.iter_mut().zip(input.values.iter()) {
+                                *output = (*output).max(*input);
+                            }
                         }
+                        DmxMergeMode::Ltp => frame.copy_from_slice(input.values.as_ref()),
                     }
-                    DmxMergeMode::Ltp => frame.copy_from_slice(input.values.as_ref()),
                 }
             }
         }
@@ -48250,6 +48261,12 @@ impl EngineRuntime {
                     .to_string(),
             );
         }
+        if self
+            .dmx_input_frames
+            .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        {
+            return Err(SHOW_ARTNET_LOOPBACK_U0_INPUT_ACTIVATION_ERROR.to_string());
+        }
         let ownership = self.output_ownership_gate.status();
         if ownership.state != OutputOwnershipState::Ready
             || ownership.effective_role != MachineOutputRole::Both
@@ -62920,6 +62937,10 @@ fn create_enabled_dmx_sender(
 const SHOW_ARTNET_LOOPBACK_TARGET_IP: &str = "127.0.0.1";
 const SHOW_ARTNET_LOOPBACK_PORT: u16 = 6454;
 const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 = 0;
+const SHOW_ARTNET_LOOPBACK_U0_INPUT_ACTIVATION_ERROR: &str =
+    "Show Art-Net loopback route activation rejected: Universe 0 already has a DMX input/merge; clear the U0 input before enabling";
+const SHOW_ARTNET_LOOPBACK_U0_INPUT_MUTATION_ERROR: &str =
+    "Strict show Art-Net loopback route rejects new Universe 0 DMX input/merge while active; ClearDmxInput(0) remains the recovery path";
 /// DSF2026 intentionally leaves channel 500 unpatched.  Keep that slot
 /// hard-zeroed on the bounded show route so a malformed project cannot drive
 /// an otherwise-unused physical address.
@@ -131101,6 +131122,209 @@ mod tests {
         assert!(receiver.recv().unwrap().is_err());
         assert_eq!(rejected.build_snapshot(0), rejected_before);
         assert_eq!(*published.read().unwrap(), rejected_before);
+    }
+
+    #[test]
+    fn show_artnet_loopback_route_rejects_preexisting_u0_input_before_sender_factory() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        runtime.dmx_input_frames.insert(
+            SHOW_ARTNET_LOOPBACK_UNIVERSE,
+            RuntimeDmxInputFrame {
+                values: Box::new([73u8; 512]),
+                merge_mode: DmxMergeMode::Ltp,
+            },
+        );
+        let before = runtime.build_snapshot(0);
+        let generation_before = runtime.dmx_route_configuration_generation;
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let mut factory_calls = 0;
+
+        let error = runtime
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |_, _| {
+                    factory_calls += 1;
+                    Ok(None)
+                },
+            )
+            .expect_err("a preexisting U0 input must block activation");
+
+        assert_eq!(error, SHOW_ARTNET_LOOPBACK_U0_INPUT_ACTIVATION_ERROR);
+        assert_eq!(
+            factory_calls, 0,
+            "U0 input rejection must precede sender creation"
+        );
+        assert_eq!(runtime.output, staged);
+        assert!(runtime.dmx_sender.is_none());
+        assert_eq!(
+            runtime.dmx_route_configuration_generation,
+            generation_before
+        );
+        let input = runtime
+            .dmx_input_frames
+            .get(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+            .expect("the rejected activation must preserve the U0 input");
+        assert_eq!(input.merge_mode, DmxMergeMode::Ltp);
+        assert_eq!(input.values.as_ref(), &[73u8; 512]);
+        assert_eq!(runtime.build_snapshot(0), before);
+    }
+
+    #[test]
+    fn strict_show_artnet_route_rejects_u0_input_htp_and_ltp_without_mutating_frame() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |_, _| Ok(None),
+            )
+            .expect("the exact route must be enabled before input rejection");
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("strict U0 frame", 1),
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: u16::MAX,
+        });
+        let authored = runtime.render_dmx_frame_for_universe(0, Instant::now());
+        assert_eq!(authored[0], 255);
+
+        for (merge_mode, values) in [
+            (DmxMergeMode::Htp, Box::new([255u8; 512])),
+            (DmxMergeMode::Ltp, Box::new([17u8; 512])),
+        ] {
+            runtime.apply_command(EngineCommand::SetDmxInputFrame {
+                universe: SHOW_ARTNET_LOOPBACK_UNIVERSE,
+                values,
+                merge_mode,
+            });
+            assert_eq!(
+                runtime.last_error.as_deref(),
+                Some(SHOW_ARTNET_LOOPBACK_U0_INPUT_MUTATION_ERROR)
+            );
+            assert!(!runtime
+                .dmx_input_frames
+                .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE));
+            assert_eq!(
+                runtime.render_dmx_frame_for_universe(0, Instant::now()),
+                authored,
+                "rejected U0 input must not alter the authored 512-byte frame"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_show_artnet_route_render_backstop_ignores_stale_u0_input_and_clear_recovers() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |_, _| Ok(None),
+            )
+            .expect("the exact route must be enabled before stale-input backstop");
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("stale U0 frame", 1),
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: 32_768,
+        });
+        let authored = runtime.render_dmx_frame_for_universe(0, Instant::now());
+        runtime.dmx_input_frames.insert(
+            SHOW_ARTNET_LOOPBACK_UNIVERSE,
+            RuntimeDmxInputFrame {
+                values: Box::new([255u8; 512]),
+                merge_mode: DmxMergeMode::Ltp,
+            },
+        );
+
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, Instant::now()),
+            authored,
+            "the render backstop must ignore stale U0 input after strict activation"
+        );
+        runtime.apply_command(EngineCommand::ClearDmxInput(SHOW_ARTNET_LOOPBACK_UNIVERSE));
+        assert!(!runtime
+            .dmx_input_frames
+            .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE));
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, Instant::now()),
+            authored,
+            "ClearDmxInput remains a safe recovery operation"
+        );
+    }
+
+    #[test]
+    fn strict_show_artnet_route_preserves_u1_input_merge() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |_, _| Ok(None),
+            )
+            .expect("the exact route must be enabled before U1 merge");
+        let mut request = sample_patch_request("U1 merge frame", 1);
+        request.universe = 1;
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request,
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: 32_768,
+        });
+        let authored = runtime.render_dmx_frame_for_universe(1, Instant::now());
+        assert_eq!(authored[0], 128);
+
+        runtime.apply_command(EngineCommand::SetDmxInputFrame {
+            universe: 1,
+            values: Box::new([200u8; 512]),
+            merge_mode: DmxMergeMode::Htp,
+        });
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(1, Instant::now())[0],
+            200
+        );
+        runtime.apply_command(EngineCommand::ClearDmxInput(1));
+
+        runtime.apply_command(EngineCommand::SetDmxInputFrame {
+            universe: 1,
+            values: Box::new([17u8; 512]),
+            merge_mode: DmxMergeMode::Ltp,
+        });
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(1, Instant::now())[0],
+            17
+        );
+        runtime.apply_command(EngineCommand::ClearDmxInput(1));
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(1, Instant::now()),
+            authored
+        );
     }
 
     #[test]

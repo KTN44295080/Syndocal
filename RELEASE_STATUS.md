@@ -1,12 +1,14 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.34`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and complete same-PC Art-Net/camera/fixed-Spout checkpoint `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.34 exact-linker native build and single responsive-process gate passed; maximized UI and physical output acceptance remain open. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Updated: 2026-08-30
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.35`. The pushed baseline includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout checkpoint `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. Alpha.35 is the current source tranche for strict Universe-0 input isolation and Spout first-physical-black hardening; its native rebuild and physical acceptance are pending. The alpha.34 exact-linker native build remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.34 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.34 same-PC output and camera integration (native built; UI/hardware pending)
+## 2026-08-30 current alpha.35 same-PC output isolation (source accepted; native/hardware pending)
 
-The product identity is `1.2.0-alpha.34`. Source and native build identity are
-now fixed, but visual and physical acceptance remain open. The old camera route accepted a
+The product identity is `1.2.0-alpha.35`. The current show boundary is same-PC
+only: Art-Net targets `127.0.0.1:6454`, while video uses local Spout. Remote
+Art-Net and NDI are deliberately outside this acceptance scope. Source, native,
+visual, and physical acceptance are not conflated. The old camera route accepted a
 free-form DirectShow endpoint at fixed `1280x720` / `30 fps`. The new source
 path uses an explicit current-generation DirectShow device/profile catalog,
 persists only an opaque endpoint identity, and requires an exact one-frame
@@ -31,8 +33,31 @@ remains open. A `4096x2160` RGBA frame is about
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`; the Syndocal profile probe still proves one frame only, so
 sustained 4K remains unverified and
-no 4K60 or broad sustained-4K claim is made. Native alpha.34 UI and hardware
+no 4K60 or broad sustained-4K claim is made. Current alpha.35 UI and hardware
 probes remain pending.
+
+Alpha.35 closes a newly found show-safety boundary on the strict local Art-Net
+route. Activation now rejects a pre-existing Universe 0 DMX input before any
+sender is created; active strict mode rejects both HTP and LTP U0 input without
+inserting it; and the final render fence ignores any stale U0 input. Clear U0
+remains the explicit recovery action, while U1 and ordinary non-strict merge
+semantics remain available. Exact MSVC 14.44 focused proof passed `12/12` with
+first-party warnings `0`. Independent Terra xHigh static rereview returned GO,
+P0/P1 `0`; two additional public-ACK/non-strict-U0 tests remain P2 proof debt.
+The exact-linker full engine gate passed `924/0/2`, first-party warnings `0`.
+
+The strict Spout pair now sends cached 1920×1080 opaque-black RGBA as each
+worker's first physical frame, rechecks the SDK's exact sender name after lazy
+registration, waits for both first-black acknowledgements, and performs a final
+R4 authority revalidation before active/live handoff. Failure, timeout, name
+suffix, or authority loss retires both physical workers before exact engine
+cleanup; unresolved cleanup keeps the fixed-name fence fail closed and is
+visible in the native log. Focused Spout passed `13/0/0`; Syndocal full
+no-default passed `1205/0/7` and full default libav/Spout passed `1265/0/12`.
+TypeScript, frontend production build, release checks, format, and diff checks
+passed; first-party warnings remained `0`. Independent Terra xHigh rereview is
+GO with P0/P1 `0`. Current alpha.35 native and physical output gates remain
+open.
 
 The pushed camera/Art-Net checkpoint
 `fd0d40698ae849a0f327fa7769b06b2af182c82f` received independent source GO.
@@ -40,7 +65,7 @@ Its later serialized full app evidence was `1203/0/7` without default features
 and `1239/0/12` with default libav/Spout features. Those counts predate the
 current fixed two-Sender implementation and are not promoted to its acceptance.
 
-The current committed alpha.34 Spout integration has focused exact-linker
+The historical committed alpha.34 Spout integration has focused exact-linker
 evidence of Syndocal show-Spout `20/0/0`, engine strict-pair `5/0/0`, and
 protocol v4 command `11/0/0`, with first-party warnings `0`. The pair remains
 opaque black through initial registration and durable output-lease commit;

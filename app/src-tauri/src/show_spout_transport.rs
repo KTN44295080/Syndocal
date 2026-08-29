@@ -343,7 +343,26 @@ impl ShowSpoutWorkerControl {
                     "strict show Spout initial opaque-black send failed: {error}"
                 ));
             }
+            if self.authority_is_faulted()? {
+                return Err(
+                    "strict show Spout authority was revoked before the initial opaque-black pair completed"
+                        .to_string(),
+                );
+            }
             if state.completed_senders == 2 {
+                // The per-worker checks prove that each physical first frame
+                // was opaque black and retained its exact fixed name. Recheck
+                // the R4 fence once at the pair boundary as well: otherwise a
+                // revocation between the second worker's send and this return
+                // could incorrectly make the pair active/live.
+                drop(state);
+                self.revalidate("initial opaque-black pair confirmation")?;
+                if self.authority_is_faulted()? {
+                    return Err(
+                        "strict show Spout authority was revoked while confirming the initial opaque-black pair"
+                            .to_string(),
+                    );
+                }
                 return Ok(());
             }
             let now = Instant::now();
@@ -846,7 +865,15 @@ impl Drop for ShowSpoutPendingOutputPair {
             return;
         };
         pair.control.mark_authority_lost();
-        let _ = pair.retire();
+        if let Err(error) = pair.retire() {
+            // `Drop` cannot surface this to the R4 caller, but silently
+            // discarding a synchronous stop/join failure would make a live
+            // fixed-name collision impossible to diagnose. The sender pair
+            // remains faulted and its reservation/ownership fences stay in
+            // effect; preserve the physical cleanup evidence in the native
+            // log for the recovery path.
+            eprintln!("strict show Spout pending sender-pair Drop rollback failed: {error}");
+        }
     }
 }
 
@@ -979,6 +1006,31 @@ mod tests {
         }
     }
 
+    struct FirstBlackNameMutatingSender {
+        name: String,
+        frames: Vec<(usize, u32, u32, [u8; 4])>,
+    }
+
+    impl SpoutOutputSender for FirstBlackNameMutatingSender {
+        fn sender_name(&self) -> String {
+            self.name.clone()
+        }
+
+        fn send_image(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), String> {
+            self.frames.push((
+                pixels.len(),
+                width,
+                height,
+                pixels[0..4].try_into().unwrap(),
+            ));
+            // Models Spout's lazy registration collision: construction and
+            // the pre-send name can be exact, then the first physical frame
+            // is registered under a suffixed name.
+            self.name = "Syndocal Background_1".to_string();
+            Ok(())
+        }
+    }
+
     #[test]
     fn keepalive_black_borrows_the_fixed_opaque_frame_and_revalidates_at_send() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1000,6 +1052,37 @@ mod tests {
                 && (*width, *height) == (1920, 1080)
                 && *pixel == [0, 0, 0, 255]
         }));
+    }
+
+    #[test]
+    fn initial_black_is_opaque_before_lazy_registration_name_is_rechecked() {
+        let control = control_for_tests(|| Ok(()));
+        control.prepare_keepalive_black().unwrap();
+        let mut sender = FirstBlackNameMutatingSender {
+            name: "Syndocal Background".to_string(),
+            frames: Vec::new(),
+        };
+
+        let error = crate::spout_transport::send_strict_show_spout_black(
+            &mut sender,
+            "Syndocal Background",
+            &control,
+            "test initial opaque-black send",
+        )
+        .expect_err("a post-first-frame name suffix must fail the strict pair");
+
+        assert!(error.contains("Syndocal Background_1"));
+        assert_eq!(sender.frames.len(), 1);
+        assert_eq!(
+            sender.frames[0],
+            (
+                crate::show_spout_outputs::SHOW_SPOUT_FRAME_PIXEL_LEN
+                    * crate::show_spout_outputs::SHOW_SPOUT_BLACK_PIXEL_RGBA.len(),
+                1920,
+                1080,
+                [0, 0, 0, 255],
+            )
+        );
     }
 
     #[test]
@@ -1034,6 +1117,22 @@ mod tests {
             .wait_for_initial_black_pair(Duration::from_millis(1))
             .unwrap_err()
             .contains("foreground injected first-black failure"));
+        assert!(control.presentation_is_keepalive_black().is_err());
+    }
+
+    #[test]
+    fn initial_black_pair_barrier_revalidates_authority_before_active_handoff() {
+        let control = control_for_tests(|| Err("R4 fence changed after first black".to_string()));
+        control.prepare_keepalive_black().unwrap();
+        control.note_sender_published().unwrap();
+        control.note_sender_published().unwrap();
+        control.note_initial_black_result(Ok(())).unwrap();
+        control.note_initial_black_result(Ok(())).unwrap();
+
+        let error = control
+            .wait_for_initial_black_pair(Duration::from_millis(1))
+            .expect_err("the pair must remain inactive when its post-black R4 confirmation fails");
+        assert!(error.contains("R4 fence changed after first black"));
         assert!(control.presentation_is_keepalive_black().is_err());
     }
 

@@ -1,10 +1,10 @@
 # Syndocal camera input acceptance
 
-Status date: 2026-08-29
+Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-Product tranche: `1.2.0-alpha.34`
+Product tranche: `1.2.0-alpha.35`
 
 ## Current product boundary
 
@@ -58,7 +58,7 @@ opened the physical camera by its display name and emitted one complete RGBA
 frame to the Windows null sink for both relevant tuples: `3840x2160` / `30 fps`
 MJPEG exited `0` in `2423 ms`, and `1920x1080` / `60 fps` MJPEG exited `0` in
 `1983 ms`. This proves the device/driver/FFmpeg tuple is usable on this PC, but
-it does not replace the alpha.34 opaque-endpoint probe or sustained-output
+it does not replace the current alpha.35 opaque-endpoint probe or sustained-output
 gates below.
 
 The direct preflight also completed `150` RGBA frames at 4K30 in `7205 ms` and
@@ -138,14 +138,16 @@ the RGBA frame at a fixed 60 Hz. A `4096x2160` RGBA frame is approximately
 copy traffic before compositing and upload. The one-frame profile probe does
 not close that performance risk.
 
-Therefore alpha.34 may claim explicit 4K30 and 1080p60 profile selection and
+Therefore alpha.35 may claim explicit 4K30 and 1080p60 profile selection and
 probe after native evidence, but must not claim arbitrary sustained 4K stage
 output or 4K60. A future shared/pooled frame handoff with generation-based
 render pacing is required before broadening that claim.
 
 ## Native and hardware gates still required
 
-- [x] Exact alpha.34 release build with MSVC 14.44, first-party warnings 0.
+- [x] Historical alpha.34 release build with MSVC 14.44, first-party warnings 0.
+- [ ] Exact current alpha.35 release rebuild with MSVC 14.44, first-party
+  warnings 0.
 - [ ] Exactly one responsive, maximized window from this checkout's release
   executable.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.

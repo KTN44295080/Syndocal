@@ -1,4 +1,4 @@
-# DSF2026 same-PC output acceptance — 2026-08-29
+# DSF2026 same-PC output acceptance — current 2026-08-30
 
 ## Scope
 
@@ -111,7 +111,18 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The current committed alpha.34 Spout integration has additionally passed the
+The current alpha.35 source adds three independent Universe-0 isolation fences:
+activation rejects any pre-existing U0 input before creating a sender; active
+strict mode rejects new U0 HTP/LTP input without inserting it; and the final
+render fence skips any stale U0 merge. `ClearDmxInput(0)` remains the explicit
+recovery action, and U1 plus ordinary non-strict merge remain available. Exact
+MSVC 14.44 focused tests passed `12/12` with first-party warnings `0`.
+Independent Terra xHigh static rereview returned GO with P0/P1 `0`. Two public
+ACK/non-strict-U0 regression tests remain P2 proof debt and are not confused
+with physical acceptance. The subsequent exact-linker full engine gate passed
+`924 passed / 0 failed / 2 ignored`, first-party warnings `0`.
+
+The historical committed alpha.34 Spout integration has additionally passed the
 same exact linker gate for Syndocal show-Spout tests `20 passed / 0 failed`,
 engine strict-pair tests `5 passed / 0 failed`, and protocol v4 command tests
 `11 passed / 0 failed`, with `0` first-party warnings in each run. These tests
@@ -136,6 +147,19 @@ updated with explicit variant assertions and the dead fixture was removed;
 focused proofs and the complete matrix then passed. Native build and Unity/GPU
 checks below remain open.
 
+The current alpha.35 hardening closes the remaining first-physical-frame
+boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
+recheck its exact SDK name after lazy registration, and join the two-ACK plus
+final R4 authority barrier before active/live handoff. Failure, timeout, name
+suffix, or authority loss stops and joins both physical workers before exact
+engine cleanup; an unresolved cleanup keeps the fixed-name fence fail closed
+and is logged. Exact-linker focused Spout passed `13/0/0`; full Syndocal passed
+no-default `1205/0/7` and default libav/Spout `1265/0/12`, with first-party
+warnings `0`. Independent Terra xHigh rereview returned GO with P0/P1 `0`.
+P2 remains for a single fake-worker integration test spanning every failure
+variant and for an injected reaper-spawn/log-capture test; neither is promoted
+to physical acceptance.
+
 The non-overwriting authoring tool was independently rereviewed after its
 post-write cleanup was changed to fail closed: a failed post-write validation
 never unlinks or renames a pathname that another process could have replaced.
@@ -156,7 +180,8 @@ native artifact are accepted:
       `127.0.0.1:6454 / Art-Net / U0 / 512` activation.
 - [x] The retired serial-show command, UI, schema, registry, tests, and
       show-only machine binding are unreachable or fail closed.
-- [ ] Universe 0 input/merge cannot alter the strict completed show frame.
+- [x] Universe 0 input/merge cannot alter the strict completed show frame in
+      deterministic source tests; physical Unity output remains unchecked.
 - [x] Channel 500 is deterministically forced to zero at the strict sender
       boundary and observed as zero on the wire.
 - [x] The fixed channel 1 + channel 5 test frame is available and verified by
@@ -172,8 +197,9 @@ native artifact are accepted:
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
 - [x] Focused and full deterministic gates pass with zero first-party warnings.
-- [x] A fresh warning-free native release is built with exact MSVC 14.44 and
-      launched from this checkout as exactly one responsive process.
+- [ ] A fresh warning-free current alpha.35 native release is built with exact
+      MSVC 14.44 and launched from this checkout as exactly one responsive
+      process. The alpha.34 artifact is historical after the U0 isolation fix.
 - [ ] Computer Use verifies that exact native window as maximized. Its process
       is responsive, but the helper did not expose it as a targetable window in
       the first post-build attempt.

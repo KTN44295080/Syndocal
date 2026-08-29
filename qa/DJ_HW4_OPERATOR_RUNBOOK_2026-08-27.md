@@ -7,6 +7,68 @@ This is the short execution companion to
 acceptance authority and must not promote a row from a static gate, preflight,
 socket, or `CONNECTED` label alone.
 
+## 2026-08-30 CURRENT v1.1.11 operator authority
+
+This section is the only current DJ-PC launch and pedal authority in this
+document. Sections 1.1 through 2.1 below are immutable historical evidence and
+must not be executed as current instructions. The current external source
+checkout is branch `beta-v1.1.2`, exact clean `HEAD` and upstream
+`a13d7bff59db5e7c00e19655f87c69db7cb52005`, product source version `1.1.11`.
+No v1.1.11 installer, tag, public release, or hardware acceptance is claimed;
+HW-4 remains exactly **0/12** until the physical rows are observed.
+
+The only current show configuration is the checkout-external file
+`C:\SyndocalShow\dj-agent-v1.1.11.json`. From one PowerShell in the verified
+DJ-PC checkout:
+
+```powershell
+git pull --ff-only
+git status --short
+git rev-parse HEAD
+git rev-parse '@{upstream}'
+
+# Run once only when the exact validated v1.1.10 predecessor exists.
+.\start-all.bat --upgrade-config
+
+$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.11.json'
+.\start-all.bat --preflight-only
+.\start-all.bat
+```
+
+`--upgrade-config` is a one-way, non-overwriting migration from the exact known
+v1.1.10 predecessor. If it rejects the predecessor or target, stop and diagnose;
+do not copy an older template, synthesize JSON from this runbook, or weaken the
+strict validator. `--preflight-only` starts no show-side process. The no-argument
+launcher is the current controlled-source runtime path.
+
+Owner selection is any-deck and does not require Rekordbox MASTER. It admits an
+actually playing deck whose NFC-normalized title case-sensitively contains
+`人生オーバー`; the current artist/content identity still has to satisfy the
+strict metadata contract. If there are no title-positive candidates, only a
+fresh playing Deck 1 may become the bounded fallback after `1400 ms`. Deck 2
+alone with a nonmatching title never becomes that fallback. Multiple valid
+title-positive candidates prefer Deck 1, otherwise the lowest deck number.
+
+The current pedal state machine is:
+
+- Stage 1 F13: on the same edge, start the admitted Rekordbox deck HPF
+  (`CC16`, `64 -> 127`, `1000 ms`) and send exactly one correlated
+  `DJ_RELEASE`; then fade ChannelFader (`CC17`, `127 -> 0`, `1000 ms`), send
+  Cue/Stop (`Note 37`), and reset filter/fader. Syndocal delivery remains
+  independent from local MIDI success.
+- Stage 1 F14: local Rekordbox LoopHalf and arm the bounded loop fallback.
+  Stage 1 F15 is inactive.
+- Stage 2 F13: send one absolute `DJ_TIMELINE_LOOP_SET` to the opposite of the
+  exact current `loopActive` value. Unknown/pending/stale state sends nothing.
+- Stage 2 F14: send `DJ_TIMELINE_LOOP_HALF` only while an exact current Timeline
+  loop is active. Stage 2 never sends Rekordbox MIDI.
+- Stage 2 F15: send the only beat jump, `DJ_TIMELINE_BEAT_JUMP` with `+4`, using
+  the exact current `timelineId` and `playSessionId`.
+
+Every Stage 2 action requires the current correlated authoritative Timeline
+snapshot and matching ACK lifecycle. A `CONNECTED` label, candidate row, or
+request-accepted ACK alone is not hardware acceptance.
+
 ## 1. Stop boundary and source identity
 
 Do not begin while the current live DJ session must remain connected. Obtain
