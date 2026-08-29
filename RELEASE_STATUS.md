@@ -1,11 +1,11 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.33`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, and synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the current alpha.33 camera-capture source tranche is documented below and has no native/UI acceptance yet. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.34`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera checkpoint `fd0d40698ae849a0f327fa7769b06b2af182c82f`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the current alpha.34 same-PC Spout/camera integration has no native/UI acceptance yet. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.33 camera-capture source tranche (native pending)
+## 2026-08-29 current alpha.34 same-PC output and camera integration (native pending)
 
-The product identity is `1.2.0-alpha.33`; this is a source checkpoint and not
+The product identity is `1.2.0-alpha.34`; this is a source checkpoint and not
 yet a versioned native acceptance. The old camera route accepted a
 free-form DirectShow endpoint at fixed `1280x720` / `30 fps`. The new source
 path uses an explicit current-generation DirectShow device/profile catalog,
@@ -31,14 +31,35 @@ remains open. A `4096x2160` RGBA frame is about
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`; the Syndocal profile probe still proves one frame only, so
 sustained 4K remains unverified and
-no 4K60 or broad sustained-4K claim is made. Native alpha.33 build, UI, and
+no 4K60 or broad sustained-4K claim is made. Native alpha.34 build, UI, and
 hardware probes remain pending.
 
-The final independent source rereview is GO with P0/P1 `0`. Full app regression
-passed `1196/0/7` without default features and `1232/0/12` with the default
-libav/Spout feature set; frontend production build, localization `3631/3631`,
-typed IPC inventory `440`, `check:release`, format, and diff gates pass with
-first-party warnings `0`.
+The pushed camera/Art-Net checkpoint
+`fd0d40698ae849a0f327fa7769b06b2af182c82f` received independent source GO.
+Its later serialized full app evidence was `1203/0/7` without default features
+and `1239/0/12` with default libav/Spout features. Those counts predate the
+current fixed two-Sender implementation and are not promoted to its acceptance.
+
+The current uncommitted alpha.34 Spout integration has focused exact-linker
+evidence of Syndocal show-Spout `20/0/0`, engine strict-pair `5/0/0`, and
+protocol v4 command `11/0/0`, with first-party warnings `0`. The pair remains
+opaque black through initial registration and durable output-lease commit;
+only an infallible atomic commit token then admits live Timeline content.
+Role/project generation changes, incomplete retirement ACKs, generic output
+mutation, reserved-name claims, and VJ bootstrap fail closed around the exact
+pair. The retirement blocker is process-session scoped; process restart is the
+explicit recovery boundary because it destroys the SDK senders, engine
+instance, and pending ACK queue. Independent Terra xHigh final rereview is GO
+with no unresolved P0/P1. P2 debt remains for a real two-worker fake-SDK timing
+test and for further extraction from the oversized app/engine orchestration
+files. Final exact-linker regression passed Syndocal no-default `1205/0/7`,
+Syndocal default `1263/0/12`, and engine `920/0/2`; all remaining workspace
+crates exited successfully and first-party warnings were `0`. The initial run
+exposed a stale command-inventory count and an older dead Cue 3 test fixture;
+both received minimal test-only repairs before focused and full reruns passed.
+Native alpha.34 build/window and Unity/GPU observation remain pending. Frontend
+production build, typed command and output-control checks, `check:release`,
+format, and diff gates currently pass.
 
 ## 2026-08-29 historical alpha.32 source/native integration (hardware pending)
 

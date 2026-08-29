@@ -1643,10 +1643,10 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 /// OutputControl v2 changed the command shape and confirmation boundary. Its
 /// request/response schema identity is therefore distinct from the v1
 /// inventory schema and the Rust mutation DTO names now match that boundary.
-// v3 clean-break: the former USB serial show activation is retired.  The
-// sole show-specific output action is now the fixed local Art-Net loopback
-// route and old wire action names are rejected by `deny_unknown_fields`.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 3;
+// v4 adds an independent, payloadless same-machine Spout show activation.
+// v3's Art-Net action shape stays frozen: the new two-sender contract is not
+// smuggled through the DMX route action or a generic video-output payload.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 4;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
@@ -1676,6 +1676,11 @@ pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
 /// Art-Net loopback route after revalidating its fixed network contract.
 pub const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID: &str =
     "syndocal.output.show_artnet_loopback_route.enable.v1";
+/// The only show-specific same-machine video mutation.  Its action carries
+/// only an active lease; sender names, dimensions and routing are fixed by
+/// native code and are never caller-controlled.
+pub const OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID: &str =
+    "syndocal.output.show_spout_outputs.enable.v1";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -2295,6 +2300,9 @@ pub enum OutputControlActionV2 {
     EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
+    EnableShowSpoutOutputs {
+        lease: OutputLeaseAuthorityV1,
+    },
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2344,6 +2352,9 @@ pub enum OutputControlActionV2 {
 enum OutputControlActionV2Wire {
     EnableOutput {},
     EnableShowArtNetLoopbackRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
+    EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
     Arm {
@@ -2397,6 +2408,7 @@ impl OutputControlActionV2 {
             Self::EnableShowArtNetLoopbackRoute { .. } => {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
+            Self::EnableShowSpoutOutputs { .. } => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -2437,6 +2449,7 @@ impl OutputControlActionV2 {
         match self {
             Self::EnableOutput => {}
             Self::EnableShowArtNetLoopbackRoute { lease }
+            | Self::EnableShowSpoutOutputs { lease }
             | Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
             | Self::RenewLease { lease }
@@ -2479,6 +2492,11 @@ impl OutputControlActionV2 {
             Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
             Self::EnableShowArtNetLoopbackRoute { lease } => {
                 OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute {
+                    lease: lease.clone(),
+                }
+            }
+            Self::EnableShowSpoutOutputs { lease } => {
+                OutputControlActionV2Wire::EnableShowSpoutOutputs {
                     lease: lease.clone(),
                 }
             }
@@ -2553,6 +2571,13 @@ impl OutputControlActionV2 {
                 // 0..=11 are frozen. This action intentionally carries only
                 // the exact active lease; it cannot smuggle route edits.
                 output.push(12);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::EnableShowSpoutOutputs { lease } => {
+                // 0..=12 are frozen.  The new show video action is
+                // deliberately payloadless and cannot impersonate Art-Net.
+                output.push(13);
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
@@ -2670,6 +2695,9 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
             OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute { lease } => {
                 Self::EnableShowArtNetLoopbackRoute { lease }
+            }
+            OutputControlActionV2Wire::EnableShowSpoutOutputs { lease } => {
+                Self::EnableShowSpoutOutputs { lease }
             }
             OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
             OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
@@ -4439,6 +4467,41 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<OutputControlActionV2>(show_route_json).unwrap(),
             show_route_enable
+        );
+        // Schema v4 appends a second, independent show-only activation.  It
+        // remains payloadless: callers cannot substitute generic sender
+        // names, dimensions, or an arbitrary Spout target for the fixed
+        // same-machine pair.
+        let show_spout_enable = OutputControlActionV2::EnableShowSpoutOutputs {
+            lease: authority.clone(),
+        };
+        let mut show_spout_shape = Vec::new();
+        show_spout_enable
+            .append_canonical_bytes(&mut show_spout_shape)
+            .unwrap();
+        assert_eq!(
+            show_spout_enable.operation_id(),
+            OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+        );
+        assert_eq!(show_spout_shape.first(), Some(&13));
+        let show_spout_json = serde_json::to_value(&show_spout_enable).unwrap();
+        assert_eq!(
+            show_spout_json,
+            serde_json::json!({
+                "kind": "enable_show_spout_outputs",
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            })
+        );
+        for forged_key in ["sender_name", "width", "height", "composition_id"] {
+            let mut forged_show_spout_json = show_spout_json.clone();
+            forged_show_spout_json[forged_key] = serde_json::json!("caller_controlled");
+            assert!(
+                serde_json::from_value::<OutputControlActionV2>(forged_show_spout_json).is_err()
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(show_spout_json).unwrap(),
+            show_spout_enable
         );
         let windows_device_label = DisplayOutputSpecV2 {
             label: r"\\.\DISPLAY2".to_string(),

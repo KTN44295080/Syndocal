@@ -97,6 +97,7 @@
   "duplicate_video_layer",
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
+  "enable_show_spout_outputs_v1",
   "end_media_asset_preview",
   "export_diagnostic_package",
   "fade_video_output_opacity",

@@ -100,6 +100,7 @@ type VideoOutputCreatePanelProps = {
   onEndpoint: (value: string) => void;
   invokeCommand: FrontendTauriInvoke;
   onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
+  onEnableShowSpoutOutputs: () => void | Promise<unknown>;
 };
 
 export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
@@ -176,6 +177,16 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
     <section class="videoSetupDisclosure videoOutputCreateSurface" aria-label="New Output">
       <div class="videoSetupDisclosureHeading">New Output</div>
       <div class="videoOutputForm">
+        <div class="videoOutputQuickCreate" data-show-spout-output-activation>
+          <p class="hint videoOutputQuickHint">
+            Same-PC show video uses exactly <strong>Syndocal Background</strong> and <strong>Syndocal Foreground</strong> Spout senders at 1920×1080. Stopped content keeps both senders alive with opaque RGB-black frames.
+          </p>
+          <button
+            class="primary"
+            data-video-output-enable-show-spout
+            onClick={() => void props.onEnableShowSpoutOutputs()}
+          >Confirm and enable show Spout outputs</button>
+        </div>
         <div class="videoOutputQuickCreate" data-video-output-quick-create>
           <Show when={props.kind === "Display"} fallback={
             <>

@@ -15,7 +15,8 @@ use crate::control_plane_command::{
     OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
     OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
     OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
-    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+    OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+    OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
 };
 
 /// Wire format version for the control-plane inventory.
@@ -496,6 +497,7 @@ fn validate_operation_schema_identity(
         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
         | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+        | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
         | OUTPUT_ENABLE_OPERATION_ID
         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -781,6 +783,34 @@ mod tests {
             descriptor.validate(),
             Err(OperationDescriptorValidationError::UnsupportedOperationSchemaVersion)
         );
+    }
+
+    #[test]
+    fn show_spout_output_operation_accepts_only_schema_v4() {
+        assert_eq!(OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, 4);
+        let operation_id = OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID;
+        let exact_schema = SchemaIdentity {
+            name: format!("{operation_id}.request"),
+            version: OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
+        };
+        assert_eq!(
+            validate_operation_schema_identity(&exact_schema, operation_id, "request"),
+            Ok(())
+        );
+
+        // v3 is the deliberately retired Art-Net-only wire boundary.  A
+        // speculative future schema must not be silently accepted either.
+        for version in [3, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION + 1] {
+            let rejected = SchemaIdentity {
+                name: format!("{operation_id}.request"),
+                version,
+            };
+            assert_eq!(
+                validate_operation_schema_identity(&rejected, operation_id, "request"),
+                Err(OperationDescriptorValidationError::UnsupportedOperationSchemaVersion),
+                "schema v{version}"
+            );
+        }
     }
 
     #[test]

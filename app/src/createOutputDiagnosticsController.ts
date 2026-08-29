@@ -131,6 +131,23 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
+  const enableShowSpoutOutputs = async () => {
+    try {
+      const lease = selectOnlyActiveOutputLease(
+        await queryOutputLeaseAuthority(options.invoke),
+        ["lighting", "video"],
+      );
+      await executeOutputControl(options.invoke, {
+        kind: "enable_show_spout_outputs",
+        lease,
+      });
+      await options.refreshSnapshot();
+      options.setMessage("Same-PC Syndocal Background/Foreground Spout outputs enabled.");
+    } catch (error) {
+      options.setMessage(String(error));
+    }
+  };
+
   const sendDmxTestFrame = async () => {
     options.setMessage(
       "DMX test output is unavailable until a lease-bound OutputControl action is reviewed; no frame was sent.",
@@ -209,6 +226,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     saveEngineTelemetryReport,
     applyOutput,
     enableStagedShowArtNetLoopbackRoute,
+    enableShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     dmxRouteLabel,

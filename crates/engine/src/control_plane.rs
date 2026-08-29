@@ -86,21 +86,24 @@ mod tests {
 
     #[test]
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 269;
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 271;
         let descriptors = control_plane_engine_command_descriptors();
+        let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         assert_eq!(
             engine_command_variant_count(),
             EXPECTED_ENGINE_COMMAND_COUNT
         );
         assert_eq!(descriptors.len(), EXPECTED_ENGINE_COMMAND_COUNT);
         assert_eq!(
-            EngineCommand::CONTROL_PLANE_VARIANT_NAMES
-                .iter()
-                .collect::<BTreeSet<_>>()
-                .len(),
+            variant_names.len(),
             EXPECTED_ENGINE_COMMAND_COUNT,
             "the Rust enum itself rejects duplicate variant names; retain this proof against accidental inventory transformations"
         );
+        assert!(variant_names.contains("EnableShowSpoutOutputsPublished"));
+        assert!(variant_names.contains("RetireShowSpoutOutputsPublished"));
         assert_eq!(
             descriptors
                 .iter()

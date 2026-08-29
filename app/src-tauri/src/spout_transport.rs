@@ -15,6 +15,8 @@ use engine::{
 };
 use protocol::{TimelineFollowSettlementAckResult, VideoLayerId};
 
+use crate::show_spout_transport::ShowSpoutWorkerControl;
+
 #[cfg(test)]
 use protocol::{OutputOwnershipState, VideoOutputId};
 
@@ -140,6 +142,85 @@ impl SpoutTransportState {
                 }
                 self.failed_output_routes.insert(route_id, failure.message);
             }
+        }
+        Ok(())
+    }
+
+    /// Narrow adapter used by the strict show pair. Generic routes remain in
+    /// `start_route`; this method never inserts a show worker into that
+    /// generic route map, so a failed two-sender transaction cannot become a
+    /// half-active generic route.
+    pub(crate) fn start_show_output_worker(
+        &mut self,
+        output: &protocol::VideoOutputSummary,
+        engine: EngineHandle,
+        activation: OutputOwnershipActivation,
+        show_control: Arc<ShowSpoutWorkerControl>,
+    ) -> Result<SpoutRouteWorker, String> {
+        let endpoint_name = output
+            .endpoint_name
+            .clone()
+            .ok_or_else(|| "strict show Spout output endpoint is missing".to_string())?;
+        self.ensure_show_output_startup_is_available(output.id, &endpoint_name)?;
+        match SpoutRouteWorker::start_show_output(
+            output.id,
+            endpoint_name,
+            engine,
+            Arc::clone(&self.inputs),
+            #[cfg(feature = "ndi")]
+            Arc::clone(&self.ndi_inputs),
+            Arc::clone(&self.capture_inputs),
+            activation,
+            show_control,
+        ) {
+            Ok(worker) => Ok(worker),
+            Err(error) => {
+                if let Some(pending) = error.pending_startup {
+                    self.pending_output_startups.insert(output.id, pending);
+                }
+                Err(error.message)
+            }
+        }
+    }
+
+    /// A failed constructor may retain an SDK sender while its original
+    /// output ID has already become obsolete.  Sender identity, not a newly
+    /// allocated ID, is the retry barrier for the fixed show names.
+    pub(crate) fn has_pending_output_startup_named(&self, endpoint_name: &str) -> bool {
+        self.pending_output_startups
+            .values()
+            .any(|pending| pending.sender_name == endpoint_name)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strict_show_startup_resource_count(&self) -> usize {
+        self.output_workers.len() + self.pending_output_startups.len()
+    }
+
+    fn has_output_worker_named(&self, endpoint_name: &str) -> bool {
+        self.output_workers
+            .values()
+            .any(|worker| worker.endpoint_name.as_deref() == Some(endpoint_name))
+    }
+
+    /// Strict show sender identity is process-local resource ownership, not
+    /// an engine output id.  A failed old transaction can receive a fresh id
+    /// on retry, so the fixed endpoint name remains reserved until its join
+    /// record was harvested.
+    fn ensure_show_output_startup_is_available(
+        &self,
+        output_id: u64,
+        endpoint_name: &str,
+    ) -> Result<(), String> {
+        if self.output_workers.contains_key(&output_id)
+            || self.pending_output_startups.contains_key(&output_id)
+            || self.has_output_worker_named(endpoint_name)
+            || self.has_pending_output_startup_named(endpoint_name)
+        {
+            return Err(
+                "strict show Spout output id or fixed sender name is awaiting prior teardown acknowledgement"
+                    .to_string(),
+            );
         }
         Ok(())
     }
@@ -284,8 +365,8 @@ impl SpoutTransportState {
 }
 
 #[derive(Debug, Clone)]
-struct SpoutOutputWorkerStopError {
-    message: String,
+pub(crate) struct SpoutOutputWorkerStopError {
+    pub(crate) message: String,
 }
 
 impl std::fmt::Display for SpoutOutputWorkerStopError {
@@ -310,6 +391,7 @@ impl std::fmt::Debug for SpoutOutputWorkerStartError {
 }
 
 struct SpoutPendingOutputStartup {
+    sender_name: String,
     worker: Option<std::thread::JoinHandle<Result<(), SpoutOutputWorkerStopError>>>,
     failure_lease: Option<OutputOwnershipTeardownLease>,
     teardown_lease: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
@@ -405,18 +487,28 @@ fn take_spout_creation_lease(
         .unwrap_or_else(|poisoned| poisoned.into_inner().take())
 }
 
-trait SpoutOutputSender {
+pub(crate) trait SpoutOutputSender {
+    /// The SDK may suffix a colliding name only when the first frame causes
+    /// registration. Strict show callers therefore check this both before and
+    /// after their forced first opaque-black frame.
+    fn sender_name(&self) -> String;
+
     fn send_image(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), String>;
 }
 
 impl SpoutOutputSender for spout2::dx::Sender {
+    fn sender_name(&self) -> String {
+        self.name().to_string()
+    }
+
     fn send_image(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), String> {
         self.send_image(pixels, width, height)
             .map_err(|error| error.to_string())
     }
 }
 
-struct SpoutRouteWorker {
+pub(crate) struct SpoutRouteWorker {
+    endpoint_name: Option<String>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<Result<(), SpoutOutputWorkerStopError>>>,
     failure: Arc<Mutex<Option<SpoutOutputWorkerStopError>>>,
@@ -552,6 +644,52 @@ impl SpoutRouteWorker {
         capture_inputs: crate::capture_transport::CaptureInputRegistry,
         activation: OutputOwnershipActivation,
     ) -> Result<Self, SpoutOutputWorkerStartError> {
+        Self::start_output_with_show_control(
+            output_id,
+            sender_name,
+            engine,
+            spout_inputs,
+            #[cfg(feature = "ndi")]
+            ndi_inputs,
+            capture_inputs,
+            activation,
+            None,
+        )
+    }
+
+    fn start_show_output(
+        output_id: u64,
+        sender_name: String,
+        engine: EngineHandle,
+        spout_inputs: SpoutInputRegistry,
+        #[cfg(feature = "ndi")] ndi_inputs: crate::ndi_transport::NdiInputRegistry,
+        capture_inputs: crate::capture_transport::CaptureInputRegistry,
+        activation: OutputOwnershipActivation,
+        show_control: Arc<ShowSpoutWorkerControl>,
+    ) -> Result<Self, SpoutOutputWorkerStartError> {
+        Self::start_output_with_show_control(
+            output_id,
+            sender_name,
+            engine,
+            spout_inputs,
+            #[cfg(feature = "ndi")]
+            ndi_inputs,
+            capture_inputs,
+            activation,
+            Some(show_control),
+        )
+    }
+
+    fn start_output_with_show_control(
+        output_id: u64,
+        sender_name: String,
+        engine: EngineHandle,
+        spout_inputs: SpoutInputRegistry,
+        #[cfg(feature = "ndi")] ndi_inputs: crate::ndi_transport::NdiInputRegistry,
+        capture_inputs: crate::capture_transport::CaptureInputRegistry,
+        activation: OutputOwnershipActivation,
+        show_control: Option<Arc<ShowSpoutWorkerControl>>,
+    ) -> Result<Self, SpoutOutputWorkerStartError> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let failure = Arc::new(Mutex::new(None));
@@ -570,9 +708,17 @@ impl SpoutRouteWorker {
         let (start_sender, start_receiver) = mpsc::sync_channel::<SpoutOutputStartDecision>(1);
         let creation_lease_slot: SpoutCreationLeaseSlot = Arc::new(Mutex::new(None));
         let worker_creation_lease_slot = Arc::clone(&creation_lease_slot);
+        let worker_show_control = show_control.clone();
         let parent_engine = engine.clone();
+        let pending_sender_name = sender_name.clone();
         let worker = spawn_spout_output_worker(output_id, move || {
             let mut startup_follow_state = TimelineFollowOutputState::default();
+            if let Some(show_control) = worker_show_control.as_ref() {
+                if let Err(error) = show_control.revalidate("Spout sender construction") {
+                    let _ = ready_tx.send(Err(error.clone()));
+                    return Err(SpoutOutputWorkerStopError { message: error });
+                }
+            }
             let creation_lease = match activation.admit_resource_creation() {
                 Ok(lease) => lease,
                 Err(error) => {
@@ -644,6 +790,21 @@ impl SpoutRouteWorker {
                     return Err(SpoutOutputWorkerStopError { message });
                 }
             };
+            if show_control.is_some() && sender.name() != sender_name {
+                let actual_name = sender.name().to_string();
+                let message = format!(
+                    "strict show Spout sender name collision: expected '{sender_name}', SDK assigned '{actual_name}'"
+                );
+                ensure_startup_failure_fence(
+                    &engine,
+                    &worker_startup_failure_lease,
+                    format!("Spout output route {output_id} open failed: {message}"),
+                );
+                drop(sender);
+                creation_lease.retire();
+                let _ = ready_tx.send(Err(message.clone()));
+                return Err(SpoutOutputWorkerStopError { message });
+            }
             sender.set_format(spout2::dx::format::R8G8B8A8_UNORM);
             match worker_creation_lease_slot.lock() {
                 Ok(mut slot) => *slot = Some(creation_lease),
@@ -699,6 +860,41 @@ impl SpoutRouteWorker {
                     return result;
                 }
             }
+            // The strict show route is not established by construction or by
+            // engine publication.  Both workers wait until both creation
+            // leases were published, then each sends one cached opaque-black
+            // frame and reports its result.  Only the pair-level bounded
+            // barrier may turn this R4 into a success; a playing timeline is
+            // deliberately ignored until this first physical frame succeeds.
+            if let Some(show_control) = worker_show_control.as_ref() {
+                let first_black = show_control
+                    .wait_for_pair_publication(&worker_stop)
+                    .and_then(|_| {
+                        send_strict_show_spout_black(
+                            &mut sender,
+                            &sender_name,
+                            show_control,
+                            "Spout initial opaque-black send",
+                        )
+                    });
+                let first_black = show_control.note_initial_black_result(first_black);
+                if let Err(error) = first_black {
+                    let failure_lease = engine.begin_output_ownership_failure_fence(format!(
+                        "Spout output route {output_id} initial opaque-black send failed: {error}"
+                    ));
+                    let result = finish_spout_output_worker(
+                        &engine,
+                        sender,
+                        &worker_teardown_lease,
+                        Some(failure_lease),
+                        Some(error),
+                    );
+                    if let Err(error) = &result {
+                        record_spout_worker_failure(&worker_failure, error.clone());
+                    }
+                    return result;
+                }
+            }
             let decoder = crate::ndi_transport::NdiAwareVideoFrameDecoder::from_env()
                 .with_spout_inputs(spout_inputs)
                 .with_capture_inputs(capture_inputs);
@@ -719,6 +915,7 @@ impl SpoutRouteWorker {
                 worker_stop,
                 sender,
                 (worker_teardown_lease, worker_render_failure_lease),
+                worker_show_control,
                 move |follow_output_state| {
                     let presentation_sample = render_engine.video_presentation_sample();
                     let snapshot = &presentation_sample.snapshot;
@@ -898,6 +1095,7 @@ impl SpoutRouteWorker {
                     });
                 };
                 Ok(Self {
+                    endpoint_name: Some(pending_sender_name),
                     stop,
                     worker: Some(worker),
                     failure,
@@ -931,6 +1129,7 @@ impl SpoutRouteWorker {
                 Err(SpoutOutputWorkerStartError {
                     message: error,
                     pending_startup: Some(SpoutPendingOutputStartup {
+                        sender_name: pending_sender_name.clone(),
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
                         teardown_lease,
@@ -950,6 +1149,7 @@ impl SpoutRouteWorker {
                 Err(SpoutOutputWorkerStartError {
                     message,
                     pending_startup: Some(SpoutPendingOutputStartup {
+                        sender_name: pending_sender_name,
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
                         teardown_lease,
@@ -961,12 +1161,25 @@ impl SpoutRouteWorker {
     }
 
     fn publish(&mut self) -> Result<(), String> {
+        self.publish_with_show(None)
+    }
+
+    pub(crate) fn publish_with_show(
+        &mut self,
+        show_control: Option<&Arc<ShowSpoutWorkerControl>>,
+    ) -> Result<(), String> {
+        if let Some(show_control) = show_control {
+            show_control.revalidate("Spout sender publication")?;
+        }
         let lease = self
             .creation_lease
             .take()
             .ok_or_else(|| "Spout output resource was already published".to_string())?;
         match lease.publish() {
             Ok(()) => {
+                if let Some(show_control) = show_control {
+                    show_control.note_sender_published()?;
+                }
                 let Some(start_signal) = self.start_signal.take() else {
                     return Err(
                         "Spout output resource publication signal was already consumed".to_string(),
@@ -985,11 +1198,19 @@ impl SpoutRouteWorker {
         }
     }
 
-    fn failure_snapshot(&self) -> Option<SpoutOutputWorkerStopError> {
+    pub(crate) fn failure_snapshot(&self) -> Option<SpoutOutputWorkerStopError> {
         self.failure
             .lock()
             .map(|failure| failure.clone())
             .unwrap_or_else(|poisoned| (*poisoned.into_inner()).clone())
+    }
+
+    pub(crate) fn has_finished_or_failed(&self) -> bool {
+        self.failure_snapshot().is_some()
+            || self
+                .worker
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
     }
 
     fn release_teardown_lease(&mut self) {
@@ -1001,7 +1222,7 @@ impl SpoutRouteWorker {
         drop(lease);
     }
 
-    fn stop(mut self) -> Result<(), SpoutOutputWorkerStopError> {
+    pub(crate) fn stop(mut self) -> Result<(), SpoutOutputWorkerStopError> {
         let undelivered_creation_lease = self.signal_retirement();
         self.stop.store(true, Ordering::Release);
         let join_result = self.worker.take().map(|worker| {
@@ -1042,6 +1263,7 @@ fn wait_until_ready(
 ) -> Result<SpoutRouteWorker, video::ExternalVideoTransportDriverError> {
     match ready.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok(())) => Ok(SpoutRouteWorker {
+            endpoint_name: None,
             stop: Arc::clone(stop),
             worker: Some(worker),
             failure,
@@ -1132,6 +1354,7 @@ fn run_spout_output_worker<S, R>(
     worker_stop: Arc<AtomicBool>,
     mut sender: S,
     lease_slots: SpoutLeaseSlots,
+    show_control: Option<Arc<ShowSpoutWorkerControl>>,
     mut render: R,
 ) -> Result<(), SpoutOutputWorkerStopError>
 where
@@ -1153,6 +1376,67 @@ where
     let mut follow_output_state = TimelineFollowOutputState::default();
     while !worker_stop.load(Ordering::Acquire) {
         let started = Instant::now();
+        // A stopped/paused show timeline must keep both sender registrations
+        // alive without entering the renderer. This path borrows the one
+        // cached opaque black frame and still captures/revalidates authority
+        // immediately before the SDK call.
+        if let Some(show_control) = show_control.as_ref() {
+            if let Err(error) =
+                show_control.sync_timeline_playing(engine.snapshot().timeline.playing)
+            {
+                if !worker_stop.load(Ordering::Acquire) {
+                    failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
+                        "Spout output route {output_id} show timeline state was revoked: {error}"
+                    )));
+                    worker_error = Some(error.clone());
+                }
+                eprintln!("Spout output '{sender_name}' stopped: {error}");
+                break;
+            }
+            if !show_control.pair_publication_complete() {
+                if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
+                    std::thread::sleep(remaining);
+                }
+                continue;
+            }
+            match show_control.presentation_is_keepalive_black() {
+                Ok(true) => {
+                    if let Err(error) = send_show_spout_keepalive_frame(
+                        output_id,
+                        sender_name,
+                        &engine,
+                        &mut sender,
+                        show_control,
+                    ) {
+                        if !worker_stop.load(Ordering::Acquire) {
+                            failure_lease = Some(
+                                engine.begin_output_ownership_failure_fence(format!(
+                                    "Spout output route {output_id} keepalive black send failed: {error}"
+                                )),
+                            );
+                            worker_error = Some(error.clone());
+                        }
+                        eprintln!("Spout output '{sender_name}' stopped: {error}");
+                        break;
+                    }
+                    if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
+                        std::thread::sleep(remaining);
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    if !worker_stop.load(Ordering::Acquire) {
+                        failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
+                            "Spout output route {output_id} show presentation was revoked: {error}"
+                        )));
+                        worker_error = Some(error.clone());
+                    }
+                    eprintln!("Spout output '{sender_name}' stopped: {error}");
+                    break;
+                }
+            }
+        }
         let rendered = render(&mut follow_output_state);
         let handed_off_failure_lease =
             rendered
@@ -1261,7 +1545,33 @@ where
                             &engine,
                             &authority,
                             follow_identity,
-                            || sender.send_image(&frame.data, frame.width, frame.height),
+                            || {
+                                if let Some(show_control) = show_control.as_ref() {
+                                    if show_control.presentation_is_keepalive_black()? {
+                                        return send_strict_show_spout_black(
+                                            &mut sender,
+                                            sender_name,
+                                            show_control,
+                                            "Spout physical keepalive send",
+                                        );
+                                    }
+                                    ensure_strict_show_spout_sender_name(
+                                        &sender,
+                                        sender_name,
+                                        "Spout physical live send",
+                                    )?;
+                                    show_control.revalidate("Spout physical live send")?;
+                                }
+                                sender.send_image(&frame.data, frame.width, frame.height)?;
+                                if show_control.is_some() {
+                                    ensure_strict_show_spout_sender_name(
+                                        &sender,
+                                        sender_name,
+                                        "Spout physical live send completion",
+                                    )?;
+                                }
+                                Ok(())
+                            },
                         );
                         match send_result {
                             Ok(()) => {
@@ -1430,13 +1740,87 @@ where
         }
     }
 
-    finish_spout_output_worker(
+    let finish = finish_spout_output_worker(
         &engine,
         sender,
         &teardown_lease_slot,
         failure_lease,
         worker_error,
-    )
+    );
+    // `finish_spout_output_worker` dropped the SDK sender synchronously
+    // before returning. Only then may the show control count this physical
+    // retirement; the second such callback performs its one exact engine
+    // compensation without relying on a later UI/external-sync action.
+    if let Some(show_control) = show_control.as_ref() {
+        show_control.note_physical_sender_drop();
+    }
+    finish
+}
+
+fn ensure_strict_show_spout_sender_name<S: SpoutOutputSender>(
+    sender: &S,
+    expected_name: &str,
+    phase: &str,
+) -> Result<(), String> {
+    let actual_name = sender.sender_name();
+    if actual_name == expected_name {
+        Ok(())
+    } else {
+        Err(format!(
+            "strict show Spout sender name collision at {phase}: expected '{expected_name}', SDK assigned '{actual_name}'"
+        ))
+    }
+}
+
+/// Sends the one required first opaque-black frame. Spout can suffix a sender
+/// when `SendImage` performs its lazy registration, so exact identity is
+/// checked immediately before and immediately after the SDK call.
+fn send_strict_show_spout_black<S: SpoutOutputSender>(
+    sender: &mut S,
+    expected_name: &str,
+    show_control: &ShowSpoutWorkerControl,
+    phase: &str,
+) -> Result<(), String> {
+    ensure_strict_show_spout_sender_name(sender, expected_name, phase)?;
+    show_control.revalidate(phase)?;
+    let black = show_control.black_frame();
+    sender.send_image(black.as_rgba(), black.width(), black.height())?;
+    ensure_strict_show_spout_sender_name(sender, expected_name, &format!("{phase} completion"))
+}
+
+fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
+    output_id: u64,
+    sender_name: &str,
+    engine: &EngineHandle,
+    sender: &mut S,
+    show_control: &ShowSpoutWorkerControl,
+) -> Result<(), String> {
+    let presentation_sample = engine.video_presentation_sample();
+    let authority = capture_output_presentation_authority(
+        "Spout",
+        protocol::VideoOutputKind::SpoutSender,
+        &presentation_sample,
+        engine.output_ownership_status(),
+        engine.safety_blackout_authority(),
+        output_id,
+        sender_name,
+    )?;
+    revalidate_output_presentation_authority(engine, "Spout", &authority)?;
+    let _permit = engine
+        .acquire_video_output()
+        .map_err(|error| format!("Spout keepalive video output admission failed: {error}"))?;
+    send_frame_if_authorized("Spout", engine, &authority, None, || {
+        send_strict_show_spout_black(
+            sender,
+            sender_name,
+            show_control,
+            "Spout physical keepalive send",
+        )
+    })
+    .map_err(|error| match error {
+        PhysicalOutputSendError::Revoked(reason) => reason,
+        PhysicalOutputSendError::Sdk(error) => error,
+    })
 }
 
 #[cfg(test)]
@@ -2104,6 +2488,10 @@ mod tests {
     }
 
     impl SpoutOutputSender for InjectedSpoutSender {
+        fn sender_name(&self) -> String {
+            "Injected Spout".to_string()
+        }
+
         fn send_image(&mut self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), String> {
             self.send_error.take().map_or(Ok(()), Err)
         }
@@ -2117,6 +2505,34 @@ mod tests {
             }
             self.dropped.store(true, Ordering::Release);
         }
+    }
+
+    struct NameMutatingSpoutSender {
+        name: String,
+    }
+
+    impl SpoutOutputSender for NameMutatingSpoutSender {
+        fn sender_name(&self) -> String {
+            self.name.clone()
+        }
+
+        fn send_image(&mut self, _pixels: &[u8], _width: u32, _height: u32) -> Result<(), String> {
+            self.name = "Syndocal Background_1".to_string();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn strict_show_sender_name_is_rechecked_after_lazy_sdk_registration() {
+        let mut sender = NameMutatingSpoutSender {
+            name: "Syndocal Background".to_string(),
+        };
+        ensure_strict_show_spout_sender_name(&sender, "Syndocal Background", "pre-send").unwrap();
+        sender.send_image(&[0, 0, 0, 255], 1, 1).unwrap();
+        let error =
+            ensure_strict_show_spout_sender_name(&sender, "Syndocal Background", "post-send")
+                .unwrap_err();
+        assert!(error.contains("Syndocal Background_1"));
     }
 
     fn injected_spout_frame() -> video::VideoFrame {
@@ -2964,6 +3380,7 @@ mod tests {
                 worker_stop_for_thread,
                 sender,
                 (worker_teardown_lease_slot, render_failure_lease),
+                None,
                 move |_| match &render_error {
                     Some(error) => Err(error.clone()),
                     None => Ok((
@@ -3057,6 +3474,7 @@ mod tests {
                     worker_stop,
                     sender,
                     (teardown_lease_slot, render_failure_lease.clone()),
+                    None,
                     move |follow_output_state| {
                         let fault = "Spout output route 705 render failed: injected inner failure"
                             .to_string();
@@ -3316,6 +3734,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 sender,
                 (Arc::new(Mutex::new(None)), Arc::new(Mutex::new(None))),
+                None,
                 move |follow_output_state| {
                     // Every observation of this generation is superseded
                     // before it could admit: the bounded-settlement watchdog
@@ -3386,6 +3805,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 sender,
                 (Arc::new(Mutex::new(None)), Arc::new(Mutex::new(None))),
+                None,
                 move |_| {
                     Ok((
                         injected_spout_render_decision(
@@ -3446,6 +3866,7 @@ mod tests {
             worker_stop,
             sender,
             (Arc::clone(&teardown_lease_slot), Arc::new(Mutex::new(None))),
+            None,
             |_| {
                 Ok((
                     injected_spout_render_decision(703, engine.output_ownership_status().epoch),
@@ -3497,6 +3918,7 @@ mod tests {
                 worker_stop_for_thread,
                 sender,
                 (worker_teardown_lease, Arc::new(Mutex::new(None))),
+                None,
                 |_| {
                     Ok((
                         injected_spout_render_decision(
@@ -3541,6 +3963,7 @@ mod tests {
         transport.output_workers.insert(
             route.route_id,
             SpoutRouteWorker {
+                endpoint_name: Some(route.endpoint_name.clone()),
                 stop: worker_stop,
                 worker: None,
                 failure: worker_failure,
@@ -3593,6 +4016,45 @@ mod tests {
             0,
             "sender creation must remain inside the worker and never run after spawn failure"
         );
+    }
+
+    #[test]
+    fn strict_show_retry_rejects_a_fresh_id_until_the_old_fixed_name_is_harvested() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let failure_lease = engine.begin_output_ownership_failure_fence(
+            "test old strict show sender is awaiting its join acknowledgement",
+        );
+        let mut transport = SpoutTransportState::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "ndi")]
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
+        // The old sender used id 71; a fresh R4 allocates id 411.  The name,
+        // rather than the obsolete id, blocks construction until harvest.
+        transport.pending_output_startups.insert(
+            71,
+            SpoutPendingOutputStartup {
+                sender_name: "Syndocal Background".to_string(),
+                worker: None,
+                failure_lease: Some(failure_lease),
+                teardown_lease: Arc::new(Mutex::new(None)),
+                message: "old strict show sender cleanup is pending".to_string(),
+            },
+        );
+        let blocked = transport
+            .ensure_show_output_startup_is_available(411, "Syndocal Background")
+            .expect_err("a fresh output id must not bypass the fixed sender-name barrier");
+        assert!(blocked.contains("fixed sender name"));
+
+        transport.harvest_failed_workers(&engine).unwrap();
+        assert!(!transport.has_pending_output_startup_named("Syndocal Background"));
+        transport
+            .ensure_show_output_startup_is_available(411, "Syndocal Background")
+            .expect("the new id is admitted only after the old pending cleanup was harvested");
     }
 
     #[test]
@@ -3649,6 +4111,7 @@ mod tests {
         );
         let teardown_lease = Arc::new(Mutex::new(None));
         let pending = SpoutPendingOutputStartup {
+            sender_name: "Delayed Spout".to_string(),
             worker: Some(worker),
             failure_lease: Some(failure_lease),
             teardown_lease: Arc::clone(&teardown_lease),
@@ -3723,6 +4186,7 @@ mod tests {
             "Spout publication handshake disconnected during startup",
         );
         let mut pending = SpoutPendingOutputStartup {
+            sender_name: "Disconnected Spout".to_string(),
             worker: Some(worker),
             failure_lease: Some(failure_lease),
             teardown_lease: Arc::new(Mutex::new(None)),

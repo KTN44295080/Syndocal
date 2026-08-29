@@ -76,6 +76,7 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
         action,
         OutputControlActionV2::ReleaseBlackout { .. }
             | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+            | OutputControlActionV2::EnableShowSpoutOutputs { .. }
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
             | OutputControlActionV2::AddDisplay { .. }
@@ -615,6 +616,14 @@ where
                 lease_now_ms,
             )
         }
+        OutputControlActionV2::EnableShowSpoutOutputs { .. } => {
+            super::enable_show_spout_outputs_with_output_control_fence(
+                state,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+        }
         OutputControlActionV2::ReleaseBlackout { .. } => {
             super::release_safety_blackout_with_output_control_fence(
                 state,
@@ -902,6 +911,9 @@ fn validate_output_action_current(
         OutputControlActionV2::EnableOutput => Ok(()),
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
+        }
+        OutputControlActionV2::EnableShowSpoutOutputs { .. } => {
+            super::validate_current_show_spout_outputs_action(state).map(|_| ())
         }
         OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
@@ -1713,6 +1725,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+        | OutputControlActionV2::EnableShowSpoutOutputs { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }

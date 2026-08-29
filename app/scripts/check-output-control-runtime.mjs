@@ -33,11 +33,12 @@ const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.trans
 
 const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
   || action.kind === "add_display" || action.kind === "assign_video_output_composition"
-  || action.kind === "enable_show_artnet_loopback_route"
+  || action.kind === "enable_show_artnet_loopback_route" || action.kind === "enable_show_spout_outputs"
   ? ["lighting", "video"] : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
   enable_show_artnet_loopback_route: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+  enable_show_spout_outputs: runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
   arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -52,6 +53,7 @@ const operationFor = (action) => ({
 const commandFor = (action) => ({
   enable_output: "enable_output_control_v2",
   enable_show_artnet_loopback_route: "enable_show_art_net_loopback_route_v1",
+  enable_show_spout_outputs: "enable_show_spout_outputs_v1",
   arm: "arm_output_control_v2",
   release_blackout: "release_blackout_output_control_v2",
   take_over_standby: "take_over_output_control_v2",
@@ -66,6 +68,7 @@ const commandFor = (action) => ({
 
 const enableAction = { kind: "enable_output" };
 const showArtNetLoopbackRouteAction = { kind: "enable_show_artnet_loopback_route", lease: lease() };
+const showSpoutOutputsAction = { kind: "enable_show_spout_outputs", lease: lease() };
 const ordinaryActions = [
   { kind: "arm", role: "lighting", lease: lease() },
   { kind: "release_blackout", lease: lease() },
@@ -95,6 +98,7 @@ const ordinaryActions = [
     lease: lease(),
   },
   showArtNetLoopbackRouteAction,
+  showSpoutOutputsAction,
 ];
 const lifecycleActions = [
   { kind: "acquire_lease", role: "both" },
@@ -143,6 +147,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
     arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
     enable_show_artnet_loopback_route: "authorized",
+    enable_show_spout_outputs: "authorized",
     acquire_lease: "acquired", enable_output: recoveringEnable ? "recovered" : "acquired",
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
@@ -224,6 +229,7 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
       || action.kind === "take_over_standby" || action.kind === "add_display"
       || action.kind === "assign_video_output_composition"
       || action.kind === "enable_show_artnet_loopback_route"
+      || action.kind === "enable_show_spout_outputs"
       ? await runtime.executeOutputControl(harness.invoke, action)
       : await runtime.executeOutputLeaseLifecycle(harness.invoke, action);
   assert.equal(receipt.operation_id, operationFor(action));
@@ -237,6 +243,15 @@ assert.deepEqual(
   Object.keys(showArtNetLoopbackHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the show route action must not carry route/protocol/port fields",
+);
+
+const showSpoutOutputsHarness = createHarness({ action: showSpoutOutputsAction, queryState: "active" });
+const showSpoutOutputsReceipt = await runtime.executeOutputControl(showSpoutOutputsHarness.invoke, showSpoutOutputsAction);
+assert.equal(showSpoutOutputsReceipt.operation_id, runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID);
+assert.deepEqual(
+  Object.keys(showSpoutOutputsHarness.executeArgs[0].request.action).sort(),
+  ["kind", "lease"],
+  "the strict show Spout action must not carry names, dimensions, or generic route fields",
 );
 
 const assignmentAction = ordinaryActions.find((action) => action.kind === "assign_video_output_composition");
@@ -682,7 +697,7 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "ForceTransferLease"]) {
+for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSpoutOutputs", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(
@@ -762,8 +777,10 @@ assert.doesNotMatch(setupIoFixtureSource, /EnttecOpenDmx|serial_baud_rate: 250_0
   "the Setup I/O fixture must stage the exact Art-Net show route, not a retired serial route");
 assert.match(runtimeSource, /OutputControlActionV2::EnableOutput[\s\S]*enable_output_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::EnableShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::EnableShowSpoutOutputs[\s\S]*enable_show_spout_outputs_with_output_control_fence/);
 assert.match(controlPlaneSource, /enable_output_control_v2/);
 assert.match(controlPlaneSource, /enable_show_art_net_loopback_route_v1/);
+assert.match(controlPlaneSource, /enable_show_spout_outputs_v1/);
 assert.match(
   appSource,
   /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*onEnableStagedShowArtNetLoopbackRoute=\{enableStagedShowArtNetLoopbackRoute\}/,
@@ -793,6 +810,7 @@ assert.doesNotMatch(
   "the route mutation stays in the DMX workbench, not the compact connection selector",
 );
 assert.match(outputDiagnosticsSource, /enableStagedShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route/);
+assert.match(outputDiagnosticsSource, /enableShowSpoutOutputs[\s\S]*enable_show_spout_outputs/);
 assert.doesNotMatch(
   outputDiagnosticsSource,
   /invoke(?:<[^>]*>)?\(\s*["']set_dmx_outputs["']/,
@@ -1013,4 +1031,4 @@ assert.equal(enableMutationHarness.rawPending, false);
 assert.equal(enableMutationHarness.authority, "unavailable",
   "a late terminal response must not directly restore enabled UI state");
 
-console.log("output control runtime contract: PASS (v2 output commands, fixed same-PC Art-Net loopback, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v4 output commands, fixed same-PC Art-Net loopback and Spout pair, strict receipts, fail-closed query)");

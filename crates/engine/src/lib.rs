@@ -3896,6 +3896,25 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// The one show-specific same-machine video publication. Its payload is
+    /// derived only by the native control plane after a local R4 admission;
+    /// it cannot create arbitrary Spout names or dimensions.
+    EnableShowSpoutOutputsPublished {
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Internal compensation/authority-loss cleanup for the fixed show
+    /// Spout pair. It cannot remove an arbitrary generic Spout output.
+    RetireShowSpoutOutputsPublished {
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetOutputOwnershipRole {
         role: MachineOutputRole,
         expires_at: Instant,
@@ -5307,6 +5326,8 @@ macro_rules! engine_command_video_presentation_relevance {
             EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+            | EngineCommand::RetireShowSpoutOutputsPublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
             | EngineCommand::ClearDmxInput(_) => false,
             // Output ownership is fenced by its own epoch in every transport;
@@ -5588,6 +5609,8 @@ impl EngineCommand {
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
                 | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+                | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+                | EngineCommand::RetireShowSpoutOutputsPublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
                 | EngineCommand::FenceOutputOwnership { .. }
                 | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -6754,6 +6777,68 @@ impl EngineHandle {
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(
                 "Show Art-Net loopback route activation worker disconnected before acknowledgement"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Publish only the two native control-plane-derived fixed show Spout
+    /// outputs. The engine repeats exact pair, output authority, composition,
+    /// and safety checks immediately before mutating its project image.
+    pub fn enable_show_spout_outputs_published(
+        &self,
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::EnableShowSpoutOutputsPublished {
+            expected_background,
+            expected_foreground,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| format!("Show Spout output activation could not enqueue: {error}"))?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "Show Spout output activation did not receive an acknowledged snapshot".to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "Show Spout output activation worker disconnected before acknowledgement"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Retire only the exact fixed show pair after a native sender failure or
+    /// a failed two-phase activation. Generic Spout outputs remain outside
+    /// this show-specific cleanup surface.
+    pub fn retire_show_spout_outputs_published(
+        &self,
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RetireShowSpoutOutputsPublished {
+            expected_background,
+            expected_foreground,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| format!("Show Spout output retirement could not enqueue: {error}"))?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "Show Spout output retirement did not receive an acknowledged snapshot".to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "Show Spout output retirement worker disconnected before acknowledgement"
                     .to_string(),
             ),
         }
@@ -10904,6 +10989,8 @@ impl EngineHandle {
             | EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+            | EngineCommand::RetireShowSpoutOutputsPublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
             | EngineCommand::FenceOutputOwnership { .. }
             | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -18588,6 +18675,14 @@ enum PendingCommandRollback {
         dmx_route_configuration_generation: u64,
         last_error: Option<String>,
     },
+    /// The sender has not been constructed until after the engine publishes
+    /// the pair. A failed publication must nevertheless restore the complete
+    /// pre-action output graph so no stale show sender can later start.
+    RestoreShowSpoutOutputsEnable {
+        video_outputs: Vec<RuntimeVideoOutput>,
+        video_output_fades: Vec<RuntimeVideoOutputFade>,
+        last_error: Option<String>,
+    },
     ClearBootstrappedVjShow,
     RemoveAddedEffect {
         effect_id: EffectId,
@@ -22524,6 +22619,59 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Show Art-Net loopback route activation could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::EnableShowSpoutOutputsPublished {
+                expected_background,
+                expected_foreground,
+                expected_safety_epoch,
+                expected_safety_generation,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreShowSpoutOutputsEnable {
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Show Spout output activation expired before engine execution".to_string())
+                } else {
+                    self.apply_show_spout_outputs_enable(
+                        &expected_background,
+                        &expected_foreground,
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Show Spout outputs could not publish an acknowledged engine snapshot",
+                });
+            }
+            EngineCommand::RetireShowSpoutOutputsPublished {
+                expected_background,
+                expected_foreground,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Show Spout output retirement expired before engine execution".to_string())
+                } else {
+                    self.apply_show_spout_outputs_retire(&expected_background, &expected_foreground)
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    // Sender retirement already completed before this command
+                    // is queued. Never revive the stale pair if its cleanup
+                    // publication fails.
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Show Spout output retirement could not publish an acknowledged engine snapshot",
                 });
             }
             EngineCommand::SetDmxInputFrame {
@@ -28050,12 +28198,16 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::AddVideoOutput(output) => {
-                self.video_outputs
-                    .retain(|candidate| candidate.summary.id != output.id);
                 let mut output = sanitize_video_output(output);
                 if !self.video_composition_exists(output.composition_id) {
                     output.composition_id = 1;
                 }
+                if let Err(error) = self.reject_generic_show_spout_output_add(&output) {
+                    self.last_error = Some(error);
+                    return;
+                }
+                self.video_outputs
+                    .retain(|candidate| candidate.summary.id != output.id);
                 self.video_outputs
                     .push(RuntimeVideoOutput { summary: output });
                 self.last_error = None;
@@ -28089,6 +28241,12 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::RemoveVideoOutput(output_id) => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "removal")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 self.video_outputs
                     .retain(|output| output.summary.id != output_id);
                 self.remove_video_output_references(output_id);
@@ -28101,6 +28259,10 @@ impl EngineRuntime {
             } => {
                 let result = if Instant::now() > expires_at {
                     Err("Display output cleanup expired before engine execution".to_string())
+                } else if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "removal")
+                {
+                    Err(error)
                 } else {
                     self.video_outputs
                         .retain(|output| output.summary.id != output_id);
@@ -28127,6 +28289,15 @@ impl EngineRuntime {
                 height,
                 endpoint_name,
             } => {
+                if let Err(error) = self.reject_generic_show_spout_output_config(
+                    output_id,
+                    &label,
+                    &kind,
+                    endpoint_name.as_deref(),
+                ) {
+                    self.last_error = Some(error);
+                    return;
+                }
                 let is_display = matches!(kind, VideoOutputKind::Display);
                 self.update_video_output(output_id, |output| {
                     output.label = label;
@@ -28140,6 +28311,12 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::SetVideoOutputEnabled { output_id, enabled } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "enabled state")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 self.update_video_output(output_id, |output| output.enabled = enabled);
             }
             EngineCommand::SetVideoOutputRoutingPublished {
@@ -28167,6 +28344,10 @@ impl EngineRuntime {
                     )
                 } else if !self.video_composition_exists(composition_id) {
                     Err(format!("Video composition {composition_id} was not found"))
+                } else if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "routing")
+                {
+                    Err(error)
                 } else {
                     let output = self
                         .video_outputs
@@ -28198,6 +28379,12 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::SetVideoOutputOpacity { output_id, opacity } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "opacity")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if opacity.is_finite() {
                     self.video_output_fades
                         .retain(|fade| fade.output_id != output_id);
@@ -28213,6 +28400,12 @@ impl EngineRuntime {
                 opacity,
                 duration_ms,
             } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "opacity fade")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if !opacity.is_finite() {
                     self.last_error = Some("Invalid video output opacity".to_string());
                     return;
@@ -28248,9 +28441,21 @@ impl EngineRuntime {
                 output_id,
                 blackout,
             } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "blackout")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 self.update_video_output(output_id, |output| output.blackout = blackout);
             }
             EngineCommand::SetVideoOutputMapping { output_id, mapping } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "mapping")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 self.update_video_output(output_id, |output| output.mapping = mapping);
             }
             EngineCommand::SetVideoOutputMappingField {
@@ -28258,6 +28463,12 @@ impl EngineRuntime {
                 field,
                 value,
             } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "mapping field")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 if !value.is_finite() {
                     self.last_error = Some("Invalid video output mapping value".to_string());
                     return;
@@ -28294,6 +28505,12 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::ApplyVideoOutputMappingPreset { output_id, label } => {
+                if let Err(error) =
+                    self.reject_generic_show_spout_output_mutation(output_id, "mapping preset")
+                {
+                    self.last_error = Some(error);
+                    return;
+                }
                 let label = label.trim();
                 if label.is_empty() {
                     self.last_error =
@@ -28884,6 +29101,15 @@ impl EngineRuntime {
                 self.output = output;
                 self.dmx_sender_recovery = dmx_sender_recovery;
                 self.dmx_route_configuration_generation = dmx_route_configuration_generation;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreShowSpoutOutputsEnable {
+                video_outputs,
+                video_output_fades,
+                last_error,
+            } => {
+                self.video_outputs = video_outputs;
+                self.video_output_fades = video_output_fades;
                 self.last_error = last_error;
             }
             PendingCommandRollback::ClearBootstrappedVjShow => {
@@ -45591,6 +45817,7 @@ impl EngineRuntime {
         &mut self,
         output: VideoOutputSummary,
     ) -> Result<(), String> {
+        self.reject_generic_show_spout_output_add(&output)?;
         if output.id == 0 {
             return Err("Video output ID must be greater than zero".to_string());
         }
@@ -45905,6 +46132,12 @@ impl EngineRuntime {
         output: VideoOutputSummary,
         expires_at: Instant,
     ) -> Result<(), String> {
+        if self.strict_show_spout_pair_is_active() {
+            return Err(
+                "Generic VJ bootstrap is blocked while the strict show Spout pair is active"
+                    .to_string(),
+            );
+        }
         if Instant::now() > expires_at {
             return Err("First-run VJ setup expired before engine execution".to_string());
         }
@@ -48090,6 +48323,233 @@ impl EngineRuntime {
             expected_safety_generation,
             create_verified_show_artnet_loopback_sender,
         )
+    }
+
+    fn apply_show_spout_outputs_enable(
+        &mut self,
+        expected_background: &VideoOutputSummary,
+        expected_foreground: &VideoOutputSummary,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+    ) -> Result<(), String> {
+        if !show_spout_pair_is_exact(expected_background, expected_foreground) {
+            return Err(
+                "Show Spout output request did not name the exact Syndocal Background/Foreground 1920x1080 pair"
+                    .to_string(),
+            );
+        }
+        if !self.video_composition_exists(expected_background.composition_id) {
+            return Err("Show Spout output composition no longer exists".to_string());
+        }
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Ready
+            || ownership.effective_role != MachineOutputRole::Both
+            || ownership.desired_role != MachineOutputRole::Both
+            || !ownership.video_allowed
+        {
+            return Err(
+                "Show Spout output activation requires the current local Both video authority"
+                    .to_string(),
+            );
+        }
+
+        // Use the same priority safety serialization as the loopback route:
+        // no physical show pair can become visible after a safety enqueue won.
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _safety_enqueue_gate = shared_telemetry
+            .safety_blackout_enqueue_gate
+            .lock()
+            .map_err(|_| {
+                "Safety blackout enqueue gate was poisoned before show Spout activation".to_string()
+            })?;
+        let safety = shared_telemetry.safety_blackout.lock().map_err(|_| {
+            "Safety blackout authority lock was poisoned before show Spout activation".to_string()
+        })?;
+        if shared_telemetry.has_pending_safety_blackout_enqueue()? {
+            return Err(
+                "Show Spout output activation was superseded by a queued emergency blackout"
+                    .to_string(),
+            );
+        }
+        if safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return Err(
+                "Show Spout output activation was superseded by an emergency blackout authority change"
+                    .to_string(),
+            );
+        }
+
+        let existing_spout = self
+            .video_outputs
+            .iter()
+            .filter(|output| output.summary.kind == VideoOutputKind::SpoutSender)
+            .map(|output| &output.summary)
+            .collect::<Vec<_>>();
+        if existing_spout.is_empty() {
+            if self.video_outputs.iter().any(|output| {
+                output.summary.id == expected_background.id
+                    || output.summary.id == expected_foreground.id
+                    || show_spout_reserved_name_collision(&output.summary)
+            }) {
+                return Err(
+                    "Show Spout output activation found a reserved sender name or id collision"
+                        .to_string(),
+                );
+            }
+            self.video_outputs.push(RuntimeVideoOutput {
+                summary: expected_background.clone(),
+            });
+            self.video_outputs.push(RuntimeVideoOutput {
+                summary: expected_foreground.clone(),
+            });
+            self.last_error = None;
+            return Ok(());
+        }
+        if existing_spout.len() == 2
+            && show_spout_output_equal(existing_spout[0], expected_background)
+            && show_spout_output_equal(existing_spout[1], expected_foreground)
+            || existing_spout.len() == 2
+                && show_spout_output_equal(existing_spout[1], expected_background)
+                && show_spout_output_equal(existing_spout[0], expected_foreground)
+        {
+            self.last_error = None;
+            return Ok(());
+        }
+        Err(
+            "Show Spout output activation requires no existing Spout sender or the exact fixed pair"
+                .to_string(),
+        )
+    }
+
+    /// The strict show pair owns the entire Spout sender set for this show
+    /// route. Generic Spout creation/configuration must not be allowed to
+    /// introduce a third sender after the exact pair was admitted.
+    fn strict_show_spout_pair_is_active(&self) -> bool {
+        let spout = self
+            .video_outputs
+            .iter()
+            .filter(|output| output.summary.kind == VideoOutputKind::SpoutSender)
+            .map(|output| &output.summary)
+            .collect::<Vec<_>>();
+        spout.len() == 2
+            && spout
+                .iter()
+                .any(|output| show_spout_output_is_exact(output, SHOW_SPOUT_BACKGROUND_NAME))
+            && spout
+                .iter()
+                .any(|output| show_spout_output_is_exact(output, SHOW_SPOUT_FOREGROUND_NAME))
+    }
+
+    fn strict_show_spout_pair_owns_output(&self, output_id: VideoOutputId) -> bool {
+        self.strict_show_spout_pair_is_active()
+            && self.video_outputs.iter().any(|output| {
+                output.summary.id == output_id
+                    && (show_spout_output_is_exact(&output.summary, SHOW_SPOUT_BACKGROUND_NAME)
+                        || show_spout_output_is_exact(&output.summary, SHOW_SPOUT_FOREGROUND_NAME))
+            })
+    }
+
+    fn reject_generic_show_spout_output_mutation(
+        &self,
+        output_id: VideoOutputId,
+        operation: &str,
+    ) -> Result<(), String> {
+        if self.strict_show_spout_pair_owns_output(output_id) {
+            return Err(format!(
+                "Generic video output {operation} is blocked for strict show Spout sender {output_id}; retire the exact show pair through its dedicated R4 route"
+            ));
+        }
+        Ok(())
+    }
+
+    fn reject_generic_show_spout_output_add(
+        &self,
+        output: &VideoOutputSummary,
+    ) -> Result<(), String> {
+        if !self.strict_show_spout_pair_is_active() {
+            return Ok(());
+        }
+        if output.kind == VideoOutputKind::SpoutSender
+            || self.strict_show_spout_pair_owns_output(output.id)
+            || show_spout_reserved_name_collision(output)
+        {
+            return Err(
+                "Generic video output creation is blocked while the strict show Spout pair is active"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn reject_generic_show_spout_output_config(
+        &self,
+        output_id: VideoOutputId,
+        label: &str,
+        kind: &VideoOutputKind,
+        endpoint_name: Option<&str>,
+    ) -> Result<(), String> {
+        self.reject_generic_show_spout_output_mutation(output_id, "configuration")?;
+        if self.strict_show_spout_pair_is_active()
+            && (*kind == VideoOutputKind::SpoutSender
+                || label == SHOW_SPOUT_BACKGROUND_NAME
+                || label == SHOW_SPOUT_FOREGROUND_NAME
+                || endpoint_name == Some(SHOW_SPOUT_BACKGROUND_NAME)
+                || endpoint_name == Some(SHOW_SPOUT_FOREGROUND_NAME))
+        {
+            return Err(
+                "Generic video output configuration may not create or claim a strict show Spout sender while the pair is active"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_show_spout_outputs_retire(
+        &mut self,
+        expected_background: &VideoOutputSummary,
+        expected_foreground: &VideoOutputSummary,
+    ) -> Result<(), String> {
+        if !show_spout_pair_is_exact(expected_background, expected_foreground) {
+            return Err(
+                "Show Spout output retirement did not name the exact fixed pair".to_string(),
+            );
+        }
+        let mut saw_background = false;
+        let mut saw_foreground = false;
+        let mut saw_conflicting_spout = false;
+        for output in &self.video_outputs {
+            if output.summary.kind != VideoOutputKind::SpoutSender {
+                continue;
+            }
+            if show_spout_output_equal(&output.summary, expected_background) {
+                saw_background = true;
+            } else if show_spout_output_equal(&output.summary, expected_foreground) {
+                saw_foreground = true;
+            } else {
+                saw_conflicting_spout = true;
+            }
+        }
+        if !saw_background || !saw_foreground {
+            return Err("Show Spout output retirement requires the exact active pair".to_string());
+        }
+        self.video_outputs.retain(|output| {
+            output.summary.id != expected_background.id
+                && output.summary.id != expected_foreground.id
+        });
+        self.video_output_fades.retain(|fade| {
+            fade.output_id != expected_background.id && fade.output_id != expected_foreground.id
+        });
+        if saw_conflicting_spout {
+            let message =
+                "Show Spout exact pair was retired but a generic or conflicting Spout sender remains"
+                    .to_string();
+            self.last_error = Some(message.clone());
+            return Err(message);
+        }
+        self.last_error = None;
+        Ok(())
     }
 
     fn dmx_preview_snapshot(&self) -> Vec<DmxUniversePreview> {
@@ -62508,6 +62968,50 @@ fn create_verified_show_artnet_loopback_sender(
         .map(DmxSender::ArtNet)
         .map(Some)
         .map_err(|error| error.to_string())
+}
+
+const SHOW_SPOUT_BACKGROUND_NAME: &str = "Syndocal Background";
+const SHOW_SPOUT_FOREGROUND_NAME: &str = "Syndocal Foreground";
+const SHOW_SPOUT_MAIN_COMPOSITION_ID: CompositionId = 1;
+const SHOW_SPOUT_WIDTH: u32 = 1920;
+const SHOW_SPOUT_HEIGHT: u32 = 1080;
+
+fn show_spout_output_is_exact(output: &VideoOutputSummary, name: &str) -> bool {
+    output.id != 0
+        && output.label == name
+        && output.kind == VideoOutputKind::SpoutSender
+        && output.enabled
+        && output.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+        && !output.fullscreen
+        && output.monitor_id.is_none()
+        && output.monitor_identity.is_none()
+        && output.width == SHOW_SPOUT_WIDTH
+        && output.height == SHOW_SPOUT_HEIGHT
+        && output.endpoint_name.as_deref() == Some(name)
+        && output.opacity == 1.0
+        && !output.blackout
+        && output.mapping == VideoOutputMapping::default()
+}
+
+fn show_spout_pair_is_exact(
+    background: &VideoOutputSummary,
+    foreground: &VideoOutputSummary,
+) -> bool {
+    background.id != foreground.id
+        && background.composition_id == foreground.composition_id
+        && show_spout_output_is_exact(background, SHOW_SPOUT_BACKGROUND_NAME)
+        && show_spout_output_is_exact(foreground, SHOW_SPOUT_FOREGROUND_NAME)
+}
+
+fn show_spout_output_equal(current: &VideoOutputSummary, expected: &VideoOutputSummary) -> bool {
+    current == expected
+}
+
+fn show_spout_reserved_name_collision(output: &VideoOutputSummary) -> bool {
+    output.label == SHOW_SPOUT_BACKGROUND_NAME
+        || output.label == SHOW_SPOUT_FOREGROUND_NAME
+        || output.endpoint_name.as_deref() == Some(SHOW_SPOUT_BACKGROUND_NAME)
+        || output.endpoint_name.as_deref() == Some(SHOW_SPOUT_FOREGROUND_NAME)
 }
 
 impl DmxSender {
@@ -122839,7 +123343,10 @@ mod tests {
         runtime.publish_pending_command_acks(0, &published);
 
         assert!(receiver.recv().unwrap().is_err());
-        assert_eq!(runtime.build_snapshot(0), before);
+        assert_eq!(
+            runtime.build_snapshot(0).video.outputs,
+            before.video.outputs
+        );
         assert_eq!(*published.read().unwrap(), before);
         assert_eq!(
             runtime.timeline_audio_projection_authority,
@@ -124028,28 +124535,6 @@ mod tests {
                         ..TimelineCueEventSummary::default()
                     }],
                     duration_ms: 1_000,
-                    ..ChildTimelineSummary::default()
-                }),
-            )
-            .unwrap();
-        let mut leaf_clip = timeline_test_audio_clip(78, 50);
-        leaf_clip.start_ms = 0;
-        leaf_clip.duration_ms = 300;
-        leaf_clip.output_bus = TimelineAudioOutputBus::Program;
-        runtime
-            .set_cue_child_timeline_state(
-                3,
-                Some(ChildTimelineSummary {
-                    layers: vec![timeline_test_layer(
-                        50,
-                        0,
-                        false,
-                        false,
-                        false,
-                        TimelineLayerKind::Audio,
-                    )],
-                    audio_clips: vec![leaf_clip],
-                    duration_ms: 300,
                     ..ChildTimelineSummary::default()
                 }),
             )
@@ -130014,6 +130499,396 @@ mod tests {
             serial_port: String::new(),
             serial_baud_rate: DmxOutputConfig::default().serial_baud_rate,
         }
+    }
+
+    fn show_spout_output(
+        id: VideoOutputId,
+        label: &str,
+        composition_id: CompositionId,
+    ) -> VideoOutputSummary {
+        VideoOutputSummary {
+            id,
+            label: label.to_string(),
+            kind: VideoOutputKind::SpoutSender,
+            enabled: true,
+            composition_id,
+            fullscreen: false,
+            monitor_id: None,
+            monitor_identity: None,
+            width: SHOW_SPOUT_WIDTH,
+            height: SHOW_SPOUT_HEIGHT,
+            endpoint_name: Some(label.to_string()),
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        }
+    }
+
+    #[test]
+    fn show_spout_pair_is_exact_atomic_noop_or_fail_closed() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
+        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .expect("the exact pair is atomically accepted");
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            vec![background.clone(), foreground.clone()]
+        );
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .expect("the exact already-published pair is a no-op");
+
+        let before = runtime.build_snapshot(0);
+        runtime.apply_command(EngineCommand::AddVideoOutput(show_spout_output(
+            77,
+            "Generic Spout",
+            1,
+        )));
+        assert_eq!(
+            runtime.build_snapshot(0).video.outputs,
+            before.video.outputs,
+            "a generic Spout add may not create a third sender after the strict pair"
+        );
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Generic video output creation is blocked")));
+
+        let mut wrong_resolution = foreground.clone();
+        wrong_resolution.width = 1280;
+        assert!(runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &wrong_resolution,
+                safety.epoch,
+                safety.generation,
+            )
+            .is_err());
+        assert_eq!(
+            runtime.build_snapshot(0).video.outputs,
+            before.video.outputs
+        );
+
+        let mut wrong_main_background = background.clone();
+        wrong_main_background.composition_id = 2;
+        let mut wrong_main_foreground = foreground.clone();
+        wrong_main_foreground.composition_id = 2;
+        assert!(runtime
+            .apply_show_spout_outputs_enable(
+                &wrong_main_background,
+                &wrong_main_foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .is_err());
+        assert_eq!(
+            runtime.build_snapshot(0).video.outputs,
+            before.video.outputs,
+            "a non-Main pair is rejected before any engine mutation"
+        );
+
+        let mut generic = EngineRuntime::new(staged_show_artnet_loopback_output());
+        generic.video_outputs.push(RuntimeVideoOutput {
+            summary: show_spout_output(99, "Generic Spout", 1),
+        });
+        let generic_before = generic.build_snapshot(0);
+        assert!(generic
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .is_err());
+        assert_eq!(generic.build_snapshot(0), generic_before);
+    }
+
+    #[test]
+    fn active_show_spout_pair_rejects_generic_identity_mutations_without_state_change() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
+        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .unwrap();
+        let before = runtime.build_snapshot(0);
+
+        let assert_unchanged = |runtime: &mut EngineRuntime, command: EngineCommand| {
+            runtime.apply_command(command);
+            assert_eq!(runtime.build_snapshot(0).video, before.video);
+            assert!(runtime
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("strict show Spout")));
+        };
+
+        // Every direct per-output mutator is rejected before it can turn the
+        // exact two-sender pair partial, re-route it, or alter its fixed
+        // identity. Dedicated `RetireShowSpoutOutputsPublished` is the sole
+        // deliberately separate retirement path.
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputConfig {
+                output_id: background.id,
+                label: "other".to_string(),
+                kind: VideoOutputKind::Display,
+                fullscreen: true,
+                monitor_id: Some(3),
+                monitor_identity: Some("other".to_string()),
+                width: 1280,
+                height: 720,
+                endpoint_name: None,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputEnabled {
+                output_id: background.id,
+                enabled: false,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputOpacity {
+                output_id: background.id,
+                opacity: 0.25,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::FadeVideoOutputOpacity {
+                output_id: background.id,
+                opacity: 0.25,
+                duration_ms: 500,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputBlackout {
+                output_id: background.id,
+                blackout: true,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputMapping {
+                output_id: background.id,
+                mapping: VideoOutputMapping {
+                    scale_x: 1.25,
+                    ..VideoOutputMapping::default()
+                },
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputMappingField {
+                output_id: background.id,
+                field: "scale_x".to_string(),
+                value: 1.25,
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::ApplyVideoOutputMappingPreset {
+                output_id: background.id,
+                label: "any".to_string(),
+            },
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::RemoveVideoOutput(background.id),
+        );
+
+        // Generic raw additions/configuration cannot claim either fixed
+        // sender name, even when their kind is not Spout.
+        let mut reserved_display = published_display_output(91);
+        reserved_display.label = SHOW_SPOUT_BACKGROUND_NAME.to_string();
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::AddVideoOutput(reserved_display),
+        );
+        assert_unchanged(
+            &mut runtime,
+            EngineCommand::SetVideoOutputConfig {
+                output_id: foreground.id,
+                label: SHOW_SPOUT_FOREGROUND_NAME.to_string(),
+                kind: VideoOutputKind::Display,
+                fullscreen: false,
+                monitor_id: None,
+                monitor_identity: None,
+                width: SHOW_SPOUT_WIDTH,
+                height: SHOW_SPOUT_HEIGHT,
+                endpoint_name: Some(SHOW_SPOUT_FOREGROUND_NAME.to_string()),
+            },
+        );
+
+        // An unrelated Display remains supported; strict show ownership
+        // excludes only reserved IDs/names and generic Spout identities.
+        let unrelated = published_display_output(92);
+        runtime.apply_command(EngineCommand::AddVideoOutput(unrelated.clone()));
+        assert!(runtime
+            .video_outputs
+            .iter()
+            .any(|output| output.summary == unrelated));
+    }
+
+    #[test]
+    fn active_show_spout_pair_rejects_generic_published_remove_route_add_and_bootstrap() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
+        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .unwrap();
+        let before = runtime.build_snapshot(0);
+        let published = RwLock::new(before.clone());
+
+        let (remove_ack, remove_result) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::RemoveVideoOutputPublished {
+            output_id: background.id,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: remove_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(remove_result.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+
+        let (route_ack, route_result) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetVideoOutputRoutingPublished {
+            output_id: foreground.id,
+            expected_from_composition_id: 1,
+            composition_id: 1,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: route_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(route_result.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+
+        let mut reserved_display = published_display_output(93);
+        reserved_display.label = SHOW_SPOUT_FOREGROUND_NAME.to_string();
+        let (add_ack, add_result) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddVideoOutputPublished {
+            output: reserved_display,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(add_result.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+
+        let bootstrap = runtime.bootstrap_vj_show_with_assets(
+            Vec::new(),
+            published_display_output(94),
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(bootstrap
+            .as_ref()
+            .is_err_and(|error| error.contains("strict show Spout")));
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+    }
+
+    #[test]
+    fn show_spout_retirement_removes_the_exact_pair_before_reporting_a_persisted_generic_conflict()
+    {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
+        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .unwrap();
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: show_spout_output(99, "Persisted Generic Spout", 1),
+        });
+
+        let error = runtime
+            .apply_show_spout_outputs_retire(&background, &foreground)
+            .expect_err("a persisted third sender must remain a visible conflict");
+        assert!(error.contains("exact pair was retired"));
+        assert_eq!(runtime.video_outputs.len(), 1);
+        assert_eq!(runtime.video_outputs[0].summary.id, 99);
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|value| value == error));
+    }
+
+    #[test]
+    fn show_spout_pair_publication_failure_restores_the_complete_a_image() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
+        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let before = runtime.build_snapshot(0);
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::EnableShowSpoutOutputsPublished {
+            expected_background: background,
+            expected_foreground: foreground,
+            expected_safety_epoch: safety.epoch,
+            expected_safety_generation: safety.generation,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert_eq!(
+            runtime.video_outputs.len(),
+            2,
+            "B contains both senders before publication"
+        );
+        runtime.fail_next_pending_publication = true;
+        let published = RwLock::new(before.clone());
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().expect("publication receipt").is_err());
+        assert!(
+            runtime.video_outputs.is_empty(),
+            "rollback removes both B senders"
+        );
+        assert_eq!(
+            runtime.build_snapshot(0).video,
+            before.video,
+            "publication failure restores the complete pre-action video graph"
+        );
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Show Spout outputs could not publish")));
+        assert_eq!(*published.read().unwrap(), before);
     }
 
     #[test]

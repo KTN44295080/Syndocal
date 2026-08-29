@@ -6,8 +6,8 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
-- The same-PC output/camera repair checkpoint is based on clean pushed parent
-  `c152356beef2b8ec5447b85149df89ad2ea4ca78` on
+- The same-PC Art-Net/camera repair checkpoint is clean and pushed at
+  `fd0d40698ae849a0f327fa7769b06b2af182c82f` on
   `codex/syndocal-v1.2`. The same-PC show-output clean break replaces the
   retired show-only USB/Enttec activation with a payloadless, locally
   confirmed Art-Net route fixed at `127.0.0.1:6454`, wire U0, 512 bytes, and
@@ -21,12 +21,20 @@ This is the concise authoritative resume note for the final show-critical tranch
   bytes 0/4 and ch500 zero at payload byte 499. Independent Terra xHigh review
   is GO after closing the stale Setup I/O fixture and publication-failure
   rollback proof. Ox was unavailable for this narrow review exception.
-- A fixed two-Sender Spout state/validation module is source-complete and has
-  independent Terra xHigh static GO: exact names `Syndocal Background` and
-  `Syndocal Foreground`, exact `1920x1080`, cached RGBA black, explicit sender
-  establishment, authority-restored recovery, and fail-closed composition
-  identity. It is not yet registered or integrated into runtime/UI, so no
-  production or native Spout claim follows from this checkpoint.
+- A fixed two-Sender Spout state/validation module is integrated in the current
+  uncommitted alpha.34 tranche: exact names `Syndocal Background` and
+  `Syndocal Foreground`, exact `1920x1080`, cached opaque RGBA black, explicit
+  sender establishment, tick-driven live/black presentation, and fail-closed
+  authority/composition identity. Focused integration tests and independent
+  adversarial review are still running, so no production or native Spout claim
+  follows from this in-progress state.
+- The non-overwriting authoring tool received independent Terra xHigh GO after
+  post-write cleanup was changed to retain an unverifiable target for explicit
+  quarantine/manual removal instead of risking pathname-based deletion. It
+  created `DSF2026-show-alpha10-same-pc-output.sdc` as a separate `1,098,035`
+  byte file with SHA-256
+  `DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`.
+  Alpha9 and both managed MP3 sidecars retained their pinned hashes.
 - C: reached zero free bytes during the focused build. A dry run proved that
   Cargo profile `dev` alone owned `205,503` generated files / `400.0 GiB`.
   `cargo clean --profile dev` removed only those regenerable development
@@ -46,7 +54,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 - The Timeline-audio component checkpoint itself had no new native or hardware acceptance. Its preserved pre-checkpoint process PID `73380` was later path-verified and terminated immediately before the alpha.32 native build; it was never relabelled as current evidence.
 - The Windows candidate-gate source checkpoint is pushed at `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`. Metadata completes all hash and updater-signature checks before any EXE inspector; candidate and manual three-root inspectors receive only verified-byte `wx` copies; NSIS/MSI/outer/nested archive tools likewise receive only pre/post-hashed copies. Independent review is implementation `GO`, while actual RC acceptance remains `NO-GO` until real signed bundles and Windows runtime identity evidence exist. Supervisor self-tests passed `125/43/4/140` plus `check:release`; Node's non-handle-atomic pathname and unprovable owner/DACL boundary is explicitly limited to fresh single-writer staging.
 - The synchronized alpha.32 product identity is pushed at `5d40874c629f26d6e011252622b2886d39d8d40b`. From that clean pushed HEAD, the exact MSVC 14.44 Community linker was pinned and first in `where.exe`; `pnpm --dir app tauri build --no-bundle` passed in `2m 52s` with first-party warnings 0. `target/release/syndocal.exe` is `60,713,984` bytes, Product/FileVersion `1.2.0-alpha.32`, SHA-256 `B04CE351A456C82715383A4430401F3DA4D824EC8813B32894ABE1BF98FBD90D`. With the verified local FFmpeg runtime `bin` inherited, exactly one checkout-owned process launched as PID `89524`, is responsive with title `Syndocal`, and Computer Use verified the exact window is maximized. Audible and physical acceptance remain open.
-- The current alpha.33 camera-capture source tranche replaces the old free-form DirectShow route fixed at `1280x720` / `30 fps` with an explicit current-generation device/profile catalog, opaque endpoint identity, and an exact one-frame probe before Add. Its envelope is maximum `4096x2160`; profiles above `1920x1080` admit no more than `30 fps`, profiles above `1280x720` no more than `60 fps`, and capture rates up to `120 fps` only when advertised. Output presentation remains at most `60 Hz`; screen capture stays `1280x720` / `30 fps`. The exact supervisor source gates passed capture `64/0/2` and control-plane `64/0`, with MSVC 14.44 and first-party warnings 0. Independent review found P0 `0`; source fixes close bounded listing memory, child cleanup, and automatic fault-row visibility, while sustained-4K performance remains open. Native alpha.33 build and UI probes are pending. The acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- The alpha.34 integration includes the alpha.33 camera-capture source tranche, which replaces the old free-form DirectShow route fixed at `1280x720` / `30 fps` with an explicit current-generation device/profile catalog, opaque endpoint identity, and an exact one-frame probe before Add. Its envelope is maximum `4096x2160`; profiles above `1920x1080` admit no more than `30 fps`, profiles above `1280x720` no more than `60 fps`, and capture rates up to `120 fps` only when advertised. Output presentation remains at most `60 Hz`; screen capture stays `1280x720` / `30 fps`. The exact supervisor source gates passed capture `64/0/2` and control-plane `64/0`, with MSVC 14.44 and first-party warnings 0. Independent review found P0 `0`; source fixes close bounded listing memory, child cleanup, and automatic fault-row visibility, while sustained-4K performance remains open. Native alpha.34 build and UI probes are pending. The acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
 - Alpha.32 cleanup inventory was refreshed read-only. The four known build/cache roots still exist; a new exact-byte traversal of `target` exceeded the bounded 50-second window and was stopped without changing files. The latest completed exact `target` inventory therefore remains `428,244,808,551` logical bytes. The reviewed recurring-cleanup harness is not approved for Apply, so no deletion ran and reclaimed bytes remain 0.
 - The documentation checkpoint containing this record is accepted only after
   its commit is pushed, `HEAD` equals `origin/codex/syndocal-v1.2`, and the
@@ -67,11 +75,11 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is `1.2.0-alpha.33`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The current alpha.33 camera source/UI tranche is separate; its native build and UI probes remain open. The accepted alpha.31 Timeline-authoring native evidence is historical below and is not relabelled. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- KDMX product metadata is `1.2.0-alpha.34`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The current alpha.34 same-PC output/camera integration is separate; its native build and UI probes remain open. The accepted alpha.31 Timeline-authoring native evidence is historical below and is not relabelled. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
 
-### 2026-08-29 current alpha.33 camera-capture source tranche (native pending)
+### 2026-08-29 current alpha.34 same-PC output and camera integration (native pending)
 
-The product identity is `1.2.0-alpha.33`; this is a source checkpoint, not yet
+The product identity is `1.2.0-alpha.34`; this is a source checkpoint, not yet
 a versioned native acceptance. The old camera route accepted a free-form
 DirectShow endpoint at fixed `1280x720` / `30 fps`. The new source path uses an
 explicit current-generation DirectShow device/profile catalog, persists only an
@@ -101,14 +109,40 @@ Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`. The exact Syndocal profile probe still proves one frame only.
 Sustained 4K remains unverified:
 the current RGBA `Vec` clone at `60 Hz` may approach `1.98 GiB/s` of copy
-traffic. Native alpha.33 build, UI, and hardware probes remain pending; no
+traffic. Native alpha.34 build, UI, and hardware probes remain pending; no
 native or hardware completion is claimed here.
 
-Final independent source rereview is GO with P0/P1/P2 `0`. Full app regression
-passed `1203/0/7` without default features and `1239/0/12` with default
-libav/Spout features. Frontend production build, localization `3631/3631`,
-typed IPC inventory `440`, `check:release`, format, and diff gates pass with
-first-party warnings `0`.
+At pushed checkpoint `fd0d40698ae849a0f327fa7769b06b2af182c82f`, the
+camera/Art-Net independent source rereview was GO with P0/P1/P2 `0`. That
+checkpoint's full app regression passed `1203/0/7` without default features
+and `1239/0/12` with default libav/Spout features. Those counts predate the
+current fixed two-Sender Spout integration and are not its full-regression
+evidence.
+
+The current uncommitted alpha.34 Spout integration has focused exact-linker
+evidence of Syndocal show-Spout `20/0/0`, engine strict-pair `5/0/0`, and
+protocol v4 command `11/0/0`, all with first-party warnings `0`. It holds both
+senders on opaque black until the durable output lease commit, binds every
+send to the exact output-ownership generation/epoch and project callback
+epoch, blocks generic mutation of the fixed pair, and preserves unresolved
+engine-retirement identity until a later R4 reconciles it. That barrier is
+process-session scoped: process exit destroys the SDK senders, engine instance,
+and pending ACK queue and is the explicit recovery boundary for an infinite
+driver call. Independent Terra xHigh final rereview returned GO with no
+unresolved P0/P1. P2 proof debt remains for a true two-worker fake-SDK timing
+test, and the new show modules only partially reduce the existing oversized
+app/engine orchestration files. Final exact-linker regression passed Syndocal
+no-default `1205/0/7`, Syndocal default `1263/0/12`, and engine `920/0/2`;
+the remaining workspace crates exited successfully and first-party warnings
+were `0`. The initial matrix found only a stale expected command count and an
+older unreferenced Cue 3 test fixture. Explicit command-variant assertions and
+removal of the dead fixture closed both; focused reruns and the full matrix then
+passed. Native alpha.34 build/window and Unity/GPU observation remain pending.
+
+Frontend production build, typed command/output-control checks,
+`check:release`, localization/IPC inventory, format, diff, and full Rust gates
+pass for the frozen source checkpoint. No native or physical output claim is
+promoted from these deterministic results.
 
 ### 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
@@ -459,13 +493,13 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. Complete the pending alpha.33 camera tranche from the exact-linker source gate: native build, one responsive maximized UI, exact profile probes, camera start/stop, disconnect/replug, and bounded 4K30/1080p60 runs. Follow [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md); do not infer sustained 4K or 120fps support from the one-frame probe.
+1. Complete the pending alpha.34 same-PC output/camera integration from the exact-linker source gate: native build, one responsive maximized UI, exact Art-Net/Spout activation, camera profile probes, camera start/stop, disconnect/replug, and bounded 4K30/1080p60 runs. Follow [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md) and [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md); do not infer sustained 4K or 120fps support from the one-frame probe.
 2. The alpha.32 normal native build, launch, and maximized-window gate is complete. The current test target `Music (Elgato Virtual Audio)` was already persisted under alpha.31; audibly verify that Timeline media-library clips plus Guide/Click share it in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
 3. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
 4. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
 5. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
 6. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
-7. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
+7. For this show, verify the strict same-PC Art-Net route at `127.0.0.1:6454`, wire U0, 512 bytes, including the ch1/ch5 red-frame proof and ch500 zero. Generic serial DMX remains a product capability but is not part of this show route. Close Daslight/Easy View manually before Unity because the receiver port cannot be shared.
 8. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
 9. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
 
@@ -473,6 +507,6 @@ integrated source checkpoint above is authoritative for current source status.
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - Keep the current Syndocal process alive for authoring; the DJ-Link PC may remain stopped until the final integration gate.
-- For alpha.33, first perform the exact MSVC 14.44 native build, then the maximized camera UI/profile probes and bounded camera fault/performance runs. Keep all native/UI/hardware results explicitly pending until observed and recorded against [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- For alpha.34, first complete the exact MSVC 14.44 source/full-regression and independent review gates, then perform the native build, maximized same-PC output UI checks, camera profile probes, and bounded camera fault/performance runs. Keep all native/UI/hardware results explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
 - Keep the verified alpha.32 process alive for operator audition. Complete the `Music (Elgato Virtual Audio)` audition and run the v3 authority checker before the separate dedicated show-ASIO build; do not reuse or relabel the historical alpha.31 artifact.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

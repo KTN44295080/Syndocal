@@ -5923,6 +5923,7 @@ export default function App() {
     resetEngineTelemetry,
     saveEngineTelemetryReport,
     enableStagedShowArtNetLoopbackRoute,
+    enableShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     refreshSerialPorts,
@@ -27226,6 +27227,7 @@ export default function App() {
           onOutputEndpoint={setVideoOutputEndpoint}
           invokeCommand={invoke}
           onAddDisplayOutput={addDisplayVideoOutput}
+          onEnableShowSpoutOutputs={enableShowSpoutOutputs}
           onSelectOutput={setSelectedVideoOutputId}
           onMappingPresetLabel={setVideoOutputMappingPresetLabel}
           onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}

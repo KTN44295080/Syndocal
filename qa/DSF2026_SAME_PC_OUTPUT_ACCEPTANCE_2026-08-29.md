@@ -63,6 +63,37 @@ conversion, but both off states must be RGB byte-exact black. Stopping a
 timeline or output must not destroy either show sender; black frames must keep
 flowing. Sender destruction remains a separate output-route teardown operation.
 
+The bundled Spout SDK registers each sender independently on its first image;
+it has no transaction that can make two names externally visible in one atomic
+operation. Syndocal therefore must construct and verify both exact names before
+the first send, treat the pair as established only after both initial black
+frames succeed, and retire both senders plus their exact engine outputs if one
+side fails or the SDK changes either name. A short external observation of one
+name during an asymmetric first-send failure cannot be eliminated by this SDK;
+the bounded acceptance claim is immediate pair cleanup and fail-closed retry,
+not impossible simultaneous registration.
+
+Spout sender destruction is synchronous in the SDK and the worker join is the
+name-reuse acknowledgement. The current SDK wrapper provides no bounded cancel
+for a `SendImage` call that itself never returns. Syndocal keeps output/name
+ownership fail closed while waiting, but cannot promise bounded recovery from a
+driver-level infinite `SendImage` hang. This remains an external GPU/driver
+liveness boundary and must not be described as an automatically recovered
+case without a process restart.
+
+The unresolved exact engine-retirement barrier is deliberately process-session
+scoped. Exiting Syndocal destroys that process's SDK senders, engine instance,
+and pending acknowledgement queue; restart is therefore the explicit recovery
+boundary for a driver hang or crash. If the restarted project still contains
+the exact authored pair, a new authenticated R4 may establish new physical
+senders against that new engine instance. No claim is made that an in-process
+blocked retirement survives an application restart.
+
+The two reserved show names are mutually exclusive with generic Spout outputs.
+Generic Spout creation must fail visibly while the show pair is authored,
+starting, or active; a pending startup with either reserved name must be fully
+joined and harvested before a fresh show-output request may reuse that name.
+
 ## Current evidence and open gates
 
 Static evidence already confirms the low-level ArtDmx encoder uses opcode
@@ -80,6 +111,44 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
+The current uncommitted alpha.34 Spout integration has additionally passed the
+same exact linker gate for Syndocal show-Spout tests `20 passed / 0 failed`,
+engine strict-pair tests `5 passed / 0 failed`, and protocol v4 command tests
+`11 passed / 0 failed`, with `0` first-party warnings in each run. These tests
+cover initial opaque black, post-lease live transfer, exact-name reuse,
+process-session retirement reconciliation, role/project generation fences,
+generic-mutator rejection, and unrelated Display coexistence. Independent
+Terra xHigh final rereview returned GO with no unresolved P0/P1. The remaining
+P2 proof debt is a true two-worker fake-SDK integration test for the real-time
+ordering of one-sided lazy registration failure and exact retirement. The new
+show modules isolate validation/lifecycle state, but the orchestration call
+site in the oversized app `main.rs` and the engine command switch remain only
+partially split. Neither item is promoted to physical acceptance. The final
+exact-linker deterministic matrix passed: Syndocal no-default
+`1205 passed / 0 failed / 7 ignored`, Syndocal default
+`1263 passed / 0 failed / 12 ignored`, and engine
+`920 passed / 0 failed / 2 ignored`; the remaining workspace crates also exited
+successfully. First-party warnings were `0`. The first matrix attempt exposed
+two separate test-maintenance defects: the new command variants were missing
+from the expected command-inventory count, and an older child-Timeline test
+installed an unreferenced Cue 3 state without creating Cue 3. The inventory was
+updated with explicit variant assertions and the dead fixture was removed;
+focused proofs and the complete matrix then passed. Native build and Unity/GPU
+checks below remain open.
+
+The non-overwriting authoring tool was independently rereviewed after its
+post-write cleanup was changed to fail closed: a failed post-write validation
+never unlinks or renames a pathname that another process could have replaced.
+The generated reference copy is
+`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc`,
+`1,098,035` bytes, SHA-256
+`DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`.
+Its alpha9 source remains SHA-256
+`93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`;
+the two managed MP3 sidecars also retained their pinned hashes. The new copy
+contains disabled exact Art-Net routes in both persisted route fields, exactly
+two fixed Spout summaries, and Main composition output IDs `1,2`.
+
 The following gates remain open until the complete Spout integration and its
 native artifact are accepted:
 
@@ -92,12 +161,17 @@ native artifact are accepted:
       boundary and observed as zero on the wire.
 - [x] The fixed channel 1 + channel 5 test frame is available and verified by
       a local UDP receiver test.
-- [ ] Exactly two fixed 1920×1080 Spout outputs can be created or validated by
+- [x] Exactly two fixed 1920×1080 Spout outputs can be created or validated by
       the reviewed output-control path.
-- [ ] Timeline/output stop keeps both senders alive and publishes RGB black.
-- [ ] The reference show is saved to a new SDC containing the Art-Net route and
+- [x] Existing-name auto-renaming, asymmetric first-send failure, pending
+      startup retry, and generic/show-output conflicts fail closed and retire
+      the exact pair without leaving stale engine or transport ownership.
+- [x] Timeline/output stop keeps both senders alive and publishes RGB black in
+      deterministic source tests; Unity/GPU observation remains separately
+      unchecked below.
+- [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
-- [ ] Focused and full deterministic gates pass with zero first-party warnings.
+- [x] Focused and full deterministic gates pass with zero first-party warnings.
 - [ ] A fresh warning-free native release is built with exact MSVC 14.44,
       launched from this checkout, and verified as one responsive maximized
       Syndocal window.
