@@ -35,8 +35,21 @@ build/window and selector/UI regression gates only. Audible/device selection,
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
 remain open. The reviewed native-evidence record was committed and pushed at
 `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and `HEAD`/upstream equality was
-verified immediately after that push. The next safe action is operator audible
-confirmation.
+verified immediately after that push. After the current native show-UI evidence
+below is committed and pushed and `HEAD`/upstream equality is reverified, the
+next safe action is operator audible confirmation.
+
+The same exact alpha.39 PID/window then received a bounded native show-UI
+reverification while the project remained paused and unsaved. A Timeline Audio
+Clip right-click opened the compact `操作` disclosure; expanding it exposed
+the four nested groups `選択`, `クリップボード`, `タイミング`, and `レーン`.
+A left click outside dismissed the menu both before and after the
+hierarchy was expanded. In Setup I/O, the DJ Link disclosure was scrolled to
+its lower content while the upper Web Remote card remained visible and directly
+selectable; switching back to Web Remote succeeded without scrolling the page
+back to the top. This closes the current-native context-menu dismissal/hierarchy
+and DJ Link/Web Remote reachability visual checks only. It does not add a
+hardware, network, or remote-server acceptance claim.
 
 The current read-only storage inventory is `target` `94,214,143,142` logical
 bytes across `86,760` files, `app/node_modules` `545,338,492` bytes,

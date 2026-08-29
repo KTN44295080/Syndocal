@@ -43,8 +43,22 @@ This is the concise authoritative resume note for the final show-critical tranch
   and last write `2026-08-29T05:53:14.5317317Z`. The native build/window
   and selector/UI regression gates are complete only; audible/device selection,
   operator audible confirmation, dedicated Show-ASIO, Unity/GPU Art-Net/Spout,
-  DJ, camera, and other hardware acceptance remain open. The next safe action is
-  operator audible confirmation.
+  DJ, camera, and other hardware acceptance remain open. After the current
+  native show-UI evidence below is committed and pushed and `HEAD`/upstream
+  equality is reverified, the next safe action is operator audible
+  confirmation.
+
+  A subsequent bounded native show-UI pass used the same exact responsive,
+  maximized alpha.39 PID `87640` / window id `2033716740` and left the opened
+  project paused and unsaved. Right-clicking its Timeline Audio Clip opened the
+  compact `操作` disclosure; expanding it exposed the four nested groups
+  `選択`, `クリップボード`, `タイミング`, and `レーン`. An outside left click
+  dismissed the menu both before and after hierarchy expansion. In
+  Setup I/O, the DJ Link disclosure was scrolled to its lower content while the
+  upper Web Remote card remained visible and directly selectable; switching to
+  Web Remote succeeded without restoring the disclosure scroll position first.
+  This is native visual evidence for context-menu dismissal/hierarchy and
+  Web Remote/DJ Link reachability only, not DJ/network/remote-server acceptance.
 
 - Historical alpha.38 native authority remains immutable. The exact MSVC
   `14.44` native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s`
