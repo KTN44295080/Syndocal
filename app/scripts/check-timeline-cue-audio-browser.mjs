@@ -241,6 +241,29 @@ const runTrustedCueAudioRefresh = async (client, label) => {
   await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls.map((call) => call.command).join(',') === 'list_audio_output_devices,get_timeline_cue_audio_status'"), `${label} manual list then Cue Audio status`);
   return refreshTarget;
 };
+const installCueAudioStatusEndpointOverride = async (client, label) => {
+  assert.equal(await evaluate(client, `(() => {
+    const internals = window.__TAURI_INTERNALS__;
+    const mock = window.__syndocalCueAudioMock;
+    if (!internals || typeof internals.invoke !== 'function' || !mock) return false;
+    if (internals.__timelineCueAudioStatusEndpointOverrideInstalled) return true;
+    const invoke = internals.invoke;
+    internals.invoke = async (command, args = {}) => {
+      if (command === 'get_timeline_cue_audio_status' && Array.isArray(mock.nextStatusEndpoints)) {
+        mock.endpoints = structuredClone(mock.nextStatusEndpoints);
+      }
+      if (command === 'get_timeline_cue_audio_status' && mock.statusOnlyGateArmed === true) {
+        mock.statusOnlyGateArmed = false;
+        mock.statusOnlyCallCount = (mock.statusOnlyCallCount ?? 0) + 1;
+        await new Promise((resolveStatusOnly) => { mock.releaseStatusOnly = resolveStatusOnly; });
+      }
+      return invoke(command, args);
+    };
+    internals.__timelineCueAudioStatusEndpointOverrideInstalled = true;
+    return true;
+  })()`), true, `${label} installs deterministic status endpoint override`);
+};
+const setCueAudioStatusEndpoints = (client, endpoints) => evaluate(client, `window.__syndocalCueAudioMock.nextStatusEndpoints = ${JSON.stringify(endpoints)};`);
 const readCueAudioLedger = (client) => evaluate(client, `(() => {
   const mock = window.__syndocalCueAudioMock;
   const calls = mock?.calls ?? [];
@@ -389,6 +412,183 @@ try {
       args: { settings: { version: 1, route: 'explicit_device', device_name: 'Exact Program', topology_fingerprint: 'topology-fingerprint-a', click_gain: 1, guide_gain: 0.85 } },
     },
   ], "Cue Audio invokes manual list, canonical status, then only the exact selected topology-fenced settings");
+  assert.equal(await evaluate(client, "document.querySelector('[data-timeline-cue-audio-output]')?.value"), "Exact Program", "exact desired output remains visibly selected after configuration");
+  await installCueAudioStatusEndpointOverride(client, "phase A");
+  await setCueAudioStatusEndpoints(client, [
+    { name: "Exact Program", occurrences: 1, selectable: true },
+    { name: "Duplicate Program", occurrences: 2, selectable: false },
+  ]);
+  await runTrustedCueAudioRefresh(client, "phase A reordered refresh");
+  const reorderedProof = await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    const resolved = document.querySelector('.timelineCueAudioResolved');
+    return {
+      value: output instanceof HTMLSelectElement ? output.value : null,
+      options: output instanceof HTMLSelectElement ? [...output.options].map((option) => option.value) : [],
+      desired: window.__syndocalCueAudioMock.settings.device_name,
+      resolved: resolved?.textContent?.trim() ?? null,
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
+    };
+  })()`);
+  assert.deepEqual(reorderedProof, {
+    value: "Exact Program",
+    options: ["", "Exact Program", "Duplicate Program"],
+    desired: "Exact Program",
+    resolved: "Authoring output: Exact Program",
+    calls: [
+      { command: "list_audio_output_devices", args: {} },
+      { command: "get_timeline_cue_audio_status", args: {} },
+    ],
+  }, "endpoint reorder and refresh preserve the stable desired selection without a settings mutation");
+  const statusOnlyCallsBefore = await evaluate(client, "window.__syndocalCueAudioMock.calls.length");
+  await evaluate(client, "window.__syndocalCueAudioMock.statusOnlyGateArmed = true; window.__syndocalCueAudioMock.statusOnlyCallCount = 0; window.__syndocalCueAudioMock.releaseStatusOnly = null;");
+  assert.equal(await click(client, '[data-workspace-option="setup"]'), true, "phase A status-only leaves Control");
+  await waitFor(() => evaluate(client, "document.querySelector('[data-timeline-cue-audio-output]') === null"), "phase A status-only leaves Timeline");
+  await prepareTimelineSurface(client, "phase A status-only");
+  await waitFor(() => evaluate(client, "document.querySelector('[data-timeline-cue-audio-output]') !== null"), "phase A status-only Timeline remount");
+  await openCueAudioPanel(client, "phase A status-only");
+  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock.statusOnlyCallCount === 1"), "phase A status-only Cue Audio status poll");
+  assert.equal(await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    if (!(output instanceof HTMLSelectElement)) return null;
+    output.value = 'Duplicate Program';
+    return output.value;
+  })()`), "Duplicate Program", "phase A status-only models native selection drift before the status reply");
+  assert.equal(await evaluate(client, "typeof window.__syndocalCueAudioMock.releaseStatusOnly === 'function'"), true, "phase A status-only reply is held until drift is injected");
+  await evaluate(client, "window.__syndocalCueAudioMock.releaseStatusOnly(); window.__syndocalCueAudioMock.releaseStatusOnly = null;");
+  await waitFor(() => evaluate(client, "document.querySelector('[data-timeline-cue-audio-output]')?.value === 'Exact Program'"), "phase A status-only exact selection recovery");
+  const statusOnlyProof = await evaluate(client, `(() => {
+    const calls = window.__syndocalCueAudioMock.calls.slice(${statusOnlyCallsBefore});
+    return {
+      statusCount: calls.filter((call) => call.command === 'get_timeline_cue_audio_status').length,
+      listCount: calls.filter((call) => call.command === 'list_audio_output_devices').length,
+      configureCount: calls.filter((call) => call.command === 'set_machine_timeline_cue_audio_settings').length,
+      desired: window.__syndocalCueAudioMock.settings.device_name,
+      value: document.querySelector('[data-timeline-cue-audio-output]')?.value ?? null,
+      resolved: document.querySelector('.timelineCueAudioResolved')?.textContent?.trim() ?? null,
+    };
+  })()`);
+  assert.deepEqual(statusOnlyProof, {
+    statusCount: 1,
+    listCount: 0,
+    configureCount: 0,
+    desired: "Exact Program",
+    value: "Exact Program",
+    resolved: "Authoring output: Exact Program",
+  }, "status-only polling preserves the exact desired selection without list or configuration mutation");
+  await setCueAudioStatusEndpoints(client, [
+    { name: "Exact Program", occurrences: 1, selectable: true },
+    { name: "Exact Program", occurrences: 1, selectable: true },
+  ]);
+  await runTrustedCueAudioRefresh(client, "phase A duplicate-row refresh");
+  assert.equal(await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    if (!(output instanceof HTMLSelectElement)) return false;
+    output.value = 'Exact Program';
+    output.dispatchEvent(new Event('change', { bubbles: true }));
+    output.value = '';
+    return true;
+  })()`), true, "phase A duplicate rows exercise configure admission");
+  const duplicateRowsProof = await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    const rows = output instanceof HTMLSelectElement
+      ? [...output.options].filter((option) => option.value === 'Exact Program')
+      : [];
+    return {
+      value: output instanceof HTMLSelectElement ? output.value : null,
+      rowCount: rows.length,
+      allDisabled: rows.length === 2 && rows.every((option) => option.disabled),
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
+    };
+  })()`);
+  assert.deepEqual(duplicateRowsProof, {
+    value: "",
+    rowCount: 2,
+    allDisabled: true,
+    calls: [
+      { command: "list_audio_output_devices", args: {} },
+      { command: "get_timeline_cue_audio_status", args: {} },
+    ],
+  }, "two same-name rows remain blank and disabled without configure IPC");
+  await setCueAudioStatusEndpoints(client, [
+    { name: "Exact Program", occurrences: 2, selectable: true },
+  ]);
+  await runTrustedCueAudioRefresh(client, "phase A contradictory-occurrence refresh");
+  assert.equal(await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    if (!(output instanceof HTMLSelectElement)) return false;
+    output.value = 'Exact Program';
+    output.dispatchEvent(new Event('change', { bubbles: true }));
+    output.value = '';
+    return true;
+  })()`), true, "phase A contradictory occurrence exercises configure admission");
+  const contradictoryOccurrenceProof = await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    const row = output instanceof HTMLSelectElement
+      ? [...output.options].find((option) => option.value === 'Exact Program')
+      : null;
+    return {
+      value: output instanceof HTMLSelectElement ? output.value : null,
+      disabled: row?.disabled === true,
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
+    };
+  })()`);
+  assert.deepEqual(contradictoryOccurrenceProof, {
+    value: "",
+    disabled: true,
+    calls: [
+      { command: "list_audio_output_devices", args: {} },
+      { command: "get_timeline_cue_audio_status", args: {} },
+    ],
+  }, "occurrences > 1 remains blank and disabled without configure IPC");
+  await setCueAudioStatusEndpoints(client, [
+    { name: "Other Program", occurrences: 1, selectable: true },
+  ]);
+  await runTrustedCueAudioRefresh(client, "phase A missing refresh");
+  const missingProof = await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    const missing = output instanceof HTMLSelectElement
+      ? [...output.options].find((option) => option.value === 'Exact Program')
+      : null;
+    return {
+      value: output instanceof HTMLSelectElement ? output.value : null,
+      missingDisabled: missing?.disabled === true,
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
+    };
+  })()`);
+  assert.deepEqual(missingProof, {
+    value: "",
+    missingDisabled: true,
+    calls: [
+      { command: "list_audio_output_devices", args: {} },
+      { command: "get_timeline_cue_audio_status", args: {} },
+    ],
+  }, "missing desired output stays visibly fail-closed without implicit configuration");
+  await setCueAudioStatusEndpoints(client, [
+    { name: "Exact Program", occurrences: 2, selectable: true },
+  ]);
+  await runTrustedCueAudioRefresh(client, "phase A ambiguous refresh");
+  const ambiguousProof = await evaluate(client, `(() => {
+    const output = document.querySelector('[data-timeline-cue-audio-output]');
+    const ambiguous = output instanceof HTMLSelectElement
+      ? [...output.options].find((option) => option.value === 'Exact Program')
+      : null;
+    return {
+      value: output instanceof HTMLSelectElement ? output.value : null,
+      ambiguousDisabled: ambiguous?.disabled === true,
+      ambiguousLabel: ambiguous?.textContent?.trim() ?? null,
+      calls: structuredClone(window.__syndocalCueAudioMock.cueAudioCalls),
+    };
+  })()`);
+  assert.deepEqual(ambiguousProof, {
+    value: "",
+    ambiguousDisabled: true,
+    ambiguousLabel: "Exact Program (2 matching outputs; ambiguous)",
+    calls: [
+      { command: "list_audio_output_devices", args: {} },
+      { command: "get_timeline_cue_audio_status", args: {} },
+    ],
+  }, "ambiguous desired output stays visibly fail-closed without implicit configuration");
   assert.ok(proof.summaryHeight >= 43.5, "Cue Audio disclosure summary preserves a 44px target");
   console.log("PHASE A pure-browser fixture Cue Audio: 1280x720 disclosure, Click/Guide authority, 44px controls, internal scroll, and no local enable passed");
   client.close();
@@ -417,9 +617,17 @@ try {
   })()`), "phase B owner registration and Program Audio startup handoff");
   const startupProof = await readCueAudioLedger(client);
   assertCueAudioLedger(startupProof, "phase B startup milestone", 0);
-  await sleep(1_100);
+  await waitFor(async () => {
+    const proof = await readCueAudioLedger(client);
+    return proof.calls.filter((call) => call.command === "get_external_video_transport_status").length >= 1;
+  }, "phase B external video transport status poll");
   const preProbeProof = await readCueAudioLedger(client);
   assertCueAudioLedger(preProbeProof, "phase B pre-probe organic startup", 0);
+  const transportStatusPolls = preProbeProof.calls.filter((call) => call.command === "get_external_video_transport_status");
+  assert.ok(transportStatusPolls.length >= 1, "phase B observes at least one external video transport status poll");
+  for (const poll of transportStatusPolls) {
+    assert.deepEqual(poll.args, {}, "phase B external video transport status poll uses exact empty args");
+  }
   assert.ok(preProbeProof.authorityBundleDeliveryCount >= 1, "phase B receives the production-shaped project authority bundle");
   assert.equal(preProbeProof.ownerCallCount, 1, "phase B owner registration occurs exactly once");
   assert.equal(preProbeProof.programAudioCallCount, 1, "phase B Program Audio startup occurs exactly once");

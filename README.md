@@ -2,16 +2,19 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.38**
+- 製品名: **Syndocal 1.2.0-alpha.39**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.38` on branch
-`codex/syndocal-v1.2`. Alpha.38 is the current source train; its exact
-source checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build
-source HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact
+Current product metadata is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`. Alpha.39 is the current source train; its exact source
+checkpoint and native artifact identity are recorded only after the checkpoint
+is committed/pushed and the required clean-source native build completes. The
+latest accepted native authority remains the historical alpha.38 source
+checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source
+HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`, both pushed. The exact
 MSVC 14.44 native build completed in `3m12s` with first-party warnings `0`.
 The `61,114,368`-byte `1.2.0-alpha.38` executable has SHA-256
 `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
@@ -20,7 +23,7 @@ Computer Use verified Restore enabled and Maximize disabled, proving the exact
 window is maximized. Same-PC Unity/GPU, audible audio-device, DJ, and camera
 hardware acceptance remain open.
 
-Alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
+Historical alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
 rotated Timeline transport authority without changing media source projection.
 The old path compared Click/Guide transport events to the unrelated source
 projection pair and could therefore report a false stale-authority fault. The
@@ -106,7 +109,7 @@ remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
 alpha.34 and alpha.36 native builds passed. The now-historical alpha.37 native
-build/maximized-window gate passed, and the current alpha.38 normal
+build/maximized-window gate passed, and the now-historical alpha.38 normal
 native/window gate is complete. Camera-specific UI interaction and hardware
 probes remain pending.
 
@@ -138,8 +141,8 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.38 product and
-installer naming below; that naming does not assert an alpha.38 installer
+acceptance. The release metadata checker expects alpha.39 product and
+installer naming below; that naming does not assert an alpha.39 installer
 exists.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
@@ -335,7 +338,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.38_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.38_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.39_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.39_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

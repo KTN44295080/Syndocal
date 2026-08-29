@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.38";
+export const expectedVersion = "1.2.0-alpha.39";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");

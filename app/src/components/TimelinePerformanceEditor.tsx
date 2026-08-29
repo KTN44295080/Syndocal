@@ -44,6 +44,19 @@ interface TimelinePerformanceEditorProps {
 
 const phaseTime = (timeMs: number) => `${(Math.max(0, timeMs) / 1_000).toFixed(3)}s`;
 
+const admissibleCueAudioEndpoint = (
+  endpoints: TimelineCueAudioStatus["endpoints"],
+  requestedName: string | null,
+) => {
+  if (!requestedName) return null;
+  const matches = endpoints.filter((endpoint) => endpoint.name === requestedName);
+  return matches.length === 1
+    && matches[0]?.selectable === true
+    && matches[0]?.occurrences === 1
+    ? matches[0]
+    : null;
+};
+
 const cueAudioLifecycleText = (status: TimelineCueAudioStatus) => {
   switch (status.lifecycle) {
     case "missing_device": return "Missing device";
@@ -62,16 +75,41 @@ const cueAudioLifecycleText = (status: TimelineCueAudioStatus) => {
 
 export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps) {
   const [pendingExplicitRoute, setPendingExplicitRoute] = createSignal(false);
+  let authoringOutputSelect: HTMLSelectElement | undefined;
   createEffect(() => {
     if (props.cueAudioStatus.desiredSettings.route === "explicit_device") {
       setPendingExplicitRoute(false);
     }
   });
   const explicitRouteVisible = () => pendingExplicitRoute() || props.cueAudioStatus.desiredSettings.route === "explicit_device";
-  const selectedOutputName = () =>
-    props.cueAudioStatus.desiredSettings.route === "explicit_device"
-      ? props.cueAudioStatus.desiredSettings.device_name ?? ""
+  const selectedOutputName = () => {
+    const settings = props.cueAudioStatus.desiredSettings;
+    return settings.route === "explicit_device"
+      && admissibleCueAudioEndpoint(props.cueAudioStatus.endpoints, settings.device_name)
+      ? settings.device_name ?? ""
       : "";
+  };
+  // Endpoint refreshes can reorder native options without changing the desired
+  // value. Reapply the exact selectable option after Solid updates the list;
+  // assigning the DOM property is silent and cannot configure a device.
+  createEffect(() => {
+    const settings = props.cueAudioStatus.desiredSettings;
+    const endpoints = props.cueAudioStatus.endpoints;
+    const statusRevision = props.cueAudioStatus.statusRevision;
+    const desiredEndpoint = settings.route === "explicit_device"
+      ? admissibleCueAudioEndpoint(endpoints, settings.device_name)
+      : null;
+    const desiredName = desiredEndpoint
+      ? settings.device_name ?? ""
+      : "";
+    const select = authoringOutputSelect;
+    if (!select) return;
+    void statusRevision;
+    const desiredOption = desiredName
+      ? [...select.options].find((option) => option.value === desiredName && !option.disabled)
+      : undefined;
+    select.value = desiredOption?.value ?? "";
+  });
   const setLoopBoundary = (edge: "a" | "b") => {
     const current = props.loopRegion;
     const position = Math.max(0, Math.round(props.positionMs));
@@ -144,10 +182,11 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
               <span>Authoring output device</span>
               <select
                 data-timeline-cue-audio-output
+                ref={(element) => { authoringOutputSelect = element; }}
                 value={selectedOutputName()}
                 disabled={props.cueAudioMutationBusy}
                 onChange={(event) => {
-                  const endpoint = props.cueAudioStatus.endpoints.find((candidate) => candidate.name === event.currentTarget.value && candidate.selectable);
+                  const endpoint = admissibleCueAudioEndpoint(props.cueAudioStatus.endpoints, event.currentTarget.value);
                   const fingerprint = props.cueAudioStatus.observedTopologyFingerprint;
                   if (!endpoint || !fingerprint) return;
                   props.onConfigureCueAudio({
@@ -164,7 +203,7 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
                 </Show>
                 <For each={props.cueAudioStatus.endpoints}>
                   {(endpoint) => (
-                    <option value={endpoint.name} disabled={!endpoint.selectable}>
+                    <option value={endpoint.name} disabled={admissibleCueAudioEndpoint(props.cueAudioStatus.endpoints, endpoint.name) === null}>
                       {endpoint.occurrences > 1 ? `${endpoint.name} (${endpoint.occurrences} matching outputs; ambiguous)` : endpoint.name}
                     </option>
                   )}

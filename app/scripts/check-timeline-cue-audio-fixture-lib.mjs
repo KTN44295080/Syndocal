@@ -380,6 +380,7 @@ export const installCueAudioMock = (eventTargets) => {
       "load_startup_project",
       "take_open_project_paths",
       "get_timeline_cue_audio_status",
+      "get_external_video_transport_status",
       "get_timeline_follow_runtime",
       "get_snapshot_delta",
       "poll_project_authority_bundle",
@@ -601,6 +602,18 @@ export const installCueAudioMock = (eventTargets) => {
           project_revision: 0,
           checkpoint_hash: "browser-authority-checkpoint",
           runtime: { epoch: 0, generation: 0, status: "idle", admission_reason: null, outcome: null, source_timeline_id: null, target_timeline_id: null, elapsed_ms: 0, duration_ms: 0, progress_millis: 0, fault: null, settlement: null },
+        };
+      }
+      if (command === "get_external_video_transport_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio external-video transport status payload must be empty");
+        return {
+          active_routes: [],
+          active_count: 0,
+          capture_faults: [],
+          ownership_allowed: false,
+          ownership_state: "Failed",
+          ownership_reason: "StartupDenied",
+          ownership_error: "Machine output ownership has not been initialized",
         };
       }
       if (command === "list_audio_output_devices") {
