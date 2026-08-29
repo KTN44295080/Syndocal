@@ -146,7 +146,7 @@ render pacing is required before broadening that claim.
 ## Native and hardware gates still required
 
 - [x] Historical alpha.34 release build with MSVC 14.44, first-party warnings 0.
-- [ ] Exact current alpha.35 release rebuild with MSVC 14.44, first-party
+- [x] Exact current alpha.35 release rebuild with MSVC 14.44, first-party
   warnings 0.
 - [ ] Exactly one responsive, maximized window from this checkout's release
   executable.

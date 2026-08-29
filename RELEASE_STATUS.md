@@ -1,9 +1,9 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.35`. The pushed source checkpoint is `c7218c112b296652fa77f88c67e861c18d6aea1b`, including strict Universe-0 input isolation and Spout first-physical-black hardening. Earlier pushed authorities include canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.35 native rebuild and physical acceptance are pending. The alpha.34 exact-linker native build remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.34 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.35`. The pushed source checkpoint is `c7218c112b296652fa77f88c67e861c18d6aea1b`, including strict Universe-0 input isolation and Spout first-physical-black hardening. The exact-linker alpha.35 native build from clean pushed HEAD `31a577cfaad54c0ea981a0fc98a4254b0f5cb8db` passed and exactly one checkout-owned process is responsive; maximized visual and physical acceptance remain open. Earlier pushed authorities include canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.34 native build remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.34 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-30 current alpha.35 same-PC output isolation (source accepted; native/hardware pending)
+## 2026-08-30 current alpha.35 same-PC output isolation (native responsive; visual/hardware pending)
 
 The product identity is `1.2.0-alpha.35`. The current show boundary is same-PC
 only: Art-Net targets `127.0.0.1:6454`, while video uses local Spout. Remote
@@ -56,8 +56,15 @@ visible in the native log. Focused Spout passed `13/0/0`; Syndocal full
 no-default passed `1205/0/7` and full default libav/Spout passed `1265/0/12`.
 TypeScript, frontend production build, release checks, format, and diff checks
 passed; first-party warnings remained `0`. Independent Terra xHigh rereview is
-GO with P0/P1 `0`. Current alpha.35 native and physical output gates remain
-open.
+GO with P0/P1 `0`. The exact-linker native build from clean pushed HEAD
+`31a577c` completed in `3m36s` with first-party warnings `0`. The
+`61,045,760`-byte executable reports Product/FileVersion `1.2.0-alpha.35` and
+SHA-256 `1144DBFA1AAD3E46E88F6F3A026218B8B7AB3C3E9A234270B75EDB41213A0E7A`.
+Exactly one checkout-owned PID `72448` is responsive. Computer Use did not
+return the Tauri window from either app or window enumeration; the explicit
+path retry reported that its accessibility window-opened handler did not become
+ready. No UI input was attempted afterward. Maximized visual and physical
+output gates remain open.
 
 The pushed camera/Art-Net checkpoint
 `fd0d40698ae849a0f327fa7769b06b2af182c82f` received independent source GO.

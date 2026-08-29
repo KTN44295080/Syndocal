@@ -103,8 +103,7 @@ any stale U0 merge at the final render fence. U1 and ordinary non-strict input
 merge remain available. Focused exact-linker proof passed `12/12` with
 first-party warnings `0`, and independent Terra xHigh rereview returned GO with
 no P0/P1/P2. The exact-linker full engine gate then passed
-`924 passed / 0 failed / 2 ignored`, first-party warnings `0`; a fresh
-alpha.35 native gate is still required.
+`924 passed / 0 failed / 2 ignored`, first-party warnings `0`.
 Alpha.35 also binds the strict Spout pair to a physical first-frame barrier:
 each sender must first transmit the cached 1920×1080 opaque-black RGBA frame,
 retain its exact post-send SDK name, and join the two-ACK plus final R4
@@ -112,6 +111,13 @@ authority barrier before active/live handoff. The focused pair gate passed
 `13/13`; full Syndocal passed no-default `1205/0/7` and default Spout/libav
 `1265/0/12`, with first-party warnings `0`. Independent Terra xHigh rereview
 returned GO with P0/P1 `0`.
+The exact-linker native build from clean pushed HEAD `31a577c` completed in
+`3m36s` with first-party warnings `0`. The resulting `61,045,760`-byte
+`1.2.0-alpha.35` executable has SHA-256
+`1144DBFA1AAD3E46E88F6F3A026218B8B7AB3C3E9A234270B75EDB41213A0E7A`.
+Exactly one checkout-owned process, PID `72448`, is responsive. Computer Use
+still did not expose the Tauri window as targetable, so maximized visual and
+physical Unity/GPU acceptance remain open.
 The alpha.34 exact-linker native build from pushed HEAD `138f6c3` produced a
 `61,039,104`-byte `1.2.0-alpha.34` executable with SHA-256
 `1FCB899E2B118B94F92B5D87ECD7A5EA3FFE32D33448319FE697D39841FA642F`.

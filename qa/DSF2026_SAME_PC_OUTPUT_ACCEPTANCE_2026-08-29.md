@@ -197,7 +197,7 @@ native artifact are accepted:
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
 - [x] Focused and full deterministic gates pass with zero first-party warnings.
-- [ ] A fresh warning-free current alpha.35 native release is built with exact
+- [x] A fresh warning-free current alpha.35 native release is built with exact
       MSVC 14.44 and launched from this checkout as exactly one responsive
       process. The alpha.34 artifact is historical after the U0 isolation fix.
 - [ ] Computer Use verifies that exact native window as maximized. Its process

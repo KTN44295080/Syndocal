@@ -9,9 +9,17 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Alpha.35 source checkpoint `c7218c112b296652fa77f88c67e861c18d6aea1b`
   (`Harden same-PC show output isolation`) is pushed to
   `origin/codex/syndocal-v1.2`; immediately after push, local `HEAD`, upstream,
-  and that hash were equal and the worktree was clean. The next safe action is
-  the exact MSVC 14.44 alpha.35 native build after path-verifying and stopping
-  only the historical checkout-owned alpha.34 process PID `85492`.
+  and that hash were equal and the worktree was clean. The exact MSVC 14.44
+  alpha.35 native build then ran from clean pushed HEAD
+  `31a577cfaad54c0ea981a0fc98a4254b0f5cb8db`, after path-verifying and stopping
+  only the historical checkout-owned alpha.34 process PID `85492`. It completed
+  in `3m36s`, first-party warnings `0`; `target/release/syndocal.exe` is
+  `61,045,760` bytes, Product/FileVersion `1.2.0-alpha.35`, SHA-256
+  `1144DBFA1AAD3E46E88F6F3A026218B8B7AB3C3E9A234270B75EDB41213A0E7A`.
+  Exactly one checkout-owned PID `72448` is responsive. Computer Use did not
+  expose the window as targetable and explicit-path recovery reported an
+  unready accessibility window-opened handler; maximized visual proof remains
+  open.
 
 - Current product metadata is `1.2.0-alpha.35`. The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
@@ -28,8 +36,8 @@ This is the concise authoritative resume note for the final show-critical tranch
   `13/0/0`; full Syndocal passed no-default `1205/0/7` and default libav/Spout
   `1265/0/12`; TypeScript, production build, release, format, and diff gates
   passed with first-party warnings `0`. Independent Terra xHigh rereview is GO
-  with P0/P1 `0`. The alpha.35 native build and physical Unity observation
-  remain pending.
+  with P0/P1 `0`. The alpha.35 native build passed as recorded above; physical
+  Unity observation remains pending.
 
 - Checkpoint storage evidence after the full gates recorded
   `145,081,024,512` free bytes on `C:`. The latest completed exact target
