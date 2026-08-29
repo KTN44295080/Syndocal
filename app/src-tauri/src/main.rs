@@ -13759,6 +13759,7 @@ impl TimelineCueAudioRuntime {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let state = self.state.lock();
             let result = state.map(|mut state| take_finished_timeline_cue_workers(&mut state));
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             drop(route_gate);
             result
         };
