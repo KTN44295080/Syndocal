@@ -5849,6 +5849,11 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub position_ms: u64,
     pub muted: bool,
     pub transport_revision: u64,
+    /// Canonical non-persistent Timeline Play/Pause authority. This is
+    /// intentionally independent from `source_projection_authority`, which
+    /// fences the separately-clocked audio source image.
+    pub transport_epoch: u64,
+    pub transport_generation: u64,
     pub source_projection_authority: TimelineAudioProjectionAuthority,
     pub publication_generation: u64,
     pub bpm: f32,
@@ -10475,6 +10480,8 @@ impl EngineHandle {
                             snapshot.timeline.audio_muted
                         },
                         transport_revision,
+                        transport_epoch: snapshot.timeline.transport_epoch,
+                        transport_generation: snapshot.timeline.transport_generation,
                         source_projection_authority,
                         publication_generation,
                         bpm: snapshot.clock.bpm,
@@ -26475,7 +26482,7 @@ impl EngineRuntime {
                 let semantic_change = self.timeline_metronome_enabled != enabled
                     || self.timeline_count_in_beats != next_count_in_beats;
                 if semantic_change {
-                    if let Err(error) = self.timeline_click_scheduler.rotate_schedule_generation() {
+                    if let Err(error) = self.rotate_timeline_schedule_generation() {
                         self.last_error = Some(error);
                         return;
                     }
@@ -40870,6 +40877,48 @@ impl EngineRuntime {
         self.timeline_click_scheduler
             .invalidate(reserved.epoch, reserved.generation)
             .expect("Timeline click schedule preflight must reserve a generation successor");
+        // Guide events carry the same transport authority as click events.
+        // Retire the old queue at the single transport commit boundary so no
+        // pre-invalidation Guide watermark can be paired with the successor
+        // transport image.
+        self.timeline_guide_cues.clear();
+    }
+
+    /// Rotate the click schedule and retire Guide events that were minted
+    /// under the previous schedule authority. Schedule rotations preserve
+    /// the Timeline transport epoch/generation, so they need their own
+    /// explicit Guide retirement boundary.
+    fn rotate_timeline_schedule_generation(&mut self) -> Result<(), String> {
+        self.timeline_click_scheduler.rotate_schedule_generation()?;
+        self.timeline_guide_cues.clear();
+        Ok(())
+    }
+
+    fn rotate_timeline_schedule_source(
+        &mut self,
+        source: TimelineScheduleSource,
+    ) -> Result<(), String> {
+        let before = self.timeline_click_scheduler.identity().schedule_generation;
+        self.timeline_click_scheduler.rotate_source(source)?;
+        if self.timeline_click_scheduler.identity().schedule_generation != before {
+            self.timeline_guide_cues.clear();
+        }
+        Ok(())
+    }
+
+    fn rearm_timeline_click_count_in(&mut self, start_units: u64) -> Result<usize, String> {
+        let events = self.timeline_click_scheduler.rearm_count_in(start_units)?;
+        self.timeline_guide_cues.clear();
+        Ok(events)
+    }
+
+    fn end_timeline_click_count_in(&mut self) -> Result<(), String> {
+        let was_active = self.timeline_click_scheduler.count_in_active;
+        self.timeline_click_scheduler.end_count_in()?;
+        if was_active {
+            self.timeline_guide_cues.clear();
+        }
+        Ok(())
     }
 
     /// No invalidating runtime path may mutate transport state unless the
@@ -44538,7 +44587,7 @@ impl EngineRuntime {
                 return;
             }
             self.clock = candidate;
-            if let Err(error) = self.timeline_click_scheduler.rotate_schedule_generation() {
+            if let Err(error) = self.rotate_timeline_schedule_generation() {
                 self.last_error = Some(error);
             }
         } else {
@@ -44704,12 +44753,19 @@ impl EngineRuntime {
     fn advance_timeline_click_scheduler(&mut self) {
         let result = (|| {
             let Some(mut selection) = self.timeline_click_source_selection()? else {
-                self.timeline_click_scheduler.disarm();
+                if self.timeline_click_scheduler.identity().source != TimelineScheduleSource::Root {
+                    // A DirectChild metronome can end while Guide remains
+                    // enabled. Return the scheduler to the root authority so
+                    // Guide scheduling cannot retain a child-source identity
+                    // after the child transport disappears.
+                    self.rotate_timeline_schedule_source(TimelineScheduleSource::Root)?;
+                } else {
+                    self.timeline_click_scheduler.disarm();
+                }
                 return Ok::<(), String>(());
             };
             if self.timeline_click_scheduler.identity().source != selection.source {
-                self.timeline_click_scheduler
-                    .rotate_source(selection.source)?;
+                self.rotate_timeline_schedule_source(selection.source)?;
             }
             let authority_changed = self
                 .timeline_click_scheduler
@@ -44728,7 +44784,7 @@ impl EngineRuntime {
                     self.timeline_click_scheduler.sample_rate,
                     self.timeline_click_scheduler.lookahead_frames,
                 )? {
-                    self.timeline_click_scheduler.rotate_schedule_generation()?;
+                    self.rotate_timeline_schedule_generation()?;
                 } else {
                     // Retain the already queued authority until cumulative PLL
                     // drift crosses the one-frame contract. Mixing events
@@ -44741,12 +44797,12 @@ impl EngineRuntime {
                 .configure_authority(selection.authority.clone())?;
             if let Some(start_units) = selection.count_in_start_units {
                 if !self.timeline_click_scheduler.count_in_active {
-                    self.timeline_click_scheduler.rearm_count_in(start_units)?;
+                    self.rearm_timeline_click_count_in(start_units)?;
                 }
                 return Ok::<(), String>(());
             }
             if self.timeline_click_scheduler.count_in_active {
-                self.timeline_click_scheduler.end_count_in()?;
+                self.end_timeline_click_count_in()?;
             }
             let current_units = self.timeline_position_quarter_units_at_ms(
                 &selection.authority,
@@ -113129,6 +113185,69 @@ mod tests {
     }
 
     #[test]
+    fn timeline_audio_runtime_snapshot_publishes_transport_authority_separately() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut seeded = engine.snapshot();
+        seeded.timeline.phases.push(TimelinePhaseSummary {
+            id: TimelinePhaseId(1),
+            label: "Transport snapshot test".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 60_000,
+        });
+        engine.load_project_snapshot_and_wait(seeded).unwrap();
+        let initial = engine.video_audio_runtime_snapshot().timeline_audio;
+        let initial_transport = engine.timeline_transport_authority();
+        assert_eq!(
+            (initial.transport_epoch, initial.transport_generation),
+            (initial_transport.epoch, initial_transport.generation)
+        );
+        let source_projection = initial.source_projection_authority;
+
+        let played = engine
+            .set_timeline_playing_published(
+                initial_transport.epoch,
+                initial_transport.generation,
+                true,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let after_play = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(
+            (after_play.transport_epoch, after_play.transport_generation),
+            (played.epoch_after, played.generation_after)
+        );
+        assert_eq!(
+            after_play.source_projection_authority, source_projection,
+            "Play authority rotation must not masquerade as an audio-source projection rotation"
+        );
+
+        let paused = engine
+            .set_timeline_playing_published(
+                played.epoch_after,
+                played.generation_after,
+                false,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        let after_pause = engine.video_audio_runtime_snapshot().timeline_audio;
+        assert_eq!(
+            (
+                after_pause.transport_epoch,
+                after_pause.transport_generation
+            ),
+            (paused.epoch_after, paused.generation_after)
+        );
+        assert_eq!(
+            after_pause.source_projection_authority, source_projection,
+            "Pause authority rotation must remain independent from source projection"
+        );
+    }
+
+    #[test]
     fn timeline_transport_authority_rolls_epoch_and_terminal_exhaustion_preserves_state() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
@@ -129485,6 +129604,150 @@ mod tests {
         assert_eq!(
             runtime.last_error.as_deref(),
             Some("Timeline click schedule generation is exhausted")
+        );
+    }
+
+    #[test]
+    fn timeline_guide_queue_retires_on_transport_and_schedule_authority_rotation() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_guide_enabled = true;
+        let push_guide_for_current_identity = |runtime: &mut EngineRuntime| {
+            let identity = runtime.timeline_click_scheduler.identity();
+            runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+                generation: runtime.timeline_audio_transport_revision,
+                sequence: 1,
+                at_ms: 0,
+                label: "Current authority".to_string(),
+                cue: TimelineGuideCueKind::Looping,
+                asset: TimelineGuideAssetKey::Looping,
+                playback_rate_milli: 1_000,
+                sample_frame: 0,
+                epoch: identity.epoch,
+                transport_generation: identity.transport_generation,
+                schedule_generation: identity.schedule_generation,
+                source: identity.source,
+            });
+        };
+        let transport_authority = |runtime: &EngineRuntime| TimelineTransportAuthority {
+            epoch: runtime.timeline_transport_epoch,
+            generation: runtime.timeline_transport_generation,
+        };
+
+        push_guide_for_current_identity(&mut runtime);
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+        assert!(runtime.timeline_guide_cues.is_empty());
+        let after_play = transport_authority(&runtime);
+
+        push_guide_for_current_identity(&mut runtime);
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(false));
+        assert!(runtime.timeline_guide_cues.is_empty());
+        let after_pause = transport_authority(&runtime);
+        assert_ne!(after_pause.generation, after_play.generation);
+
+        push_guide_for_current_identity(&mut runtime);
+        let schedule_before = runtime
+            .timeline_click_scheduler
+            .identity()
+            .schedule_generation;
+        runtime.apply_command(EngineCommand::SetTimelineMetronome {
+            enabled: true,
+            count_in_beats: 4,
+        });
+        assert!(runtime.timeline_guide_cues.is_empty());
+        assert_eq!(
+            runtime
+                .timeline_click_scheduler
+                .identity()
+                .schedule_generation,
+            schedule_before + 1
+        );
+        assert_eq!(transport_authority(&runtime), after_pause);
+
+        push_guide_for_current_identity(&mut runtime);
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+        assert!(runtime.timeline_guide_cues.is_empty());
+        let published = runtime.timeline_snapshot();
+        assert_eq!(
+            (published.transport_epoch, published.transport_generation),
+            (
+                runtime.timeline_transport_epoch,
+                runtime.timeline_transport_generation
+            )
+        );
+        assert!(
+            !published.click_events.is_empty(),
+            "the resumed metronome must publish a current-authority Click batch"
+        );
+        assert!(published.click_events.iter().all(|event| {
+            event.epoch == published.transport_epoch
+                && event.transport_generation == published.transport_generation
+                && event.schedule_generation == published.click_schedule_generation
+        }));
+        assert_eq!(runtime.last_error, None);
+    }
+
+    #[test]
+    fn timeline_click_source_return_to_root_retires_direct_child_guides() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_playing = true;
+        runtime.timeline_guide_enabled = true;
+        runtime.timeline_metronome_enabled = false;
+        let child_source = TimelineScheduleSource::DirectChild {
+            cue_id: 17,
+            generation: 3,
+        };
+        runtime
+            .timeline_click_scheduler
+            .rotate_source(child_source)
+            .unwrap();
+        let identity = runtime.timeline_click_scheduler.identity();
+        runtime.timeline_guide_cues.push(TimelineGuideCueSummary {
+            generation: runtime.timeline_audio_transport_revision,
+            sequence: 1,
+            at_ms: 0,
+            label: "Direct child authority".to_string(),
+            cue: TimelineGuideCueKind::Looping,
+            asset: TimelineGuideAssetKey::Looping,
+            playback_rate_milli: 1_000,
+            sample_frame: 0,
+            epoch: identity.epoch,
+            transport_generation: identity.transport_generation,
+            schedule_generation: identity.schedule_generation,
+            source: child_source,
+        });
+
+        runtime.advance_timeline_click_scheduler();
+
+        assert_eq!(
+            runtime.timeline_click_scheduler.identity().source,
+            TimelineScheduleSource::Root
+        );
+        assert!(runtime.timeline_guide_cues.is_empty());
+        assert_eq!(runtime.last_error, None);
+
+        // The successor Root authority must be usable for new Guide
+        // admissions; only the pre-rotation child watermark is retired.
+        runtime.timeline_position_ms = 0;
+        runtime.timeline_phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(18),
+            label: "Root phase".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 500,
+            end_ms: 2_000,
+        }];
+        runtime.advance_timeline_guide_lookahead();
+        assert_eq!(runtime.timeline_guide_cues.len(), 1);
+        let root_cue = &runtime.timeline_guide_cues[0];
+        let root_identity = runtime.timeline_click_scheduler.identity();
+        assert_eq!(root_cue.source, TimelineScheduleSource::Root);
+        assert_eq!(root_cue.epoch, root_identity.epoch);
+        assert_eq!(
+            root_cue.transport_generation,
+            root_identity.transport_generation
+        );
+        assert_eq!(
+            root_cue.schedule_generation,
+            root_identity.schedule_generation
         );
     }
 

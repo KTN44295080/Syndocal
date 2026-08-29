@@ -6,7 +6,29 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
-- Current source train is `1.2.0-alpha.37` on branch
+- Current source candidate is `1.2.0-alpha.38` on branch
+  `codex/syndocal-v1.2`, prepared from pushed upstream-equal base
+  `eb84207cc62efb17de16f15344df79c17d6c4e68`. Its exact implementation
+  checkpoint is recorded after this candidate is committed and pushed; no
+  alpha.38 native artifact is claimed yet. The old CUE path compared
+  Click/Guide Timeline transport authority to the independent media source
+  projection and faulted after a real Play/Pause rotation. The new path
+  publishes and checks transport epoch/generation independently, retires old
+  Guide queues on transport/schedule/source/count-in rotations, returns an ended
+  DirectChild scheduler source to Root, and hides a retired endpoint after
+  Fault. Invalid, stale, mixed, future, missing, or ambiguous authority remains
+  visible and fail-closed; no permissive fallback or stale-ignore path exists.
+  Exact MSVC `14.44.35207` proof passes full engine `927/0/2 ignored`, Timeline
+  CUE `50/50`, full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline
+  CUE `60/60`, with first-party warnings `0`; format/diff, `check:release`,
+  TypeScript, and the Vite production build pass.
+  Independent Terra xHigh review is GO with no release-blocking P0/P1/P2.
+  Non-blocking P2 proof improvements remain for attachment-level real
+  Play/Pause, full DirectChild-to-Root/Follow/timecode admission, and individual
+  audible-MIDI/drift/count-in rotations. A fresh native build and audible
+  operator confirmation remain required.
+
+- Historical alpha.37 source train is `1.2.0-alpha.37` on branch
   `codex/syndocal-v1.2`. Checkpoint
   `1636aeb440c718c628a953b58e4f0c59d4874e35` and native-build source HEAD
   `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed; its pre-tranche base was upstream-equal HEAD
@@ -94,11 +116,12 @@ This is the concise authoritative resume note for the final show-critical tranch
   unready accessibility window-opened handler; maximized visual proof remains
   open.
 
-- Current product metadata is `1.2.0-alpha.37`; its implementation checkpoint
-  `1636aeb440c718c628a953b58e4f0c59d4874e35` and native-build source HEAD
-  `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
-  native rebuild and responsive/maximized window gate are complete as recorded
-  above. Alpha.36 and earlier processes are historical execution evidence only.
+- Current product metadata is `1.2.0-alpha.38`; its exact source checkpoint and
+  native artifact identity are pending the commit/push and clean-source native
+  gate. The latest accepted native authority remains historical alpha.37 from
+  pushed build HEAD `5626a9636003462a23daf0f3de67af3cc5060e29`, with the
+  responsive/maximized PID `50864` recorded above. Alpha.37 and earlier
+  processes are historical execution evidence only after alpha.38 is built.
   The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
@@ -117,14 +140,15 @@ This is the concise authoritative resume note for the final show-critical tranch
   with P0/P1 `0`. The alpha.35 native build passed as recorded above; physical
   Unity observation remains pending.
 
-- Checkpoint storage evidence after the native build records `115,826,647,040`
-  free bytes on `C:`. A fresh read-only traversal reports `target` as
-  `88,272,487,158` logical bytes across `83,911` files, `app/node_modules` as
+- Alpha.38 pre-build storage evidence records `110,531,031,040` free bytes on
+  `C:`. A fresh read-only traversal reports `target` as `94,055,639,601`
+  logical bytes across `86,378` files, `app/node_modules` as
   `545,338,492` bytes across `3,704` files, `tools/asio-bridge/target` as
   `1,774,985,879` bytes across `5,560` files, and `app/dist` as `5,203,962`
   bytes across `306` files. Git reports one `568 KiB` temporary-object garbage
-  item. The recurring cleanup harness is still not approved for Apply, so no
-  harness-driven deletion or manual deletion ran and reclaimed bytes are `0`.
+  item. No deletion target is currently accepted for this checkpoint
+  (`Candidates=[]`), so no harness-driven or manual deletion ran and reclaimed
+  logical bytes remain `0`.
 
 - The complete same-PC Art-Net/camera/fixed-Spout source checkpoint is clean and
   pushed at `138f6c3e7bd536c10a589bc644bb9bc6df269f7a` on
@@ -630,8 +654,8 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. Keep the current alpha.37 PID `50864` running and maximized. After the operator saves Daslight/Easy View state and explicitly authorizes closing it, close Daslight PID `42752` so Unity can own UDP `6454`; do not close it before that approval. Then verify exact Art-Net/Spout activation, the ch1/ch5 red Mega PAR frame, channel 500 zero, both exact 1920×1080 Spout senders, and continuous black while stopped. Follow [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md).
-2. Audibly verify that Timeline media-library clips plus Guide/Click share the still-enumerated `Music (Elgato Virtual Audio)` endpoint in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
+1. Keep historical alpha.37 PID `50864` alive only until the alpha.38 pre-build gate. Immediately before that build, resolve its executable path and stop only the exact checkout `target/release/syndocal.exe`; preserve Daslight PID `42752`. After the alpha.38 build/window gate, keep the new exact process maximized. Close Daslight only after the operator saves its state and explicitly authorizes closing it, then verify exact Art-Net/Spout activation, the ch1/ch5 red Mega PAR frame, channel 500 zero, both exact 1920×1080 Spout senders, and continuous black while stopped. Follow [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md).
+2. On the fresh alpha.38 native, reproduce media-only Play/Pause and Click-enabled Play without a CUE authority Fault, then audibly verify that Timeline media-library clips plus Guide/Click share the still-enumerated `Music (Elgato Virtual Audio)` endpoint in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
 3. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
 4. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
 5. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
@@ -643,7 +667,7 @@ integrated source checkpoint above is authoritative for current source status.
 ## First safe resume actions
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
-- Keep the current Syndocal process alive for authoring; the DJ-Link PC may remain stopped until the final integration gate.
-- Alpha.35 and alpha.36 source/full-regression, independent review, and native build gates are historical. The alpha.37 implementation checkpoint is pushed at `1636aeb440c718c628a953b58e4f0c59d4874e35`; exact-linker build and responsive/maximized process evidence from clean pushed HEAD `5626a9636003462a23daf0f3de67af3cc5060e29` are complete. Keep Unity/GPU, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
-- Keep the current alpha.37 PID `50864` alive for the next operator acceptance. Complete the `Music (Elgato Virtual Audio)` audition and run the v3 authority checker before the separate dedicated show-ASIO build; do not reuse or relabel historical alpha.31/alpha.32/alpha.35/alpha.36 artifacts.
+- Keep alpha.37 PID `50864` alive until the exact alpha.38 pre-build stop; the DJ-Link PC may remain stopped until the final integration gate.
+- Alpha.35-alpha.37 source/full-regression, independent review, and native build gates are historical. Alpha.38 automated source gates and independent review are complete; commit/push, clean-source native build, exact artifact identity, and responsive/maximized process proof are next. Keep Unity/GPU, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
+- After alpha.38 launches, reproduce the former Click-enabled Play/Pause fault and complete the `Music (Elgato Virtual Audio)` audition before the separate dedicated show-ASIO build; do not reuse or relabel historical alpha.31/alpha.32/alpha.35/alpha.36/alpha.37 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

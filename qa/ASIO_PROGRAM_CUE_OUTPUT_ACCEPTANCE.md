@@ -341,6 +341,34 @@ under `cfg(test)`; release check and final rereview are warning-free/GO. This
 is deterministic source proof only; the selected `Music (Elgato Virtual
 Audio)` endpoint remains audibly unaccepted below.
 
+### 2026-08-30 alpha.38 Timeline transport-authority correction
+
+The alpha.37 native authoring run exposed a second, independent boundary: a
+valid Play/Pause transition rotated Timeline transport authority while leaving
+the current media source projection unchanged. CUE identity compared event
+transport epoch/generation to that source-projection pair, so current
+Click/Guide could fault as stale. Alpha.38 carries the canonical Timeline
+transport pair separately in the engine audio snapshot and compares CUE events
+only to that pair. Source projection remains an independent media-clip/lane
+ABA fence and is never substituted for transport authority.
+
+Transport, click schedule, source, audible-MIDI, drift, and count-in authority
+rotations now retire old Guide entries. DirectChild source removal rotates back
+to Root before disarming, preventing child identity/history from reaching a
+later Root or Follow admission. A Faulted/retired attachment no longer reports
+its old resolved endpoint as live. Stale, mixed, missing, future, or ambiguous
+authority still fails closed; there is no default, PROGRAM, ASIO, or alternate
+device fallback.
+
+Exact MSVC 14.44 source proof passes full engine `927/0/2 ignored`, Timeline
+CUE `50/50`, full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline CUE
+`60/60`, with first-party warnings `0`; format/diff checks pass. Independent
+Terra xHigh review is GO. Attachment-level real Play/Pause, full
+DirectChild-to-Root/Follow/timecode admission, and individual audible-MIDI/
+drift/count-in rotation tests remain non-blocking P2 proof improvements. The
+selected physical endpoint and audible media/Click/Guide behavior remain
+unaccepted until the alpha.38 native rebuild and operator observation.
+
 Open P1, deliberately outside this Timeline-audio tranche: the Video layer
 keeps its own legacy varispeed/seek model. Timeline-audio source/output clock
 proof must not be treated as Video synchronization proof until that independent

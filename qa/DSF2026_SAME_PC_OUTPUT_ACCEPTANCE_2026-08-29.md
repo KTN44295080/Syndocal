@@ -111,7 +111,7 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The alpha.35 source, carried by current alpha.37, adds three independent
+The alpha.35 source, carried unchanged by the current alpha.38 source candidate, adds three independent
 Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
 strict mode rejects new U0 HTP/LTP input without inserting it; and the final
@@ -145,10 +145,11 @@ two separate test-maintenance defects: the new command variants were missing
 from the expected command-inventory count, and an older child-Timeline test
 installed an unreferenced Cue 3 state without creating Cue 3. The inventory was
 updated with explicit variant assertions and the dead fixture was removed;
-focused proofs and the complete matrix then passed. The current native build is
-closed below; Unity/GPU physical checks remain open.
+focused proofs and the complete matrix then passed. The latest accepted native
+build remains historical alpha.37 below; alpha.38 native and Unity/GPU physical
+checks remain open.
 
-The alpha.35 hardening, carried by current alpha.37, closes the remaining
+The alpha.35 hardening, carried unchanged by the current alpha.38 source candidate, closes the remaining
 first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
 recheck its exact SDK name after lazy registration, and join the two-ACK plus
@@ -182,6 +183,12 @@ Terra xHigh review is GO with P0/P1 `0`.
 Direct pending-publish-reservation and non-synthetic post-join-cleanup-error
 tests remain P2 proof debt; they are not relabeled as Unity/GPU or physical
 sender acceptance.
+
+Alpha.38 changes Timeline CUE transport/Guide authority only; it does not change
+the strict Art-Net route, fixed Spout pair, or their activation/retirement
+contracts. The latest direct Spout matrix therefore remains the historical
+alpha.37 evidence above. A fresh alpha.38 native artifact and the Unity/GPU
+physical row remain explicitly unaccepted.
 
 The non-overwriting authoring tool was independently rereviewed after its
 post-write cleanup was changed to fail closed: a failed post-write validation

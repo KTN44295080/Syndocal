@@ -354,19 +354,18 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.27` on
-`codex/syndocal-v1.2`. Alpha.27 is the active show-completion tranche: it adds
-the exact Stage 2 pedal contract, worker-side Timeline authority fences, the
-four-physical/four-logical Strongpoint layout correction, exact Mega Bar 8/8
-layout, compact I/O disclosures, and fail-closed DSF2026 show publication
-tooling. Its source-focused gates and independent reviews are recorded in
+alpha checkpoints; current product metadata is `1.2.0-alpha.38` on
+`codex/syndocal-v1.2`. Alpha.38 is the active source tranche and repairs the
+Timeline CUE transport-authority/Guide-retirement boundary found during
+real-machine authoring. The complete current source, native, show-output,
+audio, DJ, and remaining physical acceptance state is recorded in
 `qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
 
-Alpha.27 native build, artifact identity, launch, maximized UI acceptance,
-fresh DVC import/save, final authored show, serial DMX, real DJ-PC ACK/reconnect,
-and physical Pedal 1/2/3 acceptance remain unverified until their explicit
-gates run. The preceding alpha.26 source checkpoint and the running alpha.25
-artifact are historical inputs only; neither is alpha.27 native evidence.
+Alpha.38 native artifact identity, launch/maximized-window proof, audible
+media/Click/Guide confirmation, Unity/GPU, camera, DJ reconnect/pedal, and
+physical output acceptance remain unverified until their explicit gates run.
+Alpha.37 and earlier native artifacts are historical evidence only and must not
+be relabeled as alpha.38 acceptance.
 
 The immediately preceding alpha.25 source/native checkpoint remains immutable
 historical evidence: source/native evidence was

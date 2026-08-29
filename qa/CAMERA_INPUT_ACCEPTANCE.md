@@ -4,9 +4,15 @@ Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-Product tranche: `1.2.0-alpha.37`
+Product tranche: current source `1.2.0-alpha.38`; latest accepted camera native
+evidence is historical `1.2.0-alpha.37`.
 
 ## Current product boundary
+
+Alpha.38 changes Timeline CUE transport authority and does not alter the camera
+catalog, capture, or probe implementation. A fresh alpha.38 native camera gate
+has not run; the alpha.37 artifact below remains historical evidence and must
+not be relabeled as alpha.38 native or hardware acceptance.
 
 Alpha.32 and earlier accepted a free-form camera endpoint and opened the
 Windows DirectShow path at a fixed `1280x720` / `30 fps`. That path could not
@@ -153,9 +159,9 @@ render pacing is required before broadening that claim.
   with MSVC 14.44, first-party warnings 0.
 - [x] Historical alpha.36 window was responsive and maximized before its exact
   path was verified and PID `109972` was stopped for the next native build.
-- [x] Exact current alpha.37 release rebuild from clean pushed HEAD `5626a96`
+- [x] Latest accepted, now-historical alpha.37 release rebuild from clean pushed HEAD `5626a96`
   with MSVC 14.44, first-party warnings 0.
-- [x] Exactly one responsive, maximized window from this checkout's alpha.37
+- [x] Historical proof records exactly one responsive, maximized window from this checkout's alpha.37
   release executable (PID `50864`; Computer Use system-menu proof).
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.

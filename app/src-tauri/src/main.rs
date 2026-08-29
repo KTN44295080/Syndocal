@@ -13522,17 +13522,17 @@ fn timeline_cue_engine_identity(
     }
     let (epoch, transport_generation, schedule_generation, source) =
         published_identity.unwrap_or((
-            timeline.source_projection_authority.epoch,
-            timeline.source_projection_authority.generation,
+            timeline.transport_epoch,
+            timeline.transport_generation,
             timeline.click_schedule_generation.max(1),
             expected_source,
         ));
     if published_identity.is_some()
-        && (epoch != timeline.source_projection_authority.epoch
-            || transport_generation != timeline.source_projection_authority.generation)
+        && (epoch != timeline.transport_epoch
+            || transport_generation != timeline.transport_generation)
     {
         return Err(
-            "Timeline cue event transport authority is stale against the published audio source"
+            "Timeline cue event transport authority is stale against the published Timeline transport"
                 .to_string(),
         );
     }
@@ -14924,6 +14924,15 @@ impl TimelineCueAudioRuntime {
             )
         };
         let effective_settings = Self::effective_settings(&state);
+        // A resolved device is an active-output observation only while the
+        // matching attachment is still published and Running. Keep the
+        // state value for retry diagnostics, but never expose a retired or
+        // faulted output as currently live in the status DTO.
+        let resolved_device_name = (state.lifecycle == TimelineCueAudioLifecycle::Running
+            && state.applied.is_some()
+            && state.attachment.is_some())
+        .then(|| state.resolved_device_name.clone())
+        .flatten();
         Ok(TimelineCueAudioStatus {
             runtime_incarnation: state.runtime_incarnation,
             status_revision,
@@ -14932,7 +14941,7 @@ impl TimelineCueAudioRuntime {
             settings_revision: state.settings_revision,
             lifecycle: state.lifecycle,
             requested_device_name: effective_settings.device_name,
-            resolved_device_name: state.resolved_device_name.clone(),
+            resolved_device_name,
             requested_topology_fingerprint: effective_settings.topology_fingerprint,
             observed_topology_fingerprint: state.observed_topology_fingerprint.clone(),
             topology_generation: state.topology_generation,
@@ -84562,8 +84571,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn timeline_cue_empty_batch_identity_uses_direct_transport_and_project_flags_only() {
+    fn timeline_cue_identity_uses_transport_authority_not_source_projection() {
         let timeline = engine::TimelineAudioRuntimeSnapshot {
+            transport_epoch: 101,
+            transport_generation: 202,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -84582,8 +84593,8 @@ pub(crate) mod tests {
         assert_eq!(
             timeline_cue_engine_identity(&timeline),
             Ok(TimelineCueEngineIdentity {
-                epoch: 41,
-                transport_generation: 73,
+                epoch: 101,
+                transport_generation: 202,
                 schedule_generation: 14,
                 source: TimelineScheduleSource::DirectChild {
                     cue_id: 5,
@@ -84595,11 +84606,39 @@ pub(crate) mod tests {
                 playing: true,
             })
         );
+        let mut current = timeline.clone();
+        current.click_events = vec![protocol::TimelineClickEventSummary {
+            epoch: 101,
+            transport_generation: 202,
+            schedule_generation: 14,
+            source: TimelineScheduleSource::DirectChild {
+                cue_id: 5,
+                generation: 8,
+            },
+            ..protocol::TimelineClickEventSummary::default()
+        }];
+        assert_eq!(
+            timeline_cue_engine_identity(&current)
+                .expect("current Timeline transport event must be accepted"),
+            TimelineCueEngineIdentity {
+                epoch: 101,
+                transport_generation: 202,
+                schedule_generation: 14,
+                source: TimelineScheduleSource::DirectChild {
+                    cue_id: 5,
+                    generation: 8,
+                },
+                audio_transport_revision: 9,
+                metronome_enabled: true,
+                guide_enabled: false,
+                playing: true,
+            }
+        );
         let mut mixed = timeline.clone();
         mixed.click_events = vec![
             protocol::TimelineClickEventSummary {
-                epoch: 41,
-                transport_generation: 73,
+                epoch: 101,
+                transport_generation: 202,
                 schedule_generation: 14,
                 source: TimelineScheduleSource::DirectChild {
                     cue_id: 5,
@@ -84608,8 +84647,8 @@ pub(crate) mod tests {
                 ..protocol::TimelineClickEventSummary::default()
             },
             protocol::TimelineClickEventSummary {
-                epoch: 41,
-                transport_generation: 74,
+                epoch: 101,
+                transport_generation: 203,
                 schedule_generation: 14,
                 source: TimelineScheduleSource::DirectChild {
                     cue_id: 5,
@@ -84623,8 +84662,8 @@ pub(crate) mod tests {
             .contains("mixes transport authorities"));
         let mut stale = timeline.clone();
         stale.click_events = vec![protocol::TimelineClickEventSummary {
-            epoch: 40,
-            transport_generation: 73,
+            epoch: 100,
+            transport_generation: 202,
             schedule_generation: 14,
             source: TimelineScheduleSource::DirectChild {
                 cue_id: 5,
@@ -84634,7 +84673,7 @@ pub(crate) mod tests {
         }];
         assert!(timeline_cue_engine_identity(&stale)
             .unwrap_err()
-            .contains("stale against the published audio source"));
+            .contains("stale against the published Timeline transport"));
 
         let runtime = TimelineCueAudioRuntime::default();
         runtime.initialize(
@@ -84689,6 +84728,28 @@ pub(crate) mod tests {
             runtime.state.lock().unwrap().status_revision,
             VIDEO_CLIP_RUNTIME_GENERATION_MAX
         );
+    }
+
+    #[test]
+    fn timeline_cue_status_hides_resolved_device_after_fault_retirement() {
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.lifecycle = TimelineCueAudioLifecycle::Fault;
+            state.resolved_device_name = Some("Retired output".to_owned());
+            state.applied = None;
+            state.attachment = None;
+        }
+        let status = runtime
+            .status()
+            .expect("faulted Timeline CUE status remains observable");
+        assert_eq!(status.lifecycle, TimelineCueAudioLifecycle::Fault);
+        assert_eq!(status.applied_settings, None);
+        assert_eq!(status.resolved_device_name, None);
     }
 
     #[test]
@@ -84754,6 +84815,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -84848,6 +84911,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -84948,6 +85013,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -85476,6 +85543,8 @@ pub(crate) mod tests {
             metronome_enabled: true,
             guide_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -85570,6 +85639,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -85657,6 +85728,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -85786,6 +85859,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,
@@ -85845,6 +85920,8 @@ pub(crate) mod tests {
             playing: true,
             metronome_enabled: true,
             click_schedule_generation: 3,
+            transport_epoch: 41,
+            transport_generation: 73,
             source_projection_authority: engine::TimelineAudioProjectionAuthority {
                 epoch: 41,
                 generation: 73,

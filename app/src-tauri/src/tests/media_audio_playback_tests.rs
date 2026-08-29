@@ -185,6 +185,8 @@ fn timeline_cue_test_snapshot(
         playing: engine_identity.playing,
         position_ms,
         transport_revision: engine_identity.audio_transport_revision,
+        transport_epoch: engine_identity.epoch,
+        transport_generation: engine_identity.transport_generation,
         metronome_enabled: engine_identity.metronome_enabled,
         guide_enabled: engine_identity.guide_enabled,
         click_schedule_generation: engine_identity.schedule_generation,
@@ -2359,6 +2361,8 @@ fn explicit_wdm_enqueue_failure_retires_the_route_and_blocks_automatic_reopen() 
         metronome_enabled: identity.metronome_enabled,
         guide_enabled: identity.guide_enabled,
         transport_revision: identity.audio_transport_revision,
+        transport_epoch: identity.epoch,
+        transport_generation: identity.transport_generation,
         click_schedule_generation: identity.schedule_generation,
         source_projection_authority: engine::TimelineAudioProjectionAuthority {
             epoch: identity.epoch,
@@ -3229,6 +3233,8 @@ fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
         ],
         playing: true,
         position_ms: 100,
+        transport_epoch: current.transport_epoch,
+        transport_generation: current.transport_generation,
         source_projection_authority: current.source_projection_authority,
         publication_generation: current.publication_generation,
         ..engine::TimelineAudioRuntimeSnapshot::default()
@@ -4071,6 +4077,8 @@ fn invalid_timeline_audio_rate_is_visible_and_cue_only_does_not_fault_program_se
         playing: true,
         position_ms: 100,
         transport_revision: 1,
+        transport_epoch: 1,
+        transport_generation: 1,
         ..engine::TimelineAudioRuntimeSnapshot::default()
     };
 
@@ -4389,6 +4397,8 @@ fn stale_rate_prepared_clip_is_retired_without_attaching_old_speed() {
         playing: true,
         position_ms: 100,
         transport_revision: 1,
+        transport_epoch: 1,
+        transport_generation: 1,
         source_projection_authority: authority,
         ..engine::TimelineAudioRuntimeSnapshot::default()
     };
@@ -4523,6 +4533,8 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
         playing: true,
         position_ms: 500,
         transport_revision: 7,
+        transport_epoch: 1,
+        transport_generation: 1,
         ..engine::TimelineAudioRuntimeSnapshot::default()
     };
 
@@ -4602,6 +4614,8 @@ fn timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once() {
         playing: true,
         position_ms: 500,
         transport_revision: 2,
+        transport_epoch: 1,
+        transport_generation: 1,
         source_projection_authority: engine::TimelineAudioProjectionAuthority {
             epoch: 1,
             generation: 3,
@@ -4658,6 +4672,8 @@ fn timeline_audio_decoder_fence_rejects_stale_source_before_sink_start() {
         }],
         playing: true,
         position_ms: 100,
+        transport_epoch: 1,
+        transport_generation: 1,
         source_projection_authority: engine::TimelineAudioProjectionAuthority {
             epoch: 2,
             generation: 4,
@@ -4705,6 +4721,8 @@ fn timeline_audio_output_bus_change_retires_old_sink_before_each_logical_rebuild
         // would wait forever for an audio consumer that does not exist in
         // this in-memory seam.
         position_ms: 0,
+        transport_epoch: 1,
+        transport_generation: 1,
         source_projection_authority: engine::TimelineAudioProjectionAuthority {
             epoch: 2,
             generation: 4,
@@ -4816,6 +4834,8 @@ fn cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settle
         cue_errors: Vec::new(),
     };
     let current = engine::TimelineAudioRuntimeSnapshot {
+        transport_epoch: 1,
+        transport_generation: 1,
         source_projection_authority: authority,
         ..engine::TimelineAudioRuntimeSnapshot::default()
     };

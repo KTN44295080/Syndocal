@@ -1,8 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.37`.
-The warning-free alpha.37 source checkpoint
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.38`.
+Alpha.38 is the current source candidate. Its warning-free automated gates and
+independent review are recorded below; its exact source checkpoint and native
+artifact identity remain pending the required commit/push and clean-source
+native build. The latest accepted native authority is the historical alpha.37
+build. The warning-free alpha.37 source checkpoint
 `1636aeb440c718c628a953b58e4f0c59d4874e35` and documentation checkpoint
 `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
 alpha.37 native build from clean pushed HEAD `5626a9636003462a23daf0f3de67af3cc5060e29`
@@ -20,10 +24,40 @@ and same-PC Art-Net/camera/fixed-Spout baseline
 uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but
 audible real-device, Unity/GPU, camera hardware, real installer/updater,
 dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open.
-Historical alpha.36 and earlier native/DJ evidence remains immutable below;
+Historical alpha.37, alpha.36, and earlier native/DJ evidence remains immutable below;
 HW-4 remains exactly `0/12`.
 
-## 2026-08-30 current alpha.37 CUE-anchor and strict-Spout source checkpoint
+## 2026-08-30 current alpha.38 Timeline CUE transport-authority repair
+
+The alpha.37 real-machine authoring run exposed a show-critical false Fault:
+Play/Pause rotated the canonical Timeline transport epoch/generation while the
+media source-projection pair remained unchanged, but CUE admission compared
+Click/Guide event authority to that unrelated source-projection pair. The old
+path could therefore reject a valid current event as stale. Alpha.38 publishes
+the transport pair independently in `TimelineAudioRuntimeSnapshot` and uses
+only that pair for Timeline CUE identity and fallback checks.
+
+Every production transport, click-schedule, source, and count-in identity
+rotation now retires the preceding Guide queue. DirectChild-to-no-selection
+also rotates back to Root before disarming, so a later Root/Follow Guide cannot
+inherit child identity or history. Fault retirement exposes no stale resolved
+device name. Stale, mixed, future, missing, or ambiguous authority remains
+visible and fail-closed; no source-projection alias, default-device fallback,
+or global stale-event ignore was introduced.
+
+Exact MSVC `14.44.35207` proof passes full engine `927 passed / 0 failed / 2
+ignored`, focused Timeline CUE `50/50`, full no-default Syndocal `1212/0/7
+ignored`, and ASIO Timeline CUE `60/60`; first-party warnings are `0`. Format
+and diff checks, `check:release`, TypeScript, and the Vite production build
+pass. A current-authority Click batch is asserted non-empty
+after rotation, and every event must match the published transport and schedule
+generation. Independent Terra xHigh rereview is GO with no release-blocking
+P0/P1/P2. Non-blocking P2 coverage remains for one attachment-level real
+Play/Pause integration, full DirectChild-to-Root/Follow/timecode CUE admission,
+and separate audible-MIDI/drift/count-in Guide-rotation cases. A fresh alpha.38
+native build and audible operator confirmation are still required.
+
+## 2026-08-30 historical alpha.37 CUE-anchor and strict-Spout source checkpoint
 
 Alpha.37 linearizes Timeline CUE event admission before any fresh Legacy/ASIO
 source activation. Pre-anchor history is skipped, exact-anchor and future

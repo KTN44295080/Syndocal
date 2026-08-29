@@ -2,24 +2,38 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.37**
+- 製品名: **Syndocal 1.2.0-alpha.38**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.37` on branch
-`codex/syndocal-v1.2`; source checkpoint
-`1636aeb440c718c628a953b58e4f0c59d4874e35` and native-build source HEAD
-`5626a9636003462a23daf0f3de67af3cc5060e29` are pushed.
-Alpha.27 completed the show-control, stage-layout,
-machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.37 is the current source and accepted native product train.
-Its exact-linker native build and responsive/maximized-window gate are complete;
-same-PC Unity/GPU, audible audio-device, DJ, and camera hardware acceptance
-remain open.
+Current product metadata is `1.2.0-alpha.38` on branch
+`codex/syndocal-v1.2`. Alpha.38 is the current source candidate; its exact
+checkpoint hash and native artifact identity are recorded only after the
+checkpoint is committed/pushed and the required clean-source native build
+completes. The latest accepted native authority remains the historical
+alpha.37 build from pushed source HEAD
+`5626a9636003462a23daf0f3de67af3cc5060e29`. Same-PC Unity/GPU, audible
+audio-device, DJ, and camera hardware acceptance remain open.
 
-Alpha.37 repairs two show-critical runtime boundaries. Timeline CUE audio now
+Alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
+rotated Timeline transport authority without changing media source projection.
+The old path compared Click/Guide transport events to the unrelated source
+projection pair and could therefore report a false stale-authority fault. The
+new path publishes transport epoch/generation separately, compares CUE events
+only to that pair, retires old Guide queues on every transport/schedule/source/
+count-in rotation, returns DirectChild scheduling to Root when the child source
+ends, and hides a retired output device after Fault. Invalid, stale, mixed, or
+ambiguous authority still fails closed; no permissive retry or fallback was
+added. Exact-linker proof passes engine `927/0/2 ignored`, Timeline CUE `50/50`,
+full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline CUE `60/60`, with
+first-party warnings `0`; `check:release`, TypeScript, and the Vite production
+build pass at alpha.38. Independent Terra xHigh review is GO. Audible
+media/Click/Guide playback on the selected physical endpoint remains pending a
+fresh alpha.38 native build and operator confirmation.
+
+Historical alpha.37 repaired two show-critical runtime boundaries. Timeline CUE audio now
 publishes the exact-anchor/future event batch before a fresh Legacy or ASIO
 source can enter its callback, skips only pre-anchor history, retires the
 active source on publication/activation failure, and keeps watermarks
@@ -83,9 +97,9 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
-alpha.34 and alpha.36 native builds passed, while the current alpha.37 native
-build/maximized-window gate is complete. Camera UI interaction and hardware
-probes remain pending.
+alpha.34 and alpha.36 native builds passed. The latest accepted, now-historical
+alpha.37 native build/maximized-window gate is complete; the alpha.38 native
+gate, Camera UI interaction, and hardware probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
@@ -115,8 +129,8 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.37 product and
-installer naming below; that naming does not assert an alpha.37 installer
+acceptance. The release metadata checker expects alpha.38 product and
+installer naming below; that naming does not assert an alpha.38 installer
 exists.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
@@ -161,7 +175,7 @@ authority barrier before active/live handoff. The focused pair gate passed
 `13/13`; full Syndocal passed no-default `1205/0/7` and default Spout/libav
 `1265/0/12`, with first-party warnings `0`. Independent Terra xHigh rereview
 returned GO with P0/P1 `0`.
-The current alpha.37 native build from clean pushed HEAD `5626a96` completed in
+The latest accepted, now-historical alpha.37 native build from clean pushed HEAD `5626a96` completed in
 `3m04s` with the exact MSVC 14.44 Community linker pinned and first, and with
 first-party warnings `0`. Its `61,116,416`-byte executable reports
 Product/FileVersion `1.2.0-alpha.37` and SHA-256
@@ -312,7 +326,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.37_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.37_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.38_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.38_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
