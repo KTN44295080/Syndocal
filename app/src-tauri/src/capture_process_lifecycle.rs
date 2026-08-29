@@ -186,6 +186,7 @@ where
 }
 
 fn reap_until_exit(mut child: Child, _label: String) -> std::process::ExitStatus {
+    #[cfg(test)]
     let child_id = child.id();
     loop {
         match child.try_wait() {
