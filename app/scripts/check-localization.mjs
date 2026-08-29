@@ -63,6 +63,20 @@ assert.equal(localization.translateUiText("Explicit Device", "ja"), "出力デ�
 assert.equal(localization.translateUiText("Click gain", "ja"), "クリック音量");
 assert.equal(localization.translateUiText("Refresh outputs", "ja"), "出力を更新");
 assert.equal(localization.translateUiText("Output topology changed. Reselect the device.", "ja"), "出力トポロジーが変わりました。デバイスを再選択してください。");
+assert.equal(localization.translateUiText("CUE route", "ja"), "CUE経路");
+assert.equal(localization.translateUiText("Same ASIO", "ja"), "同じASIO");
+assert.equal(localization.translateUiText("Split device", "ja"), "デバイスを分離");
+assert.equal(localization.translateUiText("WDM endpoint", "ja"), "WDMエンドポイント");
+assert.equal(localization.translateUiText("CUE WDM endpoint", "ja"), "CUE WDMエンドポイント");
+assert.equal(localization.translateUiText("Select WDM endpoint", "ja"), "WDMエンドポイントを選択");
+assert.equal(localization.translateUiText("Spare", "ja"), "予備");
+assert.equal(
+  localization.translateUiText(
+    "PROGRAM and CUE use separate device clocks. Timing can drift; no clock lock is claimed.",
+    "ja",
+  ),
+  "PROGRAMとCUEは別々のデバイスクロックを使用します。タイミングがずれる可能性があります。クロックロックは保証されません。",
+);
 assert.equal(localization.translateUiText("Exact Output (2 matching outputs; ambiguous)", "ja"), "Exact Output（一致する出力 2 件・曖昧）");
 assert.equal(localization.translateUiText("Missing Output (missing)", "ja"), "Missing Output（見つかりません）");
 assert.equal(localization.translateUiText("Backend fault:", "ja"), "バックエンド異常:");

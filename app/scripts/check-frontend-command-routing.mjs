@@ -336,13 +336,14 @@ const backendRendererMutations = rustClassification(
 // and two machine-local USB-DMX selection/status routes bring this to 425.
 // Alpha.28 adds ten explicit ASIO output-control routes plus two persistent
 // Timeline Audio Clip bus routes, bringing the manifest to 437 with 130
-// renderer-ticketed and 31 backend-authoritative project mutations. The
+// renderer-ticketed and 31 backend-authoritative project mutations. Alpha.30
+// adds one machine-local explicit-WDM CUE test route, bringing it to 438. The
 // ASIO transport-generation helper is intentionally internal and has no
 // dormant WebView IPC route. The later R4 video-output
 // composition assignment replaces the retired direct route one-for-one and
 // remains outside both generic project-mutation classifiers; the machine-local
 // DJ authority routes are neither category.
-assert.equal(manifest.length, 437, "frontend Tauri manifest count drifted");
+assert.equal(manifest.length, 438, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 130, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

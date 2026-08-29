@@ -26,12 +26,17 @@ const assertions = [
     "state type must expose the four exact operator states",
   ],
   [
-    /export interface AudioOutputView[\s\S]*?backend: AudioOutputBackend;[\s\S]*?driverId: string;[\s\S]*?sampleRate: number \| null;[\s\S]*?bufferFrames: number \| null;[\s\S]*?programLeft: number \| null;[\s\S]*?programRight: number \| null;[\s\S]*?cue: number \| null;[\s\S]*?spare: number \| null;[\s\S]*?state: AudioOutputState;[\s\S]*?reason: string;/u,
+    /export type AudioOutputCueRoute = "same-asio" \| "split-device";/u,
+    panel,
+    "CUE route type must expose only same-ASIO and split-device",
+  ],
+  [
+    /export interface AudioOutputView[\s\S]*?backend: AudioOutputBackend;[\s\S]*?driverId: string;[\s\S]*?sampleRate: number \| null;[\s\S]*?bufferFrames: number \| null;[\s\S]*?programLeft: number \| null;[\s\S]*?programRight: number \| null;[\s\S]*?cue: number \| null;[\s\S]*?cueRoute: AudioOutputCueRoute;[\s\S]*?cueDeviceName: string \| null;[\s\S]*?cueTopologyFingerprint: string \| null;[\s\S]*?spare: number \| null;[\s\S]*?state: AudioOutputState;[\s\S]*?reason: string;/u,
     panel,
     "view type must carry backend, exact stream settings, channels, state, and reason",
   ],
   [
-    /export interface AudioOutputOptions[\s\S]*?drivers: readonly AudioOutputDriverOption\[\];[\s\S]*?sampleRates: readonly AudioOutputRateOption\[\];[\s\S]*?bufferFrames: readonly AudioOutputBufferOption\[\];[\s\S]*?channels: readonly AudioOutputChannelOption\[\];[\s\S]*?hasSpare: boolean;/u,
+    /export interface AudioOutputOptions[\s\S]*?drivers: readonly AudioOutputDriverOption\[\];[\s\S]*?sampleRates: readonly AudioOutputRateOption\[\];[\s\S]*?bufferFrames: readonly AudioOutputBufferOption\[\];[\s\S]*?channels: readonly AudioOutputChannelOption\[\];[\s\S]*?cueEndpoints: readonly AudioOutputCueEndpointOption\[\];[\s\S]*?hasSpare: boolean;/u,
     panel,
     "options type must expose driver/rate/buffer/channel capability lists",
   ],
@@ -46,10 +51,16 @@ const assertions = [
   [/aria-label="Audio output driver"/u, panel, "driver selector needs an accessible name"],
   [/aria-label="Audio output sample rate"/u, panel, "sample-rate selector needs an accessible name"],
   [/aria-label="Audio output buffer"/u, panel, "buffer selector needs an accessible name"],
+  [/aria-label="CUE route"/u, panel, "CUE route selector needs an accessible name"],
+  [/aria-label="CUE WDM endpoint"/u, panel, "CUE WDM endpoint selector needs an accessible name"],
   [/label="PROGRAM L"/u, panel, "PROGRAM L channel selector must be present"],
   [/label="PROGRAM R"/u, panel, "PROGRAM R channel selector must be present"],
   [/label="CUE"/u, panel, "CUE channel selector must be present"],
   [/label="Spare"/u, panel, "optional Spare channel selector must be present"],
+  [/data-audio-output-row="program"[\s\S]*?PROGRAM L[\s\S]*?PROGRAM R/u, panel, "PROGRAM must be one explicit two-channel row"],
+  [/data-audio-output-row="cue"[\s\S]*?same-asio[\s\S]*?split-device/u, panel, "CUE row must switch between same-ASIO and split-device controls"],
+  [/data-no-localize/u, panel, "WDM endpoint names must opt out of UI localization"],
+  [/data-audio-output-clock-warning[^>]*role="alert"[\s\S]*?PROGRAM and CUE use separate device clocks\. Timing can drift; no clock lock is claimed\./u, panel, "split-device clock warning must be exact and alert-visible"],
   [/data-audio-output-action="refresh"[\s\S]*?>\s*Refresh\s*</u, panel, "Refresh action must be present"],
   [/data-audio-output-action="revalidate"[\s\S]*?>\s*Revalidate\s*</u, panel, "Revalidate action must be present"],
   [/data-audio-output-action="start"[\s\S]*?>\s*Start\s*</u, panel, "Start action must be present"],
@@ -61,7 +72,31 @@ const assertions = [
   [/Test CUE/u, panel, "CUE test must be present"],
   [/Test Spare/u, panel, "Spare test must be present"],
   [/props\.testMode !== null && props\.testMode !== (?:test|kind)/u, panel, "test actions must remain mutually exclusive"],
+  [
+    /const testDisabled = \(test: AudioOutputTest\): boolean => \{[\s\S]*?test === "cue" && props\.view\.cueRoute === "split-device"[\s\S]*?return true;/u,
+    panel,
+    "split-device CUE test must not remain disabled at the panel layer",
+    true,
+  ],
+  [/Split CUE test plays only on the selected WDM endpoint\./u, panel, "split-device CUE test must identify its selected WDM endpoint"],
+  [
+    /<Show when=\{!props\.canTest\}>[\s\S]*?Not connected: native test controls are unavailable\./u,
+    panel,
+    "test-unavailable messaging must depend only on canTest",
+  ],
+  [
+    /<Show[\s\S]*?props\.canTest[\s\S]*?!props\.canSolo[\s\S]*?props\.view\.cueRoute === "split-device"[\s\S]*?Solo is unavailable in split-device mode; CUE tests remain available\./u,
+    panel,
+    "split-device solo messaging must remain separate while CUE tests stay available",
+  ],
+  [
+    /Not connected: native test and solo controls are unavailable\./u,
+    panel,
+    "combined test-and-solo unavailable messaging must be retired",
+    true,
+  ],
   [/const testDisabled = [\s\S]*?props\.canTest[\s\S]*?props\.livePlaybackActive/u, panel, "tests must be disabled during live playback"],
+  [/const soloDisabled = \(\) =>[\s\S]*?!props\.canSolo[\s\S]*?props\.view\.cueRoute === "split-device"/u, panel, "all solo controls must be disabled in split-device"],
   [/const soloDisabled = [\s\S]*?props\.canSolo[\s\S]*?props\.livePlaybackActive/u, panel, "solo must be disabled during live playback"],
   [/onTest\(null\)/u, panel, "the selected test must have an explicit stop path"],
   [/PROGRAM-only/u, panel, "PROGRAM-only preflight must be present"],
@@ -72,8 +107,9 @@ const assertions = [
   [/Output \$\{option\.index \+ 1\}/u, panel, "channel labels must cross the zero-based boundary exactly once"],
 ];
 
-for (const [pattern, source, message] of assertions) {
-  assert.match(source, pattern, message);
+for (const [pattern, source, message, negative = false] of assertions) {
+  if (negative) assert.doesNotMatch(source, pattern, message);
+  else assert.match(source, pattern, message);
 }
 
 assert.doesNotMatch(`${panel}\n${css}`, /\b(?:position\s*:\s*(?:fixed|sticky)|portal|<dialog)\b/iu, "panel must remain an in-flow deck item");

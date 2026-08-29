@@ -2713,17 +2713,18 @@ re-proven, so cleanup remains fail-closed. `Candidates=[]`,
 no deletion occurred. The older `HardlinkDetected` cleanup result remains
 historical and is intentionally unchanged.
 
-## 59. 2026-08-29 CURRENT alpha.28 source/integration checkpoint
+## 59. 2026-08-29 historical alpha.28 source/integration checkpoint
 
-The current source authority is branch `codex/syndocal-v1.2` at
+At this historical alpha.28 checkpoint, the source authority was branch
+`codex/syndocal-v1.2` at
 `8153ebb37a9517aad91c0da6ad06de9a80db2a1a`, equal to its upstream at this
 checkpoint. Product metadata is synchronized at `1.2.0-alpha.28`. The active
 alpha.28 implementation changes remain uncommitted; this documentation
 checkpoint makes no commit or push claim. Earlier sections retain their
-recorded evidence and are not relabelled; this section is the current alpha.28
-status.
+recorded evidence and are not relabelled; this section is historical alpha.28
+status and is superseded by the current alpha.30 section below.
 
-Current verified source evidence:
+Verified source evidence recorded at that historical checkpoint:
 
 - `pnpm --dir app run build` passed and the frontend build transformed `302`
   modules.
@@ -2733,26 +2734,28 @@ Current verified source evidence:
 - Prior focused ASIO preflight evidence passed `17/17`, `11/11`, and `15/15`,
   with first-party warnings `0`. This is preflight/source evidence only.
 
-Production code integration remains pending despite the isolated source and
+Production code integration remained pending despite the isolated source and
 preflight results. The alpha.28 native release build, native launch/window
 acceptance, ASIO loader smoke, and all physical/hardware rows (including MOTU
 M4, M32/DL16, serial DMX, DJ/MIDI/pedal, real ACK, and reconnect) remain
 unverified. No historical native or hardware checkbox is changed or promoted
 by this section.
 
-The first safe resume action is to complete and independently review the
-alpha.28 production integration, rerun the exact gates from a stable tree,
+The first safe resume action at that historical checkpoint was to complete and
+independently review the alpha.28 production integration, rerun the exact gates
+from a stable tree,
 then perform the required native and hardware acceptance before any commit or
 push.
 
-## 60. 2026-08-29 CURRENT alpha.29 lifecycle checkpoint and hybrid-output requirement
+## 60. 2026-08-29 historical alpha.29 lifecycle checkpoint and hybrid-output requirement
 
-Branch `codex/syndocal-v1.2` advanced to committed and pushed source checkpoint
-`54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`; product metadata is synchronized
-at `1.2.0-alpha.29`. The checkpoint makes Ready cancellation and explicit
-Normal return authoritative, serializes ASIO lifecycle mutations, and removes
-the show-ASIO warning inventory without warning suppression. Independent
-review is GO with P0/P1 zero.
+At the historical alpha.29 checkpoint, branch `codex/syndocal-v1.2` had
+advanced to committed and pushed source checkpoint
+`54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`; product metadata was synchronized
+at `1.2.0-alpha.29`. That checkpoint made Ready cancellation and explicit
+Normal return authoritative, serialized ASIO lifecycle mutations, and removed
+the show-ASIO warning inventory without warning suppression. Independent review
+was GO with P0/P1 zero.
 
 Verified evidence is show-ASIO `cargo check` warnings 0, application tests
 1409 discovered / 1397 passed / 0 failed / 12 ignored, frontend contract 59
@@ -2764,14 +2767,45 @@ the exact responsive process completed Tauri setup but exposed only its 16x16
 single-instance window, not a user-facing Syndocal window. No native-window GO
 is inferred from the successful build.
 
-The current show requirement is a deliberate expansion of the previous
+At that historical checkpoint, the show requirement was a deliberate expansion
+of the previous
 single-stream acceptance: logical PROGRAM and CUE must be assignable to
 separate operator-selected physical output devices. The first physical target
 is TOPPING E2x2 ASIO 1/2 for PROGRAM plus an explicit headphone/WDM endpoint
 for CUE. Same-ASIO remains the shared-clock mode. Hybrid mode must expose its
 dual-clock limitation, route every CUE source to exactly one selected endpoint,
 keep the ASIO CUE lanes silent, forbid automatic fallback, and fence CUE on
-PROGRAM stop/fault or endpoint loss. This implementation and its physical
-acceptance remain pending; the next safe action is the separately owned hybrid
-profile/runtime/UI tranche followed by independent review and exact native
-gates.
+PROGRAM stop/fault or endpoint loss. The hybrid implementation and its
+physical acceptance were pending at alpha.29; that wording is historical and
+is not the current alpha.30 status. The next safe action at that checkpoint was
+the separately owned hybrid profile/runtime/UI tranche followed by independent
+review and exact native gates.
+
+## 61. 2026-08-29 CURRENT alpha.30 hybrid PROGRAM/CUE source checkpoint (unaccepted)
+
+The current product metadata is `1.2.0-alpha.30` on branch
+`codex/syndocal-v1.2`. The alpha.30 source/UI tranche is present in the dirty
+worktree and has no accepted alpha.30 source commit. It adds arbitrary
+PROGRAM/CUE device assignment in two explicit modes: `CueDelivery::SameAsio`
+keeps PROGRAM and CUE on one selected ASIO stream and shared clock, while
+`CueDelivery::ExplicitWdm` keeps PROGRAM on ASIO and sends CUE to the explicitly
+named WDM endpoint whose enumerated topology is part of the selection. Timeline
+CUE clips, generated Click/Guide, and the explicit CUE test path use the same
+logical CUE route. Missing, ambiguous, stale, changed, or failed route/session
+state remains visible and fail-closed; no ASIO/PROGRAM/default-device fallback
+or CUE leakage to PROGRAM is accepted by the source contract. Session and
+generation fences cover activation, publication, timeline preparation, and
+retirement paths.
+
+Focused source checks are provisional. The previously recorded full Rust result
+`1426 discovered / 1414 passed / 0 failed / 12 ignored` predates later source
+fixes and is stale; it is excluded from final alpha.30 evidence. Any focused
+result from the dirty tree must be rerun after the later fixes from a clean,
+pushed source checkpoint. No alpha.30 native build/launch/window, real-device
+audition, physical output routing, or show completion has been verified.
+
+The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` is
+deferred until after show acceptance. Moving ASIO/CUE ownership and lifecycle
+boundaries before the show is a pre-show risk, so this checkpoint records no
+module split or extraction completion. This section is the current boundary;
+the alpha.28/29 “pending/not implemented” statements above remain historical.

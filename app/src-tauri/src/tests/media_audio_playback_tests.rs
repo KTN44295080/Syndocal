@@ -177,6 +177,8 @@ fn timeline_audio_prepare_stall_releases_control_lock_and_rejects_device_aba() {
             None,
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             None,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            None,
             &timeline,
             &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
             || {
@@ -271,6 +273,8 @@ fn timeline_audio_real_wav_prepare_survives_multiple_position_ticks_and_installs
         None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {
@@ -361,12 +365,1684 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
         prepared,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
     );
     let mut prepared = prepared.pop().unwrap().unwrap();
     assert_eq!(prepared.request.source_position_ms, 100);
     assert!(prepared.decoder.is_none());
     prepared.stop();
     let _ = fs::remove_file(path);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink() {
+    let suffix = current_unix_ms();
+    let path = std::env::temp_dir().join(format!(
+        "syndocal-explicit-wdm-stop-append-race-{suffix}.wav"
+    ));
+    write_timeline_audio_test_wav(&path);
+
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::ExplicitWdm {
+            device_name: "Race Headphones".to_string(),
+            topology_fingerprint: "race-topology".to_string(),
+        })
+        .unwrap();
+
+    let output_clock_epoch = 23;
+    let (mixer, _unconsumed_source) = rodio::mixer::mixer(2, 48_000);
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (control, cue_source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        timeline_cue_audio::TimelineCueAuthority {
+            fence: timeline_cue_audio::TimelineCueFence {
+                output_clock_epoch,
+                schedule_generation: 1,
+                source_fence: 1,
+            },
+            clock: timeline_cue_audio::TimelineCueClockMap {
+                canonical_anchor_frame: 0,
+                output_anchor_frame: 0,
+            },
+        },
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    mixer.add(cue_source);
+    {
+        let mut state = runtime.state.lock().unwrap();
+        state.attachment = Some(TimelineCueAudioAttachment {
+            control,
+            output: TimelineCueAudioAttachmentOutput::Legacy {
+                mixer: mixer.clone(),
+                _explicit_stream: None,
+            },
+            cue_test_sinks: Vec::new(),
+            route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
+            settings_revision: state.settings_revision,
+            program_device_generation: None,
+            engine_identity: TimelineCueEngineIdentity {
+                epoch: 1,
+                transport_generation: 1,
+                schedule_generation: 1,
+                source: TimelineScheduleSource::Root,
+                audio_transport_revision: 1,
+                metronome_enabled: true,
+                guide_enabled: true,
+                playing: true,
+            },
+            output_clock_epoch,
+            source_fence: 1,
+            next_sequence: 1,
+            last_click_key: None,
+            last_guide_generation: None,
+            last_guide_sequence: 0,
+            blocked_event_identity: None,
+            last_observed_output_frame: 0,
+            last_output_progress_at: Instant::now(),
+        });
+        state.next_output_clock_epoch = output_clock_epoch;
+        state.lifecycle = TimelineCueAudioLifecycle::Running;
+    }
+
+    let output = runtime.explicit_wdm_output_snapshot().unwrap();
+    let prepared = prepare_explicit_wdm_timeline_audio_clip(
+        TimelineAudioPrepareRequest {
+            key: TimelineAudioSinkKey::Root(703),
+            clip: TimelineAudioClipSummary {
+                id: 703,
+                layer_id: 44,
+                media_asset_id: None,
+                path: path.to_string_lossy().into_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Cue,
+            },
+            source_position_ms: 0,
+            volume: 1.0,
+            source: TimelineAudioSourceConfig {
+                path: path.clone(),
+                gain: 1.0,
+                offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Cue,
+            },
+        },
+        &output,
+    )
+    .unwrap();
+    let prepared = seek_prepared_timeline_audio_decoders(vec![Ok(prepared)]);
+    let runtime_for_stop = Arc::clone(&runtime);
+    let mut stop_between_append_and_postcheck = move || {
+        runtime_for_stop
+            .close_normal_routes_for_asio_start()
+            .unwrap();
+    };
+    let mut results = append_prepared_timeline_audio_decoders(
+        prepared,
+        None,
+        Some(&runtime),
+        Some(&mut stop_between_append_and_postcheck),
+    );
+    let error = match results.pop().unwrap() {
+        Ok(mut prepared) => {
+            prepared.stop();
+            panic!("a retired Explicit WDM CUE route must reject the prepared sink")
+        }
+        Err(error) => error.1,
+    };
+    assert!(error.contains("changed during Timeline source attachment"));
+    assert!(runtime.explicit_wdm_output_snapshot().is_none());
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(!state.normal_admission_open);
+    drop(state);
+    let _ = fs::remove_file(path);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn published_explicit_wdm_cue_test_runtime() -> Arc<TimelineCueAudioRuntime> {
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::ExplicitWdm {
+            device_name: "Test Headphones".to_owned(),
+            topology_fingerprint: "test-topology".to_owned(),
+        })
+        .unwrap();
+
+    let output_clock_epoch = 23;
+    let (mixer, _unconsumed_source) = rodio::mixer::mixer(2, 48_000);
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (control, cue_source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        timeline_cue_audio::TimelineCueAuthority {
+            fence: timeline_cue_audio::TimelineCueFence {
+                output_clock_epoch,
+                schedule_generation: 1,
+                source_fence: 1,
+            },
+            clock: timeline_cue_audio::TimelineCueClockMap {
+                canonical_anchor_frame: 0,
+                output_anchor_frame: 0,
+            },
+        },
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    mixer.add(cue_source);
+    let mut state = runtime.state.lock().unwrap();
+    state.resolved_device_name = Some("Test Headphones".to_owned());
+    state.observed_topology_fingerprint = Some("test-topology".to_owned());
+    state.next_output_clock_epoch = output_clock_epoch;
+    state.attachment = Some(TimelineCueAudioAttachment {
+        control,
+        output: TimelineCueAudioAttachmentOutput::Legacy {
+            mixer,
+            _explicit_stream: None,
+        },
+        cue_test_sinks: Vec::new(),
+        route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
+        settings_revision: state.settings_revision,
+        program_device_generation: None,
+        engine_identity: TimelineCueEngineIdentity {
+            epoch: 1,
+            transport_generation: 1,
+            schedule_generation: 1,
+            source: TimelineScheduleSource::Root,
+            audio_transport_revision: 1,
+            metronome_enabled: true,
+            guide_enabled: true,
+            playing: false,
+        },
+        output_clock_epoch,
+        source_fence: 1,
+        next_sequence: 1,
+        last_click_key: None,
+        last_guide_generation: None,
+        last_guide_sequence: 0,
+        blocked_event_identity: None,
+        last_observed_output_frame: 0,
+        last_output_progress_at: Instant::now(),
+    });
+    state.lifecycle = TimelineCueAudioLifecycle::Running;
+    drop(state);
+    runtime
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn poison_timeline_cue_audio_state(runtime: &Arc<TimelineCueAudioRuntime>) {
+    let runtime = Arc::clone(runtime);
+    let result = std::panic::catch_unwind(move || {
+        let _state = runtime.state.lock().unwrap();
+        panic!("poison Timeline CUE audio state for retirement proof");
+    });
+    assert!(result.is_err());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn poison_timeline_cue_audio_admission(runtime: &Arc<TimelineCueAudioRuntime>) {
+    let runtime = Arc::clone(runtime);
+    let result = std::panic::catch_unwind(move || {
+        let _admission = runtime.settings_update.lock().unwrap();
+        panic!("poison Timeline CUE audio admission for Stop proof");
+    });
+    assert!(result.is_err());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn poison_asio_output_runtime(runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>) {
+    let runtime = Arc::clone(runtime);
+    let result = std::panic::catch_unwind(move || {
+        let _runtime = runtime.lock().unwrap();
+        panic!("poison ASIO output runtime for Stop proof");
+    });
+    assert!(result.is_err());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+fn add_test_timeline_audio_sink(playback: &mut MediaAudioPlayback, key: u64) {
+    let (mixer, _) = rodio::mixer::mixer(2, 48_000);
+    let sink = rodio::Sink::connect_new(&mixer);
+    sink.append(rodio::buffer::SamplesBuffer::new(
+        2,
+        48_000,
+        vec![0.25_f32; 9_600],
+    ));
+    sink.play();
+    playback
+        .timeline_sinks
+        .insert(TimelineAudioSinkKey::Root(key), sink);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_cue_test_requires_exact_active_published_route() {
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    let error = runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect_err("missing delivery must be rejected");
+    assert!(error.contains("active ExplicitWdm"));
+
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::SameAsio { cue_output: 1 })
+        .unwrap();
+    let error = runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect_err("same-ASIO delivery must be rejected");
+    assert!(error.contains("active ExplicitWdm"));
+
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::ExplicitWdm {
+            device_name: "Test Headphones".to_owned(),
+            topology_fingerprint: "test-topology".to_owned(),
+        })
+        .unwrap();
+    let error = runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect_err("unpublished WDM attachment must be rejected");
+    assert!(error.contains("published CUE attachment"));
+
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_mut()
+        .unwrap()
+        .route = timeline_cue_audio::TimelineCueAudioRoute::FollowProgram;
+    let error = runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect_err("non-explicit attachment route must be rejected");
+    assert!(error.contains("ExplicitDevice route"));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn no_cue_project_keeps_exact_split_device_ready_for_start_and_stop_test() {
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::ExplicitWdm {
+            device_name: "Test Headphones".to_owned(),
+            topology_fingerprint: "test-topology".to_owned(),
+        })
+        .unwrap();
+    let settings_revision = runtime.state.lock().unwrap().settings_revision;
+    let (mixer, _) = rodio::mixer::mixer(2, 48_000);
+    let destination = PreparedTimelineCueDestination {
+        mixer,
+        output_sample_rate: 48_000,
+        channels: 2,
+        program_device_generation: None,
+        resolved_device_name: Some("Test Headphones".to_owned()),
+        topology_fingerprint: Some("test-topology".to_owned()),
+        explicit_stream: None,
+        assets: timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap(),
+    };
+    let timeline = engine::TimelineAudioRuntimeSnapshot::default();
+    assert!(!timeline.metronome_enabled);
+    assert!(!timeline.guide_enabled);
+    assert!(timeline.clips.is_empty());
+
+    runtime.complete_prepare(
+        TimelineCueAudioPrepareFingerprint {
+            settings_revision,
+            program_device_generation: None,
+        },
+        Ok((
+            destination,
+            vec![TimelineCueAudioEndpointSummary {
+                name: "Test Headphones".to_owned(),
+                occurrences: 1,
+                selectable: true,
+            }],
+        )),
+        &timeline,
+        None,
+    );
+    assert!(runtime.explicit_wdm_output_snapshot().is_some());
+
+    // The no-CUE scheduler tick must preserve the explicit endpoint so the
+    // operator can verify it before adding click/guide/media content.
+    runtime.sync_normal(
+        &timeline,
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+    );
+    assert!(runtime.explicit_wdm_output_snapshot().is_some());
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("exact selected split endpoint accepts the bounded CUE test");
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .cue_test_sinks
+            .len(),
+        1
+    );
+    runtime.stop_explicit_wdm_cue_test_tones().unwrap();
+    assert!(runtime
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_ref()
+        .unwrap()
+        .cue_test_sinks
+        .is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_cue_test_is_bounded_replaced_and_retired_with_attachment() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("exact published WDM route accepts the bounded CUE tone");
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .cue_test_sinks
+            .len(),
+        1
+    );
+
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("a repeated CUE test replaces the prior bounded tone");
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .cue_test_sinks
+            .len(),
+        1,
+        "concurrent/repeated test presses must not accumulate sinks"
+    );
+
+    runtime.stop_explicit_wdm_cue_test_tones().unwrap();
+    assert!(runtime
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_ref()
+        .unwrap()
+        .cue_test_sinks
+        .is_empty());
+
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("route remains usable after a test stop");
+    runtime.retire_timeline_cue_attachment();
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    drop(state);
+    assert!(runtime.explicit_wdm_output_snapshot().is_none());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn concurrent_explicit_wdm_cue_tests_leave_one_owned_sink() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let mut workers = Vec::new();
+    for _ in 0..2 {
+        let runtime = Arc::clone(&runtime);
+        let barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            barrier.wait();
+            runtime.append_explicit_wdm_cue_test_tone()
+        }));
+    }
+    barrier.wait();
+    for worker in workers {
+        worker.join().unwrap().unwrap();
+    }
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .cue_test_sinks
+            .len(),
+        1
+    );
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn control_plane_and_ui_play_share_test_retirement_and_fence_a_racing_append() {
+    let timeline_cue_audio = published_explicit_wdm_cue_test_runtime();
+    timeline_cue_audio
+        .append_explicit_wdm_cue_test_tone()
+        .expect("published WDM route accepts the pre-play test tone");
+    let (asio_runtime, _context, _program, _cue) =
+        asio_output_runtime::AsioOutputRuntime::active_in_memory(211, 77).unwrap();
+    let asio_output_runtime = Arc::new(Mutex::new(asio_runtime));
+
+    let mut runtime_guard = asio_output_runtime.lock().unwrap();
+    let (attempted_sender, attempted_receiver) = mpsc::sync_channel(1);
+    let racing_runtime = Arc::clone(&asio_output_runtime);
+    let racing_cue = Arc::clone(&timeline_cue_audio);
+    let racing_append = std::thread::spawn(move || {
+        attempted_sender.send(()).unwrap();
+        let mut runtime = racing_runtime.lock().unwrap();
+        crate::append_explicit_wdm_cue_test_for_idle_timeline(&mut runtime, &racing_cue, false)
+    });
+    attempted_receiver.recv().unwrap();
+
+    let identity = runtime_guard.current_preflight_identity().unwrap();
+    crate::admit_asio_timeline_live_playback(&mut runtime_guard, &timeline_cue_audio, identity)
+        .expect("shared runtime Play admission retires the prior test tone");
+    assert!(timeline_cue_audio
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_ref()
+        .unwrap()
+        .cue_test_sinks
+        .is_empty());
+    drop(runtime_guard);
+
+    let error = racing_append
+        .join()
+        .unwrap()
+        .expect_err("a CUE test racing after Play must observe the live gate");
+    assert!(error.contains("blocked while Timeline/live playback is active"));
+    assert!(asio_output_runtime
+        .lock()
+        .unwrap()
+        .preflight_status(asio_program_cue_render::preflight_now_ms())
+        .unwrap()
+        .live_playback_active());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_timeline_cue_state_router_fault_retires_wdm_attachment_and_reports_fault() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("published WDM route accepts the test tone before poisoning");
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .cue_test_sinks
+            .len(),
+        1
+    );
+
+    poison_timeline_cue_audio_state(&runtime);
+    runtime.retire_timeline_cue_attachment_for_router_state(
+        TimelineCueAudioLifecycle::Fault,
+        "router fault test".to_owned(),
+    );
+
+    let state = runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+    drop(state);
+    let status_error = runtime
+        .status()
+        .expect_err("poisoned state must remain visibly faulted");
+    assert!(status_error.contains("state lock was poisoned"));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_router_retirement_drops_prepare_receiver_and_reaps_the_late_worker() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let send_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_send_failed = Arc::clone(&send_failed);
+    let worker = std::thread::spawn(move || {
+        release_receiver.recv().unwrap();
+        worker_send_failed.store(
+            result_sender
+                .send(Err("late prepared destination".to_owned()))
+                .is_err(),
+            std::sync::atomic::Ordering::Release,
+        );
+    });
+    let fingerprint = {
+        let mut state = runtime.state.lock().unwrap();
+        let fingerprint = TimelineCueAudioPrepareFingerprint {
+            settings_revision: state.settings_revision,
+            program_device_generation: None,
+        };
+        state.prepare_job = Some(TimelineCueAudioPrepareJob {
+            fingerprint,
+            started_at: Instant::now(),
+            receiver: result_receiver,
+            timed_out: false,
+            worker: Some(worker),
+        });
+        fingerprint
+    };
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .prepare_job
+            .as_ref()
+            .unwrap()
+            .fingerprint,
+        fingerprint
+    );
+
+    poison_timeline_cue_audio_state(&runtime);
+    runtime.retire_timeline_cue_attachment_for_router_state(
+        TimelineCueAudioLifecycle::Fault,
+        "router fault with in-flight prepare".to_owned(),
+    );
+
+    {
+        let state = runtime
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.attachment.is_none());
+        assert!(state.prepare_job.is_none());
+        assert!(state.topology_probe.is_none());
+        assert_eq!(state.retired_workers.len(), 1);
+        assert!(!state.normal_admission_open);
+        assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    }
+    release_sender.send(()).unwrap();
+    for _ in 0..100 {
+        if send_failed.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        send_failed.load(std::sync::atomic::Ordering::Acquire),
+        "the late worker result receiver must be dropped during poison retirement"
+    );
+    runtime.terminal_fault_and_retire_normal_runtime(
+        "late worker reap proof",
+        "late worker reap proof".to_owned(),
+    );
+    assert!(runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retired_workers
+        .is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn locked_router_retires_explicit_wdm_and_drops_the_inflight_prepare_receiver() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    assert!(slot
+        .into_stop_with(|| Ok(()))
+        .unwrap()
+        .perform()
+        .succeeded());
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let send_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_send_failed = Arc::clone(&send_failed);
+    let worker = std::thread::spawn(move || {
+        if release_receiver.recv().is_err() {
+            return;
+        }
+        worker_send_failed.store(
+            result_sender
+                .send(Err("late WDM prepare result".to_owned()))
+                .is_err(),
+            std::sync::atomic::Ordering::Release,
+        );
+    });
+    {
+        let mut state = runtime.state.lock().unwrap();
+        let fingerprint = TimelineCueAudioPrepareFingerprint {
+            settings_revision: state.settings_revision,
+            program_device_generation: None,
+        };
+        state.prepare_job = Some(TimelineCueAudioPrepareJob {
+            fingerprint,
+            started_at: Instant::now(),
+            receiver: result_receiver,
+            timed_out: false,
+            worker: Some(worker),
+        });
+    }
+
+    runtime.sync_with_output_router(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+        Some(&slot),
+        Some(&asio_output_runtime),
+    );
+
+    {
+        let state = runtime.state.lock().unwrap();
+        assert!(state.attachment.is_none());
+        assert!(state.prepare_job.is_none());
+        assert!(state.topology_probe.is_none());
+        assert_eq!(state.retired_workers.len(), 1);
+        assert_eq!(
+            state.lifecycle,
+            TimelineCueAudioLifecycle::WaitingForProgramOutput
+        );
+        assert!(!state.normal_admission_open);
+        assert!(state.active_asio_cue_delivery.is_none());
+        assert!(state.asio_retry_barrier.is_none());
+    }
+    release_sender.send(()).unwrap();
+    for _ in 0..100 {
+        if send_failed.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(send_failed.load(std::sync::atomic::Ordering::Acquire));
+    for _ in 0..100 {
+        if runtime.state.lock().unwrap().retired_workers[0].is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(runtime.state.lock().unwrap().retired_workers[0].is_finished());
+    assert!(!runtime.reap_finished_timeline_cue_workers());
+    assert!(runtime.state.lock().unwrap().retired_workers.is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn state_poison_between_prepare_spawn_and_publication_is_terminal_and_receiverless() {
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    let settings_revision = runtime.state.lock().unwrap().settings_revision;
+    let (mixer, _) = rodio::mixer::mixer(2, 48_000);
+    let poison_runtime = Arc::clone(&runtime);
+
+    let error = runtime
+        .spawn_prepare_with_after_worker_spawn(
+            TimelineCueAudioPrepareFingerprint {
+                settings_revision,
+                program_device_generation: Some(7),
+            },
+            timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default(),
+            Some(TimelineCueProgramDestination {
+                mixer,
+                output_sample_rate: 48_000,
+                channels: 2,
+                device_generation: 7,
+                resolved_device_name: Some("Program Test".to_owned()),
+            }),
+            move || poison_timeline_cue_audio_state(&poison_runtime),
+        )
+        .expect_err("post-spawn poison must reject prepare publication");
+    assert!(error.contains("poisoned before prepare worker publication"));
+
+    for _ in 0..100 {
+        let finished = runtime
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retired_workers
+            .iter()
+            .all(|worker| worker.is_finished());
+        if finished {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    runtime.terminal_fault_and_retire_normal_runtime(
+        "post-spawn poison reap proof",
+        "post-spawn poison reap proof".to_owned(),
+    );
+    let state = runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(state.attachment.is_none());
+    assert!(state.prepare_job.is_none());
+    assert!(state.topology_probe.is_none());
+    assert!(state.retired_workers.is_empty());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(state.asio_retry_barrier.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_enqueue_failure_retires_the_route_and_blocks_automatic_reopen() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let identity = runtime
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_ref()
+        .unwrap()
+        .engine_identity
+        .clone();
+    let click_events = (0..=timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY)
+        .map(|index| protocol::TimelineClickEventSummary {
+            epoch: identity.epoch,
+            transport_generation: identity.transport_generation,
+            sample_frame: index as u64,
+            measure: 1,
+            beat: (index % 4 + 1) as u16,
+            schedule_generation: identity.schedule_generation,
+            source: identity.source,
+            ..protocol::TimelineClickEventSummary::default()
+        })
+        .collect();
+    let timeline = engine::TimelineAudioRuntimeSnapshot {
+        playing: identity.playing,
+        metronome_enabled: identity.metronome_enabled,
+        guide_enabled: identity.guide_enabled,
+        transport_revision: identity.audio_transport_revision,
+        click_schedule_generation: identity.schedule_generation,
+        source_projection_authority: engine::TimelineAudioProjectionAuthority {
+            epoch: identity.epoch,
+            generation: identity.transport_generation,
+        },
+        click_events,
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    };
+
+    runtime.feed_attachment(&timeline, None);
+
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert!(state.applied.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert_eq!(
+        state.blocked_settings_revision,
+        Some(state.settings_revision)
+    );
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("queue is full")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn prepare_timeout_retires_explicit_wdm_and_skips_feed_on_the_timeout_tick() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        release_receiver.recv().unwrap();
+        let _ = result_sender.send(Err("late prepare result".to_owned()));
+    });
+    {
+        let mut state = runtime.state.lock().unwrap();
+        let fingerprint = TimelineCueAudioPrepareFingerprint {
+            settings_revision: state.settings_revision,
+            program_device_generation: None,
+        };
+        state.prepare_job = Some(TimelineCueAudioPrepareJob {
+            fingerprint,
+            started_at: Instant::now()
+                .checked_sub(TIMELINE_CUE_AUDIO_PREPARE_TIMEOUT + Duration::from_millis(1))
+                .unwrap(),
+            receiver: result_receiver,
+            timed_out: false,
+            worker: Some(worker),
+        });
+    }
+
+    runtime.sync_normal(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+    );
+
+    {
+        let state = runtime.state.lock().unwrap();
+        assert!(state.attachment.is_none());
+        assert!(state.applied.is_none());
+        assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Stalled);
+        assert_eq!(
+            state.blocked_settings_revision,
+            Some(state.settings_revision)
+        );
+        assert!(state.prepare_job.as_ref().is_some_and(|job| job.timed_out));
+    }
+    release_sender.send(()).unwrap();
+    for _ in 0..100 {
+        let finished = runtime
+            .state
+            .lock()
+            .unwrap()
+            .prepare_job
+            .as_ref()
+            .and_then(|job| job.worker.as_ref())
+            .is_some_and(|worker| worker.is_finished());
+        if finished {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    runtime.sync_normal(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+    );
+    assert!(runtime.state.lock().unwrap().prepare_job.is_none());
+    assert!(!runtime.reap_finished_timeline_cue_workers());
+    assert!(runtime.state.lock().unwrap().retired_workers.is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn topology_result_without_worker_handle_retires_the_existing_explicit_wdm_route() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Ok(("test-topology".to_owned(), Vec::new())))
+        .unwrap();
+    runtime.state.lock().unwrap().topology_probe = Some(TimelineCueAudioTopologyProbe {
+        started_at: Instant::now(),
+        timed_out: false,
+        receiver,
+        worker: None,
+    });
+
+    runtime.poll_or_spawn_topology_probe();
+
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert!(state.applied.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert_eq!(
+        state.blocked_settings_revision,
+        Some(state.settings_revision)
+    );
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("worker handle was already consumed")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_timeline_cue_state_stop_retires_wdm_attachment_and_reports_fault() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime
+        .append_explicit_wdm_cue_test_tone()
+        .expect("published WDM route accepts the test tone before poisoning");
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .expect("published Explicit WDM attachment")
+            .cue_test_sinks
+            .len(),
+        1
+    );
+
+    poison_timeline_cue_audio_state(&runtime);
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let stop_close_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_close_called_by_bridge = Arc::clone(&stop_close_called);
+    crate::stop_close_asio_program_cue_output_inner_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        move |_| {
+            stop_close_called_by_bridge.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    )
+    .expect("production Stop/Close must continue after recovering poisoned CUE state");
+
+    let state = runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+    assert!(stop_close_called.load(std::sync::atomic::Ordering::Acquire));
+    assert!(machine
+        .lock()
+        .unwrap()
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_asio_runtime_and_media_stop_still_fence_router_and_silence_cue() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    add_test_timeline_audio_sink(&mut media_audio.lock().unwrap(), 991);
+    poison_asio_output_runtime(&asio_output_runtime);
+    let poisoned_media = Arc::clone(&media_audio);
+    assert!(std::panic::catch_unwind(move || {
+        let _media = poisoned_media.lock().unwrap();
+        panic!("poison media audio for Stop proof");
+    })
+    .is_err());
+
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let stop_close_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called = Arc::clone(&stop_close_called);
+    let error = crate::stop_close_asio_program_cue_output_inner_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        move |_| {
+            called.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    )
+    .expect_err("media poison remains visible after fail-closed sink retirement");
+
+    assert!(error.contains("runtime lock was poisoned"));
+    assert!(error.contains("Media audio playback lock was poisoned"));
+    assert!(stop_close_called.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+    assert!(runtime.state.lock().unwrap().attachment.is_none());
+    assert!(media_audio
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .timeline_sinks
+        .is_empty());
+    assert!(machine
+        .lock()
+        .unwrap()
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("Media audio playback lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn cue_activation_failure_rollback_recovers_poison_and_never_leaves_program_active() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    add_test_timeline_audio_sink(&mut media_audio.lock().unwrap(), 993);
+    poison_asio_output_runtime(&asio_output_runtime);
+    let poisoned_media = Arc::clone(&media_audio);
+    assert!(std::panic::catch_unwind(move || {
+        let _media = poisoned_media.lock().unwrap();
+        panic!("poison media audio before CUE activation rollback");
+    })
+    .is_err());
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let stop_close_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called = Arc::clone(&stop_close_called);
+
+    let error = crate::rollback_asio_program_after_cue_activation_failure_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        "injected CUE activation failure",
+        move |_| {
+            called.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    );
+
+    assert!(error.contains("CUE activation failed"));
+    assert!(error.contains("runtime lock was poisoned"));
+    assert!(error.contains("Media audio playback lock was poisoned"));
+    assert!(stop_close_called.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+    assert!(runtime.state.lock().unwrap().attachment.is_none());
+    assert!(media_audio
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .timeline_sinks
+        .is_empty());
+    assert!(machine
+        .lock()
+        .unwrap()
+        .last_error
+        .as_deref()
+        .is_some_and(|message| message.contains("CUE activation failed")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_disappearance_after_enumeration_rolls_program_back_before_active_reply() {
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.close_normal_routes_for_asio_start().unwrap();
+    runtime
+        .activate_asio_cue_delivery(&asio_program_cue::CueDelivery::ExplicitWdm {
+            device_name: "Disappearing Headphones".to_owned(),
+            topology_fingerprint: "enumerated-topology".to_owned(),
+        })
+        .unwrap();
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let stop_close_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called = Arc::clone(&stop_close_called);
+
+    let error = crate::finalize_explicit_wdm_cue_start_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        || Err("selected WDM endpoint disappeared before open".to_owned()),
+        move |_| {
+            called.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    )
+    .expect_err("a post-enumeration WDM open failure must roll PROGRAM back");
+
+    assert!(error.contains("endpoint failed to open after enumeration"));
+    assert!(error.contains("PROGRAM was rolled back to Locked"));
+    assert!(stop_close_called.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+    let cue_state = runtime.state.lock().unwrap();
+    assert!(cue_state.active_asio_cue_delivery.is_none());
+    assert!(cue_state.attachment.is_none());
+    assert!(!cue_state.normal_admission_open);
+    drop(cue_state);
+    assert!(machine
+        .lock()
+        .unwrap()
+        .last_error
+        .as_deref()
+        .is_some_and(|message| message.contains("endpoint failed to open after enumeration")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_cue_admission_and_bridge_failure_remain_faulted_visible_and_silent() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    poison_timeline_cue_audio_admission(&runtime);
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    add_test_timeline_audio_sink(&mut media_audio.lock().unwrap(), 992);
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let error = crate::stop_close_asio_program_cue_output_inner_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        |_| Err("injected bridge Stop/Close failure".to_owned()),
+    )
+    .expect_err("bridge failure remains terminal after CUE retirement");
+
+    assert!(error.contains("admission lock was poisoned"));
+    assert!(error.contains("Stop/Close failed"));
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert!(state.asio_retry_barrier.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("admission lock was poisoned")));
+    drop(state);
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Fault
+    );
+    assert!(media_audio.lock().unwrap().timeline_sinks.is_empty());
+    assert!(machine
+        .lock()
+        .unwrap()
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("Stop/Close failed")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_normal_scheduler_state_retires_explicit_wdm_and_closes_admission() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    poison_timeline_cue_audio_state(&runtime);
+
+    runtime.sync_normal(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+    );
+
+    let state = runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(state.attachment.is_none());
+    assert!(state.prepare_job.is_none());
+    assert!(state.topology_probe.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert_eq!(
+        state.blocked_settings_revision,
+        Some(state.settings_revision)
+    );
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(state.asio_retry_barrier.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn state_poison_after_normal_initial_check_still_retires_explicit_wdm() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    let poison_runtime = Arc::clone(&runtime);
+
+    runtime.sync_normal_with_after_initial_state(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+        move || poison_timeline_cue_audio_state(&poison_runtime),
+    );
+
+    let state = runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(state.asio_retry_barrier.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("state lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_normal_topology_admission_retires_explicit_wdm_and_closes_admission() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+    runtime.state.lock().unwrap().last_topology_probe_at = Instant::now() - Duration::from_secs(3);
+    poison_timeline_cue_audio_admission(&runtime);
+
+    runtime.sync_normal(
+        &engine::TimelineAudioRuntimeSnapshot::default(),
+        &Arc::new(Mutex::new(MediaAudioPlayback::default())),
+    );
+
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(!state.normal_admission_open);
+    assert_eq!(
+        state.blocked_settings_revision,
+        Some(state.settings_revision)
+    );
+    assert!(state.active_asio_cue_delivery.is_none());
+    assert!(state.asio_retry_barrier.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("admission lock was poisoned")));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn normal_prepare_failure_retires_the_owned_route_before_publishing_fault() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    runtime.append_explicit_wdm_cue_test_tone().unwrap();
+
+    runtime.fail_prepare("injected normal prepare failure".to_owned());
+
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert!(state.applied.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(state.normal_admission_open);
+    assert_eq!(
+        state.blocked_settings_revision,
+        Some(state.settings_revision)
+    );
+    assert!(matches!(
+        state.active_asio_cue_delivery,
+        Some(ActiveAsioCueDelivery::ExplicitWdm { .. })
+    ));
+    assert_eq!(
+        state.last_error.as_deref(),
+        Some("injected normal prepare failure")
+    );
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn running_cue_prepare_worker_cannot_delay_program_stop_close() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let _ = release_receiver.recv();
+        let _ = result_sender.send(Err("late topology result".to_owned()));
+    });
+    runtime.state.lock().unwrap().topology_probe = Some(TimelineCueAudioTopologyProbe {
+        started_at: Instant::now(),
+        timed_out: false,
+        receiver: result_receiver,
+        worker: Some(worker),
+    });
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let machine = Arc::new(Mutex::new(AsioOutputMachineState::default()));
+    let stop_close_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called = Arc::clone(&stop_close_called);
+
+    crate::stop_close_asio_program_cue_output_inner_with(
+        &runtime,
+        &asio_output_runtime,
+        &slot,
+        &media_audio,
+        &machine,
+        move |_| {
+            called.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+    )
+    .expect("unfinished device worker must be quarantined before bridge Stop/Close");
+
+    assert!(stop_close_called.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+    {
+        let state = runtime.state.lock().unwrap();
+        assert!(state.topology_probe.is_none());
+        assert_eq!(state.retired_workers.len(), 1);
+        assert!(!state.normal_admission_open);
+    }
+    release_sender.send(()).unwrap();
+    for _ in 0..100 {
+        if runtime.state.lock().unwrap().retired_workers[0].is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(runtime.state.lock().unwrap().retired_workers[0].is_finished());
+    assert!(!runtime.reap_finished_timeline_cue_workers());
+    assert!(runtime.state.lock().unwrap().retired_workers.is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn explicit_wdm_timeline_commit_fence_rejects_after_stop_and_drains_before_stop() {
+    let retired_before_commit = published_explicit_wdm_cue_test_runtime();
+    assert!(retired_before_commit.close_routes_for_asio_stop().is_none());
+    let error = retired_before_commit
+        .lock_explicit_wdm_timeline_commit(23)
+        .expect_err("a Stop-first WDM epoch must not admit Timeline sink commit");
+    assert!(error.contains("changed before Timeline sink commit"));
+
+    let commit_before_stop = published_explicit_wdm_cue_test_runtime();
+    let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let commit_fence = commit_before_stop
+        .lock_explicit_wdm_timeline_commit(23)
+        .expect("the current WDM epoch admits the final commit fence");
+    let (stop_started_sender, stop_started_receiver) = mpsc::sync_channel(1);
+    let stop_runtime = Arc::clone(&commit_before_stop);
+    let stop_audio = Arc::clone(&media_audio);
+    let stop_worker = std::thread::spawn(move || {
+        stop_started_sender.send(()).unwrap();
+        assert!(stop_runtime.close_routes_for_asio_stop().is_none());
+        let mut playback = stop_audio.lock().unwrap();
+        playback.stop_all();
+        playback.stop_all_timeline();
+    });
+    stop_started_receiver.recv().unwrap();
+
+    // This models the production commit section after decoder append and its
+    // postcheck. Stop is already attempting the same admission fence, so it
+    // cannot retire the route until the sink becomes visible to playback.
+    add_test_timeline_audio_sink(&mut media_audio.lock().unwrap(), 994);
+    assert_eq!(media_audio.lock().unwrap().timeline_sinks.len(), 1);
+    drop(commit_fence);
+    stop_worker.join().unwrap();
+
+    assert!(media_audio.lock().unwrap().timeline_sinks.is_empty());
+    assert!(commit_before_stop
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .is_none());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn transient_cue_state_contention_never_synthesizes_a_generation_or_retires_routes() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    {
+        let mut playback = audio.lock().unwrap();
+        playback.hybrid_cue_output_generation = 23;
+        add_test_timeline_audio_sink(&mut playback, 995);
+    }
+    let timeline = engine::TimelineAudioRuntimeSnapshot::default();
+
+    let mut state = runtime.state.lock().unwrap();
+    assert!(matches!(
+        runtime.asio_cue_route_snapshot(),
+        AsioCueRouteSnapshot::Busy
+    ));
+    assert_eq!(runtime.cue_delivery_generation(), None);
+    if let Some(generation) = runtime.cue_delivery_generation() {
+        audio
+            .lock()
+            .unwrap()
+            .observe_hybrid_cue_output_generation(generation);
+    }
+    assert_eq!(audio.lock().unwrap().hybrid_cue_output_generation, 23);
+    assert_eq!(audio.lock().unwrap().timeline_sinks.len(), 1);
+
+    runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_output_runtime));
+    assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
+
+    state.active_asio_cue_delivery = Some(ActiveAsioCueDelivery::SameAsio);
+    runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_output_runtime));
+    assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
+    drop(state);
+
+    assert_eq!(runtime.cue_delivery_generation(), Some(0));
+    assert!(runtime.state.lock().unwrap().attachment.is_some());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn blocking_cue_observers_wait_for_contention_then_preserve_the_published_epoch() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let state = runtime.state.lock().unwrap();
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let observed_runtime = Arc::clone(&runtime);
+    let observer = std::thread::spawn(move || {
+        started_sender.send(()).unwrap();
+        let result = observed_runtime.asio_cue_route_snapshot_blocking();
+        result_sender.send(result).unwrap();
+    });
+    started_receiver.recv().unwrap();
+    assert!(matches!(
+        result_receiver.recv_timeout(Duration::from_millis(25)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
+    drop(state);
+
+    let observed = result_receiver.recv().unwrap().unwrap();
+    assert!(matches!(
+        observed,
+        AsioCueRouteSnapshot::ExplicitWdm(Some(ExplicitWdmCueOutputSnapshot {
+            output_clock_epoch: 23,
+            ..
+        }))
+    ));
+    observer.join().unwrap();
+
+    let timeline = engine::TimelineAudioRuntimeSnapshot::default();
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    let state = runtime.state.lock().unwrap();
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (finished_sender, finished_receiver) = mpsc::sync_channel(1);
+    let sync_runtime = Arc::clone(&runtime);
+    let sync_audio = Arc::clone(&audio);
+    let sync_worker = std::thread::spawn(move || {
+        started_sender.send(()).unwrap();
+        sync_runtime.sync_normal(&timeline, &sync_audio);
+        finished_sender.send(()).unwrap();
+    });
+    started_receiver.recv().unwrap();
+    assert!(matches!(
+        finished_receiver.recv_timeout(Duration::from_millis(25)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
+    drop(state);
+    finished_receiver.recv().unwrap();
+    sync_worker.join().unwrap();
+    assert!(runtime.state.lock().unwrap().attachment.is_some());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn normal_selection_keeps_router_locked_until_retired_cue_workers_are_reaped() {
+    let slot = audio_output_router::RouterSlot::test_slot();
+    slot.quiesce().unwrap();
+    assert!(slot
+        .into_admitted_start_with(|| Ok(()))
+        .unwrap()
+        .perform()
+        .succeeded());
+    assert!(slot
+        .into_stop_with(|| Ok(()))
+        .unwrap()
+        .perform()
+        .succeeded());
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked
+    );
+
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    runtime.initialize(
+        PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+        Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+    );
+    runtime.state.lock().unwrap().normal_admission_open = false;
+    let (release_sender, release_receiver) = mpsc::sync_channel::<()>(1);
+    let worker = std::thread::spawn(move || {
+        let _ = release_receiver.recv();
+    });
+    runtime.state.lock().unwrap().retired_workers.push(worker);
+
+    let error = crate::select_normal_audio_output_with_cue_preflight(&slot, &runtime)
+        .expect_err("a running retired CUE worker must block Normal selection");
+    assert!(error.contains("retired route is still owned"));
+    assert_eq!(
+        slot.snapshot().unwrap().state,
+        audio_output_router::State::Locked,
+        "failed CUE preflight must not consume the only Locked -> Normal transition"
+    );
+
+    release_sender.send(()).unwrap();
+    for _ in 0..100 {
+        if runtime.state.lock().unwrap().retired_workers[0].is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(runtime.state.lock().unwrap().retired_workers[0].is_finished());
+    let snapshot = crate::select_normal_audio_output_with_cue_preflight(&slot, &runtime)
+        .expect("a finished retired worker is reaped before Normal selection");
+    assert_eq!(snapshot.state, audio_output_router::State::Normal);
+    assert!(runtime.state.lock().unwrap().normal_admission_open);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn asio_timeline_play_retires_wdm_test_before_live_ack() {
+    let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (engine, slot, asio_output_runtime) = crate::tests::active_asio_command_parts();
+    let timeline_cue_audio = published_explicit_wdm_cue_test_runtime();
+    timeline_cue_audio
+        .append_explicit_wdm_cue_test_tone()
+        .expect("published WDM route accepts the pre-play test tone");
+
+    crate::set_timeline_playing_asio_linearized(
+        &engine,
+        &slot,
+        &asio_output_runtime,
+        &timeline_cue_audio,
+        true,
+    )
+    .expect("Timeline Play should acknowledge after retiring the WDM test tone");
+
+    assert!(timeline_cue_audio
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_ref()
+        .unwrap()
+        .cue_test_sinks
+        .is_empty());
+    assert!(asio_output_runtime
+        .lock()
+        .unwrap()
+        .preflight_status(asio_program_cue_render::preflight_now_ms())
+        .unwrap()
+        .live_playback_active());
 }
 
 #[test]
@@ -421,6 +2097,8 @@ fn timeline_audio_prepare_transaction_deadline_is_global_across_clips() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -1031,6 +2709,8 @@ fn timeline_audio_commit_fence_rejects_publication_after_final_snapshot_read() {
         None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         &timeline,
         &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
         || {},
@@ -1065,6 +2745,8 @@ fn timeline_audio_commit_fence_rejects_same_authority_transport_publication() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -1109,6 +2791,8 @@ fn timeline_audio_commit_fence_rejects_same_authority_seek_publication() {
     let error = sync_timeline_audio_without_blocking_playback_lock(
         &engine,
         &audio,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         None,
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -1531,6 +3215,94 @@ fn timeline_audio_output_bus_change_retires_old_sink_before_each_logical_rebuild
         "the committed PROGRAM reconstruction cannot retain an old CUE source"
     );
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settlement() {
+    let (mixer, _mixed) = rodio::mixer::mixer(2, 48_000);
+    let program_key = TimelineAudioSinkKey::Root(201);
+    let cue_key = TimelineAudioSinkKey::Root(202);
+    let authority = engine::TimelineAudioProjectionAuthority {
+        epoch: 8,
+        generation: 13,
+    };
+    let mut playback = MediaAudioPlayback {
+        timeline_source_projection_authority: Some(authority),
+        ..MediaAudioPlayback::default()
+    };
+    playback
+        .timeline_sinks
+        .insert(program_key.clone(), rodio::Sink::connect_new(&mixer));
+    playback.timeline_sources.insert(
+        program_key.clone(),
+        TimelineAudioSourceConfig {
+            path: PathBuf::from("program.wav"),
+            gain: 1.0,
+            offset_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
+        },
+    );
+    let request = TimelineAudioPrepareRequest {
+        key: cue_key.clone(),
+        clip: TimelineAudioClipSummary {
+            id: 202,
+            layer_id: 2,
+            media_asset_id: None,
+            path: "cue.wav".to_owned(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
+        },
+        source_position_ms: 0,
+        volume: 1.0,
+        source: TimelineAudioSourceConfig {
+            path: PathBuf::from("cue.wav"),
+            gain: 1.0,
+            offset_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Cue,
+        },
+    };
+    let plan = TimelineAudioSyncPlan {
+        authority,
+        device_generation: playback.audio_device_generation,
+        hybrid_cue_output_generation: playback.hybrid_cue_output_generation,
+        requested_device_name: playback.requested_device_name.clone(),
+        mixer: None,
+        prepares: Vec::new(),
+        seeks: Vec::new(),
+        errors: Vec::new(),
+        cue_errors: Vec::new(),
+    };
+    let current = engine::TimelineAudioRuntimeSnapshot {
+        source_projection_authority: authority,
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    };
+    let mut prepared_output = None;
+
+    playback
+        .commit_timeline_audio_sync(
+            plan,
+            &current,
+            &mut prepared_output,
+            vec![Err(Box::new((
+                request,
+                "Explicit WDM CUE output is selected but is not publishable".to_owned(),
+            )))],
+            Vec::new(),
+        )
+        .expect("a CUE-only fault must not fail PROGRAM/Follow settlement");
+
+    assert!(playback.timeline_sinks.contains_key(&program_key));
+    assert!(playback.timeline_sources.contains_key(&program_key));
+    assert!(playback.timeline_failures.contains_key(&cue_key));
+    assert!(playback
+        .timeline_last_sync_error
+        .as_deref()
+        .is_some_and(|error| error.contains("not publishable")));
 }
 
 #[test]

@@ -1,11 +1,31 @@
 # ASIO Input Acceptance
 
-Updated: 2026-08-26
+Updated: 2026-08-29
 
 ASIO multi-output playback and the PROGRAM/CUE show routing gate are tracked
 separately in `qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md`. ABI/schema v2 in this
 document remains the input/Reactive Capture contract; output work must not
 silently change its request or callback semantics.
+
+## 2026-08-29 alpha.30 output-boundary note (not input acceptance)
+
+The current dirty alpha.30 source/UI tree contains the separate hybrid output
+assignment required by the show: `SameAsio` keeps PROGRAM and CUE on the
+selected ASIO stream and shared clock, while `ExplicitWdm` keeps PROGRAM on
+ASIO and assigns CUE to one explicitly named, topology-fenced WDM endpoint.
+Timeline CUE clips, generated Click/Guide, and the explicit CUE test path use
+that logical CUE route. Missing, ambiguous, stale, changed, or failed route
+state is intended to remain visible and fail-closed, without ASIO/PROGRAM/
+default-device fallback or CUE leakage to PROGRAM. These statements belong to
+the separate output gate; this document does not accept them as input evidence.
+
+Focused source evidence is provisional. The earlier full Rust result
+`1426 discovered / 1414 passed / 0 failed / 12 ignored` predates later source
+fixes and is stale, so it is excluded from final alpha.30 evidence. No alpha.30
+native build/launch/window, real-device audition, physical I/O, or show
+completion is accepted here. The oversized audio-runtime extraction from
+`app/src-tauri/src/main.rs` is deferred until after show acceptance because a
+pre-show ownership/lifecycle refactor is a risk.
 
 ## Release boundary
 

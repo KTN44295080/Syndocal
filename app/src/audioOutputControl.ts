@@ -3,6 +3,9 @@ import type {
   AudioOutputBackend,
   AudioOutputBufferOption,
   AudioOutputChannelOption,
+  AudioOutputCueChange,
+  AudioOutputCueEndpointOption,
+  AudioOutputCueRoute,
   AudioOutputDriverOption,
   AudioOutputOptions,
   AudioOutputRateOption,
@@ -16,7 +19,7 @@ import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 const ASIO_SCHEMA_VERSION = 3;
 const ASIO_ABI_VERSION = 3;
 const ASIO_BACKEND = "asio-sdk-v3-rt";
-const MACHINE_PROFILE_SCHEMA_VERSION = 1;
+const MACHINE_PROFILE_SCHEMA_VERSION = 2;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -89,6 +92,72 @@ export interface AsioOutputStatusRecord {
   terminalFault: string | null;
 }
 
+export interface MachineAudioOutputCueDeliverySameAsio {
+  mode: "sameAsio";
+  cueOutput: number;
+}
+
+export interface MachineAudioOutputCueDeliveryExplicitWdm {
+  mode: "explicitWdm";
+  deviceName: string;
+  topologyFingerprint: string;
+}
+
+export type MachineAudioOutputCueDelivery =
+  | MachineAudioOutputCueDeliverySameAsio
+  | MachineAudioOutputCueDeliveryExplicitWdm;
+
+export type TimelineCueAudioLifecycle =
+  | "loading_settings"
+  | "disabled_by_project"
+  | "waiting_for_program_output"
+  | "applying"
+  | "running"
+  | "missing_device"
+  | "ambiguous_device"
+  | "topology_changed"
+  | "stalled"
+  | "fault";
+
+export interface TimelineCueAudioEndpointRecord extends AudioOutputCueEndpointOption {}
+
+export interface TimelineCueAudioSettingsRecord {
+  version: number;
+  route: "follow_program" | "explicit_device";
+  deviceName: string | null;
+  topologyFingerprint: string | null;
+  clickGain: number;
+  guideGain: number;
+}
+
+/** Exact backend status used to gate split-device output selection. */
+export interface TimelineCueAudioStatusRecord {
+  runtimeIncarnation: number;
+  statusRevision: number;
+  desiredSettings: TimelineCueAudioSettingsRecord;
+  appliedSettings: TimelineCueAudioSettingsRecord | null;
+  settingsRevision: number;
+  lifecycle: TimelineCueAudioLifecycle;
+  requestedDeviceName: string | null;
+  resolvedDeviceName: string | null;
+  requestedTopologyFingerprint: string | null;
+  observedTopologyFingerprint: string | null;
+  topologyGeneration: number;
+  endpoints: readonly TimelineCueAudioEndpointRecord[];
+  outputClockEpoch: number;
+  scheduleGeneration: number;
+  sourceFence: number;
+  nextOutputFrame: number;
+  callbackLive: boolean;
+  faultCode: string;
+  faultCount: number;
+  faultSequence: number;
+  lastError: string | null;
+  rotationCount: number;
+  stallCount: number;
+  configCount: number;
+}
+
 export interface MachineAudioOutputProfileDraft {
   driverId: string;
   catalogGeneration: number;
@@ -99,11 +168,14 @@ export interface MachineAudioOutputProfileDraft {
   programLeft: number | null;
   programRight: number | null;
   cue: number | null;
+  cueRoute: AudioOutputCueRoute;
+  cueDeviceName: string | null;
+  cueTopologyFingerprint: string | null;
   spare: number | null;
 }
 
 export interface MachineAudioOutputProfile {
-  schemaVersion: 1;
+  schemaVersion: 2;
   driverId: string;
   catalogGeneration: number;
   sampleRateHz: number;
@@ -112,7 +184,7 @@ export interface MachineAudioOutputProfile {
   deviceOutputChannels: number;
   programLeftOutput: number;
   programRightOutput: number;
-  cueOutput: number;
+  cueDelivery: MachineAudioOutputCueDelivery;
   spareOutput?: number;
 }
 
@@ -145,9 +217,12 @@ export interface AudioOutputController {
   setBufferFrames: (bufferFrames: number | null) => void;
   setProgramLeft: (channelIndex: number | null) => void;
   setProgramRight: (channelIndex: number | null) => void;
-  setCue: (channelIndex: number | null) => void;
+  setCue: AudioOutputCueChange;
+  setCueRoute: (route: AudioOutputCueRoute) => void;
+  setCueDeviceName: (deviceName: string | null) => void;
   setSpare: (channelIndex: number | null) => void;
   refresh: () => Promise<void>;
+  refreshCueEndpoints: () => Promise<void>;
   revalidate: () => Promise<void>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
@@ -201,9 +276,170 @@ const requireInteger = (value: unknown, field: string, minimum = 0): number => {
   return value;
 };
 
+const requireFiniteNumber = (value: unknown, field: string): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number`);
+  }
+  return value;
+};
+
+const requireTrimmedString = (value: unknown, field: string): string => {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw new Error(`${field} must be a trimmed string`);
+  }
+  return value;
+};
+
 const requireBoolean = (value: unknown, field: string): boolean => {
   if (typeof value !== "boolean") throw new Error(`${field} must be boolean`);
   return value;
+};
+
+const parseTimelineCueAudioSettings = (
+  raw: unknown,
+  label: string,
+): TimelineCueAudioSettingsRecord => {
+  const value = requireRecord(raw, label);
+  requireExactKeys(
+    value,
+    ["version", "route", "device_name", "topology_fingerprint", "click_gain", "guide_gain"],
+    label,
+  );
+  const route = value.route;
+  if (route !== "follow_program" && route !== "explicit_device") {
+    throw new Error(`${label}.route is unknown`);
+  }
+  const version = requireInteger(value.version, `${label}.version`, 1);
+  if (version !== 1) throw new Error(`${label}.version is unsupported`);
+  return {
+    version,
+    route,
+    deviceName: requireNullableString(value.device_name, `${label}.device_name`),
+    topologyFingerprint: requireNullableString(value.topology_fingerprint, `${label}.topology_fingerprint`),
+    clickGain: requireFiniteNumber(value.click_gain, `${label}.click_gain`),
+    guideGain: requireFiniteNumber(value.guide_gain, `${label}.guide_gain`),
+  };
+};
+
+const parseTimelineCueAudioEndpoint = (
+  raw: unknown,
+  label: string,
+): TimelineCueAudioEndpointRecord => {
+  const value = requireRecord(raw, label);
+  requireExactKeys(value, ["name", "occurrences", "selectable"], label);
+  return {
+    name: requireString(value.name, `${label}.name`),
+    occurrences: requireInteger(value.occurrences, `${label}.occurrences`, 1),
+    selectable: requireBoolean(value.selectable, `${label}.selectable`),
+  };
+};
+
+export const parseTimelineCueAudioStatus = (raw: unknown): TimelineCueAudioStatusRecord => {
+  const value = requireRecord(
+    parseJsonPayload(raw, "Timeline CUE audio status"),
+    "Timeline CUE audio status",
+  );
+  requireExactKeys(
+    value,
+    [
+      "runtimeIncarnation",
+      "statusRevision",
+      "desiredSettings",
+      "appliedSettings",
+      "settingsRevision",
+      "lifecycle",
+      "requestedDeviceName",
+      "resolvedDeviceName",
+      "requestedTopologyFingerprint",
+      "observedTopologyFingerprint",
+      "topologyGeneration",
+      "endpoints",
+      "outputClockEpoch",
+      "scheduleGeneration",
+      "sourceFence",
+      "nextOutputFrame",
+      "callbackLive",
+      "faultCode",
+      "faultCount",
+      "faultSequence",
+      "lastError",
+      "rotationCount",
+      "stallCount",
+      "configCount",
+    ],
+    "Timeline CUE audio status",
+  );
+  const lifecycle = value.lifecycle;
+  const knownLifecycles: readonly TimelineCueAudioLifecycle[] = [
+    "loading_settings",
+    "disabled_by_project",
+    "waiting_for_program_output",
+    "applying",
+    "running",
+    "missing_device",
+    "ambiguous_device",
+    "topology_changed",
+    "stalled",
+    "fault",
+  ];
+  if (typeof lifecycle !== "string" || !knownLifecycles.includes(lifecycle as TimelineCueAudioLifecycle)) {
+    throw new Error("Timeline CUE audio status.lifecycle is unknown");
+  }
+  if (!Array.isArray(value.endpoints)) {
+    throw new Error("Timeline CUE audio status.endpoints must be an array");
+  }
+  const endpoints = value.endpoints.map((endpoint, index) =>
+    parseTimelineCueAudioEndpoint(endpoint, `Timeline CUE audio status.endpoints[${index}]`));
+  const faultCode = requireTrimmedString(value.faultCode, "Timeline CUE audio status.faultCode");
+  return {
+    runtimeIncarnation: requireInteger(value.runtimeIncarnation, "Timeline CUE audio status.runtimeIncarnation"),
+    statusRevision: requireInteger(value.statusRevision, "Timeline CUE audio status.statusRevision"),
+    desiredSettings: parseTimelineCueAudioSettings(
+      value.desiredSettings,
+      "Timeline CUE audio status.desiredSettings",
+    ),
+    appliedSettings: value.appliedSettings === null
+      ? null
+      : parseTimelineCueAudioSettings(value.appliedSettings, "Timeline CUE audio status.appliedSettings"),
+    settingsRevision: requireInteger(value.settingsRevision, "Timeline CUE audio status.settingsRevision"),
+    lifecycle: lifecycle as TimelineCueAudioLifecycle,
+    requestedDeviceName: requireNullableString(
+      value.requestedDeviceName,
+      "Timeline CUE audio status.requestedDeviceName",
+    ),
+    resolvedDeviceName: requireNullableString(
+      value.resolvedDeviceName,
+      "Timeline CUE audio status.resolvedDeviceName",
+    ),
+    requestedTopologyFingerprint: requireNullableString(
+      value.requestedTopologyFingerprint,
+      "Timeline CUE audio status.requestedTopologyFingerprint",
+    ),
+    observedTopologyFingerprint: requireNullableString(
+      value.observedTopologyFingerprint,
+      "Timeline CUE audio status.observedTopologyFingerprint",
+    ),
+    topologyGeneration: requireInteger(value.topologyGeneration, "Timeline CUE audio status.topologyGeneration"),
+    endpoints,
+    outputClockEpoch: requireInteger(value.outputClockEpoch, "Timeline CUE audio status.outputClockEpoch"),
+    scheduleGeneration: requireInteger(value.scheduleGeneration, "Timeline CUE audio status.scheduleGeneration"),
+    sourceFence: requireInteger(value.sourceFence, "Timeline CUE audio status.sourceFence"),
+    nextOutputFrame: requireInteger(value.nextOutputFrame, "Timeline CUE audio status.nextOutputFrame"),
+    callbackLive: requireBoolean(value.callbackLive, "Timeline CUE audio status.callbackLive"),
+    faultCode,
+    faultCount: requireInteger(value.faultCount, "Timeline CUE audio status.faultCount"),
+    faultSequence: requireInteger(value.faultSequence, "Timeline CUE audio status.faultSequence"),
+    lastError: requireNullableString(value.lastError, "Timeline CUE audio status.lastError"),
+    rotationCount: requireInteger(value.rotationCount, "Timeline CUE audio status.rotationCount"),
+    stallCount: requireInteger(value.stallCount, "Timeline CUE audio status.stallCount"),
+    configCount: requireInteger(value.configCount, "Timeline CUE audio status.configCount"),
+  };
+};
+
+export const parseAudioOutputDeviceNames = (raw: unknown): readonly string[] => {
+  const value = parseJsonPayload(raw, "audio output device inventory");
+  if (!Array.isArray(value)) throw new Error("audio output device inventory must be an array");
+  return value.map((name, index) => requireString(name, `audio output device inventory[${index}]`));
 };
 
 const requireAsioHeader = (
@@ -393,9 +629,30 @@ export const buildMachineAudioOutputProfile = (
   const deviceOutputChannels = requireInteger(draft.deviceOutputChannels, "deviceOutputChannels", 1);
   const programLeftOutput = channelToOneBased(draft.programLeft, "PROGRAM L", deviceOutputChannels);
   const programRightOutput = channelToOneBased(draft.programRight, "PROGRAM R", deviceOutputChannels);
-  const cueOutput = channelToOneBased(draft.cue, "CUE", deviceOutputChannels);
-  const selected = new Set([programLeftOutput, programRightOutput, cueOutput]);
-  if (selected.size !== 3) throw new Error("PROGRAM L, PROGRAM R, and CUE must use distinct outputs");
+  if (programLeftOutput === programRightOutput) {
+    throw new Error("PROGRAM L and PROGRAM R must use distinct outputs");
+  }
+  const selected = new Set([programLeftOutput, programRightOutput]);
+  let cueDelivery: MachineAudioOutputCueDelivery;
+  if (draft.cueRoute === "same-asio") {
+    const cueOutput = channelToOneBased(draft.cue, "CUE", deviceOutputChannels);
+    if (selected.has(cueOutput)) {
+      throw new Error("PROGRAM L, PROGRAM R, and CUE must use distinct outputs");
+    }
+    selected.add(cueOutput);
+    cueDelivery = { mode: "sameAsio", cueOutput };
+  } else if (draft.cueRoute === "split-device") {
+    if (draft.cue !== null) {
+      throw new Error("split-device CUE delivery cannot carry an ASIO CUE channel");
+    }
+    cueDelivery = {
+      mode: "explicitWdm",
+      deviceName: requireString(draft.cueDeviceName, "CUE WDM deviceName"),
+      topologyFingerprint: requireString(draft.cueTopologyFingerprint, "CUE WDM topologyFingerprint"),
+    };
+  } else {
+    throw new Error("cueRoute must be same-asio or split-device");
+  }
   const spareOutput = draft.spare === null
     ? undefined
     : channelToOneBased(draft.spare, "Spare", deviceOutputChannels);
@@ -412,7 +669,7 @@ export const buildMachineAudioOutputProfile = (
     deviceOutputChannels,
     programLeftOutput,
     programRightOutput,
-    cueOutput,
+    cueDelivery,
     ...(spareOutput === undefined ? {} : { spareOutput }),
   };
 };
@@ -428,6 +685,9 @@ const normalView = (): AudioOutputView => ({
   programLeft: null,
   programRight: null,
   cue: null,
+  cueRoute: "same-asio",
+  cueDeviceName: null,
+  cueTopologyFingerprint: null,
   spare: null,
   catalogGeneration: 0,
   state: "Ready",
@@ -439,8 +699,53 @@ const emptyOptions = (): AudioOutputOptions => ({
   sampleRates: [],
   bufferFrames: [],
   channels: [],
+  cueEndpoints: [],
   hasSpare: false,
 });
+
+const mergeCueEndpointOptions = (
+  statusEndpoints: readonly TimelineCueAudioEndpointRecord[],
+  enumeratedNames: readonly string[],
+): readonly AudioOutputCueEndpointOption[] => {
+  const occurrencesByName = new Map<string, number>();
+  for (const name of enumeratedNames) {
+    occurrencesByName.set(name, (occurrencesByName.get(name) ?? 0) + 1);
+  }
+  const statusOccurrencesByName = new Map<string, number>();
+  for (const endpoint of statusEndpoints) {
+    statusOccurrencesByName.set(
+      endpoint.name,
+      (statusOccurrencesByName.get(endpoint.name) ?? 0) + 1,
+    );
+  }
+  const endpointsByName = new Map<string, AudioOutputCueEndpointOption>();
+  for (const endpoint of statusEndpoints) {
+    const occurrences = Math.max(
+      occurrencesByName.get(endpoint.name) ?? 0,
+      endpoint.occurrences,
+      statusOccurrencesByName.get(endpoint.name) ?? 0,
+    );
+    endpointsByName.set(endpoint.name, {
+      name: endpoint.name,
+      occurrences,
+      // A repeated exact name is never safe to select, even if a stale or
+      // malformed status claims it is selectable.
+      selectable: statusOccurrencesByName.get(endpoint.name) === 1
+        && occurrences === 1
+        && endpoint.selectable,
+    });
+  }
+  for (const name of enumeratedNames) {
+    if (endpointsByName.has(name)) continue;
+    const occurrences = occurrencesByName.get(name) ?? 0;
+    endpointsByName.set(name, {
+      name,
+      occurrences,
+      selectable: occurrences === 1,
+    });
+  }
+  return [...endpointsByName.values()];
+};
 
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -526,6 +831,7 @@ export const createAudioOutputController = (
   let disposed = false;
   let requestGeneration = 0;
   let nativeStatus: AsioOutputStatusRecord | null = null;
+  let cueAudioStatus: TimelineCueAudioStatusRecord | null = null;
 
   const clearPreflightState = (): void => {
     setTestMode(null);
@@ -555,6 +861,15 @@ export const createAudioOutputController = (
   const commandFailure = (operation: string, error: unknown) => {
     setLocked(`Show ASIO ${operation} is unavailable or invalid: ${errorText(error)}`);
   };
+  const cueEndpointIsReady = (): boolean => {
+    if (view().cueRoute !== "split-device") return true;
+    const current = view();
+    const status = cueAudioStatus;
+    if (!status || !current.cueDeviceName || !current.cueTopologyFingerprint) return false;
+    if (status.observedTopologyFingerprint !== current.cueTopologyFingerprint) return false;
+    const endpoint = options().cueEndpoints.find((candidate) => candidate.name === current.cueDeviceName);
+    return endpoint?.selectable === true && endpoint.occurrences === 1;
+  };
   const profileDraft = (): MachineAudioOutputProfileDraft => {
     const current = view();
     const output = capabilities()?.output;
@@ -569,6 +884,9 @@ export const createAudioOutputController = (
       programLeft: current.programLeft,
       programRight: current.programRight,
       cue: current.cue,
+      cueRoute: current.cueRoute,
+      cueDeviceName: current.cueDeviceName,
+      cueTopologyFingerprint: current.cueTopologyFingerprint,
       spare: current.spare,
     };
   };
@@ -589,6 +907,7 @@ export const createAudioOutputController = (
     } catch {
       return;
     }
+    if (!cueEndpointIsReady()) return;
     const request = ++requestGeneration;
     void (async () => {
       setBusy(true);
@@ -698,6 +1017,38 @@ export const createAudioOutputController = (
     }
   };
 
+  const loadCueEndpoints = async (request: number): Promise<boolean> => {
+    if (disposed || request !== requestGeneration || view().backend !== "show-asio") return false;
+    try {
+      const rawDevices = await dependencies.invoke<unknown>("list_audio_output_devices");
+      if (disposed || request !== requestGeneration) return false;
+      const deviceNames = parseAudioOutputDeviceNames(rawDevices);
+      const rawStatus = await dependencies.invoke<unknown>("get_timeline_cue_audio_status");
+      if (disposed || request !== requestGeneration) return false;
+      const status = parseTimelineCueAudioStatus(rawStatus);
+      cueAudioStatus = status;
+      const cueEndpoints = mergeCueEndpointOptions(status.endpoints, deviceNames);
+      setOptions((current) => ({ ...current, cueEndpoints }));
+      if (view().cueRoute === "split-device" && !cueEndpointIsReady()) {
+        setLocked(
+          status.observedTopologyFingerprint === null
+            ? "CUE WDM endpoints are unavailable; explicitly select an endpoint before Start."
+            : "CUE WDM endpoint is missing, ambiguous, or topology-changed; Refresh and reselect before Start.",
+        );
+      }
+      return true;
+    } catch (error) {
+      if (!disposed && request === requestGeneration) {
+        cueAudioStatus = null;
+        setOptions((current) => ({ ...current, cueEndpoints: [] }));
+        if (view().cueRoute === "split-device") {
+          setLocked(`CUE WDM endpoint inventory is unavailable or invalid: ${errorText(error)}`);
+        }
+      }
+      return false;
+    }
+  };
+
   const refresh = async (): Promise<void> => {
     if (disposed) return;
     if (view().state === "Active" || view().state === "Fault") {
@@ -712,6 +1063,7 @@ export const createAudioOutputController = (
     }
     if (view().backend === "normal-wasapi") {
       clearPreflightState();
+      cueAudioStatus = null;
       setView(normalView());
       setOptions(emptyOptions());
       setCapabilities(null);
@@ -772,8 +1124,33 @@ export const createAudioOutputController = (
       }
       if (!(await loadCapabilities(currentDriverId, request)) || disposed || request !== requestGeneration) return;
       await loadStatus(request, true);
+      await loadCueEndpoints(request);
     } catch (error) {
       if (!disposed && request === requestGeneration) commandFailure("driver/status", error);
+    } finally {
+      if (!disposed && request === requestGeneration) setBusy(false);
+    }
+  };
+
+  const refreshCueEndpoints = async (): Promise<void> => {
+    if (disposed || view().backend !== "show-asio") return;
+    if (view().state === "Active" || view().state === "Fault") {
+      setView((current) => ({
+        ...current,
+        reason: "CUE WDM endpoint refresh is unavailable while ASIO output is Active or Fault; Stop/Close first.",
+      }));
+      return;
+    }
+    if (!dependencies.backendAvailable) {
+      if (view().cueRoute === "split-device") {
+        setLocked("CUE WDM endpoint inventory is unavailable in this build; output remains Locked.");
+      }
+      return;
+    }
+    const request = ++requestGeneration;
+    setBusy(true);
+    try {
+      await loadCueEndpoints(request);
     } finally {
       if (!disposed && request === requestGeneration) setBusy(false);
     }
@@ -786,7 +1163,9 @@ export const createAudioOutputController = (
     }
     if (disposed) return;
     clearPreflightState();
+    cueAudioStatus = null;
     setView((current) => ({ ...current, backend: "show-asio", state: "Locked", reason: "Show ASIO requires an explicit Refresh and revalidation." }));
+    setOptions(emptyOptions());
     setCapabilities(null);
     nativeStatus = null;
     void refresh();
@@ -801,9 +1180,13 @@ export const createAudioOutputController = (
       programLeft: null,
       programRight: null,
       cue: null,
+      cueDeviceName: null,
+      cueTopologyFingerprint: null,
       spare: null,
     }));
     if (!accepted || !dependencies.backendAvailable) return;
+    cueAudioStatus = null;
+    setOptions((current) => ({ ...current, cueEndpoints: [] }));
     if (!nativeStatus || !isSafeForEnumeration(nativeStatus)) {
       setLocked("Driver capabilities are Locked until native lifecycle and router state are safe.");
       return;
@@ -830,9 +1213,71 @@ export const createAudioOutputController = (
   const setProgramRight = (programRight: number | null) => {
     if (setConfigurationValue((current) => ({ ...current, programRight }))) reselectConfiguredProfile();
   };
-  const setCue = (cue: number | null) => {
+  const setCueRoute = (cueRoute: AudioOutputCueRoute) => {
+    if (disposed || view().backend !== "show-asio") return;
+    if (view().state === "Active" || view().state === "Fault") return;
+    if (cueRoute !== "same-asio" && cueRoute !== "split-device") {
+      setLocked("CUE route is invalid; choose Same ASIO or Split device.");
+      return;
+    }
+    const accepted = setConfigurationValue((current) => ({
+      ...current,
+      cueRoute,
+      cue: cueRoute === "same-asio" ? current.cue : null,
+      cueDeviceName: cueRoute === "split-device" ? current.cueDeviceName : null,
+      cueTopologyFingerprint: cueRoute === "split-device" ? current.cueTopologyFingerprint : null,
+    }));
+    if (!accepted) return;
+    if (cueRoute === "split-device" && !cueEndpointIsReady()) {
+      setLocked("CUE WDM endpoint is not ready; explicitly select one before Start.");
+      if (cueAudioStatus === null || options().cueEndpoints.length === 0) {
+        void refreshCueEndpoints();
+      }
+    }
+    reselectConfiguredProfile();
+  };
+  const setCueDeviceName = (deviceName: string | null) => {
+    if (disposed || view().backend !== "show-asio" || view().cueRoute !== "split-device") return;
+    if (view().state === "Active" || view().state === "Fault") return;
+    if (deviceName !== null) {
+      const endpoint = options().cueEndpoints.find((candidate) => candidate.name === deviceName);
+      if (!endpoint || !endpoint.selectable || endpoint.occurrences !== 1) {
+        setLocked("CUE WDM endpoint is missing or ambiguous; select an exact endpoint before Start.");
+        return;
+      }
+      const observedTopologyFingerprint = cueAudioStatus?.observedTopologyFingerprint;
+      if (!observedTopologyFingerprint) {
+        setLocked("CUE WDM topology is unavailable; Refresh endpoints before selecting a device.");
+        return;
+      }
+      const accepted = setConfigurationValue((current) => ({
+        ...current,
+        cueDeviceName: deviceName,
+        cueTopologyFingerprint: observedTopologyFingerprint,
+        cue: null,
+      }));
+      if (accepted) reselectConfiguredProfile();
+      return;
+    }
+    if (setConfigurationValue((current) => ({
+      ...current,
+      cueDeviceName: null,
+      cueTopologyFingerprint: null,
+      cue: null,
+    }))) reselectConfiguredProfile();
+  };
+  const setCueChannel = (cue: number | null) => {
+    if (view().state === "Active" || view().state === "Fault") return;
+    if (view().cueRoute !== "same-asio") {
+      setLocked("CUE ASIO channel is unavailable while Split device is selected.");
+      return;
+    }
     if (setConfigurationValue((current) => ({ ...current, cue }))) reselectConfiguredProfile();
   };
+  const setCue = Object.assign(setCueChannel as AudioOutputCueChange, {
+    setRoute: setCueRoute,
+    setDeviceName: setCueDeviceName,
+  });
   const setSpare = (spare: number | null) => {
     if (setConfigurationValue((current) => ({ ...current, spare }))) reselectConfiguredProfile();
   };
@@ -903,6 +1348,9 @@ export const createAudioOutputController = (
     }
     try {
       machineAudioOutputProfileJson(profileDraft());
+      if (!cueEndpointIsReady()) {
+        throw new Error("CUE WDM endpoint is missing, ambiguous, or topology-changed");
+      }
     } catch (error) {
       setLocked(`ASIO Start is Locked: ${errorText(error)}`);
       return;
@@ -928,7 +1376,21 @@ export const createAudioOutputController = (
       }
     } catch (error) {
       if (!disposed && request === requestGeneration) {
-        setFault(`ASIO Start failed and output remains stopped: ${errorText(error)}`);
+        const startError = errorText(error);
+        // Start can fail after native ownership has changed (for example while
+        // rolling back a CUE admission). Re-read the authoritative state so
+        // Stop remains available for an Active/Fault session and never claim
+        // that output is stopped from a stale pre-Start snapshot.
+        const recoveredStatus = await loadStatus(request);
+        if (disposed || request !== requestGeneration || recoveredStatus === null) return;
+        if (recoveredStatus.routerState === "AsioActive"
+          || recoveredStatus.routerState === "Fault"
+          || recoveredStatus.state === "active"
+          || recoveredStatus.state === "fault") {
+          setFault(`ASIO Start failed after native ownership changed; Stop/Close is required: ${startError}`);
+        } else {
+          setLocked(`ASIO Start failed and native output is not Active: ${startError}`);
+        }
       }
     } finally {
       if (!disposed && request === requestGeneration) setBusy(false);
@@ -966,7 +1428,29 @@ export const createAudioOutputController = (
       }));
     } catch (error) {
       if (!disposed && request === requestGeneration) {
-        setFault(`ASIO Stop/Close failed; output remains Locked: ${errorText(error)}`);
+        const stopError = errorText(error);
+        // Stop/Close can cross the native router fence and still surface an
+        // error (for example a cleanup warning or transport-side exception).
+        // Re-read the authoritative native state before deciding whether the
+        // UI must remain Faulted.  A Locked router is safe to revalidate or
+        // return to Normal; AsioActive/Fault means ownership or fault is still
+        // present and must remain visible as Fault.
+        const recoveredStatus = await loadStatus(request);
+        if (disposed || request !== requestGeneration) return;
+        if (recoveredStatus?.routerState === "Locked") {
+          setLocked(
+            `ASIO Stop/Close reported an error after native output was fenced; router is Locked and can be returned to Normal: ${stopError}`,
+          );
+        } else if (recoveredStatus?.routerState === "AsioActive"
+          || recoveredStatus?.routerState === "Fault"
+          || recoveredStatus?.state === "active"
+          || recoveredStatus?.state === "fault") {
+          setFault(
+            `ASIO Stop/Close failed; native output remains ${recoveredStatus.routerState}: ${stopError}`,
+          );
+        } else {
+          setFault(`ASIO Stop/Close failed; output state could not be proven safe: ${stopError}`);
+        }
       }
     } finally {
       if (!disposed && request === requestGeneration) setBusy(false);
@@ -991,6 +1475,7 @@ export const createAudioOutputController = (
     }
     if (!dependencies.backendAvailable) {
       nativeStatus = null;
+      cueAudioStatus = null;
       clearPreflightState();
       setView(normalView());
       setOptions(emptyOptions());
@@ -1009,6 +1494,7 @@ export const createAudioOutputController = (
         throw new Error("native Normal selection did not publish the exact Normal status");
       }
       if (!disposed) {
+        cueAudioStatus = null;
         setView(normalView());
         setOptions(emptyOptions());
         setCapabilities(null);
@@ -1036,6 +1522,16 @@ export const createAudioOutputController = (
       setLocked(`ASIO ${operation} is available only while output is Active and the router is AsioActive.`);
       return false;
     }
+    if (operation === "solo" && view().cueRoute === "split-device") {
+      // Split-device has no native solo transport for either clock domain.
+      // Keep the owned Active state intact so a direct caller cannot make Stop
+      // unreachable by attempting an unsupported solo action.
+      setView((current) => ({
+        ...current,
+        reason: "ASIO solo is unavailable while Split device is selected; no external-WDM solo fallback exists.",
+      }));
+      return false;
+    }
     return true;
   };
 
@@ -1053,12 +1549,19 @@ export const createAudioOutputController = (
 
   const setTest = async (test: AudioOutputTest | null): Promise<void> => {
     if (!preflightActionIsAllowed("test")) return;
+    const splitDeviceCueCommand = view().cueRoute === "split-device"
+      && (test === "cue" || test === null);
+    const splitDeviceCueEnabled = test !== null;
     const request = ++requestGeneration;
     setBusy(true);
     try {
-      const rawStatus = await dependencies.invoke<unknown>("set_asio_output_test", {
-        request: { test: test ?? "off" },
-      });
+      const rawStatus = splitDeviceCueCommand
+        ? await dependencies.invoke<unknown>("set_explicit_wdm_cue_test", {
+          enabled: splitDeviceCueEnabled,
+        })
+        : await dependencies.invoke<unknown>("set_asio_output_test", {
+          request: { test: test ?? "off" },
+        });
       if (disposed || request !== requestGeneration) return;
       const status = parseActivePreflightStatus(rawStatus, "test");
       nativeStatus = status;
@@ -1067,6 +1570,9 @@ export const createAudioOutputController = (
         catalogGeneration: status.catalogGeneration,
       }));
       if (test !== null) setSoloModeState("none");
+      // The external WDM tone is bounded, but its native Sink remains owned
+      // until an explicit stop, replacement, Timeline Play, or route retire.
+      // Keep CUE selected so the panel's Stop test action remains reachable.
       setTestMode(test);
     } catch (error) {
       if (!disposed && request === requestGeneration) commandFailure("test", error);
@@ -1132,6 +1638,7 @@ export const createAudioOutputController = (
       || !nativeStatus.profileReady) return false;
     try {
       machineAudioOutputProfileJson(profileDraft());
+      if (!cueEndpointIsReady()) return false;
       return true;
     } catch {
       return false;
@@ -1164,7 +1671,8 @@ export const createAudioOutputController = (
     && !busy()
     && view().backend === "show-asio"
     && view().state === "Active"
-    && isActiveAsioOutputStatus(nativeStatus);
+    && isActiveAsioOutputStatus(nativeStatus)
+    && view().cueRoute === "same-asio";
   const livePlaybackActive = createMemo(() => dependencies.readLivePlaybackActive());
 
   return {
@@ -1191,8 +1699,11 @@ export const createAudioOutputController = (
     setProgramLeft,
     setProgramRight,
     setCue,
+    setCueRoute,
+    setCueDeviceName,
     setSpare,
     refresh,
+    refreshCueEndpoints,
     revalidate,
     start,
     stop,
@@ -1203,6 +1714,7 @@ export const createAudioOutputController = (
       disposed = true;
       requestGeneration += 1;
       nativeStatus = null;
+      cueAudioStatus = null;
       clearPreflightState();
       setBusy(false);
     },

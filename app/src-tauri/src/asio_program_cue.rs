@@ -7,7 +7,7 @@
 
 use engine::TimelineAudioLiveFence;
 use serde::{
-    de::{self, IgnoredAny, MapAccess, Visitor},
+    de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor},
     Deserialize, Serialize,
 };
 use std::collections::{BTreeSet, HashSet};
@@ -17,8 +17,10 @@ use std::sync::{
     Arc,
 };
 
-const MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION: u32 = 1;
+const MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION: u32 = 2;
+const LEGACY_MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION: u32 = 1;
 const MAX_PROFILE_BYTES: usize = 65_536;
+const MAX_PROFILE_STRING_BYTES: usize = 512;
 const MAX_DEVICE_OUTPUT_CHANNELS: u32 = u16::MAX as u32;
 const MAX_FIXED_BUFFER_FRAMES: u32 = 1_048_576;
 
@@ -73,6 +75,34 @@ pub(crate) enum PreflightClearReason {
     EngineLive,
 }
 
+/// The machine-local CUE destination.  The ASIO profile owns only the ASIO
+/// PROGRAM channels; an explicit WDM target is metadata for a separate WDM
+/// runtime and therefore has no ASIO channel number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum CueDelivery {
+    SameAsio {
+        #[serde(rename = "cueOutput")]
+        cue_output: u32,
+    },
+    ExplicitWdm {
+        #[serde(rename = "deviceName")]
+        device_name: String,
+        #[serde(rename = "topologyFingerprint")]
+        topology_fingerprint: String,
+    },
+}
+
+impl CueDelivery {
+    pub(crate) fn is_same_asio(&self) -> bool {
+        matches!(self, Self::SameAsio { .. })
+    }
+
+    pub(crate) fn is_external_wdm(&self) -> bool {
+        matches!(self, Self::ExplicitWdm { .. })
+    }
+}
+
 /// Strict machine-only schema.  `deny_unknown_fields` deliberately preserves a
 /// future/corrupt file as Locked rather than rewriting it into a lossy shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,9 +119,35 @@ pub(crate) struct MachineAsioOutputProfile {
     /// validation so Output 1 always becomes callback channel 0 exactly once.
     program_left_output: u32,
     program_right_output: u32,
-    cue_output: u32,
+    cue_delivery: CueDelivery,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spare_output: Option<u32>,
+}
+
+/// The only accepted legacy shape.  It is parsed separately so the V1
+/// `cueOutput` field can never be accepted by the V2 deserializer and so the
+/// migration remains an explicit, one-way conversion.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MachineAsioOutputProfileV1 {
+    schema_version: u32,
+    driver_id: String,
+    catalog_generation: u64,
+    sample_rate_hz: u32,
+    native_format: String,
+    fixed_buffer_frames: u32,
+    device_output_channels: u32,
+    program_left_output: u32,
+    program_right_output: u32,
+    cue_output: u32,
+    #[serde(default)]
+    spare_output: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineOutputProfileSchemaProbe {
+    schema_version: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +201,7 @@ impl FreshOutputCapabilityProof {
             // distinct in-range placeholders solely for this local check.
             program_left_output: 1,
             program_right_output: 2,
-            cue_output: 3,
+            cue_delivery: CueDelivery::SameAsio { cue_output: 3 },
             spare_output: None,
         };
         profile.validate_capability_tuple()?;
@@ -223,12 +279,146 @@ impl<'de> Deserialize<'de> for NoDuplicateJsonObject {
                             "duplicate machine ASIO output profile field {key:?}"
                         )));
                     }
-                    map.next_value::<IgnoredAny>()?;
+                    map.next_value_seed(NoDuplicateJsonValue)?;
                 }
                 Ok(NoDuplicateJsonObject)
             }
         }
         deserializer.deserialize_map(NoDuplicateVisitor)
+    }
+}
+
+/// A recursive JSON pre-scan.  `serde_json::Value` and `IgnoredAny` both lose
+/// duplicate object members, so every nested object/array is traversed with a
+/// seed before the typed profile deserializer is allowed to run.
+struct NoDuplicateJsonValue;
+
+impl<'de> DeserializeSeed<'de> for NoDuplicateJsonValue {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NoDuplicateJsonValueVisitor)
+    }
+}
+
+struct NoDuplicateJsonValueVisitor;
+
+impl<'de> Visitor<'de> for NoDuplicateJsonValueVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("any JSON value with no duplicate object keys")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate machine ASIO output profile field {key:?}"
+                )));
+            }
+            map.next_value_seed(NoDuplicateJsonValue)?;
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence.next_element_seed(NoDuplicateJsonValue)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_bytes<E>(self, _value: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_byte_buf<E>(self, _value: Vec<u8>) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(())
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        NoDuplicateJsonValue.deserialize(deserializer)
+    }
+
+    fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        NoDuplicateJsonValue.deserialize(deserializer)
     }
 }
 
@@ -288,6 +478,19 @@ impl MachineAsioOutputProfile {
         &self.native_format
     }
 
+    pub(crate) fn cue_delivery(&self) -> &CueDelivery {
+        &self.cue_delivery
+    }
+
+    /// Return the zero-based ASIO CUE channel, or `None` when CUE belongs to
+    /// the separately owned external WDM runtime.
+    pub(crate) fn asio_cue_output_index(&self) -> Option<usize> {
+        match self.cue_delivery {
+            CueDelivery::SameAsio { cue_output } => Some(self.zero_based(cue_output)),
+            CueDelivery::ExplicitWdm { .. } => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         device_output_channels: u32,
@@ -306,36 +509,69 @@ impl MachineAsioOutputProfile {
             device_output_channels,
             program_left_output,
             program_right_output,
-            cue_output,
+            cue_delivery: CueDelivery::SameAsio { cue_output },
             spare_output: None,
         }
     }
 
     /// Strict parse for machine-local storage.  The caller must keep the input
-    /// bytes unchanged whenever this returns `Err`; this function never applies
-    /// a default device, fallback route, migration, or partial repair.
+    /// bytes unchanged whenever this returns `Err`; invalid input never receives
+    /// a default device, fallback route, or partial repair. Schema V1 alone has
+    /// the explicit one-way migration to the equivalent V2 `SameAsio` route.
     pub(crate) fn parse_storage_text(text: &str) -> Result<Self, OutputProfileLock> {
         if text.len() > MAX_PROFILE_BYTES {
             return Err(OutputProfileLock::Oversized);
         }
         serde_json::from_str::<NoDuplicateJsonObject>(text)
             .map_err(|error| OutputProfileLock::InvalidJson(error.to_string()))?;
-        let profile: Self = serde_json::from_str(text)
+        let schema = serde_json::from_str::<MachineOutputProfileSchemaProbe>(text)
             .map_err(|error| OutputProfileLock::InvalidJson(error.to_string()))?;
-        if profile.schema_version > MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
-            return Err(OutputProfileLock::FutureSchema {
-                actual: profile.schema_version,
-                expected: MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION,
-            });
-        }
-        if profile.schema_version != MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
-            return Err(OutputProfileLock::Invalid(format!(
-                "machine ASIO output profile schema {} is not supported",
-                profile.schema_version
-            )));
-        }
+        let profile = match schema.schema_version {
+            LEGACY_MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION => {
+                let legacy: MachineAsioOutputProfileV1 = serde_json::from_str(text)
+                    .map_err(|error| OutputProfileLock::InvalidJson(error.to_string()))?;
+                Self::migrate_v1(legacy)?
+            }
+            MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION => serde_json::from_str(text)
+                .map_err(|error| OutputProfileLock::InvalidJson(error.to_string()))?,
+            actual if actual > MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION => {
+                return Err(OutputProfileLock::FutureSchema {
+                    actual,
+                    expected: MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION,
+                });
+            }
+            actual => {
+                return Err(OutputProfileLock::Invalid(format!(
+                    "machine ASIO output profile schema {actual} is not supported"
+                )));
+            }
+        };
         profile.validate()?;
         Ok(profile)
+    }
+
+    fn migrate_v1(legacy: MachineAsioOutputProfileV1) -> Result<Self, OutputProfileLock> {
+        if legacy.schema_version != LEGACY_MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
+            return Err(OutputProfileLock::Invalid(
+                "machine ASIO output profile legacy migration received an unexpected schema"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            schema_version: MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION,
+            driver_id: legacy.driver_id,
+            catalog_generation: legacy.catalog_generation,
+            sample_rate_hz: legacy.sample_rate_hz,
+            native_format: legacy.native_format,
+            fixed_buffer_frames: legacy.fixed_buffer_frames,
+            device_output_channels: legacy.device_output_channels,
+            program_left_output: legacy.program_left_output,
+            program_right_output: legacy.program_right_output,
+            cue_delivery: CueDelivery::SameAsio {
+                cue_output: legacy.cue_output,
+            },
+            spare_output: legacy.spare_output,
+        })
     }
 
     /// Parses persisted bytes without rewriting them on a malformed, unknown,
@@ -360,12 +596,23 @@ impl MachineAsioOutputProfile {
     }
 
     pub(crate) fn validate(&self) -> Result<(), OutputProfileLock> {
+        if self.schema_version > MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
+            return Err(OutputProfileLock::FutureSchema {
+                actual: self.schema_version,
+                expected: MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION,
+            });
+        }
+        if self.schema_version != MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
+            return Err(OutputProfileLock::Invalid(format!(
+                "machine ASIO output profile schema {} is not supported",
+                self.schema_version
+            )));
+        }
         self.validate_capability_tuple()?;
         let mut selected = BTreeSet::new();
         for (name, channel) in [
             ("programLeftOutput", self.program_left_output),
             ("programRightOutput", self.program_right_output),
-            ("cueOutput", self.cue_output),
         ] {
             if channel == 0 || channel > self.device_output_channels {
                 return Err(OutputProfileLock::Invalid(format!(
@@ -377,6 +624,36 @@ impl MachineAsioOutputProfile {
                 return Err(OutputProfileLock::Invalid(format!(
                     "machine ASIO output profile duplicates Output {channel}"
                 )));
+            }
+        }
+        match &self.cue_delivery {
+            CueDelivery::SameAsio { cue_output } => {
+                if *cue_output == 0 || *cue_output > self.device_output_channels {
+                    return Err(OutputProfileLock::Invalid(format!(
+                        "machine ASIO output profile cueDelivery.cueOutput Output {cue_output} is outside Output 1..{}",
+                        self.device_output_channels
+                    )));
+                }
+                if !selected.insert(*cue_output) {
+                    return Err(OutputProfileLock::Invalid(format!(
+                        "machine ASIO output profile duplicates Output {cue_output}"
+                    )));
+                }
+            }
+            CueDelivery::ExplicitWdm {
+                device_name,
+                topology_fingerprint,
+            } => {
+                validate_profile_text(
+                    "cueDelivery.deviceName",
+                    device_name,
+                    MAX_PROFILE_STRING_BYTES,
+                )?;
+                validate_profile_text(
+                    "cueDelivery.topologyFingerprint",
+                    topology_fingerprint,
+                    MAX_PROFILE_STRING_BYTES,
+                )?;
             }
         }
         if let Some(channel) = self.spare_output {
@@ -396,13 +673,11 @@ impl MachineAsioOutputProfile {
     }
 
     fn validate_capability_tuple(&self) -> Result<(), OutputProfileLock> {
-        if self.driver_id.trim() != self.driver_id
-            || !self.driver_id.starts_with("asio:")
-            || self.driver_id.len() <= "asio:".len()
-        {
+        if !valid_profile_driver_id(&self.driver_id) {
             return Err(OutputProfileLock::Invalid(
-                "machine ASIO output profile driverId must be an explicit asio:<driver name> identity"
-                    .to_owned(),
+                format!(
+                    "machine ASIO output profile driverId must be an explicit asio:<driver name> identity without surrounding whitespace, control characters, or more than {MAX_PROFILE_STRING_BYTES} UTF-8 bytes"
+                ),
             ));
         }
         if self.catalog_generation == 0 {
@@ -452,8 +727,45 @@ impl MachineAsioOutputProfile {
     }
 
     fn cue_index(&self) -> usize {
-        self.zero_based(self.cue_output)
+        self.asio_cue_output_index()
+            .expect("cue_index is only valid for sameAsio delivery")
     }
+}
+
+fn valid_profile_driver_id(value: &str) -> bool {
+    value.starts_with("asio:")
+        && value.len() > "asio:".len()
+        && value.len() <= MAX_PROFILE_STRING_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn validate_profile_text(
+    field: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), OutputProfileLock> {
+    if value.trim().is_empty() {
+        return Err(OutputProfileLock::Invalid(format!(
+            "machine ASIO output profile {field} must not be empty"
+        )));
+    }
+    if value.trim() != value {
+        return Err(OutputProfileLock::Invalid(format!(
+            "machine ASIO output profile {field} must not have surrounding whitespace"
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(OutputProfileLock::Invalid(format!(
+            "machine ASIO output profile {field} must not contain control characters"
+        )));
+    }
+    if value.len() > max_bytes {
+        return Err(OutputProfileLock::Invalid(format!(
+            "machine ASIO output profile {field} exceeds the {max_bytes}-byte UTF-8 limit"
+        )));
+    }
+    Ok(())
 }
 
 /// A snapshot of an already validated machine profile used by the pure
@@ -486,6 +798,12 @@ impl AsioPreflightMapper {
             PreflightTarget::Off => Err(OutputProfileLock::Invalid(
                 "ASIO preflight Off target does not produce a test frame".to_owned(),
             )),
+            PreflightTarget::Cue if self.profile.cue_delivery().is_external_wdm() => {
+                Err(OutputProfileLock::Invalid(
+                    "ASIO CUE preflight test is unavailable for external WDM delivery; the external WDM runtime owns CUE testing"
+                        .to_owned(),
+                ))
+            }
             PreflightTarget::Spare if self.profile.spare_output.is_none() => {
                 Err(OutputProfileLock::Invalid(
                     "ASIO preflight Spare target requires an explicitly selected Spare output"
@@ -494,6 +812,16 @@ impl AsioPreflightMapper {
             }
             _ => Ok(()),
         }
+    }
+
+    pub(crate) fn validate_solo(&self, mode: PreflightSolo) -> Result<(), OutputProfileLock> {
+        if mode == PreflightSolo::CueOnly && self.profile.cue_delivery().is_external_wdm() {
+            return Err(OutputProfileLock::Invalid(
+                "ASIO CUE solo is unavailable for external WDM delivery; the external WDM runtime owns CUE testing"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// Map one bounded operator test target into a complete device-width
@@ -719,15 +1047,17 @@ impl From<OutputProfileLock> for PreflightStateError {
 }
 
 /// Ephemeral operator preflight state.  This intentionally has no serde
-/// derives, storage methods, or profile fields: a test/solo selection expires
-/// or is explicitly cleared on transport rotation, Stop, or Fault and can
-/// never become project or machine-profile data.
+/// derives or storage methods: a test/solo selection expires or is explicitly
+/// cleared on transport rotation, Stop, or Fault and can never become project
+/// or machine-profile data.  The non-serializable cue availability bit only
+/// binds this ephemeral state to the validated mapper's delivery mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AsioPreflightState {
     identity: AsioPreflightIdentity,
     phase: PreflightPhase,
     live_playback_active: bool,
     engine_live_active: bool,
+    cue_preflight_available: bool,
     test: Option<ActivePreflightTest>,
     solo: PreflightSolo,
 }
@@ -746,6 +1076,19 @@ impl AsioPreflightState {
         Self::from_identity_in_phase(identity, PreflightPhase::Active)
     }
 
+    /// Construct state bound to the validated machine profile.  External WDM
+    /// CUE remains owned by its separate runtime, so this state rejects CUE
+    /// Test/Solo admission while preserving the legacy sameAsio constructor.
+    #[cfg(test)]
+    pub(crate) fn from_identity_with_mapper(
+        identity: AsioPreflightIdentity,
+        mapper: &AsioPreflightMapper,
+    ) -> Self {
+        let mut state = Self::from_identity(identity);
+        state.cue_preflight_available = mapper.profile.cue_delivery().is_same_asio();
+        state
+    }
+
     /// Construct a state holder before the ASIO session has been admitted.
     /// The identity is still retained so every later operation can be checked
     /// against the exact session/transport pair that the caller presents.
@@ -762,6 +1105,7 @@ impl AsioPreflightState {
             phase,
             live_playback_active: false,
             engine_live_active: false,
+            cue_preflight_available: true,
             test: None,
             solo: PreflightSolo::None,
         }
@@ -887,6 +1231,9 @@ impl AsioPreflightState {
             self.test = None;
             return Ok(());
         }
+        if target == PreflightTarget::Cue && !self.cue_preflight_available {
+            return Err(external_wdm_cue_test_rejected());
+        }
         if target == PreflightTarget::Spare {
             return Err(PreflightStateError::SpareUnavailable);
         }
@@ -930,6 +1277,7 @@ impl AsioPreflightState {
         drain_active: bool,
     ) -> Result<(), PreflightStateError> {
         self.require_active_and_quiet(identity)?;
+        self.cue_preflight_available = mapper.profile.cue_delivery().is_same_asio();
         if target == PreflightTarget::Off {
             self.test = None;
             return Ok(());
@@ -979,6 +1327,37 @@ impl AsioPreflightState {
         self.set_solo_with_live_fence(mode, identity, now_ms, None, false)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_solo_with_mapper(
+        &mut self,
+        mapper: &AsioPreflightMapper,
+        mode: PreflightSolo,
+        identity: AsioPreflightIdentity,
+        now_ms: u64,
+    ) -> Result<(), PreflightStateError> {
+        self.set_solo_with_mapper_and_live_fence(mapper, mode, identity, now_ms, None, false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_solo_with_mapper_and_live_fence(
+        &mut self,
+        mapper: &AsioPreflightMapper,
+        mode: PreflightSolo,
+        identity: AsioPreflightIdentity,
+        now_ms: u64,
+        live_fence: Option<&TimelineAudioLiveFence>,
+        drain_active: bool,
+    ) -> Result<(), PreflightStateError> {
+        self.set_solo_with_live_fence_inner(
+            mode,
+            identity,
+            now_ms,
+            live_fence,
+            drain_active,
+            Some(mapper),
+        )
+    }
+
     /// Solo admission with the authoritative Timeline live fence checked
     /// while this state is held.  Rejected live admission also clears a stale
     /// selection so it cannot resume when live playback exits.
@@ -990,13 +1369,35 @@ impl AsioPreflightState {
         live_fence: Option<&TimelineAudioLiveFence>,
         drain_active: bool,
     ) -> Result<(), PreflightStateError> {
+        self.set_solo_with_live_fence_inner(mode, identity, now_ms, live_fence, drain_active, None)
+    }
+
+    fn set_solo_with_live_fence_inner(
+        &mut self,
+        mode: PreflightSolo,
+        identity: AsioPreflightIdentity,
+        now_ms: u64,
+        live_fence: Option<&TimelineAudioLiveFence>,
+        drain_active: bool,
+        mapper: Option<&AsioPreflightMapper>,
+    ) -> Result<(), PreflightStateError> {
         self.require_active_and_quiet(identity)?;
+        if let Some(mapper) = mapper {
+            self.cue_preflight_available = mapper.profile.cue_delivery().is_same_asio();
+        }
         self.clear_if_expired_at(now_ms);
         if mode != PreflightSolo::None
             && (drain_active || live_fence.is_some_and(TimelineAudioLiveFence::active))
         {
             self.clear_with_reason(PreflightClearReason::EngineLive);
             return Err(PreflightStateError::LivePlaybackActive);
+        }
+        if let Some(mapper) = mapper {
+            mapper
+                .validate_solo(mode)
+                .map_err(PreflightStateError::Mapping)?;
+        } else if mode == PreflightSolo::CueOnly && !self.cue_preflight_available {
+            return Err(external_wdm_cue_solo_rejected());
         }
         if mode != PreflightSolo::None {
             if let Some(test) = self.test {
@@ -1228,6 +1629,21 @@ fn non_none_solo(mode: PreflightSolo) -> Option<PreflightSolo> {
     }
 }
 
+#[cfg(test)]
+fn external_wdm_cue_test_rejected() -> PreflightStateError {
+    PreflightStateError::Mapping(OutputProfileLock::Invalid(
+        "ASIO CUE preflight test is unavailable for external WDM delivery; the external WDM runtime owns CUE testing"
+            .to_owned(),
+    ))
+}
+
+fn external_wdm_cue_solo_rejected() -> PreflightStateError {
+    PreflightStateError::Mapping(OutputProfileLock::Invalid(
+        "ASIO CUE solo is unavailable for external WDM delivery; the external WDM runtime owns CUE testing"
+            .to_owned(),
+    ))
+}
+
 fn checked_expiry(now_ms: u64, duration_ms: u64) -> Result<u64, PreflightStateError> {
     if duration_ms == 0 || duration_ms > PREFLIGHT_MAX_DURATION_MS {
         return Err(PreflightStateError::InvalidDuration);
@@ -1251,11 +1667,23 @@ impl MachineAsioOutputProfileState {
     /// after live capability revalidation has succeeded.
     pub(crate) fn serialize_ready(&self) -> Result<Vec<u8>, OutputProfileLock> {
         match self {
-            Self::Ready(profile) => serde_json::to_vec(profile).map_err(|error| {
-                OutputProfileLock::Invalid(format!(
-                    "machine ASIO output profile serialization failed: {error}"
-                ))
-            }),
+            Self::Ready(profile) => {
+                profile.validate()?;
+                if profile.schema_version != MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION {
+                    return Err(OutputProfileLock::Invalid(
+                        "machine ASIO output profile serialization requires schema 2".to_owned(),
+                    ));
+                }
+                let bytes = serde_json::to_vec(profile).map_err(|error| {
+                    OutputProfileLock::Invalid(format!(
+                        "machine ASIO output profile serialization failed: {error}"
+                    ))
+                })?;
+                if bytes.len() > MAX_PROFILE_BYTES {
+                    return Err(OutputProfileLock::Oversized);
+                }
+                Ok(bytes)
+            }
             Self::Locked { reason, .. } => Err(OutputProfileLock::Invalid(format!(
                 "machine ASIO output profile is locked and cannot be rewritten: {reason}"
             ))),
@@ -1328,10 +1756,18 @@ pub(crate) fn map_frame(
             "PROGRAM frame contains non-finite audio".to_owned(),
         ));
     }
-    let cue = cue.mono_gain_safe()?;
+    let asio_cue = profile
+        .cue_delivery()
+        .is_same_asio()
+        .then(|| cue.mono_gain_safe())
+        .transpose()?;
     destination[profile.program_left_index()] = program_left;
     destination[profile.program_right_index()] = program_right;
-    destination[profile.cue_index()] = cue;
+    if let Some(cue) = asio_cue {
+        destination[profile
+            .asio_cue_output_index()
+            .expect("sameAsio delivery must have an ASIO CUE output")] = cue;
+    }
     Ok(())
 }
 
@@ -1341,7 +1777,7 @@ mod tests {
 
     fn profile() -> MachineAsioOutputProfile {
         MachineAsioOutputProfile {
-            schema_version: 1,
+            schema_version: 2,
             driver_id: "asio:Generic multichannel".to_owned(),
             catalog_generation: 9,
             sample_rate_hz: 48_000,
@@ -1350,7 +1786,7 @@ mod tests {
             device_output_channels: 7,
             program_left_output: 5,
             program_right_output: 1,
-            cue_output: 7,
+            cue_delivery: CueDelivery::SameAsio { cue_output: 7 },
             spare_output: Some(3),
         }
     }
@@ -1396,13 +1832,15 @@ mod tests {
     #[test]
     fn duplicate_or_out_of_range_machine_outputs_lock_without_default_fallback() {
         let mut duplicate = profile();
-        duplicate.cue_output = duplicate.program_left_output;
+        duplicate.cue_delivery = CueDelivery::SameAsio {
+            cue_output: duplicate.program_left_output,
+        };
         assert!(matches!(
             duplicate.validate(),
             Err(OutputProfileLock::Invalid(_))
         ));
         let mut out_of_range = profile();
-        out_of_range.cue_output = 8;
+        out_of_range.cue_delivery = CueDelivery::SameAsio { cue_output: 8 };
         assert!(matches!(
             out_of_range.validate(),
             Err(OutputProfileLock::Invalid(_))
@@ -1412,7 +1850,7 @@ mod tests {
     #[test]
     fn future_and_unknown_machine_profiles_fail_closed() {
         let future = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "driverId": "asio:Generic multichannel",
             "catalogGeneration": 9,
             "sampleRateHz": 48000,
@@ -1421,7 +1859,7 @@ mod tests {
             "deviceOutputChannels": 7,
             "programLeftOutput": 5,
             "programRightOutput": 1,
-            "cueOutput": 7
+            "cueDelivery": {"mode": "sameAsio", "cueOutput": 7}
         });
         assert!(matches!(
             MachineAsioOutputProfile::parse_storage_text(&future.to_string()),
@@ -1441,9 +1879,207 @@ mod tests {
             MachineAsioOutputProfile::parse_storage_text(
                 &serde_json::Value::Object(unknown).to_string()
             ),
-            Err(OutputProfileLock::InvalidJson(_))
+            Err(OutputProfileLock::FutureSchema { .. })
         ));
         let duplicate = r#"{"schemaVersion":1,"driverId":"asio:Generic multichannel","catalogGeneration":9,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":7,"programLeftOutput":5,"programRightOutput":1,"cueOutput":7,"cueOutput":7}"#;
+        assert!(matches!(
+            MachineAsioOutputProfile::parse_storage_text(duplicate),
+            Err(OutputProfileLock::InvalidJson(_))
+        ));
+    }
+
+    fn external_profile() -> MachineAsioOutputProfile {
+        let mut profile = profile();
+        profile.cue_delivery = CueDelivery::ExplicitWdm {
+            device_name: "WDM Cue Device".to_owned(),
+            topology_fingerprint: "wdm-topology-v1".to_owned(),
+        };
+        profile
+    }
+
+    #[test]
+    fn v1_storage_migrates_once_to_same_asio_and_serializes_only_v2() {
+        let legacy = r#"{
+            "schemaVersion":1,
+            "driverId":"asio:Generic multichannel",
+            "catalogGeneration":9,
+            "sampleRateHz":48000,
+            "nativeFormat":"f32",
+            "fixedBufferFrames":256,
+            "deviceOutputChannels":7,
+            "programLeftOutput":5,
+            "programRightOutput":1,
+            "cueOutput":7,
+            "spareOutput":3
+        }"#;
+        let migrated = MachineAsioOutputProfile::parse_storage_text(legacy).unwrap();
+        assert_eq!(
+            migrated.schema_version,
+            MACHINE_OUTPUT_PROFILE_SCHEMA_VERSION
+        );
+        assert!(matches!(
+            migrated.cue_delivery(),
+            CueDelivery::SameAsio { cue_output: 7 }
+        ));
+        assert_eq!(migrated.asio_cue_output_index(), Some(6));
+
+        let state = MachineAsioOutputProfileState::Ready(migrated);
+        let serialized = state.serialize_ready().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(value["schemaVersion"], serde_json::json!(2));
+        assert_eq!(
+            value["cueDelivery"],
+            serde_json::json!({"mode":"sameAsio", "cueOutput":7})
+        );
+        assert!(value.get("cueOutput").is_none());
+    }
+
+    #[test]
+    fn v2_same_asio_roundtrip_preserves_exact_cue_delivery_shape() {
+        let bytes = serde_json::to_vec(&profile()).unwrap();
+        let parsed =
+            MachineAsioOutputProfile::parse_storage_text(std::str::from_utf8(&bytes).unwrap())
+                .unwrap();
+        assert_eq!(parsed, profile());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&parsed_state_bytes(&parsed)).unwrap()
+                ["cueDelivery"],
+            serde_json::json!({"mode":"sameAsio", "cueOutput":7})
+        );
+    }
+
+    fn parsed_state_bytes(profile: &MachineAsioOutputProfile) -> Vec<u8> {
+        MachineAsioOutputProfileState::Ready(profile.clone())
+            .serialize_ready()
+            .unwrap()
+    }
+
+    #[test]
+    fn external_wdm_validation_has_no_asio_cue_channel_and_rejects_invalid_strings() {
+        let external = external_profile();
+        assert!(external.validate().is_ok());
+        assert!(external.cue_delivery().is_external_wdm());
+        assert_eq!(external.asio_cue_output_index(), None);
+
+        let mut duplicate = external.clone();
+        duplicate.spare_output = Some(duplicate.program_left_output);
+        assert!(matches!(
+            duplicate.validate(),
+            Err(OutputProfileLock::Invalid(_))
+        ));
+
+        for (device_name, topology_fingerprint) in [
+            ("", "wdm-topology-v1"),
+            (" WDM Cue Device", "wdm-topology-v1"),
+            ("WDM\u{0007}Cue Device", "wdm-topology-v1"),
+            ("WDM Cue Device", ""),
+            ("WDM Cue Device", " wdm-topology-v1"),
+            ("WDM Cue Device", "wdm\u{0007}topology-v1"),
+        ] {
+            let mut invalid = external.clone();
+            invalid.cue_delivery = CueDelivery::ExplicitWdm {
+                device_name: device_name.to_owned(),
+                topology_fingerprint: topology_fingerprint.to_owned(),
+            };
+            assert!(matches!(
+                invalid.validate(),
+                Err(OutputProfileLock::Invalid(_))
+            ));
+        }
+
+        let mut oversize = external;
+        oversize.cue_delivery = CueDelivery::ExplicitWdm {
+            device_name: "x".repeat(MAX_PROFILE_STRING_BYTES + 1),
+            topology_fingerprint: "wdm-topology-v1".to_owned(),
+        };
+        assert!(matches!(
+            oversize.validate(),
+            Err(OutputProfileLock::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn v2_explicit_wdm_roundtrip_is_camel_case_and_invalid_variants_preserve_bytes_locked() {
+        let external = external_profile();
+        let bytes = parsed_state_bytes(&external);
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["cueDelivery"],
+            serde_json::json!({
+                "mode": "explicitWdm",
+                "deviceName": "WDM Cue Device",
+                "topologyFingerprint": "wdm-topology-v1"
+            })
+        );
+        assert_eq!(
+            MachineAsioOutputProfile::parse_storage_text(std::str::from_utf8(&bytes).unwrap())
+                .unwrap(),
+            external
+        );
+
+        let invalid_cases = [
+            r#"{"schemaVersion":2,"driverId":"asio:Generic multichannel","catalogGeneration":9,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":7,"programLeftOutput":5,"programRightOutput":1,"cueDelivery":{"mode":"explicitWdm","deviceName":"WDM Cue Device","topologyFingerprint":"wdm-topology-v1","unknown":true},"spareOutput":3}"#,
+            r#"{"schemaVersion":2,"driverId":"asio:Generic multichannel","catalogGeneration":9,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":7,"programLeftOutput":5,"programRightOutput":1,"cueDelivery":{"mode":"futureRoute","deviceName":"WDM Cue Device","topologyFingerprint":"wdm-topology-v1"},"spareOutput":3}"#,
+            r#"{"schemaVersion":3,"driverId":"asio:Generic multichannel","catalogGeneration":9,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":7,"programLeftOutput":5,"programRightOutput":1,"cueDelivery":{"mode":"explicitWdm","deviceName":"WDM Cue Device","topologyFingerprint":"wdm-topology-v1"},"spareOutput":3}"#,
+        ];
+        for text in invalid_cases {
+            let original = text.as_bytes().to_vec();
+            let state = MachineAsioOutputProfile::restore_storage_bytes(original.clone());
+            assert_eq!(state.locked_bytes(), Some(original.as_slice()));
+            assert!(state.serialize_ready().is_err());
+        }
+    }
+
+    #[test]
+    fn external_wdm_keeps_asio_cue_silent_and_rejects_cue_test_and_solo() {
+        let external = external_profile();
+        let mapper = AsioPreflightMapper::new(&external).unwrap();
+        assert!(matches!(
+            mapper.validate_target(PreflightTarget::Cue),
+            Err(OutputProfileLock::Invalid(message)) if message.contains("external WDM")
+        ));
+
+        let mut frame = [99.0; 7];
+        map_frame(
+            &external,
+            0.25,
+            -0.5,
+            CueFrame::Stereo {
+                left: 0.8,
+                right: -0.2,
+            },
+            &mut frame,
+        )
+        .unwrap();
+        assert_eq!(frame, [-0.5, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0]);
+
+        frame.fill(99.0);
+        assert!(mapper.map_target(PreflightTarget::Cue, &mut frame).is_err());
+        assert_eq!(frame, [0.0; 7]);
+
+        let identity = identity(40, 1);
+        let mut state = AsioPreflightState::from_identity_with_mapper(identity, &mapper);
+        assert!(matches!(
+            state.begin_test_with_mapper(&mapper, PreflightTarget::Cue, identity, 0, 100),
+            Err(PreflightStateError::Mapping(OutputProfileLock::Invalid(message)))
+                if message.contains("external WDM")
+        ));
+        assert!(matches!(
+            state.set_solo(PreflightSolo::CueOnly, identity, 0),
+            Err(PreflightStateError::Mapping(OutputProfileLock::Invalid(message)))
+                if message.contains("external WDM")
+        ));
+        assert!(matches!(
+            state.set_solo_with_mapper(&mapper, PreflightSolo::CueOnly, identity, 0),
+            Err(PreflightStateError::Mapping(OutputProfileLock::Invalid(message)))
+                if message.contains("external WDM")
+        ));
+        assert_eq!(state.solo(), PreflightSolo::None);
+    }
+
+    #[test]
+    fn nested_duplicate_keys_are_rejected_before_v2_deserialization() {
+        let duplicate = r#"{"schemaVersion":2,"driverId":"asio:Generic multichannel","catalogGeneration":9,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":7,"programLeftOutput":5,"programRightOutput":1,"cueDelivery":{"mode":"sameAsio","cueOutput":7,"cueOutput":7}}"#;
         assert!(matches!(
             MachineAsioOutputProfile::parse_storage_text(duplicate),
             Err(OutputProfileLock::InvalidJson(_))
@@ -1462,7 +2098,7 @@ mod tests {
             b"{not JSON".to_vec(),
             vec![0xff, 0xfe, 0xfd],
             vec![b'x'; MAX_PROFILE_BYTES + 1],
-            br#"{"schemaVersion":2,"driverId":"asio:Future","catalogGeneration":1,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":3,"programLeftOutput":1,"programRightOutput":2,"cueOutput":3}"#.to_vec(),
+            br#"{"schemaVersion":3,"driverId":"asio:Future","catalogGeneration":1,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":3,"programLeftOutput":1,"programRightOutput":2,"cueDelivery":{"mode":"sameAsio","cueOutput":3}}"#.to_vec(),
             br#"{"schemaVersion":1,"driverId":"asio:Unknown","catalogGeneration":1,"sampleRateHz":48000,"nativeFormat":"f32","fixedBufferFrames":256,"deviceOutputChannels":3,"programLeftOutput":1,"programRightOutput":2,"cueOutput":3,"unknown":true}"#.to_vec(),
         ];
         for bytes in cases {

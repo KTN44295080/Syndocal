@@ -1,9 +1,39 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-28
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.26`. This is a source-only checkpoint for the current App structural split and synchronized metadata: the alpha.26 native build, artifact identity, launch, and native UI acceptance are unbuilt/unverified. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.26 evidence. Historical alpha.25 native and DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Updated: 2026-08-29
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.30`. The current alpha.30 worktree contains the hybrid ASIO PROGRAM + explicit WDM CUE source/UI tranche and final software-gate evidence, but it has no accepted alpha.30 native artifact, launch, real-device audition, physical-I/O, or show-completion evidence. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.30 evidence. Historical alpha.25 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-28 current alpha.26 source-only App structural split checkpoint
+## 2026-08-29 current alpha.30 hybrid PROGRAM/CUE source checkpoint
+
+Alpha.30 is the current source/UI tranche for arbitrary PROGRAM/CUE device
+assignment. `CueDelivery::SameAsio` keeps PROGRAM and CUE on the selected ASIO
+stream and shared clock; `CueDelivery::ExplicitWdm` keeps PROGRAM on ASIO while
+the explicitly named, topology-fenced WDM endpoint owns CUE. The current source
+also wires Timeline CUE clips, generated Click/Guide, and the explicit CUE test
+path through the selected logical route. Missing, ambiguous, stale, changed, or
+failed endpoint/session state is represented as a visible fail-closed route;
+the source does not authorize ASIO/PROGRAM/default-device fallback or CUE
+leakage to PROGRAM. Session/generation fences cover route activation,
+publication, timeline preparation, and retirement paths.
+
+The final current-tree software gates passed with first-party warnings 0:
+the exact MSVC 14.44 Community linker was pinned and first in `where.exe`,
+`cargo test -p syndocal --features asio -- --nocapture --test-threads=1`
+finished `1435 passed / 0 failed / 12 ignored`, and the focused
+`media_audio_playback_tests` gate finished `64/64`. `cargo fmt --all -- --check`,
+`git diff --check` (line-ending notices only), TypeScript, Vite, frontend command
+routing, audio-control `74` static plus `57` runtime assertions, audio-panel `53`
+assertions, localization `3615/3615`, and `check:release` all passed. Release
+checking included packaging `169`, ASIO v3 `22`, and Timeline output-bus `11`
+assertions. Independent Terra xHigh source review returned GO with no P0/P1;
+its only remaining boundary is physical WDM endpoint audition and independent
+clock observation. No alpha.30 native build/launch/window, real-device audition,
+physical output routing, or show completion has been verified. The oversized
+audio-runtime extraction from `main.rs` is deliberately deferred until after
+show acceptance because changing ownership and lifecycle boundaries before the
+show is a pre-show risk; no extraction is claimed here.
+
+## 2026-08-28 historical alpha.26 source-only App structural split checkpoint
 
 Product metadata is synchronized to `1.2.0-alpha.26` on branch
 `codex/syndocal-v1.2`. This checkpoint records source and metadata only; no

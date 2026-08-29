@@ -1,6 +1,6 @@
 # ASIO PROGRAM / CUE Output Acceptance
 
-Updated: 2026-08-28
+Updated: 2026-08-29
 
 ## Show boundary
 
@@ -38,9 +38,14 @@ fields to ABI v2:
   frame, session/render generation, queue-full/underflow result, context
   lifetime, telemetry/fault codes, and the guarantee that no callback can occur
   after successful Stop/Close. An operation-name-only export set is not an ABI.
-- Open one explicit ASIO driver as one multichannel output stream. PROGRAM and
-  CUE must share that stream and clock domain; two independent output devices or
-  streams are not an accepted implementation.
+- The preferred show route opens one explicit ASIO driver as one multichannel
+  output stream. PROGRAM and CUE share that stream and clock domain. A separate
+  explicit split-device route is also available for interfaces such as TOPPING
+  E2x2 whose ASIO driver exposes only the physical PROGRAM pair: PROGRAM stays
+  on the selected ASIO output channels while every logical CUE source uses one
+  explicitly selected WDM endpoint. Split-device mode is start-aligned but has
+  independent hardware clocks; it does not claim sample-accurate long-duration
+  synchronization and must display that limitation before Start.
 - Do not build v3 output on the current CPAL/`asio-sys` callback path. Its ASIO
   callback implementation takes synchronization locks and can resize an
   interleaved buffer after a buffer-size change, while the underlying dispatcher
@@ -128,10 +133,15 @@ If no callback arrives, Timeline audio is not admitted through this boundary;
 the existing callback-gap terminal fault remains authoritative.
 
 The existing Timeline Cue Audio runtime for generated Click/Guide events is an
-input to the same logical CUE mixer. While show-ASIO output is active it must not
-use the existing `FollowProgram` route and must not open a second explicit OS
-output device. Normal MIT/WASAPI behavior remains unchanged when show-ASIO is
-not selected. This is one routing coordinator, not a parallel playback path.
+input to the selected logical CUE mixer. In preferred same-ASIO mode it must not
+use `FollowProgram` or open a second OS output device. In explicit split-device
+mode it owns exactly the selected WDM CUE endpoint while PROGRAM remains under
+the ASIO owner. All Timeline CUE clips, generated Click, Guide, and other logical
+CUE media use that same endpoint. Missing, ambiguous, stale, or failed WDM CUE
+is visible and silent; it never falls back to ASIO CUE, PROGRAM, the OS default,
+or another device. Normal MIT/WASAPI behavior remains unchanged when show-ASIO
+is not selected. This is one routing coordinator with two explicit clock-domain
+modes, not an implicit fallback path.
 
 Every Timeline and preview source constructor is admitted through one
 application `AudioOutputRouter`. While v3 is Starting, Active, or Fault, direct
@@ -203,7 +213,9 @@ Machine-local audio configuration stores:
 
 - backend and exact ASIO driver identity;
 - sample rate and fixed/requested buffer settings;
-- PROGRAM L, PROGRAM R, CUE, and optional Spare physical output channels;
+- PROGRAM L, PROGRAM R, and optional Spare physical output channels;
+- one explicit CUE delivery mode: a physical channel on the same ASIO device,
+  or an exact WDM endpoint name plus its enumerated topology fingerprint;
 - the capability/catalog generation used to validate the selection.
 
 This output profile has its own strict versioned machine-only schema. Unknown
@@ -271,6 +283,8 @@ actionable fault:
 - explicit driver is absent or its identity/capabilities changed;
 - exact sample rate, native format, channel count, or buffer cannot be opened;
 - PROGRAM L/R or CUE is absent, duplicated, or outside the device channel set;
+- an explicit WDM CUE endpoint is missing, duplicated/ambiguous, changed since
+  selection, fails to open, or is retired during source attachment;
 - device loss, stream reset/resync, sample-rate or buffer-size change, XRUN,
   malformed callback, callback gap, or realtime scheduling failure;
 - the application cannot sustain one authoritative stream/clock.
@@ -279,6 +293,12 @@ CUE must never be downmixed or rerouted to PROGRAM. PROGRAM must never be
 rerouted to CUE. A fault must not switch to WASAPI, another ASIO device, an OS
 default, or another sample rate. Reconnection does not resume playback; the
 operator must revalidate and explicitly Start.
+
+In split-device mode a CUE-only preparation or endpoint fault remains visible
+and silences/retire CUE without faulting the independently owned PROGRAM
+Timeline settlement. Loss or Stop/Fault of the ASIO PROGRAM owner retires the
+WDM CUE stream and every pending CUE source before the Router reaches Locked.
+No WDM CUE stream may survive PROGRAM Stop/Close.
 
 No panic or foreign exception may cross the v3 callback FFI boundary. A caught
 callback failure writes one complete silent device-width block, latches a
@@ -310,6 +330,12 @@ show playback, and use the same validated device/channel mapper as Timeline
 audio. A test path must not bypass stale-identity, duplicate-channel, exact-rate,
 or terminal-fault gates.
 
+In split-device mode PROGRAM/Spare tests continue to use the ASIO mapper. Test
+CUE uses only the current explicit WDM CUE mixer, is fixed-duration and
+safe-level, and is owned by the same attachment retirement path. ASIO CUE Test
+and every ASIO Solo action remain rejected in this mode. The WDM CUE test must
+not write one sample to an ASIO output channel or a PROGRAM mixer.
+
 No date or performance-day mode is stored in the product. A day that does not
 use CUE is operated by leaving CUE material unarmed or muted; it does not change
 the device schema or silently reroute CUE.
@@ -339,8 +365,16 @@ the device schema or silently reroute CUE.
       Start. Stop/Close failure remains Fault/Locked without fallback.
 - [x] Output and optional input native formats/capability tuples are validated
       separately and the exact opened tuple matches the request.
-- [x] Existing generated Click and Guide events enter the same CUE mixer; no
-      second OS output stream is opened while show-ASIO is active.
+- [x] Existing generated Click and Guide events enter the same logical CUE
+      mixer; preferred same-ASIO mode opens no second OS output stream.
+- [x] Explicit split-device mode routes every logical CUE source to one exact
+      WDM endpoint while PROGRAM remains ASIO; the persisted endpoint name and
+      topology are strict, and missing/ambiguous/stale state never falls back.
+- [x] A CUE-only WDM failure remains visible and silent without faulting the
+      PROGRAM/Follow settlement, while ASIO PROGRAM Stop/Fault retires every
+      WDM CUE source and stream before Locked.
+- [x] Split-device Test CUE is finite, safe-level, WDM-only, and ASIO CUE
+      Test/Solo remain unreachable; PROGRAM/Spare ASIO tests remain available.
 - [x] PROGRAM silence is written to the CUE channel; CUE silence is written to
       both PROGRAM channels for isolated bus tests.
 - [x] Unmapped, duplicated, stale, and out-of-range physical channels reject
@@ -407,6 +441,16 @@ the device schema or silently reroute CUE.
       loader Start/Stop/Fault smoke, and exactly one responsive maximized
       Syndocal window. The normal native build is not evidence for this gate.
 
+Alpha.30 software evidence on 2026-08-29 used the exact pinned MSVC 14.44
+Community linker with `where.exe link.exe` resolving that linker first. The
+focused ASIO media-audio gate passed `64/64`; the complete ASIO-enabled Syndocal
+suite passed `1435 / 0 failed / 12 ignored`, with first-party warnings 0.
+TypeScript, Vite, audio-control `74` static plus `57` runtime assertions,
+audio-panel `53`, command routing, localization `3615/3615`, and release checking
+also passed. Independent Terra xHigh review returned GO with no P0/P1. These
+results close the three split-device software rows above; they do not close the
+native or physical rows below.
+
 ## Physical MOTU M4 acceptance
 
 - [ ] Enumerate and explicitly select MOTU M Series ASIO at 48 kHz.
@@ -419,6 +463,26 @@ the device schema or silently reroute CUE.
 - [ ] PROGRAM+CUE play simultaneously on Outputs 1/2+3 with no audible leak or
       transport divergence.
 - [ ] Unplug enters Fault and silences output; reconnect does not auto-resume.
+
+## Physical split-device fallback acceptance
+
+This is the bounded alternate hardware route when the selected ASIO interface
+does not expose a separate physical CUE channel. It is not the preferred
+same-clock MOTU M4 acceptance and must show the independent-clock warning.
+
+- [ ] Explicitly select TOPPING E2x2 ASIO at 48 kHz with PROGRAM L/R on Outputs
+      1/2; no implicit rate or device substitution occurs.
+- [ ] Explicitly select a separate named WDM headphone endpoint for CUE and
+      preserve its exact topology fingerprint across Start revalidation.
+- [ ] Test PROGRAM L/R is audible only through TOPPING Outputs 1/2.
+- [ ] Test CUE is audible only through the selected headphone endpoint and is
+      absent from TOPPING Outputs 1/2.
+- [ ] Backing track is audible only through TOPPING Outputs 1/2 while Click,
+      Guide, and Timeline CUE media are audible only through the selected
+      headphone endpoint.
+- [ ] Removing/changing the CUE endpoint creates a visible CUE-only fault and
+      no fallback/leak; stopping or faulting TOPPING retires CUE and does not
+      auto-resume either route.
 
 ## M32/DL16 system acceptance
 

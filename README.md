@@ -2,21 +2,34 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.29**
+- 製品名: **Syndocal 1.2.0-alpha.30**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.29` on branch
+Current product metadata is `1.2.0-alpha.30` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.28 is the active ASIO PROGRAM/CUE implementation tranche;
-its normal and dedicated show-ASIO native acceptance remains open.
+native build. Alpha.30 is the current source/UI tranche for arbitrary
+PROGRAM/CUE output-device assignment: the source carries both same-ASIO
+shared-clock delivery and an explicit WDM CUE route while PROGRAM remains on
+ASIO, with exact endpoint/topology and session/generation validation represented
+  in the fail-closed paths. Timeline CUE clips, generated Click/Guide, and the
+  explicit CUE test path use that logical route. The final source gate passed
+  `1435 passed / 0 failed / 12 ignored` with first-party warnings 0; the focused
+  media-audio gate passed `64/64`, TypeScript, the frontend contract checkers,
+  Vite, release metadata/packaging, and localization `3615/3615` also passed.
+  Independent Terra xHigh source review returned GO with no P0/P1. No alpha.30
+  native build or launch, real-device audition, physical I/O, or show acceptance
+  is recorded.
+The oversized `app/src-tauri/src/main.rs` audio-runtime extraction is deferred
+until after the show because changing ownership/lifecycle boundaries before
+native and venue acceptance is a pre-show risk.
 The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.29 acceptance. No alpha.29 artifact hash, size, source HEAD, or
-PID is accepted yet. The release metadata checker expects alpha.29 product and
-installer naming below; that naming does not assert an alpha.29 installer
+it is not alpha.30 acceptance. No alpha.30 artifact hash, size, source HEAD, or
+PID is accepted yet. The release metadata checker expects alpha.30 product and
+installer naming below; that naming does not assert an alpha.30 installer
 exists.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
@@ -124,7 +137,7 @@ unaccepted.
 - 照明と映像が混在する共有タイムライン
 - 1キューで灯体値、映像Layer、Output、Node Graphを同時リコール
 - 1つのLFO/位置ウェーブから灯体属性と映像パラメータを同時駆動
-- マイクLive FFTの16 band／RMS／Peak／onset／BPM／kick／snareから照明・映像を同時駆動。WindowsではWASAPI sharedに加え、通常MIT版と分離したASIO bridge featureでdriver／sample rate／fixed buffer／channel mixを明示選択できる。ASIOは製品リリース要件であり、切断／250ms無入力時は共有0クリアを要求し、未受理を明示する。現行の未完了受入条件は `qa/ASIO_INPUT_ACCEPTANCE.md` を参照する
+- マイクLive FFTの16 band／RMS／Peak／onset／BPM／kick／snareから照明・映像を同時駆動。WindowsではWASAPI sharedに加え、通常MIT版と分離したASIO bridge featureでdriver／sample rate／fixed buffer／channel mixを明示選択できる。ASIOは製品リリース要件であり、切断／250ms無入力時は共有0クリアを要求し、未受理を明示する。入力の未完了条件は `qa/ASIO_INPUT_ACCEPTANCE.md`、PROGRAM/CUE出力は `qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md` を参照する
 - Tap / MIDI Clock / MTC / LTC / Ableton Link用共有クロック境界
 - MIDI、OSC、WebSocket、iPad/Android向けPWAリモート
 - 10秒間隔の自動Recovery、Recent Project、`.sdc` OS関連付け
@@ -141,7 +154,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.29_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.29_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.30_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.30_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
@@ -219,7 +232,7 @@ pnpm --dir app tauri build --ci --bundles nsis,msi
 
 Windowsの完全libav bundleでは`FFMPEG_DIR`を共有FFmpeg SDKルートへ設定します。bundle直前にDLLがstageされ、MSI/NSISへ同梱されます。NDIは開発時の明示featureとしてのみ扱い、通常packageでは独立したライセンス済みruntime overlayのartifact proofが存在するまでfail-closedである。
 
-ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。現行スコープはLive Audio入力の独立bridgeで、device列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。ABI v1時代のbridge/build、短時間smoke、100-cycle、native UIと第二vendor（HOTONE）の明示stream／100-cycleは歴史的証跡であり、現在のABI/schema v2 bridgeには読み替えません。現在のapp loader sourceはcanonical `syndocal_asio_bridge.dll`のABI/schema v2だけを読み、旧名・旧ABI・欠落・load/symbol/ABI faultを明示分類してfail-closeします。deterministic app-side bridge-v2 35/35とAmpero Miniの直接100-cycleは通過していますが、記録済みalpha.14 app buildでのnative UI、選択永続化／stale再検証、hot-plug／fault recovery、1時間ASIO/WASAPI soak、物理input-to-pixel latencyは未受入です。残る配布ライセンスとadvertised rate／buffer／channel matrixを含む全ゲートが終わるまで完了扱いにしません。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、受入と配布境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)を正とします。`distribution_approved: false` の間、通常installer/updaterは canonical `syndocal_asio_bridge.dll`、旧 `syndocal-asio-bridge.dll`、その他のASIO DLL、DLL globをすべて拒否し、libavは検証済み7 DLLだけを明示同梱します。GPLv3版として分離するかSteinberg proprietary agreementを締結し、独立したartifact/notice/release workflowを承認するまで、通常のpackage flowはASIO配布artifactを生成・stage・publishしません。
+ASIOは既定buildへ含めませんが、Windows製品のリリース完了条件です。canonical `syndocal_asio_bridge.dll` は入力／Reactive Capture用のABI/schema v2と、PROGRAM/CUE出力／full-duplex用のABI/schema v3を同居させ、両者を一つのprocess-wide leaseで排他します。入力側はdevice列挙・明示選択、sample rate／native format／channel／fixed buffer、低遅延callback I/O、exclusive open/start/stop/free、占有・不一致・切断・reset/resync・XRUN／no-callbackのfail-closed処理、選択設定の保存と再列挙時のstale IDロックを要求します。出力側は同一ASIOのshared-clock PROGRAM/CUEと、ASIO PROGRAM＋明示WDM CUEのsplit-device経路を持ち、後者は独立clockであることを表示して暗黙fallbackを禁止します。ABI v1時代のbridge/build、短時間smoke、100-cycle、native UIと第二vendor（HOTONE）の明示stream／100-cycleは歴史的証跡であり、現行v2/v3の全受入には読み替えません。旧名・旧ABI・欠落・load/symbol/ABI faultは明示分類してfail-closeします。配布ライセンス、advertised matrix、native show artifact、real-device output、hot-plug／fault recovery、soak、物理latencyが終わるまで完了扱いにしません。手動取得したSDKを`CPAL_ASIO_DIR`、LLVMの`libclang.dll`を`LIBCLANG_PATH`へ明示して検証します。SDK pinは[qa/ASIO_SDK_PIN.json](qa/ASIO_SDK_PIN.json)、入力境界は[qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)、出力境界は[qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md](qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md)を正とします。`distribution_approved: false` の間、通常installer/updaterは canonical `syndocal_asio_bridge.dll`、旧 `syndocal-asio-bridge.dll`、その他のASIO DLL、DLL globをすべて拒否し、libavは検証済み7 DLLだけを明示同梱します。GPLv3版として分離するかSteinberg proprietary agreementを締結し、独立したartifact/notice/release workflowを承認するまで、通常のpackage flowはASIO配布artifactを生成・stage・publishしません。
 
 ```powershell
 & .\qa\harnesses\check-asio-build.ps1
@@ -259,6 +272,7 @@ CIではcold clean Windows runnerでも、いかなるtestより先に`prepare:r
 - [qa/LIVE_AUDIO_FAIL_CLOSED.md](qa/LIVE_AUDIO_FAIL_CLOSED.md)
 - [qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md](qa/AUDIO_REACTIVE_VJ_ACCEPTANCE.md)
 - [qa/ASIO_INPUT_ACCEPTANCE.md](qa/ASIO_INPUT_ACCEPTANCE.md)
+- [qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md](qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md)
 - [qa/VJ_OPERATOR_DESK_ACCEPTANCE.md](qa/VJ_OPERATOR_DESK_ACCEPTANCE.md)
 - [qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md](qa/TOUCHDESIGNER_COMPETITIVE_AUDIT.md)
 - [RELEASE_STATUS.md](RELEASE_STATUS.md) - v1.0完成判定、外部受入、次スレッド向けバックログ

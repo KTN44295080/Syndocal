@@ -8,14 +8,50 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
-- Current alpha.29 source commit and upstream: `54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`. It was committed as `fix: stabilize ASIO output lifecycle` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
+- Last pushed KDMX source/documentation checkpoint before this alpha.30 commit: `a74ead9a9996bf2ecc4e6e5dd60914cc6494ff90` (`docs: record alpha.29 audio lifecycle checkpoint`). The alpha.30 source commit SHA and upstream equality must be filled after commit/push; no alpha.30 native artifact is accepted yet.
+- Historical alpha.29 source checkpoint: `54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`, committed as `fix: stabilize ASIO output lifecycle` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
 - DJ Agent checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is synchronized at `1.2.0-alpha.29`. Source integration and the exact normal `--no-bundle` native executable/window gate are recorded below. Normal installer/updater inspection, the dedicated show-ASIO artifact, and hardware acceptance remain open.
+- KDMX product metadata is synchronized at `1.2.0-alpha.30`. The current alpha.30 hybrid source/UI tranche and its final software-gate evidence are recorded below. Native build/launch, real-device audition, physical output routing, show completion, normal installer/updater inspection, and the dedicated show-ASIO artifact remain open.
 
-### 2026-08-29 alpha.29 ASIO lifecycle safety checkpoint
+### 2026-08-29 alpha.30 hybrid PROGRAM/CUE source checkpoint
+
+- The dirty alpha.30 source/UI tree now carries two explicit delivery modes:
+  `CueDelivery::SameAsio` keeps PROGRAM and CUE on one selected ASIO stream and
+  shared clock; `CueDelivery::ExplicitWdm` keeps PROGRAM on ASIO while the
+  explicitly named WDM endpoint, including its enumerated topology fingerprint,
+  owns CUE.
+- Timeline CUE clips, generated Click/Guide, and the explicit CUE test path
+  are wired through the same selected logical CUE route. Missing, ambiguous,
+  stale, changed, or failed endpoint/session state is visible and fail-closed;
+  no ASIO/PROGRAM/default-device fallback or CUE leakage to PROGRAM is allowed
+  by the source contract. Session/generation fences cover activation,
+  publication, timeline preparation, and retirement.
+- Exact MSVC 14.44 Community-linker gates finished with first-party warnings 0.
+  The focused ASIO media-audio gate passed `64/64`; the final full
+  `cargo test -p syndocal --features asio -- --nocapture --test-threads=1`
+  passed `1435 / 0 failed / 12 ignored`. `cargo fmt --all -- --check` and
+  `git diff --check` passed (line-ending notices only).
+- TypeScript, Vite, frontend command routing, audio-control `74` static plus
+  `57` runtime assertions, audio-panel `53`, localization `3615/3615`, and
+  `check:release` passed. Release checking included packaging `169`, ASIO v3
+  `22`, and Timeline output-bus `11` assertions. Independent Terra xHigh source
+  review returned GO with no P0/P1; physical WDM audition and independent-clock
+  observation remain external.
+- No alpha.30 native build/launch/window, real-device audition, physical output
+  routing, or show completion has been verified. The oversized audio-runtime
+  extraction from `app/src-tauri/src/main.rs` is deferred until after show
+  acceptance because changing ownership/lifecycle boundaries before the show
+  is a pre-show risk; no module-split completion is claimed.
+- The next show-critical source item is a separate Timeline-authoring monitor:
+  while the output router is Normal, media-library Timeline clips plus generated
+  Guide/Click must share one explicitly selected WDM endpoint such as
+  `Music (Wave Link)`. Entering show ASIO must retire that authoring route;
+  missing, ambiguous, or changed endpoints must remain silent and fail closed.
+
+### 2026-08-29 historical alpha.29 ASIO lifecycle safety checkpoint
 
 - `AsioReady` can now return explicitly to Normal or be invalidated by profile
   reselection. The exact Ready ticket is cancelled first, leaving `Locked`
@@ -53,14 +89,17 @@ This is the concise authoritative resume note for the final show-critical tranch
   hybrid path is not implemented or hardware-accepted at the alpha.29
   checkpoint.
 
-### 2026-08-29 alpha.28 integrated source checkpoint
+### 2026-08-29 historical alpha.28 integrated source checkpoint
 
 - The previously open application integration is now present on the working
   tree. PROGRAM/CUE render, output runtime, Timeline output/transport, output
   router, normal-output boundary, bridge-v3, and preflight logic are split into
-  dedicated modules instead of adding those implementations to the already
-  oversized `main.rs`. The only final `main.rs` repair at this checkpoint is a
-  deterministic test-startup fence; production behavior was not loosened.
+  dedicated modules. This historical checkpoint did not extract the remaining
+  `TimelineCueAudioRuntime`/`MediaAudioPlayback` ownership from the already
+  oversized `main.rs`; that larger application-runtime split is still deferred
+  because changing its lifecycle boundary before the show is a pre-show risk.
+  The only final `main.rs` repair at this checkpoint was a deterministic
+  test-startup fence; production behavior was not loosened.
 - The final independent ASIO drain review is `GO` with no P0/P1. Stop fences
   the callback context before join, Fault uses one state-lock interval, stale
   queued Test/Solo blocks are silenced through the two-callback drain, and
@@ -193,12 +232,12 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 - `qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md` is now the authoritative output gate. ASIO output is a show-critical requirement, not optional polish.
 - Adopted architecture C: retain the exact input/Reactive Capture ABI/schema v2 surface, and add an exact v3 output/full-duplex surface to the same canonical bridge DLL. ASIO playback uses one v3 session; a parallel v2 session on the same driver is forbidden and must fail busy.
 - PROGRAM stereo and CUE mono are project-level logical buses. Physical PROGRAM L/R, CUE, optional Spare, driver identity, sample rate, format, and buffer remain machine-local. Missing bus data migrates one way to PROGRAM; CUE never falls back to PROGRAM.
-- Two logical Rodio mixers feed a non-realtime renderer and bounded preallocated interleaved SPSC. The ASIO callback only copies a complete block or outputs a complete silent block and latches terminal Fault. PROGRAM/CUE share one device and clock.
+- Two logical Rodio mixers feed a non-realtime renderer and bounded preallocated interleaved SPSC. The ASIO callback only copies a complete block or outputs a complete silent block and latches terminal Fault. PROGRAM/CUE share one device and clock only in `SameAsio`; `ExplicitWdm` intentionally uses independent ASIO and WDM clock domains.
 - DSF2026 acceptance mapping is MOTU M4 Output 1/2 = PROGRAM L/R and Output 3 = CUE at exact 48 kHz, with Output 4 optional Spare. This is a selectable profile, not MOTU-specific code.
 - Device/rate/mapping conflict, disconnect, XRUN, reset/resync, buffer/rate change, callback gap, or underflow must stop output without WASAPI/default-device/rate fallback. Explicit revalidation and Start are required.
 - Independent Terra xHigh review added three implementation-blocking P0 boundaries: quiesce and join the legacy `FollowProgram` CUE/normal Rodio output before v3 Start and stay silent on Start failure/Fault; freeze exact v3 callback/queue/lifetime semantics before code; and prove arbitrary non-contiguous/reordered physical mappings with all unselected channels zero. It also requires exact queue/race injection tests and updates every show-ASIO v2-only export checker to the exact v2-nine plus v3-nine set.
 - The acceptance contract was committed and pushed at `e583141cc60decff7c062db21a39f69241f894c8`. At that historical contract checkpoint, the `1.2.0-alpha.28` implementation was still uncommitted; the authoritative 2026-08-29 integrated checkpoint above supersedes that state.
-- Integrated source, independent review, and the exact normal no-bundle native/window gate are complete in the current checkpoint. Dedicated show-ASIO artifact/loader proof, normal installer/updater inspection, authoritative non-default Timeline speed synchronization, MOTU M4 output proof, and M32/DL16 routing proof remain open.
+- Integrated source and independent review are complete. A historical pre-alpha.30 normal no-bundle build completed, but its user-facing window gate did not; alpha.30 has no native build/window evidence. Dedicated show-ASIO artifact/loader proof, normal installer/updater inspection, authoritative non-default Timeline speed synchronization, physical output proof, and M32/DL16 routing proof remain open.
 
 ### 2026-08-28 alpha.28 ASIO implementation checkpoint (superseded source snapshot)
 
@@ -257,7 +296,8 @@ integrated source checkpoint above is authoritative for current source status.
   metadata, ASIO packaging `169` assertions, v3 contract `22`, Timeline
   PROGRAM/CUE bus `11`, and existing video route/window gates. These checks do
   not establish complete production integration or native/hardware acceptance.
-- Still open and release-blocking: production app code integration, including
+- At this superseded alpha.28 snapshot, the following work was still open:
+  production app code integration, including
   v3 lifecycle wiring, two
   Rodio mixers drained by one non-RT worker into a preallocated bounded SPSC,
   app-owned mutable transport generation, complete normal/FollowProgram/
@@ -272,13 +312,14 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
-2. Build and verify the exact local-only show-ASIO artifact from clean pushed source commit `32a092267f55d32185b2cf9cc123f92067614ec1`: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
-3. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
-4. Pull the committed DJ Agent checkpoint on the DJ PC without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
-5. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
-6. Perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance. PROGRAM must reach only M4 1/2 -> DL16 5/6 -> M32 Ch18/19 -> Main/Broadcast; CUE must reach only M4 3 -> DL16 7 -> M32 Ch20 -> IEM 4/5/6 and remain absent from Main/Broadcast/Floor.
-7. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
+1. Add and prove the machine-local Timeline authoring monitor so media-library clips plus Guide/Click share one explicit WDM endpoint such as `Music (Wave Link)` in Normal mode; ASIO Start must retire it and stale/missing/ambiguous devices must remain silent.
+2. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
+3. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
+4. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
+5. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
+6. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
+7. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
+8. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
 
 ## First safe resume actions
 

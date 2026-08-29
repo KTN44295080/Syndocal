@@ -52,9 +52,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 497;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 498;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "0bd22551709135aa516f4f3baec3552bb1f53243c72fc3fbf68713327e9e45e9";
+    "2681e917116f34b5113e73f8dfd7c76204180798256f04ff4674a88ad2360242";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -433,6 +433,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "send_usb_rdm_request"
             | "set_asio_output_solo"
             | "set_asio_output_test"
+            | "set_explicit_wdm_cue_test"
             | "set_auto_vj_armed"
             | "set_auto_vj_hold"
             | "set_bpm"
@@ -2004,6 +2005,10 @@ mod tests {
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
             (
+                "set_explicit_wdm_cue_test",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
                 "select_normal_audio_output",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
@@ -2057,7 +2062,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 497);
+        assert_eq!(names.len(), 498);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
             130
@@ -2069,7 +2074,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 92);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 158);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
@@ -2101,7 +2106,7 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 497);
+        assert_eq!(names.len(), 498);
         const ENGINE_COMMAND_COUNT: usize = 269;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -2124,16 +2129,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 437;
+        const FRONTEND_INVOKE_COUNT: usize = 438;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            497 + ENGINE_COMMAND_COUNT
+            498 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1525);
+        assert_eq!(registry.operations.len(), 1527);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2143,7 +2148,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            483 + ENGINE_COMMAND_COUNT
+            484 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -2174,7 +2179,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 483);
+        assert_eq!(tauri_unavailable.clone().count(), 484);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2445,19 +2450,19 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 497;
+        const TAURI_COUNT: usize = 498;
         const ENGINE_COUNT: usize = 269;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 437;
+        const FRONTEND_COUNT: usize = 438;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1525);
-        assert_eq!(SOURCE_TOTAL, 1558);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1527);
+        assert_eq!(SOURCE_TOTAL, 1560);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 35);
 
@@ -2776,7 +2781,7 @@ mod tests {
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1081);
+        assert_eq!(unclassified.len(), 1082);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3439,11 +3444,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1525);
+        assert_eq!(legacy.operations.len(), 1527);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1525);
+        assert_eq!(operations.len(), 1527);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

@@ -3,6 +3,7 @@ import "./AudioOutputPanel.css";
 
 export type AudioOutputBackend = "normal-wasapi" | "show-asio";
 export type AudioOutputState = "Ready" | "Locked" | "Active" | "Fault";
+export type AudioOutputCueRoute = "same-asio" | "split-device";
 export type AudioOutputTest =
   | "program-left"
   | "program-right"
@@ -38,11 +39,30 @@ export interface AudioOutputChannelOption {
   disabled?: boolean;
 }
 
+export interface AudioOutputCueEndpointOption {
+  name: string;
+  occurrences: number;
+  selectable: boolean;
+}
+
+/**
+ * The callable shape keeps the pre-existing `onCueChange` prop compatible with
+ * the current Setup wiring while carrying the two new route mutations.  The
+ * optional members let isolated panel fixtures continue to provide only the
+ * original channel callback.
+ */
+export interface AudioOutputCueChange {
+  (channelIndex: number | null): void;
+  setRoute?: (route: AudioOutputCueRoute) => void;
+  setDeviceName?: (deviceName: string | null) => void;
+}
+
 export interface AudioOutputOptions {
   drivers: readonly AudioOutputDriverOption[];
   sampleRates: readonly AudioOutputRateOption[];
   bufferFrames: readonly AudioOutputBufferOption[];
   channels: readonly AudioOutputChannelOption[];
+  cueEndpoints: readonly AudioOutputCueEndpointOption[];
   hasSpare: boolean;
 }
 
@@ -55,6 +75,9 @@ export interface AudioOutputView {
   programLeft: number | null;
   programRight: number | null;
   cue: number | null;
+  cueRoute: AudioOutputCueRoute;
+  cueDeviceName: string | null;
+  cueTopologyFingerprint: string | null;
   spare: number | null;
   catalogGeneration: number;
   state: AudioOutputState;
@@ -83,7 +106,9 @@ export interface AudioOutputPanelProps {
   onBufferFramesChange: (bufferFrames: number | null) => void;
   onProgramLeftChange: (channelIndex: number | null) => void;
   onProgramRightChange: (channelIndex: number | null) => void;
-  onCueChange: (channelIndex: number | null) => void;
+  onCueChange: AudioOutputCueChange;
+  onCueRouteChange?: (route: AudioOutputCueRoute) => void;
+  onCueDeviceNameChange?: (deviceName: string | null) => void;
   onSpareChange: (channelIndex: number | null) => void;
   onRefresh: AudioOutputAction;
   onRevalidate: AudioOutputAction;
@@ -123,6 +148,13 @@ interface AudioOutputChannelSelectProps {
   onChange: (channelIndex: number | null) => void;
 }
 
+interface AudioOutputCueEndpointSelectProps {
+  value: string | null;
+  disabled: boolean;
+  options: readonly AudioOutputCueEndpointOption[];
+  onChange: (deviceName: string | null) => void;
+}
+
 function AudioOutputChannelSelect(props: AudioOutputChannelSelectProps) {
   const selectedChannelIsListed = () =>
     props.value === null || props.options.some((option) => option.index === props.value);
@@ -146,6 +178,41 @@ function AudioOutputChannelSelect(props: AudioOutputChannelSelectProps) {
           {(option) => (
             <option value={option.index} disabled={option.disabled ?? false}>
               {channelOptionLabel(option)}
+            </option>
+          )}
+        </For>
+      </select>
+    </label>
+  );
+}
+
+function AudioOutputCueEndpointSelect(props: AudioOutputCueEndpointSelectProps) {
+  const selectedEndpointIsListed = () =>
+    props.value === null || props.options.some((option) => option.name === props.value);
+
+  return (
+    <label class="audioOutputField" data-audio-output-field="cue-endpoint">
+      <span>WDM endpoint</span>
+      <select
+        aria-label="CUE WDM endpoint"
+        disabled={props.disabled}
+        value={props.value ?? ""}
+        onInput={(event) => props.onChange(event.currentTarget.value.trim() || null)}
+      >
+        <option value="">Select WDM endpoint</option>
+        <Show when={!selectedEndpointIsListed() && props.value !== null}>
+          <option value={props.value!} disabled data-no-localize>
+            Unavailable: {props.value!}
+          </option>
+        </Show>
+        <For each={props.options}>
+          {(option) => (
+            <option
+              value={option.name}
+              disabled={!option.selectable}
+              data-no-localize
+            >
+              {option.name}
             </option>
           )}
         </For>
@@ -212,9 +279,22 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
   const soloDisabled = () =>
     props.busy ||
     !props.canSolo ||
+    props.view.cueRoute === "split-device" ||
     props.livePlaybackActive ||
     props.testMode !== null ||
     props.view.state === "Fault";
+  const cueRouteChange = (route: AudioOutputCueRoute) => {
+    const handler = props.onCueRouteChange ?? props.onCueChange.setRoute;
+    handler?.(route);
+  };
+  const cueDeviceNameChange = (deviceName: string | null) => {
+    const handler = props.onCueDeviceNameChange ?? props.onCueChange.setDeviceName;
+    handler?.(deviceName);
+  };
+  const cueRouteMutationAvailable = () =>
+    props.onCueRouteChange !== undefined || props.onCueChange.setRoute !== undefined;
+  const cueDeviceMutationAvailable = () =>
+    props.onCueDeviceNameChange !== undefined || props.onCueChange.setDeviceName !== undefined;
 
   return (
     <section
@@ -375,42 +455,86 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
             </label>
           </div>
 
-          <div class="audioOutputChannelGrid" aria-label="Audio output channels">
-            <AudioOutputChannelSelect
-              field="program-left"
-              label="PROGRAM L"
-              value={props.view.programLeft}
-              disabled={configurationDisabled()}
-              options={props.options.channels}
-              onChange={props.onProgramLeftChange}
-            />
-            <AudioOutputChannelSelect
-              field="program-right"
-              label="PROGRAM R"
-              value={props.view.programRight}
-              disabled={configurationDisabled()}
-              options={props.options.channels}
-              onChange={props.onProgramRightChange}
-            />
-            <AudioOutputChannelSelect
-              field="cue"
-              label="CUE"
-              value={props.view.cue}
-              disabled={configurationDisabled()}
-              options={props.options.channels}
-              onChange={props.onCueChange}
-            />
-            <Show when={props.options.hasSpare}>
+          <div class="audioOutputCueRouting" aria-label="PROGRAM and CUE routing">
+            <label class="audioOutputField" data-audio-output-field="cue-route">
+              <span>CUE route</span>
+              <select
+                aria-label="CUE route"
+                disabled={
+                  configurationDisabled()
+                  || props.view.backend !== "show-asio"
+                  || !cueRouteMutationAvailable()
+                }
+                value={props.view.cueRoute}
+                onInput={(event) => cueRouteChange(event.currentTarget.value as AudioOutputCueRoute)}
+              >
+                <option value="same-asio">Same ASIO</option>
+                <option value="split-device">Split device</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="audioOutputProgramCueGrid" aria-label="PROGRAM and CUE output routes">
+            <div class="audioOutputProgramCueRow" data-audio-output-row="program">
+              <strong>PROGRAM</strong>
               <AudioOutputChannelSelect
-                field="spare"
-                label="Spare"
-                value={props.view.spare}
+                field="program-left"
+                label="PROGRAM L"
+                value={props.view.programLeft}
                 disabled={configurationDisabled()}
                 options={props.options.channels}
-                onChange={props.onSpareChange}
+                onChange={props.onProgramLeftChange}
               />
+              <AudioOutputChannelSelect
+                field="program-right"
+                label="PROGRAM R"
+                value={props.view.programRight}
+                disabled={configurationDisabled()}
+                options={props.options.channels}
+                onChange={props.onProgramRightChange}
+              />
+            </div>
+            <div class="audioOutputProgramCueRow" data-audio-output-row="cue">
+              <strong>CUE</strong>
+              <Show when={props.view.cueRoute === "same-asio"}>
+                <AudioOutputChannelSelect
+                  field="cue"
+                  label="CUE"
+                  value={props.view.cue}
+                  disabled={configurationDisabled()}
+                  options={props.options.channels}
+                  onChange={props.onCueChange}
+                />
+              </Show>
+              <Show when={props.view.cueRoute === "split-device"}>
+                <AudioOutputCueEndpointSelect
+                  value={props.view.cueDeviceName}
+                  disabled={configurationDisabled() || !cueDeviceMutationAvailable()}
+                  options={props.options.cueEndpoints}
+                  onChange={cueDeviceNameChange}
+                />
+              </Show>
+            </div>
+            <Show when={props.options.hasSpare}>
+              <div class="audioOutputProgramCueRow" data-audio-output-row="spare">
+                <strong>Spare</strong>
+                <AudioOutputChannelSelect
+                  field="spare"
+                  label="Spare"
+                  value={props.view.spare}
+                  disabled={configurationDisabled()}
+                  options={props.options.channels}
+                  onChange={props.onSpareChange}
+                />
+              </div>
             </Show>
           </div>
+
+          <Show when={props.view.cueRoute === "split-device"}>
+            <p class="audioOutputClockWarning" data-audio-output-clock-warning role="alert" data-no-localize>
+              PROGRAM and CUE use separate device clocks. Timing can drift; no clock lock is claimed.
+            </p>
+          </Show>
         </div>
       </details>
 
@@ -433,9 +557,21 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
             </select>
           </label>
 
-          <Show when={!props.canTest || !props.canSolo}>
+          <Show when={!props.canTest}>
             <p class="audioOutputDisconnected" data-audio-output-disconnected>
-              Not connected: native test and solo controls are unavailable.
+              Not connected: native test controls are unavailable.
+            </p>
+          </Show>
+
+          <Show
+            when={
+              props.canTest &&
+              !props.canSolo &&
+              props.view.cueRoute === "split-device"
+            }
+          >
+            <p class="audioOutputDisconnected" data-audio-output-solo-unavailable>
+              Solo is unavailable in split-device mode; CUE tests remain available.
             </p>
           </Show>
 
@@ -472,7 +608,12 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
                 Stop test
               </button>
             </Show>
-            <p class="audioOutputTestHint">Tests use a bounded safe level and the selected channels.</p>
+            <p class="audioOutputTestHint">
+              Tests use a bounded safe level and the selected channels.
+              <Show when={props.view.cueRoute === "split-device"}>
+                {" Split CUE test plays only on the selected WDM endpoint."}
+              </Show>
+            </p>
           </fieldset>
         </div>
       </details>

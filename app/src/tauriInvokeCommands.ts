@@ -316,6 +316,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_dmx_outputs",
   "set_effect_enabled",
   "set_effect_video_target_position",
+  "set_explicit_wdm_cue_test",
   "set_fixture_attribute_batch",
   "set_fixture_groups",
   "set_fixture_highlight",

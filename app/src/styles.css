@@ -37305,6 +37305,64 @@ a[href]:focus-visible,
   }
 }
 
+/* Audio output routing stays in the existing Setup I/O flow. */
+.audioOutputCueRouting,
+.audioOutputProgramCueGrid {
+  min-width: 0;
+}
+
+.audioOutputCueRouting {
+  display: grid;
+  grid-template-columns: minmax(180px, 360px);
+  gap: 8px;
+}
+
+.audioOutputProgramCueGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.audioOutputProgramCueRow {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.35fr) repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.audioOutputProgramCueRow > strong {
+  align-self: center;
+  color: #edf3fb;
+}
+
+.audioOutputProgramCueRow .audioOutputField {
+  min-width: 0;
+}
+
+.audioOutputProgramCueRow .audioOutputField select,
+.audioOutputCueRouting select {
+  min-height: 34px;
+}
+
+.audioOutputClockWarning {
+  margin: 0;
+  color: #f0bd72;
+  text-wrap: pretty;
+}
+
+@media (max-width: 800px) {
+  .audioOutputProgramCueRow {
+    grid-template-columns: minmax(84px, 0.35fr) repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .audioOutputCueRouting,
+  .audioOutputProgramCueRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Lighting keeps its authoring desk in the lower workspace while Matrix/Cue
    Pads and the existing Scene Settings/status representation share the upper
    workspace. The right rail is local to Lighting and scrolls internally. */
