@@ -9,19 +9,26 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
 Current product metadata is `1.2.0-alpha.39` on branch
-`codex/syndocal-v1.2`. Alpha.39 is the current source train; its exact source
-checkpoint and native artifact identity are recorded only after the checkpoint
-is committed/pushed and the required clean-source native build completes. The
-latest accepted native authority remains the historical alpha.38 source
-checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source
-HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`, both pushed. The exact
-MSVC 14.44 native build completed in `3m12s` with first-party warnings `0`.
-The `61,114,368`-byte `1.2.0-alpha.38` executable has SHA-256
-`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
-Exactly one checkout-owned PID `55624` is responsive with title `Syndocal`;
-Computer Use verified Restore enabled and Maximize disabled, proving the exact
-window is maximized. Same-PC Unity/GPU, audible audio-device, DJ, and camera
-hardware acceptance remain open.
+`codex/syndocal-v1.2`. The alpha.39 native checkpoint used source/docs `HEAD`
+and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
+the build checkpoint. The exact MSVC `14.44.35207` Community linker was pinned
+and first in `where.exe`; `pnpm --dir app tauri build --no-bundle` exited `0`
+in `2m57s` with first-party warnings `0`. The exact executable
+`target/release/syndocal.exe` is `61,108,736` bytes, reports
+Product/FileVersion `1.2.0-alpha.39`, and has SHA-256
+`7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with one maximized
+`Syndocal` window, id `2033716740`; Daslight was preserved. Native alpha9 UI
+reverification also passed without clicking the output selector or Refresh. The
+exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
+status-only wait; throughout it, explicit-device output and resolved output
+stayed at `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with
+advancing output frames and no visible Backend, Local IPC, or CUE fault. The project remained
+unsaved and final Timeline state was paused. Audible/device selection,
+Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
+remain open. This documentation follow-up remains uncommitted and has no
+separate commit/push claim. Complete independent review, checkpoint commit/push,
+and `HEAD`/upstream equality before starting operator acceptance.
 
 Historical alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
 rotated Timeline transport authority without changing media source projection.
@@ -41,8 +48,10 @@ endpoint remains pending operator confirmation. A real-machine
 Play/Pause/Play/Pause regression kept the authoring monitor running with
 resolved output `Music (Elgato Virtual Audio)` and no CUE/backend/IPC fault,
 but the output-device `<select>` later displayed `3 - PX160 WAV...` while the
-persisted and resolved device remained Music. That UI truth mismatch remains
-fail-closed and blocks endpoint-selection acceptance until repaired.
+persisted and resolved device remained Music. Preserve that historical UI truth
+mismatch as fail-closed evidence; the alpha.39 native selector/UI reverify above
+did not reproduce it and closes the selector/UI gate. Audible endpoint
+acceptance remains pending operator confirmation.
 
 Historical alpha.37 repaired two show-critical runtime boundaries. Timeline CUE audio now
 publishes the exact-anchor/future event batch before a fresh Legacy or ASIO

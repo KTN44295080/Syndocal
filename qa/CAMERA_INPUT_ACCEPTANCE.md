@@ -4,12 +4,12 @@ Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-## 2026-08-30 alpha.39 SOURCE checkpoint
+## 2026-08-30 alpha.39 native checkpoint
 
-The current source-only product checkpoint is `1.2.0-alpha.39` on branch
-`codex/syndocal-v1.2`, at pushed source commit
-`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-`origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+The current product checkpoint is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`; the native build used source/docs `HEAD` and upstream
+`ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at the build
+checkpoint. This tranche repairs the Timeline
 authoring-output selector's
 exact UI truth: only one exact selectable occurrence is admitted, while
 duplicate, missing, or ambiguous identities fail closed; status-only polling
@@ -17,36 +17,43 @@ may reapply the exact desired option without list/configuration/routing
 mutation. Browser Phase A/B passed after the strict external-video status-poll
 fixture was added; TypeScript, runtime, video-poll, `git diff --check`, and
 `pnpm --dir app run check:release` pass. Independent Terra select review is GO
-with P0/P1 `0`; the checker review is GO with P0/P1/P2 `0`. First-party
-warnings are `0` only for the evidenced non-native checks; no alpha.39
-native-build warning result is claimed. The source checkpoint is committed and
-pushed; this documentation follow-up remains uncommitted and has no separate
-commit claim.
+with P0/P1 `0`; the checker review is GO with P0/P1/P2 `0`. The exact MSVC
+`14.44.35207` Community linker was pinned and first in `where.exe`;
+`pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s` with first-party
+warnings `0`. The resulting `61,108,736`-byte executable reports Product/
+FileVersion `1.2.0-alpha.39` and SHA-256
+`7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with maximized `Syndocal`
+window id `2033716740`; Daslight was preserved. Native alpha9 Timeline selector
+reverification passed at the exact Music endpoint without a visible Backend,
+Local IPC, or CUE fault. The exact sequence was Play -> Pause -> status-only
+wait -> Play -> Pause -> status-only wait. This documentation
+follow-up remains uncommitted and has no separate commit/push claim.
 
-Camera and strict Art-Net behavior are unchanged by this source-only tranche.
-No alpha.39 native build, camera UI/profile, capture, audible, Unity/GPU,
+Camera and strict Art-Net behavior are unchanged by this Timeline-output
+tranche. The alpha.39 normal native build/window and Timeline selector/UI gates
+are complete only; no alpha.39 camera UI/profile, capture, audible, Unity/GPU,
 Art-Net, Spout, DJ, or other hardware acceptance has run. The next safe action
-now starts with the exact MSVC `14.44` native build -> launch/maximize ->
-alpha9 Music Play/Pause/status-only UI reverify -> operator audible
-confirmation. The alpha.38
-artifact/PID/window and observed `PX160` drift remain immutable historical
-evidence and must not be relabeled as alpha.39.
+is independent stable-diff review, checkpoint commit/push, and `HEAD`/upstream
+equality; operator audible confirmation follows. The alpha.38 artifact/PID/window and
+observed `PX160` drift remain immutable historical evidence and must not be
+relabeled as alpha.39.
 
-Product tranche: current source-only `1.2.0-alpha.39` at pushed source commit
-`8139df4c9f623076343084565f108a3f31e615f4`; the historical alpha.38 source/build
-authority remains
-`e4ec22384675aace5ed3912ddffdcfecca190919`; the normal native/window gate is
-historical alpha.38, while the latest accepted camera-specific native evidence
-is historical alpha.37. No alpha.39 native or camera evidence is claimed.
+Product tranche: current `1.2.0-alpha.39` native checkpoint at build source/docs
+`HEAD` and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`; the historical
+alpha.38 source/build authority remains
+`e4ec22384675aace5ed3912ddffdcfecca190919`. The latest accepted
+camera-specific native evidence remains historical alpha.37. No alpha.39 camera
+UI/profile, capture, sustained-performance, or hardware evidence is claimed.
 
 ## Current product boundary
 
 Historical alpha.38 changes Timeline CUE transport authority and does not alter
-the camera catalog, capture, or probe implementation. Its normal native build
-and window gate is historical evidence only; no alpha.39 camera-specific UI,
-profile, capture, or hardware acceptance has run. The alpha.37 camera artifact
-below remains historical evidence and must not be relabeled as alpha.38 or
-alpha.39 camera or hardware acceptance.
+the camera catalog, capture, or probe implementation. The current alpha.39
+normal native build/window likewise changes no camera path; no alpha.39
+camera-specific UI, profile, capture, or hardware acceptance has run. The
+alpha.37 camera artifact below remains historical camera evidence and must not
+be relabeled as alpha.38 or alpha.39 camera or hardware acceptance.
 
 The historical alpha.38 exact native executable is
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
@@ -216,8 +223,9 @@ render pacing is required before broadening that claim.
   with SHA-256
   `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
   Exactly one responsive, maximized Syndocal window is PID `55624`.
-- [ ] Alpha.39 exact-MSVC native build, launch/maximize, alpha9 Music
-  Play/Pause/status-only UI reverify, and operator audible confirmation.
+- [x] Alpha.39 exact-MSVC normal native build, launch/maximize, and alpha9 Music
+  Play/Pause/status-only selector/UI reverify are recorded above.
+- [ ] Operator audible confirmation remains open and is not camera acceptance.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.
 - [ ] Exact `1920x1080` / `60.0002 fps` profile probe succeeds.

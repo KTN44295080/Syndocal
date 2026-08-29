@@ -6,10 +6,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
-- Current source-only checkpoint is `1.2.0-alpha.39` on branch
-  `codex/syndocal-v1.2`, at pushed source commit
-  `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-  `origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+- Current alpha.39 native checkpoint is on branch `codex/syndocal-v1.2`; the
+  build source/docs `HEAD` and upstream were both
+  `ec93e9160da853ad181de70aee4db7b4a75fafbb`. This tranche repairs the Timeline
   authoring-output selector's
   exact UI truth: exactly one selectable occurrence is admitted, while
   duplicate, missing, or ambiguous identities fail closed; status-only polling
@@ -19,16 +18,32 @@ This is the concise authoritative resume note for the final show-critical tranch
   `git diff --check`, and `pnpm --dir app run check:release` pass. Independent
   Terra select review is GO with P0/P1 `0`, and the checker review is GO with
   P0/P1/P2 `0`. First-party warnings are `0` only for the evidenced non-native
-  checks; no alpha.39 native-build warning result is claimed. The source
-  checkpoint is committed and pushed; this documentation follow-up remains
-  uncommitted and has no separate commit claim.
+  checks. The exact MSVC `14.44.35207` Community linker was pinned and first in
+  `where.exe`; `pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s`
+  with first-party warnings `0`. The exact executable
+  `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+  `61,108,736` bytes, reports Product/FileVersion `1.2.0-alpha.39`, and has
+  SHA-256 `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+  Exactly one checkout-owned PID `87640` is responsive with maximized
+  `Syndocal` window id `2033716740`; Daslight was preserved. This documentation
+  follow-up remains uncommitted and has no separate commit/push claim.
 
-  No alpha.39 native build, native UI, or audible verification has run. The
-  current open boundary includes audible/device selection, dedicated
-  Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware
-  acceptance. The next safe action now starts with the exact MSVC `14.44`
-  native build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI
-  reverify -> operator audible confirmation.
+  Native alpha9 UI reverification passed without clicking the output selector or
+  Refresh. The exact sequence was Play -> Pause -> status-only wait -> Play ->
+  Pause -> status-only wait; throughout it, explicit-device and resolved output
+  stayed at `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with
+  advancing output frames and no visible Backend, Local IPC, or CUE fault. The project
+  remained unsaved and final Timeline state was paused. Read-only settings were
+  `route=explicit_device`, `device_name=Music (Elgato Virtual Audio)`,
+  fingerprint `A2D9603C75ED1A6ECBC37F0FE851AAD56C632DFF31314544F2F606C220C9479C`,
+  `click_gain=1`, and `guide_gain=0.85`. The opened alpha9 project remained
+  unchanged with SHA-256 `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`
+  and last write `2026-08-29T05:53:14.5317317Z`. The native build/window
+  and selector/UI regression gates are complete only; audible/device selection,
+  operator audible confirmation, dedicated Show-ASIO, Unity/GPU Art-Net/Spout,
+  DJ, camera, and other hardware acceptance remain open. The next safe action is
+  independent stable-diff review, checkpoint commit/push, and `HEAD`/upstream
+  equality; operator audible confirmation follows.
 
 - Historical alpha.38 native authority remains immutable. The exact MSVC
   `14.44` native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s`
@@ -48,7 +63,8 @@ This is the concise authoritative resume note for the final show-critical tranch
   after Pause the authoring-output `<select>` displayed `3 - PX160 WAV...`
   while settings JSON and resolved output remained `Music (Elgato Virtual
   Audio)`. Preserve that drift as historical fail-closed evidence; alpha.39
-  native/UI reverification remains pending.
+  native/UI reverification was pending at that checkpoint and is now complete
+  as recorded above. Audible confirmation remains open.
 
 - The first alpha.38 native resume action was exercised on PID `55624` with the
   saved reference
@@ -156,11 +172,11 @@ This is the concise authoritative resume note for the final show-critical tranch
   responsive/maximized window identity are recorded above. Alpha.37 and earlier
   processes are historical execution evidence; the exact alpha.38 PID `55624`
   is historical native authority only. The current authority is the alpha.39
-  source-only checkpoint at pushed source commit
-  `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-  `origin/codex/syndocal-v1.2`. The documentation follow-up remains
-  uncommitted and has no separate commit claim; no alpha.39 native artifact or
-  window exists.
+  native checkpoint at build source/docs `HEAD` and upstream
+  `ec93e9160da853ad181de70aee4db7b4a75fafbb`. The documentation follow-up
+  remains uncommitted and has no separate commit claim; the exact alpha.39
+  artifact and responsive maximized window are recorded at the top of this
+  handoff.
   The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
@@ -684,24 +700,31 @@ integrated source checkpoint above is authoritative for current source status.
   app/UI review, exact normal and show-ASIO native builds, real loader smoke,
   and all MOTU M4/M32/DL16 physical rows.
 - Cleanup inventory was refreshed read-only at this checkpoint: `target`
-  428,244,808,551 logical bytes (398.83 GiB), `app/node_modules` 545,338,492
-  bytes, `tools/asio-bridge/target` 1,774,985,879 bytes, and `app/dist`
-  5,183,649 bytes. The accepted recurring
-  deletion conditions are not currently satisfied, so no cleanup Apply or
-  ad-hoc deletion ran and reclaimed bytes remain 0.
+  `94,214,143,142` logical bytes across `86,760` files, `app/node_modules`
+  `545,338,492` bytes, `tools/asio-bridge/target` `1,774,985,879` bytes, and
+  `app/dist` `5,204,539` bytes. Git also reported one approximately `568 KiB`
+  garbage object. The accepted recurring deletion conditions are not currently
+  satisfied, so no cleanup Apply or ad-hoc deletion ran and reclaimed bytes
+  remain `0`.
 
 ## Required remaining acceptance
 
-1. From pushed source commit
-   `8139df4c9f623076343084565f108a3f31e615f4`, run the exact MSVC `14.44`
-   native build. The documentation follow-up remains uncommitted and has no
+1. The alpha.39 native checkpoint is recorded from source/docs `HEAD` and
+   upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`: exact MSVC `14.44.35207`
+   pinned/where-first, build exit `0` in `2m57s`, warnings `0`, artifact
+   `61,108,736` bytes with SHA-256
+   `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+2. The exact launch checkpoint is complete: one responsive/maximized
+   `Syndocal` window (PID `87640`, id `2033716740`) was verified and Daslight
+   was preserved. The documentation follow-up remains uncommitted and has no
    separate commit claim.
-2. Launch the resulting alpha.39 executable, verify exactly one responsive
-   Syndocal window, and maximize the intended window before UI operations.
-3. Reopen the alpha9 reference and reverify Music Play/Pause plus the repaired
-   status-only authoring-output UI truth; the historical alpha.38 drift to
-   `3 - PX160 WAV...` must not recur while the exact Music endpoint remains
-   authoritative.
+3. Alpha9 native UI reverification is complete without clicking the output
+   selector or Refresh. The exact sequence was Play -> Pause -> status-only wait
+   -> Play -> Pause -> status-only wait; throughout it, explicit-device and
+   resolved output stayed at `Music (Elgato Virtual Audio)`, lifecycle `実行中`,
+   `rev1`, with advancing output frames and no visible Backend, Local IPC, or CUE fault.
+   The project remained unsaved and final Timeline state was paused; the
+   historical alpha.38 drift to `3 - PX160 WAV...` was not observed.
 4. Ask the operator to audibly confirm Timeline media and Guide/Click through
    the selected `Music (Elgato Virtual Audio)` endpoint in Normal mode, then
    verify ASIO Start retires the authoring route and stale/missing/ambiguous
@@ -728,13 +751,20 @@ integrated source checkpoint above is authoritative for current source status.
 - Alpha.35-alpha.37 source/full-regression, independent review, and native build
   gates are historical. Alpha.38 native/build/window evidence is also
   historical at source/build HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`.
-  Alpha.39 automated source gates and independent reviews are complete at
-  pushed source commit `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-  `origin/codex/syndocal-v1.2`. The documentation follow-up remains uncommitted
-  and has no separate commit claim. No alpha.39 native build/UI/audible
-  evidence exists. Keep Unity/GPU Art-Net, Spout, camera, DJ, hardware,
-  audible, and dedicated Show-ASIO acceptance explicitly pending until observed
-  and recorded against their acceptance documents.
+  Alpha.39 automated source gates and independent reviews are complete; the
+  native build/window checkpoint used source/docs `HEAD` and upstream
+  `ec93e9160da853ad181de70aee4db7b4a75fafbb`, with exact MSVC `14.44.35207`
+  pinned/where-first, build exit `0` in `2m57s`, first-party warnings `0`,
+  artifact SHA-256 `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`,
+  and one responsive maximized PID `87640` / window id `2033716740`.
+  Native alpha9 UI selector/status-only reverification also passed without
+  clicking the output selector or Refresh; explicit/resolved output stayed
+  `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing
+  frames and no visible Backend, Local IPC, or CUE fault. The documentation
+  follow-up remains uncommitted and has no separate commit claim. Keep Unity/GPU
+  Art-Net, Spout, camera, DJ, hardware, audible, and dedicated Show-ASIO
+  acceptance explicitly pending until observed and recorded against their
+  acceptance documents.
 - Historical alpha.38 first safe resume action was completed: the saved alpha9
   reference was opened, Click/Guide-enabled Play -> Pause -> Play -> Pause
   tracked Timeline state without a CUE fault, and the authoring monitor stayed
@@ -743,9 +773,9 @@ integrated source checkpoint above is authoritative for current source status.
   After Pause, the authoring-output `<select>` drifted to `3 - PX160 WAV...`
   while settings JSON and resolved output remained Music. Keep this only as the
   historical alpha.38 fail-closed record; do not treat the alpha.38 process or
-  this mismatch as current alpha.39 acceptance. The next safe action now starts
-  with the exact MSVC `14.44` native build ->
-  launch/maximize -> alpha9 Music Play/Pause/status-only UI reverify -> operator
-  audible confirmation. Do not reuse or relabel historical alpha.31/
+  this mismatch as current alpha.39 acceptance. Alpha.39 selector/UI
+  reverification is recorded above; the next safe action is independent
+  stable-diff review, checkpoint commit/push, and `HEAD`/upstream equality;
+  operator audible confirmation follows. Do not reuse or relabel historical alpha.31/
   alpha.32/alpha.35/alpha.36/alpha.37/alpha.38 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

@@ -355,9 +355,9 @@ evidence. No unavailable physical device is a passing hardware result.
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; current product metadata is `1.2.0-alpha.39` on
-`codex/syndocal-v1.2`. Alpha.39 is the current SOURCE-only checkpoint at
-pushed source commit `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-`origin/codex/syndocal-v1.2`. It
+`codex/syndocal-v1.2`. The alpha.39 native checkpoint used source/docs `HEAD`
+and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
+the build checkpoint. It
 repairs the Timeline authoring-output selector's exact UI truth: only one exact
 selectable occurrence is admitted, duplicate/missing/ambiguous identities fail
 closed, and status-only polling may reapply the exact desired option without
@@ -365,16 +365,28 @@ list/configuration/routing mutation. Browser Phase A/B passed after the strict
 external-video status-poll fixture was added; TypeScript, runtime, video-poll,
 `git diff --check`, and `pnpm --dir app run check:release` pass. Independent
 Terra select review is GO with P0/P1 `0`; the checker review is GO with P0/P1/P2
-`0`. First-party warnings are `0` only for the evidenced non-native checks;
-no alpha.39 native-build warning result is claimed. The source checkpoint is
-committed and pushed; this documentation follow-up remains uncommitted and
-has no separate commit claim. The complete current
+`0`. The exact MSVC `14.44.35207` Community linker was pinned and first in
+`where.exe`; `pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s` with
+first-party warnings `0`. The resulting exact executable
+`target/release/syndocal.exe` is `61,108,736` bytes, reports
+Product/FileVersion `1.2.0-alpha.39`, and has SHA-256
+`7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with maximized
+`Syndocal` window id `2033716740`; Daslight was preserved. Native alpha9 UI
+reverification passed without clicking the output selector or Refresh. The
+exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
+status-only wait; throughout it, explicit-device and resolved output stayed at
+`Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
+frames and no visible Backend, Local IPC, or CUE fault. The project remained
+unsaved and final Timeline state was paused. This documentation follow-up
+remains uncommitted and has no separate commit/push claim. The complete current
 source, native, show-output, audio, DJ, and remaining physical acceptance state
 is recorded in
 `qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
 
-No alpha.39 native build, native UI, or audible verification has run. The latest
-native authority remains historical alpha.38: its pushed source/build HEAD was
+The alpha.39 native build/window and selector/UI regression gates are complete
+only. Audible/device selection and operator audible confirmation remain pending.
+The alpha.38 native authority remains historical: its pushed source/build HEAD was
 `e4ec22384675aace5ed3912ddffdcfecca190919`, and its exact executable was
 `1.2.0-alpha.38`, `61,114,368` bytes, SHA-256
 `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`, with
@@ -383,9 +395,8 @@ displayed `3 - PX160 WAV...` after Pause while settings/resolved output stayed
 `Music (Elgato Virtual Audio)`; preserve this as immutable historical evidence
 and do not relabel its binary as alpha.39. Audible/device selection, dedicated
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. The next safe action now starts with the exact MSVC `14.44` native
-build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI reverify ->
-operator audible confirmation.
+remain open. The next safe action is independent stable-diff review, checkpoint
+commit/push, and `HEAD`/upstream equality; operator audible confirmation follows.
 
 The immediately preceding alpha.25 source/native checkpoint remains immutable
 historical evidence: source/native evidence was
@@ -2928,9 +2939,11 @@ Cleanup was inventoried read-only for this checkpoint. `target`,
 `app/node_modules`, `tools/asio-bridge/target`, and `app/dist` still exist; a
 fresh exact-byte `target` traversal did not finish within the bounded 50-second
 window and was stopped without filesystem changes, so no new exact byte count
-is claimed. The latest completed exact inventory remains `428,244,808,551`
-logical bytes for `target`. The reviewed recurring-cleanup harness is not
-approved for Apply, so no deletion ran and reclaimed bytes remain 0.
+was claimed at that historical checkpoint. Its latest completed exact inventory
+was `428,244,808,551` logical bytes for `target`; the later alpha.39 checkpoint
+refresh is recorded in the current status and authoritative handoff. The
+reviewed recurring-cleanup harness was not approved for Apply, so no deletion
+ran and reclaimed bytes remained 0.
 
 ## 64. 2026-08-29 CURRENT alpha.33 camera-capture source tranche (native pending)
 

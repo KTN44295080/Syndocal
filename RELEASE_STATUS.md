@@ -3,11 +3,12 @@
 Updated: 2026-08-30
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.39`.
 
-## 2026-08-30 current alpha.39 SOURCE checkpoint
+## 2026-08-30 current alpha.39 native checkpoint
 
-Alpha.39 is the current SOURCE checkpoint at pushed source commit
-`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-`origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+Alpha.39 is the current product checkpoint on branch `codex/syndocal-v1.2`.
+The native build used source/docs `HEAD` and upstream
+`ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at the build
+checkpoint. This tranche repairs the Timeline
 authoring-output selector's
 exact UI truth: only one exact selectable occurrence may be admitted, while
 duplicate, missing, or ambiguous identities fail closed; status-only polling
@@ -15,16 +16,36 @@ may reapply the exact desired option without list/configuration/routing
 mutation. Browser Phase A/B passed after the strict external-video status-poll
 fixture was added; TypeScript, runtime, video-poll, `git diff --check`, and
 `pnpm --dir app run check:release` pass. Independent Terra select review is GO
-with P0/P1 `0`, and the checker review is GO with P0/P1/P2 `0`. First-party
-warnings are `0` only for the evidenced non-native checks above; no alpha.39
-native-build warning result is claimed. The source checkpoint is committed and
-pushed; this documentation follow-up remains uncommitted and has no separate
-commit claim. No alpha.39 native build, native UI, or audible verification has
-run. The next safe action now starts with the exact MSVC `14.44` native build,
-then launch/maximize, alpha9 Music Play/Pause and status-only UI reverify, and
-operator audible confirmation.
+with P0/P1 `0`, and the checker review is GO with P0/P1/P2 `0`. The exact MSVC
+`14.44.35207` Community linker was pinned and first in `where.exe`;
+`pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s` with first-party
+warnings `0`. The resulting exact executable
+`target/release/syndocal.exe` is `61,108,736` bytes, reports
+Product/FileVersion `1.2.0-alpha.39`, and has SHA-256
+`7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with maximized
+`Syndocal` window id `2033716740`; Daslight was preserved. Native alpha9 UI
+reverification passed without clicking the output selector or Refresh. The
+exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
+status-only wait; throughout it, explicit-device and resolved output stayed at
+`Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
+frames and no visible Backend, Local IPC, or CUE fault. The project remained
+unsaved and final Timeline state was paused. This closes alpha.39 native
+build/window and selector/UI regression gates only. Audible/device selection,
+Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
+remain open. This documentation follow-up remains uncommitted and has no
+separate commit/push claim. The next safe action is independent stable-diff
+review, then checkpoint commit/push and `HEAD`/upstream equality. Only after
+that may operator audible confirmation start.
 
-The latest native authority remains historical alpha.38. Its warning-free
+The current read-only storage inventory is `target` `94,214,143,142` logical
+bytes across `86,760` files, `app/node_modules` `545,338,492` bytes,
+`tools/asio-bridge/target` `1,774,985,879` bytes, and `app/dist` `5,204,539`
+bytes. Git also reported one approximately `568 KiB` garbage object. Cleanup
+conditions are not satisfied; no cleanup Apply or ad-hoc deletion ran and
+reclaimed bytes remain `0`.
+
+The alpha.38 native authority below is historical and immutable. Its warning-free
 automated gates and independent review are recorded below; exact source
 checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source
 HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact-linker
@@ -103,8 +124,9 @@ resolved `Music (Elgato Virtual Audio)`, advanced output frames, and showed no
 CUE, backend, or local IPC fault. This closes the former authority-fault native
 regression, not audible acceptance. After Pause the output-device `<select>`
 displayed `3 - PX160 WAV...` while persisted settings and resolved output
-remained Music. This new UI truth mismatch is fail-closed and blocks endpoint
-selection/audible acceptance until it is repaired and reverified.
+remained Music. This historical UI truth mismatch is fail-closed; the alpha.39
+selector/UI gate above repairs and reverifies it. Audible/device acceptance
+remains open until operator confirmation.
 
 ## 2026-08-30 historical alpha.37 CUE-anchor and strict-Spout source checkpoint
 

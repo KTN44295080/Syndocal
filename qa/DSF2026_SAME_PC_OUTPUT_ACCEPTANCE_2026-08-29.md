@@ -12,29 +12,40 @@ local Spout senders. The replacement must retain the existing output-control
 lease, safety, publication, acknowledgement, and rollback boundaries; it must
 not fall back to a generic unreviewed output mutation.
 
-## 2026-08-30 alpha.39 SOURCE checkpoint
+## 2026-08-30 alpha.39 native checkpoint
 
-The current source-only product checkpoint is `1.2.0-alpha.39` on branch
-`codex/syndocal-v1.2`, at pushed source commit
-`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-`origin/codex/syndocal-v1.2`. The Timeline authoring-output selector now admits only one exact
+The current product checkpoint is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`; the build source/docs `HEAD` and upstream were both
+`ec93e9160da853ad181de70aee4db7b4a75fafbb`. The Timeline authoring-output selector now admits only one exact
 selectable occurrence; duplicate, missing, or ambiguous identities fail closed.
 Status-only polling may reapply the exact desired option without
 list/configuration/routing mutation. Browser Phase A/B passed after the strict
 external-video status-poll fixture was added; TypeScript, runtime, video-poll,
 `git diff --check`, and `pnpm --dir app run check:release` pass. Independent
 Terra select review is GO with P0/P1 `0`; the checker review is GO with P0/P1/P2
-`0`. First-party warnings are `0` only for the evidenced non-native checks; no
-alpha.39 native-build warning result is claimed. The source checkpoint is
-committed and pushed; this documentation follow-up remains uncommitted and has
-no separate commit claim.
+`0`. The exact MSVC `14.44.35207` Community linker was pinned and first in
+`where.exe`; `pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s` with
+first-party warnings `0`. The exact executable
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+`61,108,736` bytes, reports Product/FileVersion `1.2.0-alpha.39`, and has
+SHA-256 `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with maximized
+`Syndocal` window id `2033716740`; Daslight was preserved. Native alpha9 UI
+reverification passed without clicking the output selector or Refresh. The
+exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
+status-only wait; throughout it, explicit-device and resolved output stayed at
+`Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
+frames and no visible Backend, Local IPC, or CUE fault. The project remained
+unsaved and final Timeline state was paused. This documentation follow-up
+remains uncommitted and has no separate commit/push claim.
 
 This source change does not alter the strict Art-Net route, fixed Spout pair,
-camera behavior, or their activation/retirement contracts. No alpha.39 native
-build, native UI, audible, Unity/GPU, Art-Net, Spout, DJ, camera, or hardware
-acceptance has run. The next safe action now starts with the exact MSVC `14.44`
-native build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI
-reverify -> operator audible confirmation. The historical alpha.38 artifact, PID/window, and
+camera behavior, or their activation/retirement contracts. The alpha.39 native
+build/window and selector/UI regression gates are complete only; operator audible
+confirmation, audible/device selection, Unity/GPU Art-Net/Spout, DJ, camera, and
+other hardware acceptance remain pending. The next safe action is independent
+stable-diff review, checkpoint commit/push, and `HEAD`/upstream equality;
+operator audible confirmation follows. The historical alpha.38 artifact, PID/window, and
 `PX160` display drift remain immutable evidence and must not be relabeled as
 alpha.39.
 
@@ -137,7 +148,7 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The alpha.35 source, carried unchanged by the current alpha.39 source-only
+The alpha.35 source, carried unchanged by the current alpha.39
 checkpoint, adds three independent
 Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
@@ -191,9 +202,10 @@ installed an unreferenced Cue 3 state without creating Cue 3. The inventory was
 updated with explicit variant assertions and the dead fixture was removed;
 focused proofs and the complete matrix then passed. The alpha.38 normal
 native build/window gate is historical as recorded above; Unity/GPU physical
-checks remain open and alpha.39 has no native evidence.
+checks remain open, while the alpha.39 native build/window and selector/UI
+evidence is recorded at the top.
 
-The alpha.35 hardening, carried unchanged by the current alpha.39 source-only
+The alpha.35 hardening, carried unchanged by the current alpha.39
 checkpoint, closes the remaining
 first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
@@ -233,7 +245,7 @@ Historical alpha.38 changes Timeline CUE transport/Guide authority only; it does
 the strict Art-Net route, fixed Spout pair, or their activation/retirement
 contracts. The latest direct Spout matrix therefore remains the historical
 alpha.37 evidence above. The alpha.38 normal native/window gate is historical,
-and the current alpha.39 source-only checkpoint does not change the strict
+and the current alpha.39 native checkpoint does not change the strict
 Art-Net or fixed Spout path. The Art-Net, Spout, and Unity/GPU physical rows
 remain explicitly unaccepted.
 
@@ -273,7 +285,7 @@ keeps the final Unity/GPU physical row explicitly open:
       unchecked below.
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
-- [x] Alpha.39 source-only authoring-output selector admission is exact and
+- [x] Alpha.39 authoring-output selector admission is exact and
       fail-closed for duplicate, missing, or ambiguous identities; status-only
       polling does not mutate list/configuration/routing state. Browser Phase
       A/B passed after the strict external-video status-poll fixture was added.
@@ -296,7 +308,16 @@ keeps the final Unity/GPU physical row explicitly open:
       `1.2.0-alpha.38` and SHA-256
       `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`;
       exactly one checkout-owned PID `55624` is responsive and maximized.
-- [ ] Alpha.39 exact-MSVC native build, launch/maximize, alpha9 Music
-      Play/Pause/status-only UI reverify, and operator audible confirmation.
+- [x] Alpha.39 exact-MSVC native build and launch/maximize checkpoint is recorded
+      above: source/docs `HEAD` and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`,
+      `2m57s`, first-party warnings `0`, artifact SHA-256
+      `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`, and
+      one responsive maximized PID `87640` / window id `2033716740`.
+- [x] Alpha.39 native alpha9 UI selector/status-only reverify passed without
+      clicking the output selector or Refresh: explicit-device and resolved
+      output stayed `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`,
+      with advancing output frames and no visible Backend, Local IPC, or CUE
+      fault. The project remained unsaved and final Timeline state was paused.
+- [ ] Operator audible confirmation and physical Unity/GPU output acceptance.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

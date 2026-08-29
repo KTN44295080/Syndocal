@@ -14,25 +14,36 @@ licensed, non-default show-ASIO artifact described by
 `qa/ASIO_INPUT_ACCEPTANCE.md`. No ASIO SDK-linked DLL or feature may enter the
 normal installer, updater, repair path, or default build graph.
 
-## 2026-08-30 alpha.39 SOURCE checkpoint
+## 2026-08-30 alpha.39 native checkpoint
 
-The current source-only product checkpoint is `1.2.0-alpha.39` on branch
-`codex/syndocal-v1.2`, at pushed source commit
-`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
-`origin/codex/syndocal-v1.2`. The Timeline authoring-output selector now admits only one exact
+The current product checkpoint is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`; the build source/docs `HEAD` and upstream were both
+`ec93e9160da853ad181de70aee4db7b4a75fafbb`. The Timeline authoring-output selector now admits only one exact
 selectable occurrence; duplicate, missing, and ambiguous identities remain
 visible and fail closed. Status-only polling may reapply the exact desired
 option without list/configuration/routing mutation. Browser Phase A/B passed
 after the strict external-video status-poll fixture was added; TypeScript,
 runtime, video-poll, `git diff --check`, and `pnpm --dir app run check:release`
 pass. Independent Terra select review is GO with P0/P1 `0`; the checker review
-is GO with P0/P1/P2 `0`. First-party warnings are `0` only for the evidenced
-non-native checks; no alpha.39 native-build warning result is claimed. The
-source checkpoint is committed and pushed; this documentation follow-up remains
-uncommitted and has no separate commit claim.
+is GO with P0/P1/P2 `0`. The exact MSVC `14.44.35207` Community linker was
+pinned and first in `where.exe`; `pnpm --dir app tauri build --no-bundle` exited
+`0` in `2m57s` with first-party warnings `0`. The exact executable
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+`61,108,736` bytes, reports Product/FileVersion `1.2.0-alpha.39`, and has
+SHA-256 `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
+Exactly one checkout-owned PID `87640` is responsive with maximized
+`Syndocal` window id `2033716740`; Daslight was preserved. Native alpha9 UI
+reverification passed without clicking the output selector or Refresh. The
+exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
+status-only wait; throughout it, explicit-device and resolved output stayed at
+`Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
+frames and no visible Backend, Local IPC, or CUE fault. The project remained
+unsaved and final Timeline state was paused. This documentation follow-up
+remains uncommitted and has no separate commit/push claim.
 
-No alpha.39 native build, UI, audible, or dedicated Show-ASIO verification has
-run. The latest native authority is historical alpha.38: exact executable
+The alpha.39 native build/window and selector/UI regression gates are complete
+only. Audible/device selection and dedicated Show-ASIO verification remain
+pending. The latest alpha.38 native authority is historical: exact executable
 Product/FileVersion `1.2.0-alpha.38`, `61,114,368` bytes, SHA-256
 `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`, source/
 build HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`, and responsive maximized
@@ -41,9 +52,8 @@ PID `55624`. Its authoring-output `<select>` drifted after Pause to
 `Music (Elgato Virtual Audio)`; retain that as immutable historical evidence
 and do not relabel the alpha.38 binary as alpha.39. Audible/device selection,
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. The next safe action now starts with the exact MSVC `14.44` native
-build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI reverify ->
-operator audible confirmation.
+remain open. The next safe action is independent stable-diff review, checkpoint
+commit/push, and `HEAD`/upstream equality; operator audible confirmation follows.
 
 ## Architecture decision
 
@@ -397,9 +407,9 @@ CUE `50/50`, full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline CUE
 Terra xHigh review is GO. The attachment-level native Play/Pause observation is
 recorded below; full DirectChild-to-Root/Follow/timecode admission and
 individual audible-MIDI/drift/count-in rotation tests remain non-blocking P2
-proof improvements. The selected physical endpoint and audible media/Click/Guide
-behavior remain unaccepted until the alpha.39 native build and operator audible
-confirmation.
+proof improvements. The alpha.39 native UI selector/status-only reverify passed;
+the selected physical endpoint and audible media/Click/Guide behavior remain
+unaccepted until operator audible confirmation.
 
 Open P1, deliberately outside this Timeline-audio tranche: the Video layer
 keeps its own legacy varispeed/seek model. Timeline-audio source/output clock
@@ -449,10 +459,9 @@ After Pause, only the authoring-output `<select>` display drifted to
 `3 - PX160 WAV...`; the settings JSON and resolved output remained
 `Music (Elgato Virtual Audio)`. This was a new unresolved UI truth bug in
 historical alpha.38. The drift must remain fail closed: do not treat the
-displayed selection as the authoritative endpoint, and do not mark audible or
-endpoint-selection acceptance complete until the alpha.39 source fix is
-reverified natively. The alpha.39 source-only selector repair is recorded
-above; it does not itself prove native UI or audible acceptance.
+displayed selection as the authoritative endpoint. The alpha.39 selector repair
+and native UI reverify are recorded above and close the selector/UI gate; they do
+not prove audible or physical endpoint acceptance.
 
 ## DSF2026 machine profile
 
@@ -680,8 +689,8 @@ relaunched successfully. Audible endpoint acceptance is not promoted.
 
 The alpha.38 native build/window gate is historical normal-native evidence: PID
 `55624` was responsive and maximized. The current authority is the alpha.39
-SOURCE checkpoint above; no alpha.39 native build/window evidence exists. The
-historical native gate does not promote audible PROGRAM/CUE behavior, dedicated
+native checkpoint above; its build artifact and responsive maximized window are
+recorded there. Neither native gate promotes audible PROGRAM/CUE behavior, dedicated
 Show-ASIO, or any physical MOTU M4, split-device, or M32/DL16 row.
 
 ## Normal Timeline authoring monitor acceptance
@@ -714,10 +723,16 @@ hard-coded choice.
       exact desired option without list/configuration/routing mutation. Browser
       Phase A/B proves the path after the strict external-video status-poll
       fixture was added.
-- [ ] Reverify that selector repair natively on alpha.39 after the exact MSVC
-      build and launch. The historical alpha.38 drift to `3 - PX160 WAV...`
-      while settings JSON and resolved output remained
-      `Music (Elgato Virtual Audio)` is not native alpha.39 evidence.
+- [x] Alpha.39 exact-MSVC native build and launch/maximize checkpoint is recorded
+      above: source/docs `HEAD` and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`,
+      `2m57s`, first-party warnings `0`, artifact SHA-256
+      `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`, and
+      one responsive maximized PID `87640` / window id `2033716740`.
+- [x] Alpha.39 native alpha9 UI selector/status-only reverify passed without
+      clicking the output selector or Refresh: explicit-device and resolved
+      output stayed `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`,
+      with advancing output frames and no visible Backend, Local IPC, or CUE
+      fault. The project remained unsaved and final Timeline state was paused.
 - [ ] Audibly verify both Timeline media and Guide/Click through that endpoint.
 
 ## Physical MOTU M4 acceptance
