@@ -27,15 +27,15 @@ Exactly one checkout-owned PID `87640` is responsive with maximized `Syndocal`
 window id `2033716740`; Daslight was preserved. Native alpha9 Timeline selector
 reverification passed at the exact Music endpoint without a visible Backend,
 Local IPC, or CUE fault. The exact sequence was Play -> Pause -> status-only
-wait -> Play -> Pause -> status-only wait. This documentation
-follow-up remains uncommitted and has no separate commit/push claim.
+wait -> Play -> Pause -> status-only wait. The reviewed native-evidence record
+was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
+`HEAD`/upstream equality was verified immediately after that push.
 
 Camera and strict Art-Net behavior are unchanged by this Timeline-output
 tranche. The alpha.39 normal native build/window and Timeline selector/UI gates
 are complete only; no alpha.39 camera UI/profile, capture, audible, Unity/GPU,
 Art-Net, Spout, DJ, or other hardware acceptance has run. The next safe action
-is independent stable-diff review, checkpoint commit/push, and `HEAD`/upstream
-equality; operator audible confirmation follows. The alpha.38 artifact/PID/window and
+is operator audible confirmation. The alpha.38 artifact/PID/window and
 observed `PX160` drift remain immutable historical evidence and must not be
 relabeled as alpha.39.
 

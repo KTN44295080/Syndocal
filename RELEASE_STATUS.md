@@ -33,10 +33,10 @@ frames and no visible Backend, Local IPC, or CUE fault. The project remained
 unsaved and final Timeline state was paused. This closes alpha.39 native
 build/window and selector/UI regression gates only. Audible/device selection,
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. This documentation follow-up remains uncommitted and has no
-separate commit/push claim. The next safe action is independent stable-diff
-review, then checkpoint commit/push and `HEAD`/upstream equality. Only after
-that may operator audible confirmation start.
+remain open. The reviewed native-evidence record was committed and pushed at
+`94b362bd2d733e447feabf0a0a6158699da6a2bf`, and `HEAD`/upstream equality was
+verified immediately after that push. The next safe action is operator audible
+confirmation.
 
 The current read-only storage inventory is `target` `94,214,143,142` logical
 bytes across `86,760` files, `app/node_modules` `545,338,492` bytes,

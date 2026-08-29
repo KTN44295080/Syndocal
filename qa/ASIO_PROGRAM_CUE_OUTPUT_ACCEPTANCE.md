@@ -38,8 +38,9 @@ exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
 status-only wait; throughout it, explicit-device and resolved output stayed at
 `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
 frames and no visible Backend, Local IPC, or CUE fault. The project remained
-unsaved and final Timeline state was paused. This documentation follow-up
-remains uncommitted and has no separate commit/push claim.
+unsaved and final Timeline state was paused. The reviewed native-evidence record
+was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
+`HEAD`/upstream equality was verified immediately after that push.
 
 The alpha.39 native build/window and selector/UI regression gates are complete
 only. Audible/device selection and dedicated Show-ASIO verification remain
@@ -52,8 +53,7 @@ PID `55624`. Its authoring-output `<select>` drifted after Pause to
 `Music (Elgato Virtual Audio)`; retain that as immutable historical evidence
 and do not relabel the alpha.38 binary as alpha.39. Audible/device selection,
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. The next safe action is independent stable-diff review, checkpoint
-commit/push, and `HEAD`/upstream equality; operator audible confirmation follows.
+remain open. The next safe action is operator audible confirmation.
 
 ## Architecture decision
 

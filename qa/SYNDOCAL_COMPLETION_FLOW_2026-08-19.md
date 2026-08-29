@@ -378,8 +378,9 @@ exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
 status-only wait; throughout it, explicit-device and resolved output stayed at
 `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
 frames and no visible Backend, Local IPC, or CUE fault. The project remained
-unsaved and final Timeline state was paused. This documentation follow-up
-remains uncommitted and has no separate commit/push claim. The complete current
+unsaved and final Timeline state was paused. The reviewed native-evidence record
+was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
+`HEAD`/upstream equality was verified immediately after that push. The complete current
 source, native, show-output, audio, DJ, and remaining physical acceptance state
 is recorded in
 `qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
@@ -395,8 +396,7 @@ displayed `3 - PX160 WAV...` after Pause while settings/resolved output stayed
 `Music (Elgato Virtual Audio)`; preserve this as immutable historical evidence
 and do not relabel its binary as alpha.39. Audible/device selection, dedicated
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. The next safe action is independent stable-diff review, checkpoint
-commit/push, and `HEAD`/upstream equality; operator audible confirmation follows.
+remain open. The next safe action is operator audible confirmation.
 
 The immediately preceding alpha.25 source/native checkpoint remains immutable
 historical evidence: source/native evidence was

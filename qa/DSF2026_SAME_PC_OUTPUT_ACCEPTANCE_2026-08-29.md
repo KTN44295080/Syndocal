@@ -36,16 +36,16 @@ exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
 status-only wait; throughout it, explicit-device and resolved output stayed at
 `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
 frames and no visible Backend, Local IPC, or CUE fault. The project remained
-unsaved and final Timeline state was paused. This documentation follow-up
-remains uncommitted and has no separate commit/push claim.
+unsaved and final Timeline state was paused. The reviewed native-evidence record
+was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
+`HEAD`/upstream equality was verified immediately after that push.
 
 This source change does not alter the strict Art-Net route, fixed Spout pair,
 camera behavior, or their activation/retirement contracts. The alpha.39 native
 build/window and selector/UI regression gates are complete only; operator audible
 confirmation, audible/device selection, Unity/GPU Art-Net/Spout, DJ, camera, and
-other hardware acceptance remain pending. The next safe action is independent
-stable-diff review, checkpoint commit/push, and `HEAD`/upstream equality;
-operator audible confirmation follows. The historical alpha.38 artifact, PID/window, and
+other hardware acceptance remain pending. The next safe action is operator
+audible confirmation. The historical alpha.38 artifact, PID/window, and
 `PX160` display drift remain immutable evidence and must not be relabeled as
 alpha.39.
 

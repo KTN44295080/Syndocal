@@ -26,9 +26,10 @@ stayed at `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with
 advancing output frames and no visible Backend, Local IPC, or CUE fault. The project remained
 unsaved and final Timeline state was paused. Audible/device selection,
 Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. This documentation follow-up remains uncommitted and has no
-separate commit/push claim. Complete independent review, checkpoint commit/push,
-and `HEAD`/upstream equality before starting operator acceptance.
+remain open. The reviewed native-evidence record was committed and pushed at
+`94b362bd2d733e447feabf0a0a6158699da6a2bf`, and `HEAD`/upstream equality was
+verified immediately after that push. The next safe action is operator audible
+confirmation.
 
 Historical alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
 rotated Timeline transport authority without changing media source projection.

@@ -25,8 +25,10 @@ This is the concise authoritative resume note for the final show-critical tranch
   `61,108,736` bytes, reports Product/FileVersion `1.2.0-alpha.39`, and has
   SHA-256 `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
   Exactly one checkout-owned PID `87640` is responsive with maximized
-  `Syndocal` window id `2033716740`; Daslight was preserved. This documentation
-  follow-up remains uncommitted and has no separate commit/push claim.
+  `Syndocal` window id `2033716740`; Daslight was preserved. The reviewed
+  native-evidence record was committed and pushed at
+  `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and `HEAD`/upstream equality was
+  verified immediately after that push.
 
   Native alpha9 UI reverification passed without clicking the output selector or
   Refresh. The exact sequence was Play -> Pause -> status-only wait -> Play ->
@@ -42,8 +44,7 @@ This is the concise authoritative resume note for the final show-critical tranch
   and selector/UI regression gates are complete only; audible/device selection,
   operator audible confirmation, dedicated Show-ASIO, Unity/GPU Art-Net/Spout,
   DJ, camera, and other hardware acceptance remain open. The next safe action is
-  independent stable-diff review, checkpoint commit/push, and `HEAD`/upstream
-  equality; operator audible confirmation follows.
+  operator audible confirmation.
 
 - Historical alpha.38 native authority remains immutable. The exact MSVC
   `14.44` native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s`
@@ -173,10 +174,10 @@ This is the concise authoritative resume note for the final show-critical tranch
   processes are historical execution evidence; the exact alpha.38 PID `55624`
   is historical native authority only. The current authority is the alpha.39
   native checkpoint at build source/docs `HEAD` and upstream
-  `ec93e9160da853ad181de70aee4db7b4a75fafbb`. The documentation follow-up
-  remains uncommitted and has no separate commit claim; the exact alpha.39
-  artifact and responsive maximized window are recorded at the top of this
-  handoff.
+  `ec93e9160da853ad181de70aee4db7b4a75fafbb`. The reviewed native-evidence
+  record is pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`; the exact
+  alpha.39 artifact and responsive maximized window are recorded at the top of
+  this handoff.
   The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
@@ -716,8 +717,9 @@ integrated source checkpoint above is authoritative for current source status.
    `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
 2. The exact launch checkpoint is complete: one responsive/maximized
    `Syndocal` window (PID `87640`, id `2033716740`) was verified and Daslight
-   was preserved. The documentation follow-up remains uncommitted and has no
-   separate commit claim.
+   was preserved. The reviewed native-evidence record was committed/pushed at
+   `94b362bd2d733e447feabf0a0a6158699da6a2bf`, followed by verified
+   `HEAD`/upstream equality.
 3. Alpha9 native UI reverification is complete without clicking the output
    selector or Refresh. The exact sequence was Play -> Pause -> status-only wait
    -> Play -> Pause -> status-only wait; throughout it, explicit-device and
@@ -760,8 +762,9 @@ integrated source checkpoint above is authoritative for current source status.
   Native alpha9 UI selector/status-only reverification also passed without
   clicking the output selector or Refresh; explicit/resolved output stayed
   `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing
-  frames and no visible Backend, Local IPC, or CUE fault. The documentation
-  follow-up remains uncommitted and has no separate commit claim. Keep Unity/GPU
+  frames and no visible Backend, Local IPC, or CUE fault. The reviewed
+  native-evidence record is pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`.
+  Keep Unity/GPU
   Art-Net, Spout, camera, DJ, hardware, audible, and dedicated Show-ASIO
   acceptance explicitly pending until observed and recorded against their
   acceptance documents.
@@ -774,8 +777,7 @@ integrated source checkpoint above is authoritative for current source status.
   while settings JSON and resolved output remained Music. Keep this only as the
   historical alpha.38 fail-closed record; do not treat the alpha.38 process or
   this mismatch as current alpha.39 acceptance. Alpha.39 selector/UI
-  reverification is recorded above; the next safe action is independent
-  stable-diff review, checkpoint commit/push, and `HEAD`/upstream equality;
-  operator audible confirmation follows. Do not reuse or relabel historical alpha.31/
+  reverification is recorded above; the next safe action is operator audible
+  confirmation. Do not reuse or relabel historical alpha.31/
   alpha.32/alpha.35/alpha.36/alpha.37/alpha.38 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.
