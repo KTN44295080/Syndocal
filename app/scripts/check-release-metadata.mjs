@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
@@ -6,14 +6,10 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   realpathSync,
-  rmSync,
-  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
@@ -27,6 +23,14 @@ import {
   windowsFfmpegBundleResourceMap,
 } from "./windows-runtime-inventory.mjs";
 import { StrictJsonError, parseStrictJson } from "./strict-json.mjs";
+import {
+  canonicalDecodedUpdaterUrlPath,
+  parseTauriMinisignPublicKey,
+  verifyTauriUpdaterPayload,
+} from "./updater-evidence-crypto.mjs";
+import { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
+
+export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
 export const expectedVersion = "1.2.0-alpha.31";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -657,8 +661,17 @@ function canonicalPathKey(path) {
 }
 
 export function readVerifiedEvidenceFile(evidenceRoot, relativePath, label = "evidence file") {
-  if (typeof relativePath !== "string" || isAbsolute(relativePath) || relativePath.split(/[\\/]/u).includes("..")) {
-    throw new Error(`${label} path must stay below the evidence directory: ${relativePath}`);
+  if (
+    typeof relativePath !== "string"
+    || relativePath.length === 0
+    || relativePath !== relativePath.trim()
+    || isAbsolute(relativePath)
+    || relativePath.includes("\\")
+    || relativePath.includes(":")
+    || relativePath.includes("\0")
+    || relativePath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`${label} path must be an exact slash-separated child of the evidence directory: ${relativePath}`);
   }
   const realRoot = realpathSync(evidenceRoot);
   const candidate = resolve(realRoot, relativePath);
@@ -741,25 +754,7 @@ export function parseRuntimeUpdaterIdentity(output) {
   return identity;
 }
 
-export function withMaterializedVerifiedExecutable(bytes, inspect) {
-  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
-    throw new Error("Windows executable evidence bytes are empty.");
-  }
-  const directory = mkdtempSync(join(tmpdir(), "syndocal-release-inspect-"));
-  const executablePath = join(directory, "syndocal-inspect.exe");
-  try {
-    writeFileSync(executablePath, bytes, { flag: "wx", mode: 0o700 });
-    const materialized = readFileSync(executablePath);
-    if (!materialized.equals(bytes)) {
-      throw new Error("Materialized Windows executable differs from verified evidence bytes.");
-    }
-    return inspect(executablePath);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-}
-
-function inspectWindowsExecutable(_path, bytes, updater) {
+function inspectWindowsExecutable(executablePath, bytes, updater) {
   if (process.platform !== "win32") {
     throw new Error("Windows executable evidence must be inspected on Windows.");
   }
@@ -769,34 +764,31 @@ function inspectWindowsExecutable(_path, bytes, updater) {
   if (!includesUtf8OrUtf16(bytes, updater.publicKey)) {
     throw new Error("Windows executable does not contain the exact updater public key.");
   }
-  const { productVersion, runtimeIdentity } = withMaterializedVerifiedExecutable(bytes, (executablePath) => {
-    const productVersion = execFileSync(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "$v=(Get-Item -LiteralPath $env:SYNDOCAL_RELEASE_INSPECT_PATH).VersionInfo.ProductVersion;[Console]::Out.Write($v)",
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, SYNDOCAL_RELEASE_INSPECT_PATH: executablePath },
-      },
-    ).trim();
-    const runtimeIdentity = parseRuntimeUpdaterIdentity(execFileSync(
-      executablePath,
-      ["--print-updater-release-identity"],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 10_000,
-        windowsHide: true,
-      },
-    ));
-    return { productVersion, runtimeIdentity };
-  });
+  const productVersion = execFileSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$v=(Get-Item -LiteralPath $env:SYNDOCAL_RELEASE_INSPECT_PATH).VersionInfo.ProductVersion;[Console]::Out.Write($v)",
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, SYNDOCAL_RELEASE_INSPECT_PATH: executablePath },
+    },
+  ).trim();
+  const runtimeIdentity = parseRuntimeUpdaterIdentity(execFileSync(
+    executablePath,
+    ["--print-updater-release-identity"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+      windowsHide: true,
+    },
+  ));
   if (
     runtimeIdentity.endpoint !== updater.endpoint ||
     runtimeIdentity.channel !== updater.channel ||
@@ -864,12 +856,8 @@ export function validateCandidateEvidence(manifest, options) {
     throw new Error("Previous release tag must resolve to a different commit.");
   }
 
-  const endpoint = new URL(manifest.updater.endpoint);
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-    throw new Error("Updater endpoint must be credential-free HTTPS.");
-  }
-  const endpointSegments = endpoint.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-  if (!endpointSegments.includes(manifest.updater.channel)) {
+  const endpoint = canonicalDecodedUpdaterUrlPath(manifest.updater.endpoint, "Updater endpoint");
+  if (!endpoint.pathSegments.includes(manifest.updater.channel)) {
     throw new Error("Updater endpoint path does not contain its exact channel segment.");
   }
   if (/PRIVATE KEY|TAURI_SIGNING_PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE/iu.test(JSON.stringify(manifest))) {
@@ -908,57 +896,21 @@ export function validateCandidateEvidence(manifest, options) {
   }
 
   const publicKeyRecord = addEvidenceFile(manifest.updater.publicKeyPath, "updater public key");
-  const publicKey = publicKeyRecord.bytes.toString("utf8").trim();
-  const privateKeyPattern = /PRIVATE KEY|SECRET KEY|TAURI_SIGNING_PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE/iu;
-  if (publicKey.length < 32 || privateKeyPattern.test(publicKey)) {
-    throw new Error("Updater public-key evidence is empty or contains private-key material.");
-  }
-  const strictBase64 = (text, label) => {
-    if (
-      text.length === 0 ||
-      text.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(text)
-    ) {
-      throw new Error(`${label} is not strict base64.`);
-    }
-    const decoded = Buffer.from(text, "base64");
-    if (decoded.toString("base64") !== text) throw new Error(`${label} is not canonical base64.`);
-    return decoded;
-  };
-  const decodedPublicKey = strictBase64(publicKey, "Updater public-key evidence");
-  const publicKeyText = decodedPublicKey.toString("utf8");
-  if (!Buffer.from(publicKeyText, "utf8").equals(decodedPublicKey) || privateKeyPattern.test(publicKeyText)) {
-    throw new Error("Updater public-key evidence contains private-key material or invalid UTF-8.");
-  }
-  const publicKeyLines = publicKeyText.replace(/\r\n/gu, "\n").replace(/\n$/u, "").split("\n");
-  const commentMatch = /^untrusted comment: minisign public key: ([0-9A-F]{16})$/u.exec(publicKeyLines[0] ?? "");
-  if (!commentMatch || publicKeyLines.length !== 2) {
-    throw new Error("Updater public-key evidence is not an exact Tauri minisign public key.");
-  }
-  const minisignPacket = strictBase64(publicKeyLines[1], "Updater minisign public-key packet");
-  if (minisignPacket.length !== 42 || minisignPacket.subarray(0, 2).toString("ascii") !== "Ed") {
-    throw new Error("Updater public-key evidence is not an exact Tauri minisign public key.");
-  }
-  const packetKeyId = Buffer.from(minisignPacket.subarray(2, 10)).reverse().toString("hex").toUpperCase();
-  if (packetKeyId !== commentMatch[1]) {
-    throw new Error("Updater public-key evidence key identifier does not match its minisign packet.");
-  }
-  const minisignPublicKey = createPublicKey({
-    key: Buffer.concat([
-      Buffer.from("302a300506032b6570032100", "hex"),
-      minisignPacket.subarray(10),
-    ]),
-    format: "der",
-    type: "spki",
+  const parsedPublicKey = parseTauriMinisignPublicKey(publicKeyRecord.bytes, {
+    expectedFingerprint: manifest.updater.publicKeyFingerprint,
+    label: "Updater public-key evidence",
   });
-  const publicKeyFingerprint = createHash("sha256").update(publicKey, "utf8").digest("hex");
-  if (publicKeyFingerprint !== manifest.updater.publicKeyFingerprint.toLowerCase()) {
-    throw new Error("Updater public-key fingerprint mismatch.");
-  }
+  const publicKey = parsedPublicKey.canonicalText;
+  const publicKeyFingerprint = parsedPublicKey.fingerprint;
 
   const identities = new Set();
   const updaterPayloadTargets = new Set();
   const executableTargets = new Set();
+  const verifiedArtifacts = [];
+
+  // Phase 1: every evidence file is read and SHA-256 checked before an
+  // executable can be materialized or inspected. This deliberately makes the
+  // security result independent of manifest artifact ordering.
   for (const artifact of manifest.artifacts) {
     const identity = `${artifact.role}\0${artifact.target}\0${artifact.filename}`;
     if (identities.has(identity)) throw new Error(`Duplicate release artifact identity: ${artifact.filename}`);
@@ -975,76 +927,16 @@ export function validateCandidateEvidence(manifest, options) {
       throw new Error(`Artifact SHA-256 mismatch: ${artifact.filename}`);
     }
 
+    let signatureRecord = null;
     if (artifact.role === "updater-payload") {
       updaterPayloadTargets.add(artifact.target);
       if (!artifact.signaturePath || !artifact.signatureSha256) {
         throw new Error(`Updater payload lacks signature evidence: ${artifact.filename}`);
       }
-      const signatureRecord = addEvidenceFile(artifact.signaturePath, "updater signature");
+      signatureRecord = addEvidenceFile(artifact.signaturePath, "updater signature");
       const signatureHash = createHash("sha256").update(signatureRecord.bytes).digest("hex");
       if (signatureHash !== artifact.signatureSha256.toLowerCase()) {
         throw new Error(`Updater signature SHA-256 mismatch: ${artifact.filename}`);
-      }
-      const signature = signatureRecord.bytes.toString("utf8").trim();
-      const platform = updaterManifest.platforms[artifact.target];
-      if (!platform || platform.signature !== signature || signature.length < 32) {
-        throw new Error(`Updater manifest signature does not match the exact signature file: ${artifact.target}`);
-      }
-      const decodedSignature = strictBase64(signature, "Updater signature evidence");
-      const signatureText = decodedSignature.toString("utf8");
-      if (!Buffer.from(signatureText, "utf8").equals(decodedSignature)) {
-        throw new Error(`Updater signature evidence is not valid UTF-8: ${artifact.target}`);
-      }
-      const signatureLines = signatureText.replace(/\r\n/gu, "\n").replace(/\n$/u, "").split("\n");
-      if (
-        signatureLines.length !== 4 ||
-        signatureLines[0] !== "untrusted comment: signature from tauri secret key" ||
-        !signatureLines[2].startsWith("trusted comment: ")
-      ) {
-        throw new Error(`Updater signature evidence is not an exact Tauri minisign signature: ${artifact.target}`);
-      }
-      const signaturePacket = strictBase64(signatureLines[1], "Updater minisign signature packet");
-      const signatureAlgorithm = signaturePacket.subarray(0, 2).toString("ascii");
-      if (
-        signaturePacket.length !== 74 ||
-        !["ED", "Ed"].includes(signatureAlgorithm) ||
-        !signaturePacket.subarray(2, 10).equals(minisignPacket.subarray(2, 10))
-      ) {
-        throw new Error(`Updater signature key identifier/packet is invalid: ${artifact.target}`);
-      }
-      const trustedComment = signatureLines[2].slice("trusted comment: ".length);
-      const trustedCommentMatch = /^timestamp:[1-9]\d*\tfile:(.+)$/u.exec(trustedComment);
-      if (!trustedCommentMatch || trustedCommentMatch[1] !== artifact.filename) {
-        throw new Error(`Updater signature trusted filename does not match the artifact: ${artifact.target}`);
-      }
-      const trustedCommentSignature = strictBase64(
-        signatureLines[3],
-        "Updater minisign trusted-comment signature",
-      );
-      if (trustedCommentSignature.length !== 64) {
-        throw new Error(`Updater trusted-comment signature packet is invalid: ${artifact.target}`);
-      }
-      const payloadMessage = signatureAlgorithm === "ED"
-        ? createHash("blake2b512").update(artifactRecord.bytes).digest()
-        : artifactRecord.bytes;
-      if (
-        !verifySignature(null, payloadMessage, minisignPublicKey, signaturePacket.subarray(10)) ||
-        !verifySignature(
-          null,
-          Buffer.concat([signaturePacket.subarray(10), Buffer.from(trustedComment, "utf8")]),
-          minisignPublicKey,
-          trustedCommentSignature,
-        )
-      ) {
-        throw new Error(`Updater payload cryptographic signature verification failed: ${artifact.target}`);
-      }
-      const artifactUrl = new URL(platform.url);
-      if (artifactUrl.protocol !== "https:" || artifactUrl.username || artifactUrl.password || artifactUrl.search || artifactUrl.hash) {
-        throw new Error(`Updater artifact URL must be credential-free HTTPS: ${artifact.target}`);
-      }
-      const urlSegments = artifactUrl.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-      if (!urlSegments.includes(manifest.updater.channel) || urlSegments.at(-1) !== artifact.filename) {
-        throw new Error(`Updater artifact URL channel/filename mismatch: ${artifact.target}`);
       }
     } else if (artifact.signaturePath !== undefined || artifact.signatureSha256 !== undefined) {
       throw new Error(`Only updater payloads may declare updater signature evidence: ${artifact.filename}`);
@@ -1052,16 +944,8 @@ export function validateCandidateEvidence(manifest, options) {
 
     if (artifact.role === "windows-executable") {
       executableTargets.add(artifact.target);
-      const inspected = inspectExecutable(artifactRecord.realPath, artifactRecord.bytes, {
-        endpoint: manifest.updater.endpoint,
-        publicKey,
-        channel: manifest.updater.channel,
-        publicKeyFingerprint,
-      });
-      if (inspected.productVersion !== productVersion) {
-        throw new Error(`Windows executable ProductVersion mismatch: ${artifact.filename}`);
-      }
     }
+    verifiedArtifacts.push(Object.freeze({ artifact, artifactRecord, signatureRecord }));
   }
 
   const platformTargets = Object.keys(updaterManifest.platforms).sort();
@@ -1072,6 +956,43 @@ export function validateCandidateEvidence(manifest, options) {
   for (const target of updaterPayloadTargets) {
     if (target.startsWith("windows-") && !executableTargets.has(target)) {
       throw new Error(`Windows updater target lacks an inspected application executable: ${target}`);
+    }
+  }
+
+  // Phase 2a: complete every minisign/manifest/URL payload preflight before
+  // passing any Windows executable to an inspector.
+  for (const { artifact, artifactRecord, signatureRecord } of verifiedArtifacts) {
+    if (artifact.role !== "updater-payload") continue;
+    verifyTauriUpdaterPayload({
+      payloadBytes: artifactRecord.bytes,
+      artifactFilename: artifact.filename,
+      signatureEvidenceBytes: signatureRecord.bytes,
+      publicKey: parsedPublicKey,
+      expectedPublicKeyFingerprint: manifest.updater.publicKeyFingerprint,
+      updaterManifest,
+      target: artifact.target,
+      channel: manifest.updater.channel,
+      label: "Updater payload " + artifact.target,
+    });
+  }
+
+  // Phase 2b: only after all evidence and crypto checks pass are verified
+  // executable bytes materialized for product/runtime inspection.
+  for (const { artifact, artifactRecord } of verifiedArtifacts) {
+    if (artifact.role === "windows-executable") {
+      const inspected = withMaterializedVerifiedExecutable(
+        artifactRecord.bytes,
+        (materializedPath) => inspectExecutable(materializedPath, artifactRecord.bytes, {
+          endpoint: manifest.updater.endpoint,
+          publicKey,
+          channel: manifest.updater.channel,
+          publicKeyFingerprint,
+        }),
+        { label: "Windows executable evidence " + artifact.filename },
+      );
+      if (inspected.productVersion !== productVersion) {
+        throw new Error(`Windows executable ProductVersion mismatch: ${artifact.filename}`);
+      }
     }
   }
 }

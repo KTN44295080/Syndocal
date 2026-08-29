@@ -69,17 +69,88 @@ candidate can be accepted, run the normal release metadata and ASIO packaging
 checks, then prove the installed/extracted contents of all three Windows
 delivery surfaces: NSIS, MSI, and updater payload.
 
-The proof must use a repository-owned deterministic extractor, record an
-immutable inventory, and reject canonical ASIO bridge names, retired names,
-third-party ASIO names, known bridge hashes under any filename, and every
-FFmpeg name/size/SHA-256/PE mismatch. The default CI already rechecks the
-materialized NSIS and MSI directories after its smoke steps.
+The proof uses `app/scripts/windows-candidate-extractor.mjs`, a repository-owned
+deterministic extractor, and its revalidated/transient `inventory.json` (it is
+not a cryptographic signature or an immutable release record). The checker then
+re-reads the exact installer identities, verifies the three extracted roots, and
+rejects canonical ASIO bridge names, retired names, third-party ASIO names,
+known bridge hashes under any filename, and every FFmpeg name/size/SHA-256/PE
+mismatch. No installer is executed as part of this proof. The only candidate
+executable diagnostic (`syndocal.exe --print-updater-release-identity`) is
+reachable only after the updater payload, its exact adjacent `.sig`, the
+base64-wrapped minisign public key, and the updater manifest have passed the
+same Ed25519 verification used by the RC evidence gate.
 
-No repository-owned deterministic extractor currently exists for safe NSIS and
-updater payload extraction. Therefore release-candidate package acceptance is
-intentionally fail-closed. Do not execute or unpack an arbitrary candidate
-installer as a substitute. Implement and independently review that extractor
-and its extraction-inventory schema before changing this state.
+Run the release build first, then create the candidate inventory from the exact
+versioned Tauri outputs. The output must be a new directory below the
+repository-owned `target/qa/windows-release-candidate` tree:
+
+```powershell
+$version = "1.2.0-rc.1"
+$nsis = (Resolve-Path "target/release/bundle/nsis/Syndocal_${version}_x64-setup.exe").Path
+$msi = (Resolve-Path "target/release/bundle/msi/Syndocal_${version}_x64_ja-JP.msi").Path
+# createUpdaterArtifacts=true emits a direct signed installer; use that exact
+# NSIS or MSI payload for the updater role.
+$updater = $nsis
+$out = Join-Path (Resolve-Path .).Path "target/qa/windows-release-candidate/$version"
+# Required crypto preflight: do this before any archive extraction can make an
+# extracted syndocal.exe available to the candidate inspector.
+pnpm --dir app run check:release
+node app/scripts/check-release-metadata.mjs `
+  --release-candidate --manifest qa/release/release-evidence.json
+node app/scripts/windows-candidate-extractor.mjs `
+  --nsis $nsis --msi $msi --updater $updater `
+  --product-version $version --output $out
+$env:SYNDOCAL_WINDOWS_ARTIFACT_INVENTORY = Join-Path $out "inventory.json"
+node app/scripts/check-windows-release-artifacts.mjs --require-candidate-extraction
+```
+
+This is the only acceptance order: static release checks, RC metadata/key/
+manifest/adjacent-signature/payload Ed25519 preflight, deterministic candidate
+extraction, then the candidate artifact gate. `pnpm --dir app run
+check:release:candidate` is the same safe verification tail (static checks,
+metadata crypto preflight, candidate gate) when `SYNDOCAL_WINDOWS_ARTIFACT_
+INVENTORY` already identifies the just-created inventory. Do not run the
+extracted `syndocal.exe` diagnostic manually before that command completes, and
+never run either installer as a substitute for extraction evidence.
+
+NSIS and updater ZIP payloads require an explicitly trusted 7-Zip executable
+(`SYNDOCAL_WINDOWS_7ZIP_PATH`, or the reviewed `Program Files\7-Zip\7z.exe`
+location; on the current Windows host this is `C:\Program Files\7-Zip\7z.exe`);
+PATH lookup and `Expand-Archive` are deliberately unsupported. The current
+Tauri v2 updater configuration (`bundle.createUpdaterArtifacts=true`) accepts
+only the direct signed NSIS/MSI payload with its adjacent `.sig`; legacy
+`.nsis.zip`/`.msi.zip` forms are accepted only when the config explicitly uses
+`v1Compatible`. The adjacent signature, release-evidence updater manifest,
+canonical decoded HTTPS channel/filename URL, normalized public-key fingerprint,
+and extracted executable identity must all match the same evidence manifest.
+MSI extraction uses only the exact `%SystemRoot%\System32\msiexec.exe` path.
+The extractor validates archive entry paths, rejects symlinks/reparse points
+and hard links, verifies archive listing-to-tree correspondence, materializes
+each tool input from verified bytes using a fresh `wx` file, rehashes it before
+and after tool use, and removes that input through the revalidated tombstone
+path before publication. It publishes only the three approved role directories
+plus the inventory through a same-volume pathname rename and binds every input
+artifact SHA-256 across listing, extraction, and publication. Cleanup removes
+only its revalidated temporary staging directory after moving it to a
+same-parent tombstone. The tombstone's parent, directory identity, and reparse
+status are rechecked; on any mismatch or cleanup failure it is visibly left in
+place rather than recursively deleted.
+A pre-existing or swapped final output is never recursively deleted. A
+missing tool, future/non-RC version, stale artifact, or hostile path remains a
+visible fail-closed error. Run `node app/scripts/windows-candidate-extractor.mjs
+--self-test` before the release checker self-test.
+
+The pathname rename/tombstone fence is not handle-atomic in Node, and Node does
+not provide a portable proof of the Windows owner/DACL of the temporary
+directory. This remains a visible P1 operational boundary: use only the
+repository-owned, fresh, operator-controlled single-writer staging/output tree;
+do not treat this script as an ACL or hostile-concurrent-writer guarantee.
+
+The alpha/prerelease release gate remains fail-closed: the candidate inventory
+requires an explicit `X.Y.Z-rc.N` version and cannot be used to turn an alpha
+artifact into a release candidate. The older CI smoke extraction is diagnostic
+only; it is not a substitute for this inventory proof.
 
 ## Inventory authority, target scope, reparse policy, and the NDI signal contract
 

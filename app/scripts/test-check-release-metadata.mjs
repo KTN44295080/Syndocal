@@ -189,7 +189,17 @@ const baseManifest = {
 };
 writeFileSync(manifestPath, JSON.stringify(baseManifest, null, 2));
 
+let assertions = 0;
+for (const unsafeEvidenceChildPath of ["", ".", "child/../payload", "child\\payload", "payload:alternate-stream"]) {
+  assert.throws(
+    () => readVerifiedEvidenceFile(evidenceRoot, unsafeEvidenceChildPath, "strict evidence child fixture"),
+    /exact slash-separated child/,
+  );
+  assertions += 1;
+}
+
 let inspectedUpdater = null;
+let inspectedExecutablePath = null;
 const options = {
   manifestPath,
   manifestRecord: readVerifiedEvidenceFile(evidenceRoot, "release-evidence.json", "release evidence manifest"),
@@ -204,14 +214,14 @@ const options = {
     throw new Error(`unknown tag ${tag}`);
   },
   productTags: ["v1.1.0", "v1.2.0-alpha.1", `v${version}`],
-  inspectExecutable: (_path, bytes, updater) => {
+  inspectExecutable: (path, bytes, updater) => {
+    inspectedExecutablePath = path;
     inspectedUpdater = updater;
     assert.deepEqual(bytes, executableBytes);
     return { productVersion: version };
   },
 };
 
-let assertions = 0;
 const pass = (condition, message) => {
   assert.ok(condition, message);
   assertions += 1;
@@ -223,6 +233,23 @@ const rejects = (mutate, pattern, optionMutate) => {
   optionMutate?.(candidateOptions);
   assert.throws(() => validateCandidateEvidence(manifest, candidateOptions), pattern);
   assertions += 1;
+};
+const rejectsBeforeAnyInspection = (mutate, pattern) => {
+  const manifest = structuredClone(baseManifest);
+  mutate(manifest);
+  let inspectCalls = 0;
+  assert.throws(
+    () => validateCandidateEvidence(manifest, {
+      ...options,
+      inspectExecutable: () => {
+        inspectCalls += 1;
+        return { productVersion: version };
+      },
+    }),
+    pattern,
+  );
+  assertions += 1;
+  pass(inspectCalls === 0, "EXE-first candidate evidence rejects updater preflight failure before any inspector call");
 };
 const git = (args, cwd) => execFileSync("git", args, {
   cwd,
@@ -266,6 +293,11 @@ try {
   });
   pass(materializedResult === "inspected", "runtime inspection uses a materialized copy of verified bytes");
   pass(materializedPath !== null && !existsSync(materializedPath), "materialized runtime inspection copy is removed");
+  assert.throws(
+    () => withMaterializedVerifiedExecutable(materializedBytes, (path) => writeFileSync(path, Buffer.from("swapped bytes", "utf8"))),
+    /SHA-256 changed during inspection/,
+  );
+  assertions += 1;
   let failedMaterializedPath = null;
   assert.throws(
     () => withMaterializedVerifiedExecutable(materializedBytes, (path) => {
@@ -285,6 +317,12 @@ try {
   validateCandidateEvidence(baseManifest, options);
   assertions += 1;
   pass(inspectedUpdater?.endpoint === endpoint && inspectedUpdater?.publicKey === publicKey, "executable inspector receives exact updater identity");
+  pass(
+    inspectedExecutablePath !== null
+      && inspectedExecutablePath !== join(evidenceRoot, executableName)
+      && !existsSync(inspectedExecutablePath),
+    "metadata checker passes its injected inspector only a removed verified materialized EXE copy",
+  );
   const tauriSignerManifest = structuredClone(baseManifest);
   tauriSignerManifest.updater.manifestPath = "updater-tauri-signer.json";
   tauriSignerManifest.updater.manifestSha256 = hash(tauriSignerUpdaterManifestBytes);
@@ -317,7 +355,7 @@ try {
   rejects((m) => { m.privateNote = "-----BEGIN PRIVATE KEY-----"; }, /private signing key/);
   rejects((m) => { m.updater.manifestSha256 = "0".repeat(64); }, /manifest SHA-256 mismatch/);
   rejects((m) => { m.updater.publicKeyFingerprint = "0".repeat(64); }, /public-key fingerprint mismatch/);
-  rejects((m) => { m.artifacts[1].path = `../${payloadName}`; }, /stay below/);
+  rejects((m) => { m.artifacts[1].path = `../${payloadName}`; }, /exact slash-separated child/);
   rejects((m) => { m.artifacts[1].filename = `Other_${version}.exe`; }, /filename\/path mismatch/);
   rejects((m) => {
     m.artifacts[1].filename = payloadName.replace(version, "1.1.0");
@@ -333,7 +371,7 @@ try {
     delete alias.signaturePath;
     delete alias.signatureSha256;
     m.artifacts.push(alias);
-  }, /duplicates another evidence file/);
+  }, /exact slash-separated child/);
   if (process.platform === "win32") {
     rejects((m) => {
       const alias = structuredClone(m.artifacts[1]);
@@ -357,6 +395,9 @@ try {
     rejects((m) => {
       m.artifacts[1].sha256 = hash(tamperedPayloadBytes);
     }, /cryptographic signature verification failed/);
+    rejectsBeforeAnyInspection((m) => {
+      m.artifacts[1].sha256 = hash(tamperedPayloadBytes);
+    }, /cryptographic signature verification failed/);
   } finally {
     writeFileSync(join(evidenceRoot, payloadName), payloadBytes);
   }
@@ -366,7 +407,19 @@ try {
     m.artifacts[1].signaturePath = "tampered.sig";
     m.artifacts[1].signatureSha256 = hash(tamperedSignatureBytes);
   }, /cryptographic signature verification failed/);
+  rejectsBeforeAnyInspection((m) => {
+    m.updater.manifestPath = "updater-tampered-signature.json";
+    m.updater.manifestSha256 = hash(tamperedSignatureManifestBytes);
+    m.artifacts[1].signaturePath = "tampered.sig";
+    m.artifacts[1].signatureSha256 = hash(tamperedSignatureBytes);
+  }, /cryptographic signature verification failed/);
   rejects((m) => {
+    m.updater.manifestPath = "updater-other-key.json";
+    m.updater.manifestSha256 = hash(otherKeySignatureManifestBytes);
+    m.artifacts[1].signaturePath = "other-key.sig";
+    m.artifacts[1].signatureSha256 = hash(otherKeySignatureBytes);
+  }, /signature key identifier\/packet is invalid/);
+  rejectsBeforeAnyInspection((m) => {
     m.updater.manifestPath = "updater-other-key.json";
     m.updater.manifestSha256 = hash(otherKeySignatureManifestBytes);
     m.artifacts[1].signaturePath = "other-key.sig";

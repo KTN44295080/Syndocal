@@ -3,6 +3,48 @@
 Updated: 2026-08-29
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.31`. The Timeline authoring-monitor source is pushed through `602b96a8fcb0de3fd3a3e281324550fe1d7b5630`, and the normal native no-bundle artifact and responsive maximized window are accepted as recorded below. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, installer/updater, dedicated show-ASIO, and show-completion evidence remain open. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.31 evidence. Historical alpha.30 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
+## 2026-08-29 current Windows candidate extractor tranche
+
+`app/scripts/windows-candidate-extractor.mjs` now provides the bounded
+repository-owned NSIS/MSI/updater extraction path. It stages below the
+repository-owned candidate directory and publishes a fresh output through a
+same-volume pathname rename; failure cleanup is limited to the revalidated
+temporary staging identity.
+`app/scripts/check-windows-release-artifacts.mjs` binds schema v2 inventory,
+artifact hashes, adjacent updater signature, Tauri v2 updater mode, archive
+listing/tree correspondence, release-evidence manifest/public-key/platform
+identity, and all three extracted `syndocal.exe` ProductVersion/hash/runtime
+identities to one manifest. The inventory is revalidated/transient, not a
+cryptographic or immutable release record. The RC gate remains BLOCKED until
+real RC bundles, signatures, evidence, and Windows executable/runtime proof
+exist; the current alpha tree has not been promoted by this implementation.
+
+2026-08-29 candidate-gate hardening extends that boundary without accepting an
+RC. The RC metadata checker and candidate artifact checker now share one
+side-effect-free Tauri minisign parser, Ed25519 payload/trusted-comment
+verification, public-key-fingerprint normalization, and canonical decoded
+HTTPS channel/filename URL matcher. The metadata checker reads/hashes all
+artifact evidence and completes every updater crypto preflight before any
+Windows executable inspector; the candidate checker completes payload +
+adjacent `.sig` + public-key + updater-manifest crypto verification before any
+extracted `syndocal.exe` runtime-identity diagnostic can execute. Candidate and
+manual three-root inspectors receive only fresh `wx` copies made from verified
+bytes, never an extracted/original path; no installer is executed. The
+extractor binds each source SHA-256 through listing, extraction, and
+immediately-before-publication revalidation, and hashes each tool-input copy
+before/after tool use before tombstone cleanup. Cleanup moves only a
+revalidated staging/input directory to a same-parent tombstone; parent
+identity/reparse and tombstone identity are checked before recursive removal,
+with mismatch or cleanup failure retained visibly and fail-closed. The rename
+is pathname-atomic only: Node cannot prove handle-atomic behavior or Windows
+owner/DACL, so hostile concurrent writers remain an explicit P1 operational
+boundary outside the repository-owned fresh single-writer staging contract.
+The focused evidence self-test passed 125 assertion groups, the extractor
+self-test passed 43 assertions, verified materialization self-test passed 4
+assertions, and the Windows artifact self-test passed 140 assertions. These
+synthetic checks do not provide real RC bundle, signing-key custody, installer
+execution, native build, or hardware acceptance evidence.
+
 ## 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
 At this historical checkpoint, Alpha.30 was the source/UI tranche for arbitrary
