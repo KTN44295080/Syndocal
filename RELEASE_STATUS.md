@@ -1,7 +1,25 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.31`. The Timeline authoring-monitor source is pushed through `602b96a8fcb0de3fd3a3e281324550fe1d7b5630`, and the normal native no-bundle artifact and responsive maximized window are accepted as recorded below. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, installer/updater, dedicated show-ASIO, and show-completion evidence remain open. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.31 evidence. Historical alpha.30 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.32`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` and Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`. Alpha.32 native build/window evidence is still pending; the previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, and show-completion evidence remain open. The running process is preserved as an operational baseline only and is not alpha.32 evidence. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+
+## 2026-08-29 current alpha.32 source integration (native pending)
+
+Child Timeline PROGRAM/CUE audio now publishes one bounded canonical millirate
+for source position, Rodio speed, drift, and inverse Sink seek. Nested
+fractional rates round once; invalid or ambiguous conform rates publish the
+zero sentinel and refuse attachment. Negative source offsets remain silent
+until the exact root-output boundary, including nested, loop, seek, and restart
+paths. Lighting retains its established local-rate position contract.
+
+Independent Terra xHigh rereview returned GO with no P0/P1/P2. Exact MSVC
+14.44 supervisor evidence is Timeline audio `31/31` with warnings 0; the
+implementer also recorded ASIO media playback `80/80` and protocol
+nonserialization `1/1`, both warnings 0. The Windows candidate-gate tranche
+also received independent implementation GO after metadata/extractor/
+materialization/artifact self-tests `125/43/4/140` and `check:release` passed.
+Real RC bundles and alpha.32 native/hardware acceptance remain deliberately
+unclaimed.
 
 ## 2026-08-29 current Windows candidate extractor tranche
 
@@ -75,9 +93,9 @@ audio-runtime extraction from `main.rs` is deliberately deferred until after
 show acceptance because changing ownership and lifecycle boundaries before the
 show is a pre-show risk; no extraction is claimed here.
 
-## 2026-08-29 current alpha.31 Timeline authoring-monitor source checkpoint
+## 2026-08-29 historical alpha.31 Timeline authoring-monitor source checkpoint
 
-Alpha.31 is the current pushed source/UI tranche for ordinary Timeline
+Alpha.31 was the then-current pushed source/UI tranche for ordinary Timeline
 authoring. `FollowProgram` remains the existing Normal-route behavior. When the
 operator selects `ExplicitDevice`, every Timeline media clip (regardless of
 its logical PROGRAM/CUE bus) and generated Guide/Click material is routed to

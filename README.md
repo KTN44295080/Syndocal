@@ -2,17 +2,18 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.31**
+- 製品名: **Syndocal 1.2.0-alpha.32**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.31` on branch
+Current product metadata is `1.2.0-alpha.32` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.31 is the current source/UI tranche for Timeline authoring
-monitor output and arbitrary PROGRAM/CUE device assignment. `FollowProgram`
+native build. Alpha.32 is the current source tranche for Timeline authoring
+monitor output, arbitrary PROGRAM/CUE device assignment, canonical child-Timeline
+audio varispeed, and fail-closed Windows candidate extraction/verification. `FollowProgram`
 remains the existing Normal route; with `ExplicitDevice`, every Timeline media
 clip (logical PROGRAM or CUE) plus generated Guide/Click material is sent to
 one operator-selected WDM endpoint. Show ASIO remains separate: entering it
@@ -21,13 +22,14 @@ and output selection. Endpoint name/topology and session/generation are
 revalidated; missing, ambiguous, stale, changed, or failed state stays silent
 and fail-closed without default/PROGRAM fallback.
 
-The current source gates passed with first-party warnings 0: the exact MSVC
-14.44 Community linker was pinned and first in `where.exe`; the ASIO-enabled
-full suite finished `1456 discovered / 1444 passed / 0 failed / 12 ignored`,
-and the focused media-audio gate passed `72/72`. TypeScript, Vite, release
-metadata/packaging, audio-output control/panel, Timeline-audio, command
-routing, and localization checkers also passed. The normal Windows
-`tauri build --no-bundle` then passed from clean pushed HEAD `602b96a` with the
+The current alpha.32 source gates passed with first-party warnings 0: the exact
+MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
+passed `31/31`, ASIO media playback passed `80/80`, and runtime-only protocol
+nonserialization passed `1/1`. Windows candidate metadata/extractor/materialization/
+artifact self-tests passed `125/43/4/140`; `check:release`, Timeline-audio,
+format, and diff gates also passed. The alpha.32 native build and window gate
+remain pending. Historical alpha.31 normal Windows `tauri build --no-bundle`
+passed from clean pushed HEAD `602b96a` with the
 exact linker gate; its `60,756,480`-byte executable has SHA-256
 `6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`.
 Exactly one process was launched, was responsive, and its exact native window
@@ -42,8 +44,8 @@ The oversized `app/src-tauri/src/main.rs` audio-runtime extraction is deferred
 until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.31 acceptance. The release metadata checker expects alpha.31 product and
-installer naming below; that naming does not assert an alpha.31 installer
+it is not alpha.32 acceptance. The release metadata checker expects alpha.32 product and
+installer naming below; that naming does not assert an alpha.32 installer
 exists.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
@@ -168,7 +170,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.31_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.31_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.32_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.32_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

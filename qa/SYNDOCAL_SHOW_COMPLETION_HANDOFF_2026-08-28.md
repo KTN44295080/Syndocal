@@ -9,10 +9,12 @@ This is the concise authoritative resume note for the final show-critical tranch
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
 - Last pushed alpha.30 source checkpoint: `9c9a96da6955f1ee0098468f30e16221ccaf779e` (`feat: add hybrid ASIO program and WDM cue routing`). It was pushed to `origin/codex/syndocal-v1.2` with exact upstream equality. No alpha.30 native artifact is accepted yet.
-- Current alpha.31 source authority: `602b96a8fcb0de3fd3a3e281324550fe1d7b5630` on `origin/codex/syndocal-v1.2`. It contains the Timeline authoring monitor plus the reviewed normal-build cfg correction.
-- Latest pushed pre-alpha.32 Timeline-audio source checkpoint: `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` on `origin/codex/syndocal-v1.2` (`Synchronize Timeline audio varispeed clocks`). Child Timeline PROGRAM/CUE now uses one canonical 250..=4000 millirate for position, Rodio speed, drift, and inverse Sink seek; nested fractional rates are rounded once, ambiguous/invalid rates refuse audio attachment, and a negative `source_offset_ms` remains silent until its exact root-output boundary. Lighting keeps its established position path.
+- Historical alpha.31 source authority: `602b96a8fcb0de3fd3a3e281324550fe1d7b5630` on `origin/codex/syndocal-v1.2`. It contains the Timeline authoring monitor plus the reviewed normal-build cfg correction.
+- Pushed pre-alpha.32 Timeline-audio component checkpoint, included by the current alpha.32 integration: `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` on `origin/codex/syndocal-v1.2` (`Synchronize Timeline audio varispeed clocks`). Its own product metadata was still alpha.31; the synchronized alpha.32 product identity begins with the subsequent version checkpoint. Child Timeline PROGRAM/CUE now uses one canonical 250..=4000 millirate for position, Rodio speed, drift, and inverse Sink seek; nested fractional rates are rounded once, ambiguous/invalid rates refuse audio attachment, and a negative `source_offset_ms` remains silent until its exact root-output boundary. Lighting keeps its established position path.
 - The checkpoint's independent Terra xHigh rereview is `GO` with no P0/P1/P2. Supervisor evidence is exact MSVC 14.44 with the Community linker first and absolutely pinned, engine Timeline audio `31 passed / 0 failed / 0 ignored`, frontend Timeline-audio contract PASS, `cargo fmt --all -- --check` PASS, `git diff --check` PASS, and first-party warnings 0. The implementer also recorded ASIO media playback `80/80` and protocol nonserialization `1/1`, both warnings 0.
-- This source checkpoint has no new native or hardware acceptance. The one preserved responsive process remains the pre-checkpoint `target/release/syndocal.exe` (PID `73380` at the checkpoint); it was not stopped or relabelled as current evidence. Next actions are to finish/review the separate Windows candidate-gate tranche, advance all current product surfaces to alpha.32, run the required native no-bundle build, and relaunch/maximize exactly one checkout-owned window before audible PROGRAM/CUE acceptance.
+- This source checkpoint has no new native or hardware acceptance. The one preserved responsive process remains the pre-checkpoint `target/release/syndocal.exe` (PID `73380` at the checkpoint); it was not stopped or relabelled as current evidence. The candidate-gate is now pushed/reviewed and product surfaces are advanced to alpha.32; next actions are to commit/push the synchronized alpha.32 version checkpoint, run the required native no-bundle build, and relaunch/maximize exactly one checkout-owned window before audible PROGRAM/CUE acceptance.
+- The Windows candidate-gate source checkpoint is pushed at `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`. Metadata completes all hash and updater-signature checks before any EXE inspector; candidate and manual three-root inspectors receive only verified-byte `wx` copies; NSIS/MSI/outer/nested archive tools likewise receive only pre/post-hashed copies. Independent review is implementation `GO`, while actual RC acceptance remains `NO-GO` until real signed bundles and Windows runtime identity evidence exist. Supervisor self-tests passed `125/43/4/140` plus `check:release`; Node's non-handle-atomic pathname and unprovable owner/DACL boundary is explicitly limited to fresh single-writer staging.
+- Alpha.32 cleanup inventory was refreshed read-only. The four known build/cache roots still exist; a new exact-byte traversal of `target` exceeded the bounded 50-second window and was stopped without changing files. The latest completed exact `target` inventory therefore remains `428,244,808,551` logical bytes. The reviewed recurring-cleanup harness is not approved for Apply, so no deletion ran and reclaimed bytes remain 0.
 - The documentation checkpoint containing this record is accepted only after
   its commit is pushed, `HEAD` equals `origin/codex/syndocal-v1.2`, and the
   primary worktree is clean; the close procedure rechecks all three conditions.
@@ -32,7 +34,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is synchronized at `1.2.0-alpha.31`. The current alpha.31 Timeline-authoring monitor, normal native build, launch, and maximized-window evidence are recorded below. Real-device audition, physical output routing, show completion, normal installer/updater inspection, and the dedicated show-ASIO artifact remain open.
+- KDMX product metadata is synchronized at `1.2.0-alpha.32`. Alpha.32 source integration is current; its native build, launch, and maximized-window gate remains open. The accepted alpha.31 Timeline-authoring native evidence is historical below and is not relabelled. Real-device audition, physical output routing, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open.
 
 ### 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
@@ -69,7 +71,7 @@ This is the concise authoritative resume note for the final show-critical tranch
   `Music (Elgato Virtual Audio)`. Entering show ASIO must retire that authoring route;
   missing, ambiguous, or changed endpoints must remain silent and fail closed.
 
-### 2026-08-29 current alpha.31 Timeline-authoring monitor checkpoint
+### 2026-08-29 historical alpha.31 Timeline-authoring monitor checkpoint
 
 - The Normal route now has an explicit Timeline-authoring monitor. `FollowProgram`
   preserves the existing Normal behavior; `ExplicitDevice` sends every Timeline
@@ -98,7 +100,7 @@ This is the concise authoritative resume note for the final show-critical tranch
   The exact selection was persisted at
   `%LOCALAPPDATA%\jp.seraf.ktn.syndocal\timeline-cue-audio-settings.json` while
   Syndocal was stopped, followed by a successful relaunch; audible output is
-  not yet verified. The currently responsive maximized process is PID `100320`.
+  not yet verified. The responsive maximized process at that checkpoint was PID `100320`.
   Physical output, venue
   routing, DJ Link, serial DMX, reconnect, and show completion remain external
   gates. Ox was unavailable for this tranche; under the documented narrow
@@ -383,10 +385,10 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. The built/launched alpha.31 native app is maximized and the current test target `Music (Elgato Virtual Audio)` is already persisted. Audibly verify that Timeline media-library clips plus Guide/Click share it in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
+1. Build, launch, and maximize alpha.32; the current test target `Music (Elgato Virtual Audio)` was already persisted under alpha.31. Audibly verify that Timeline media-library clips plus Guide/Click share it in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
 2. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
 3. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
-4. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
+4. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
 5. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
 6. Verify serial DMX through the operator-selected actual USB interface and physical fixtures. Do not assume a fixed COM number on the show PC, and serialize output ownership against Daslight without terminating Daslight implicitly.
 7. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
@@ -396,5 +398,5 @@ integrated source checkpoint above is authoritative for current source status.
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - Keep the current Syndocal process alive for authoring; the DJ-Link PC may remain stopped until the final integration gate.
-- Use source identity `S=E=602b96a8fcb0de3fd3a3e281324550fe1d7b5630` and `B=codex/syndocal-v1.2` for the normal alpha.31 artifact. Complete the `Music (Elgato Virtual Audio)` audition. Run the v3 authority checker before the separate dedicated show-ASIO build.
+- Build alpha.32 from the next clean pushed source identity on `codex/syndocal-v1.2`; do not reuse or relabel the historical alpha.31 artifact. Then complete the `Music (Elgato Virtual Audio)` audition and run the v3 authority checker before the separate dedicated show-ASIO build.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

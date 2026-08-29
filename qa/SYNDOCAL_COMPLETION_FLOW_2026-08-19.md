@@ -2808,12 +2808,12 @@ The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` is
 deferred until after show acceptance. Moving ASIO/CUE ownership and lifecycle
 boundaries before the show is a pre-show risk, so this checkpoint records no
 module split or extraction completion. This section is historical and is
-superseded by the current alpha.31 checkpoint below; the alpha.28/29
+superseded by the then-current alpha.31 checkpoint below; the alpha.28/29
 “pending/not implemented” statements above remain historical.
 
-## 62. 2026-08-29 CURRENT alpha.31 Timeline authoring-monitor native checkpoint (partial)
+## 62. 2026-08-29 HISTORICAL alpha.31 Timeline authoring-monitor native checkpoint (partial)
 
-The current product metadata is `1.2.0-alpha.31` on branch
+The product metadata at that checkpoint was `1.2.0-alpha.31` on branch
 `codex/syndocal-v1.2`. The alpha.31 Timeline-authoring source and the normal-build
 cfg correction are pushed through
 `602b96a8fcb0de3fd3a3e281324550fe1d7b5630`.
@@ -2862,3 +2862,42 @@ deferred until after show acceptance because moving ownership/lifecycle
 boundaries before native and venue acceptance is a pre-show risk. The first
 safe resume action is the real endpoint audition; installer/updater and
 dedicated show-ASIO builds remain separate.
+
+## 63. 2026-08-29 CURRENT alpha.32 source integration checkpoint (native pending)
+
+Section 62 is preserved as historical alpha.31 native evidence. Current product
+metadata advances to `1.2.0-alpha.32` on `codex/syndocal-v1.2`; no alpha.31
+artifact identity is relabelled. The source integration includes two pushed,
+reviewed pre-version checkpoints; the alpha.32 product identity itself begins
+with the subsequent synchronized version checkpoint:
+
+- `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` makes Child Timeline PROGRAM/CUE
+  audio use one canonical 250..=4000 millirate for source position, Rodio
+  speed, drift, and inverse Sink seek. Nested fractional rates round once;
+  invalid or ambiguous conform rates refuse audio attachment. A negative
+  source offset stays unattached until its exact root-output boundary through
+  nested, loop, seek, and restart paths. Lighting keeps its existing position
+  contract. Independent Terra xHigh rereview is GO with no P0/P1/P2.
+- `53d70baacbc2c9ed3f719eaf2e67aab1766cf487` makes Windows release-candidate
+  metadata crypto preflight complete before any executable inspection, passes
+  inspectors and archive tools only verified-byte materializations, and keeps
+  cleanup/source swaps visible and fail-closed. The implementation review is
+  GO; actual RC acceptance remains NO-GO until real signed NSIS/MSI/updater and
+  Windows runtime identity evidence exist.
+
+Recorded gates are Timeline audio `31/31`, ASIO media `80/80`, protocol
+nonserialization `1/1`, and Windows candidate self-tests `125/43/4/140`, with
+first-party warnings 0. `check:release`, format, and diff checks passed. The
+alpha.32 native no-bundle build, responsive maximized-window proof, audible
+`Music (Elgato Virtual Audio)` authoring monitor, physical ASIO/WDM/USB-DMX,
+DJ Link, reconnect, and show acceptance remain open. Camera/Screen Capture
+4K/60 and device-supported 120fps are a separate alpha.33 tranche; current
+capture remains 1280x720/30 until that reviewed implementation lands.
+
+Cleanup was inventoried read-only for this checkpoint. `target`,
+`app/node_modules`, `tools/asio-bridge/target`, and `app/dist` still exist; a
+fresh exact-byte `target` traversal did not finish within the bounded 50-second
+window and was stopped without filesystem changes, so no new exact byte count
+is claimed. The latest completed exact inventory remains `428,244,808,551`
+logical bytes for `target`. The reviewed recurring-cleanup harness is not
+approved for Apply, so no deletion ran and reclaimed bytes remain 0.
