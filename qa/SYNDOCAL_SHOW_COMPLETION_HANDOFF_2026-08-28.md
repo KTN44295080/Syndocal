@@ -8,7 +8,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
-- Last pushed KDMX source/documentation checkpoint before this alpha.30 commit: `a74ead9a9996bf2ecc4e6e5dd60914cc6494ff90` (`docs: record alpha.29 audio lifecycle checkpoint`). The alpha.30 source commit SHA and upstream equality must be filled after commit/push; no alpha.30 native artifact is accepted yet.
+- Last pushed alpha.30 source checkpoint: `9c9a96da6955f1ee0098468f30e16221ccaf779e` (`feat: add hybrid ASIO program and WDM cue routing`). It was pushed to `origin/codex/syndocal-v1.2` with exact upstream equality. No alpha.30 native artifact is accepted yet.
 - Historical alpha.29 source checkpoint: `54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`, committed as `fix: stabilize ASIO output lifecycle` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
 - DJ Agent checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
