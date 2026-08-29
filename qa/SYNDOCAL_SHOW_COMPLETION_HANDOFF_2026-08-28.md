@@ -6,11 +6,11 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
-- Current source candidate is `1.2.0-alpha.38` on branch
+- Current source train is `1.2.0-alpha.38` on branch
   `codex/syndocal-v1.2`, prepared from pushed upstream-equal base
-  `eb84207cc62efb17de16f15344df79c17d6c4e68`. Its exact implementation
-  checkpoint is recorded after this candidate is committed and pushed; no
-  alpha.38 native artifact is claimed yet. The old CUE path compared
+  `eb84207cc62efb17de16f15344df79c17d6c4e68`. Exact implementation checkpoint
+  `bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed; no alpha.38 native
+  artifact is claimed yet. The old CUE path compared
   Click/Guide Timeline transport authority to the independent media source
   projection and faulted after a real Play/Pause rotation. The new path
   publishes and checks transport epoch/generation independently, retires old
@@ -116,9 +116,10 @@ This is the concise authoritative resume note for the final show-critical tranch
   unready accessibility window-opened handler; maximized visual proof remains
   open.
 
-- Current product metadata is `1.2.0-alpha.38`; its exact source checkpoint and
-  native artifact identity are pending the commit/push and clean-source native
-  gate. The latest accepted native authority remains historical alpha.37 from
+- Current product metadata is `1.2.0-alpha.38`; exact source checkpoint
+  `bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed.
+  Native artifact identity remains pending the clean-source native gate. The
+  latest accepted native authority remains historical alpha.37 from
   pushed build HEAD `5626a9636003462a23daf0f3de67af3cc5060e29`, with the
   responsive/maximized PID `50864` recorded above. Alpha.37 and earlier
   processes are historical execution evidence only after alpha.38 is built.
@@ -668,6 +669,6 @@ integrated source checkpoint above is authoritative for current source status.
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - Keep alpha.37 PID `50864` alive until the exact alpha.38 pre-build stop; the DJ-Link PC may remain stopped until the final integration gate.
-- Alpha.35-alpha.37 source/full-regression, independent review, and native build gates are historical. Alpha.38 automated source gates and independent review are complete; commit/push, clean-source native build, exact artifact identity, and responsive/maximized process proof are next. Keep Unity/GPU, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
+- Alpha.35-alpha.37 source/full-regression, independent review, and native build gates are historical. Alpha.38 automated source gates and independent review are complete; source checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed. A clean-source native build, exact artifact identity, and responsive/maximized process proof are next. Keep Unity/GPU, camera profile probes, and bounded camera fault/performance runs explicitly pending until observed and recorded against the same-PC output and camera acceptance documents.
 - After alpha.38 launches, reproduce the former Click-enabled Play/Pause fault and complete the `Music (Elgato Virtual Audio)` audition before the separate dedicated show-ASIO build; do not reuse or relabel historical alpha.31/alpha.32/alpha.35/alpha.36/alpha.37 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

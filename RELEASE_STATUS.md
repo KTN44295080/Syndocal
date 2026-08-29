@@ -2,10 +2,10 @@
 
 Updated: 2026-08-30
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.38`.
-Alpha.38 is the current source candidate. Its warning-free automated gates and
-independent review are recorded below; its exact source checkpoint and native
-artifact identity remain pending the required commit/push and clean-source
-native build. The latest accepted native authority is the historical alpha.37
+Alpha.38 is the current source train. Its warning-free automated gates and
+independent review are recorded below; exact source checkpoint
+`bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed. Native artifact identity
+remains pending the required clean-source native build. The latest accepted native authority is the historical alpha.37
 build. The warning-free alpha.37 source checkpoint
 `1636aeb440c718c628a953b58e4f0c59d4874e35` and documentation checkpoint
 `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
