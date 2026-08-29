@@ -553,9 +553,10 @@ hard-coded choice.
       visible and silent without fallback.
 - [x] Entering Show ASIO retires every Normal-authoring Timeline sink and
       pending preparation, including with no Normal PROGRAM stream open.
-- [ ] The alpha.32 native app is built/launched/maximized and the uniquely
-      enumerated `Music (Elgato Virtual Audio)` endpoint is persisted. Audibly
-      verify both Timeline media and Guide/Click through that endpoint.
+- [x] The alpha.32 native app is built/launched/maximized and the uniquely
+      enumerated `Music (Elgato Virtual Audio)` endpoint remains persisted with
+      its exact topology fingerprint.
+- [ ] Audibly verify both Timeline media and Guide/Click through that endpoint.
 
 ## Physical MOTU M4 acceptance
 

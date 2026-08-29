@@ -27,8 +27,13 @@ MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
 passed `31/31`, ASIO media playback passed `80/80`, and runtime-only protocol
 nonserialization passed `1/1`. Windows candidate metadata/extractor/materialization/
 artifact self-tests passed `125/43/4/140`; `check:release`, Timeline-audio,
-format, and diff gates also passed. The alpha.32 native build and window gate
-remain pending. Historical alpha.31 normal Windows `tauri build --no-bundle`
+format, and diff gates also passed. The alpha.32 normal Windows
+`tauri build --no-bundle` passed from clean pushed HEAD `5d40874` with the
+exact linker first and warnings 0. Its `60,713,984`-byte executable has SHA-256
+`B04CE351A456C82715383A4430401F3DA4D824EC8813B32894ABE1BF98FBD90D`;
+exactly one checkout-owned process (PID `89524`) is responsive with title
+`Syndocal`, and Computer Use verified the window is maximized. Historical
+alpha.31 normal Windows `tauri build --no-bundle`
 passed from clean pushed HEAD `602b96a` with the
 exact linker gate; its `60,756,480`-byte executable has SHA-256
 `6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`.
@@ -43,8 +48,9 @@ exception, an independent Terra xHigh source review returned GO with no P0/P1.
 The oversized `app/src-tauri/src/main.rs` audio-runtime extraction is deferred
 until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
-The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.32 acceptance. The release metadata checker expects alpha.32 product and
+The earlier alpha.25 DJ session remains historical operational evidence only;
+it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
+acceptance. The release metadata checker expects alpha.32 product and
 installer naming below; that naming does not assert an alpha.32 installer
 exists.
 

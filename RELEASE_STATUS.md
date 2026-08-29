@@ -1,9 +1,9 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.32`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` and Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`. Alpha.32 native build/window evidence is still pending; the previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, and show-completion evidence remain open. The running process is preserved as an operational baseline only and is not alpha.32 evidence. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.32`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, and synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.32 source integration (native pending)
+## 2026-08-29 current alpha.32 source/native integration (hardware pending)
 
 Child Timeline PROGRAM/CUE audio now publishes one bounded canonical millirate
 for source position, Rodio speed, drift, and inverse Sink seek. Nested
@@ -18,8 +18,13 @@ implementer also recorded ASIO media playback `80/80` and protocol
 nonserialization `1/1`, both warnings 0. The Windows candidate-gate tranche
 also received independent implementation GO after metadata/extractor/
 materialization/artifact self-tests `125/43/4/140` and `check:release` passed.
-Real RC bundles and alpha.32 native/hardware acceptance remain deliberately
-unclaimed.
+The normal alpha.32 native build then passed from clean pushed HEAD `5d40874`
+with exact MSVC 14.44 first and warnings 0. `target/release/syndocal.exe` is
+`60,713,984` bytes, Product/FileVersion `1.2.0-alpha.32`, and SHA-256
+`B04CE351A456C82715383A4430401F3DA4D824EC8813B32894ABE1BF98FBD90D`.
+Exactly one checkout-owned process, PID `89524`, is responsive with title
+`Syndocal`; Computer Use verified the exact window and maximized state. Real RC
+bundles and hardware acceptance remain deliberately unclaimed.
 
 ## 2026-08-29 current Windows candidate extractor tranche
 

@@ -2863,7 +2863,7 @@ boundaries before native and venue acceptance is a pre-show risk. The first
 safe resume action is the real endpoint audition; installer/updater and
 dedicated show-ASIO builds remain separate.
 
-## 63. 2026-08-29 CURRENT alpha.32 source integration checkpoint (native pending)
+## 63. 2026-08-29 CURRENT alpha.32 source/native integration checkpoint (hardware pending)
 
 Section 62 is preserved as historical alpha.31 native evidence. Current product
 metadata advances to `1.2.0-alpha.32` on `codex/syndocal-v1.2`; no alpha.31
@@ -2887,10 +2887,20 @@ with the subsequent synchronized version checkpoint:
 
 Recorded gates are Timeline audio `31/31`, ASIO media `80/80`, protocol
 nonserialization `1/1`, and Windows candidate self-tests `125/43/4/140`, with
-first-party warnings 0. `check:release`, format, and diff checks passed. The
-alpha.32 native no-bundle build, responsive maximized-window proof, audible
-`Music (Elgato Virtual Audio)` authoring monitor, physical ASIO/WDM/USB-DMX,
-DJ Link, reconnect, and show acceptance remain open. Camera/Screen Capture
+first-party warnings 0. `check:release`, format, and diff checks passed.
+
+The synchronized product identity is pushed at
+`5d40874c629f26d6e011252622b2886d39d8d40b`. The exact MSVC 14.44 normal
+`pnpm --dir app tauri build --no-bundle` passed from that clean pushed HEAD in
+`2m 52s` with first-party warnings 0. The resulting executable is `60,713,984`
+bytes, reports Product/FileVersion `1.2.0-alpha.32`, and has SHA-256
+`B04CE351A456C82715383A4430401F3DA4D824EC8813B32894ABE1BF98FBD90D`.
+After inheriting the verified local FFmpeg runtime `bin`, exactly one
+checkout-owned process launched as PID `89524`, remained responsive with title
+`Syndocal`, and Computer Use verified the exact window was maximized.
+
+Audible `Music (Elgato Virtual Audio)` authoring monitor, physical
+ASIO/WDM/USB-DMX, DJ Link, reconnect, and show acceptance remain open. Camera/Screen Capture
 4K/60 and device-supported 120fps are a separate alpha.33 tranche; current
 capture remains 1280x720/30 until that reviewed implementation lands.
 
