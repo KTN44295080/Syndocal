@@ -1,6 +1,6 @@
 # ASIO PROGRAM / CUE Output Acceptance
 
-Updated: 2026-08-29
+Updated: 2026-08-30
 
 ## Show boundary
 
@@ -313,6 +313,33 @@ the decoder. Floor deliberately cannot put the fixed-point decoder coordinate
 after the requested source position. The ASIO attachment preparation retains
 its direct `Decoder::try_seek` in raw source-time before attaching the decoder,
 so it does not apply the Sink-coordinate conversion twice.
+
+### 2026-08-30 alpha.37 Timeline CUE anchor linearization
+
+The previous paused-to-playing or identity-rotation path could start a fresh
+Legacy/ASIO source before the exact-anchor Click/Guide batch entered the
+control queue. One callback could advance the new clock and reject that batch
+as past due; a later enqueue failure could also leave already queued Legacy
+audio active behind a visible Fault. Alpha.37 keeps each source detached,
+publishes pre-filtered events first, activates the exact pending source once,
+and only then commits watermarks and Running. Entries strictly before the
+canonical anchor are history; an event exactly at the anchor is retained.
+Publication or activation failure retires the attachment and source, preserves
+Fault, and commits no watermark.
+
+The deterministic proof uses a process-unique, non-wrapping per-source token,
+not engine-state value equality. An adversarial runtime with the same engine
+identity but a different token cannot release the target gate. Real Legacy
+replacement and ASIO rotation tests assert the outgoing and incoming sources'
+activation/retirement counts and a steady tick cannot reactivate them.
+Independent Terra xHigh review is GO with P0/P1/P2 `0`. Combined exact-linker
+proof passes Timeline CUE `49/49` and media-audio `46/46`, first-party warnings
+`0`; the complete no-default integration also passes `1211/0/7 ignored`.
+The exact ASIO Timeline CUE gate passes `59/59`. A combined release review's
+P1 warning was closed by keeping the test-only source-token seam entirely
+under `cfg(test)`; release check and final rereview are warning-free/GO. This
+is deterministic source proof only; the selected `Music (Elgato Virtual
+Audio)` endpoint remains audibly unaccepted below.
 
 Open P1, deliberately outside this Timeline-audio tranche: the Video layer
 keeps its own legacy varispeed/seek model. Timeline-audio source/output clock

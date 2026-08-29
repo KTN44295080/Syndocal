@@ -387,6 +387,17 @@ static TIMELINE_CUE_AUDIO_RUNTIME_INCARNATION: LazyLock<u64> = LazyLock::new(|| 
     (started ^ u64::from(std::process::id()).rotate_left(17)) % VIDEO_CLIP_RUNTIME_GENERATION_MAX
         + 1
 });
+#[cfg(test)]
+static TIMELINE_CUE_AUDIO_SOURCE_INSTANCE_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(test)]
+fn next_timeline_cue_audio_source_instance_token() -> Result<u64, String> {
+    TIMELINE_CUE_AUDIO_SOURCE_INSTANCE_TOKEN
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| "Timeline cue audio source instance token is exhausted".to_string())
+}
 /// AddDisplay-only read authority. This is intentionally separate from the
 /// public lease lifecycle query so an expired exact Both lease can be shown as
 /// recoverable without mutating or broadening Acquire/Recover.
@@ -13059,7 +13070,11 @@ enum TimelineCueAudioAttachmentOutput {
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     AsioCue {
         identity: asio_timeline_output::TimelineOutputIdentity,
-        sink: rodio::Sink,
+        /// The sink is absent while the freshly admitted source is waiting
+        /// for event publication.  Keeping the identity visible preserves
+        /// ASIO route validation while preventing callback progress before
+        /// the first batch is in the control queue.
+        sink: Option<rodio::Sink>,
     },
 }
 
@@ -13067,7 +13082,9 @@ impl TimelineCueAudioAttachmentOutput {
     fn retire(self) {
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         if let Self::AsioCue { sink, .. } = self {
-            sink.stop();
+            if let Some(sink) = sink {
+                sink.stop();
+            }
         }
         #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
         let _ = self;
@@ -13077,6 +13094,16 @@ impl TimelineCueAudioAttachmentOutput {
 struct TimelineCueAudioAttachment {
     control: timeline_cue_audio::TimelineCueAudioControl,
     output: TimelineCueAudioAttachmentOutput,
+    /// A newly-created or rotated source is kept detached until its initial
+    /// event batch has been admitted.  This is the transport linearization
+    /// boundary: no callback can advance the fresh output clock before the
+    /// exact-anchor and future events are visible to it.
+    pending_source: Option<timeline_cue_audio::TimelineCueAudioSource>,
+    /// Process-local identity for the source currently pending or active.
+    /// Unlike engine identity, this is unique for every source instance,
+    /// including independently-created runtimes with equal snapshots.
+    #[cfg(test)]
+    source_instance_token: u64,
     /// Short operator test tones are owned by the exact published CUE
     /// attachment.  They must retire with that attachment rather than being
     /// left on a process-global mixer or silently redirected to PROGRAM.
@@ -13086,6 +13113,12 @@ struct TimelineCueAudioAttachment {
     program_device_generation: Option<u64>,
     engine_identity: TimelineCueEngineIdentity,
     output_clock_epoch: u64,
+    /// Canonical Timeline frame at which this attachment was created or
+    /// rotated. Runtime snapshots retain historical click/Guide entries as
+    /// watermarks; those entries are not valid input for this fresh clock.
+    canonical_anchor_frame: u64,
+    #[cfg(test)]
+    source_test_counters: TimelineCueAudioSourceTestCounters,
     source_fence: u64,
     next_sequence: u64,
     last_click_key: Option<(u64, u64, u16, bool)>,
@@ -13096,8 +13129,50 @@ struct TimelineCueAudioAttachment {
     last_output_progress_at: Instant,
 }
 
+#[cfg(test)]
+struct TimelineCueAudioSourceActivationHook {
+    target_source_instance_token: u64,
+    gate: Arc<(Mutex<bool>, Condvar)>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct TimelineCueAudioSourceTestCounters {
+    activations: Arc<AtomicU64>,
+    retirements: Arc<AtomicU64>,
+}
+
+#[cfg(test)]
+static TIMELINE_CUE_AUDIO_SOURCE_ACTIVATION_HOOK: LazyLock<
+    Mutex<Option<TimelineCueAudioSourceActivationHook>>,
+> = LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+fn timeline_cue_audio_test_after_source_activation(source_instance_token: u64) {
+    let hook = TIMELINE_CUE_AUDIO_SOURCE_ACTIVATION_HOOK
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|hook| hook.target_source_instance_token == source_instance_token)
+        .map(|hook| Arc::clone(&hook.gate));
+    let Some(hook) = hook else {
+        return;
+    };
+    let (state, ready) = &*hook;
+    let mut released = state.lock().unwrap();
+    *released = true;
+    ready.notify_all();
+    while *released {
+        released = ready.wait(released).unwrap();
+    }
+}
+
 impl TimelineCueAudioAttachment {
     fn retire(self) {
+        #[cfg(test)]
+        self.source_test_counters
+            .retirements
+            .fetch_add(1, Ordering::Relaxed);
         for sink in self.cue_test_sinks {
             sink.stop();
         }
@@ -13706,6 +13781,65 @@ fn transition_timeline_cue_audio_to_terminal_state(
 }
 
 impl TimelineCueAudioRuntime {
+    fn activate_pending_source(
+        attachment: &mut TimelineCueAudioAttachment,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        asio_runtime: Option<&mut asio_output_runtime::AsioOutputRuntime>,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        expected_output_identity: Option<asio_timeline_output::TimelineOutputIdentity>,
+    ) -> Result<(), String> {
+        let Some(source) = attachment.pending_source.take() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        let activation_token = attachment.source_instance_token;
+        match &mut attachment.output {
+            TimelineCueAudioAttachmentOutput::Legacy { mixer, .. } => {
+                mixer.add(source);
+                #[cfg(test)]
+                {
+                    attachment
+                        .source_test_counters
+                        .activations
+                        .fetch_add(1, Ordering::Relaxed);
+                    timeline_cue_audio_test_after_source_activation(activation_token);
+                }
+                Ok(())
+            }
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            TimelineCueAudioAttachmentOutput::AsioCue { identity, sink } => {
+                let runtime = asio_runtime.ok_or_else(|| {
+                    "ASIO output runtime owner is unavailable while activating Timeline cue source"
+                        .to_string()
+                })?;
+                let expected = expected_output_identity.ok_or_else(|| {
+                    "ASIO output identity is unavailable while activating Timeline cue source"
+                        .to_string()
+                })?;
+                if *identity != expected {
+                    return Err(format!(
+                        "ASIO CUE attachment identity changed before source activation: expected {expected:?}, got {identity:?}"
+                    ));
+                }
+                let next_sink = runtime.attach_source(*identity, source, false)?;
+                if let Some(previous_sink) = sink.replace(next_sink) {
+                    #[cfg(test)]
+                    attachment
+                        .source_test_counters
+                        .retirements
+                        .fetch_add(1, Ordering::Relaxed);
+                    previous_sink.stop();
+                }
+                #[cfg(test)]
+                attachment
+                    .source_test_counters
+                    .activations
+                    .fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+    }
+
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     fn lock_external_wdm_route_state(
         &self,
@@ -15552,41 +15686,61 @@ impl TimelineCueAudioRuntime {
             settings.click_gain,
             settings.guide_gain,
         )?;
-        let sink_result = match asio_output_runtime.lock() {
-            Ok(mut runtime) => {
-                let current = runtime
-                    .current_output_identity(protocol::TimelineAudioOutputBus::Cue)
-                    .map_err(|error| error.to_string());
-                match current {
-                    Ok(current) if current == expected_output_identity => runtime
-                        .attach_source(expected_output_identity, source, false),
-                    Ok(current) => Err(format!(
-                        "ASIO CUE output identity changed before attachment: expected {expected_output_identity:?}, got {current:?}"
-                    )),
-                    Err(error) => Err(error),
-                }
-            }
-            Err(_) => Err("ASIO output runtime lock was poisoned".to_string()),
-        };
-        let sink = match sink_result {
-            Ok(sink) => sink,
+        #[cfg(test)]
+        let source_instance_token = match next_timeline_cue_audio_source_instance_token() {
+            Ok(token) => token,
             Err(error) => {
                 control.retire();
                 return Err(error);
             }
         };
+        // Do not attach the physical source yet.  The attachment is first
+        // published and fed so the exact-anchor/future batch is in the
+        // control queue before an ASIO callback can advance output_frame.
+        // Revalidate the route now, then `activate_pending_source` performs
+        // the final identity check immediately after admission.
+        match asio_output_runtime.lock() {
+            Ok(mut runtime) => {
+                let current = runtime
+                    .current_output_identity(protocol::TimelineAudioOutputBus::Cue)
+                    .map_err(|error| error.to_string());
+                match current {
+                    Ok(current) if current == expected_output_identity => {}
+                    Ok(current) => {
+                        control.retire();
+                        return Err(format!(
+                            "ASIO CUE output identity changed before attachment: expected {expected_output_identity:?}, got {current:?}"
+                        ));
+                    }
+                    Err(error) => {
+                        control.retire();
+                        return Err(error);
+                    }
+                }
+            }
+            Err(_) => {
+                control.retire();
+                return Err("ASIO output runtime lock was poisoned".to_string());
+            }
+        }
         Ok(TimelineCueAudioAttachment {
             control,
             output: TimelineCueAudioAttachmentOutput::AsioCue {
                 identity: expected_output_identity,
-                sink,
+                sink: None,
             },
+            pending_source: Some(source),
+            #[cfg(test)]
+            source_instance_token,
+            #[cfg(test)]
+            source_test_counters: TimelineCueAudioSourceTestCounters::default(),
             cue_test_sinks: Vec::new(),
             route: settings.route,
             settings_revision,
             program_device_generation: None,
             engine_identity,
             output_clock_epoch,
+            canonical_anchor_frame,
             source_fence,
             next_sequence: 1,
             last_click_key: None,
@@ -15770,7 +15924,9 @@ impl TimelineCueAudioRuntime {
             state.next_source_fence = attachment.source_fence;
             state.rotation_count = state.rotation_count.saturating_add(1);
             state.applied = Some(settings);
-            state.lifecycle = TimelineCueAudioLifecycle::Running;
+            // The source is still detached. `feed_attachment_with_asio` must
+            // admit its first batch and activate it before exposing Running.
+            state.lifecycle = TimelineCueAudioLifecycle::Applying;
             state.last_error = None;
             state.attachment = Some(attachment);
             drop(state);
@@ -16231,7 +16387,23 @@ impl TimelineCueAudioRuntime {
                 return;
             }
         };
-        destination.mixer.add(source);
+        #[cfg(test)]
+        let source_instance_token = match next_timeline_cue_audio_source_instance_token() {
+            Ok(token) => token,
+            Err(error) => {
+                control.retire();
+                let retired = state.attachment.take();
+                state.applied = None;
+                state.lifecycle = TimelineCueAudioLifecycle::Fault;
+                state.last_error = Some(error);
+                state.blocked_settings_revision = Some(state.settings_revision);
+                drop(state);
+                if let Some(attachment) = retired {
+                    attachment.retire();
+                }
+                return;
+            }
+        };
         if let Some(old) = state.attachment.take() {
             old.retire();
         }
@@ -16245,7 +16417,9 @@ impl TimelineCueAudioRuntime {
             state.topology_generation = state.topology_generation.saturating_add(1);
         }
         state.applied = Some(settings.clone());
-        state.lifecycle = TimelineCueAudioLifecycle::Running;
+        // The source is still detached. `feed_attachment` must admit its
+        // first batch and activate it before exposing Running.
+        state.lifecycle = TimelineCueAudioLifecycle::Applying;
         state.last_error = None;
         state.attachment = Some(TimelineCueAudioAttachment {
             control,
@@ -16253,12 +16427,18 @@ impl TimelineCueAudioRuntime {
                 mixer: destination.mixer,
                 _explicit_stream: destination.explicit_stream,
             },
+            pending_source: Some(source),
+            #[cfg(test)]
+            source_instance_token,
+            #[cfg(test)]
+            source_test_counters: TimelineCueAudioSourceTestCounters::default(),
             cue_test_sinks: Vec::new(),
             route: settings.route,
             settings_revision: state.settings_revision,
             program_device_generation: destination.program_device_generation,
             engine_identity: identity,
             output_clock_epoch,
+            canonical_anchor_frame,
             source_fence,
             next_sequence: 1,
             last_click_key: None,
@@ -16549,45 +16729,65 @@ impl TimelineCueAudioRuntime {
                 return;
             }
             let source_result = attachment.control.new_source();
-            let output_result = match (source_result, &mut attachment.output) {
-                (Ok(source), TimelineCueAudioAttachmentOutput::Legacy { mixer, .. }) => {
-                    mixer.add(source);
-                    Ok(())
-                }
-                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
-                (
-                    Ok(source),
-                    TimelineCueAudioAttachmentOutput::AsioCue {
-                        identity: asio_identity,
-                        sink,
-                    },
-                ) => match asio_runtime_guard.as_mut() {
-                    Some(runtime) => (|| {
-                        let expected = expected_output_identity.ok_or_else(|| {
-                            "ASIO output identity is unavailable during Timeline cue rotation"
-                                .to_string()
-                        })?;
-                        if *asio_identity != expected {
-                            return Err(format!(
+            let output_result = match source_result {
+                Ok(source) => {
+                    #[cfg(test)]
+                    let source_instance_token =
+                        match next_timeline_cue_audio_source_instance_token() {
+                            Ok(token) => token,
+                            Err(error) => {
+                                Self::retire_taken_attachment_as_fault(
+                                    &mut state, attachment, error,
+                                );
+                                return;
+                            }
+                        };
+                    match &mut attachment.output {
+                        TimelineCueAudioAttachmentOutput::Legacy { .. } => {
+                            attachment.pending_source = Some(source);
+                            #[cfg(test)]
+                            {
+                                attachment.source_instance_token = source_instance_token;
+                            }
+                            Ok(())
+                        }
+                        #[cfg(all(
+                            target_os = "windows",
+                            target_arch = "x86_64",
+                            feature = "asio"
+                        ))]
+                        TimelineCueAudioAttachmentOutput::AsioCue {
+                            identity: asio_identity,
+                            sink,
+                        } => (|| {
+                            let expected = expected_output_identity.ok_or_else(|| {
+                                "ASIO output identity is unavailable during Timeline cue rotation"
+                                    .to_string()
+                            })?;
+                            if *asio_identity != expected {
+                                return Err(format!(
                                 "ASIO CUE attachment identity changed before rotation: expected {expected:?}, got {:?}",
                                 *asio_identity
                             ));
-                        }
-                        // Keep the identity captured for this engine snapshot.
-                        // `attach_source` revalidates it immediately before
-                        // and after admission; a newer identity is never
-                        // substituted into this event batch.
-                        let next_sink = runtime.attach_source(*asio_identity, source, false)?;
-                        sink.stop();
-                        *sink = next_sink;
-                        Ok(())
-                    })(),
-                    None => Err(
-                        "ASIO output runtime owner is unavailable during Timeline cue rotation"
-                            .to_string(),
-                    ),
-                },
-                (Err(error), _) => Err(error),
+                            }
+                            if let Some(previous_sink) = sink.take() {
+                                #[cfg(test)]
+                                attachment
+                                    .source_test_counters
+                                    .retirements
+                                    .fetch_add(1, Ordering::Relaxed);
+                                previous_sink.stop();
+                            }
+                            attachment.pending_source = Some(source);
+                            #[cfg(test)]
+                            {
+                                attachment.source_instance_token = source_instance_token;
+                            }
+                            Ok(())
+                        })(),
+                    }
+                }
+                Err(error) => Err(error),
             };
             if let Err(error) = output_result {
                 if error.contains("identity changed") {
@@ -16602,6 +16802,7 @@ impl TimelineCueAudioRuntime {
                 return;
             }
             attachment.output_clock_epoch = output_clock_epoch;
+            attachment.canonical_anchor_frame = canonical_anchor_frame;
             attachment.source_fence = source_fence;
             attachment.engine_identity = identity.clone();
             attachment.next_sequence = 1;
@@ -16618,7 +16819,36 @@ impl TimelineCueAudioRuntime {
             schedule_generation: attachment.engine_identity.schedule_generation.max(1),
             source_fence: attachment.source_fence,
         };
+        // A rotated/new attachment is anchored at the current Timeline
+        // position. The engine deliberately retains historical click/Guide
+        // entries as watermarks, but mapping any such entry would require a
+        // negative output frame. Skip only those pre-anchor entries; never
+        // clamp or rewrite them, and keep the exact-anchor event admissible.
+        let canonical_anchor_frame = attachment.canonical_anchor_frame;
         if attachment.blocked_event_identity.as_ref() == Some(&identity) {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            let activation_result = Self::activate_pending_source(
+                &mut attachment,
+                asio_runtime_guard.as_mut().map(|runtime| &mut **runtime),
+                expected_output_identity,
+            );
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+            let activation_result = Self::activate_pending_source(&mut attachment);
+            if let Err(error) = activation_result {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                if error.contains("identity changed") {
+                    let engine_identity = attachment.engine_identity.clone();
+                    attachment.retire();
+                    set_asio_retry_barrier(&mut state, engine_identity);
+                    state.applied = None;
+                    state.lifecycle = TimelineCueAudioLifecycle::Applying;
+                    state.last_error = Some(error);
+                    return;
+                }
+                Self::retire_taken_attachment_as_fault(&mut state, attachment, error);
+                return;
+            }
+            state.lifecycle = TimelineCueAudioLifecycle::Running;
             state.attachment = Some(attachment);
             return;
         }
@@ -16632,6 +16862,9 @@ impl TimelineCueAudioRuntime {
                     click.count_in,
                 );
                 if attachment.last_click_key.is_some_and(|last| key <= last) {
+                    continue;
+                }
+                if click.sample_frame < canonical_anchor_frame {
                     continue;
                 }
                 pending.push((
@@ -16653,6 +16886,9 @@ impl TimelineCueAudioRuntime {
                 if attachment.last_guide_generation == Some(guide.generation)
                     && guide.sequence <= attachment.last_guide_sequence
                 {
+                    continue;
+                }
+                if guide.sample_frame < canonical_anchor_frame {
                     continue;
                 }
                 pending.push((
@@ -16723,47 +16959,72 @@ impl TimelineCueAudioRuntime {
                 }
             }
         }
-        if !events.is_empty() {
+        let latest_click_key = timeline.click_events.last().map(|click| {
+            (
+                click.sample_frame,
+                click.measure,
+                click.beat,
+                click.count_in,
+            )
+        });
+        let latest_guide_progress = timeline
+            .guide_cues
+            .last()
+            .map(|guide| (guide.generation, guide.sequence));
+        let enqueue_succeeded = if !events.is_empty() {
             if let Err(error) = attachment.control.enqueue_batch(fence, &events) {
-                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
-                let retire_faulted_attachment = attachment.route
-                    == timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice
-                    || matches!(
-                        &attachment.output,
-                        TimelineCueAudioAttachmentOutput::AsioCue { .. }
-                    );
-                #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
-                let retire_faulted_attachment = false;
-                if retire_faulted_attachment {
-                    // A failed independently-routed CUE publication is
-                    // terminal for this source.
-                    // Keep no control or Sink that could retry a stale batch
-                    // after a transport/session/fault boundary; the next
-                    // explicit settings/engine admission creates a fresh
-                    // attachment.
-                    Self::retire_taken_attachment_as_fault(&mut state, attachment, error);
-                    return;
-                }
-                // Preserve the legacy normal route's bounded retry behavior;
-                // its existing tests and operator retry rely on retaining the
-                // blocked attachment until the next admitted revision.
-                attachment.blocked_event_identity = Some(identity.clone());
-                state.lifecycle = TimelineCueAudioLifecycle::Fault;
-                state.last_error = Some(error);
+                // An active source must not survive a failed publication:
+                // retaining its mixer/Sink would allow stale queued audio to
+                // continue while the visible state reports Fault.  The
+                // attachment is retired before returning, and its event
+                // watermarks remain unchanged because this branch never
+                // reaches the successful watermark commit below.
+                Self::retire_taken_attachment_as_fault(&mut state, attachment, error);
+                return;
             } else {
                 attachment.next_sequence = next_sequence;
-                attachment.last_click_key = timeline.click_events.last().map(|click| {
-                    (
-                        click.sample_frame,
-                        click.measure,
-                        click.beat,
-                        click.count_in,
-                    )
-                });
-                if let Some(guide) = timeline.guide_cues.last() {
-                    attachment.last_guide_generation = Some(guide.generation);
-                    attachment.last_guide_sequence = guide.sequence;
+                true
+            }
+        } else {
+            // A batch containing only retained pre-anchor history is still a
+            // successful observation. Advance the watermarks so that the
+            // same history is not reconsidered on every scheduler tick.
+            true
+        };
+        if enqueue_succeeded {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            let activation_result = Self::activate_pending_source(
+                &mut attachment,
+                asio_runtime_guard.as_mut().map(|runtime| &mut **runtime),
+                expected_output_identity,
+            );
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+            let activation_result = Self::activate_pending_source(&mut attachment);
+            if let Err(error) = activation_result {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+                if error.contains("identity changed") {
+                    let engine_identity = attachment.engine_identity.clone();
+                    attachment.retire();
+                    set_asio_retry_barrier(&mut state, engine_identity);
+                    state.applied = None;
+                    state.lifecycle = TimelineCueAudioLifecycle::Applying;
+                    state.last_error = Some(error);
+                    return;
                 }
+                Self::retire_taken_attachment_as_fault(&mut state, attachment, error);
+                return;
+            }
+        }
+        if enqueue_succeeded {
+            if let Some(key) = latest_click_key {
+                // The Timeline projection is ordered; preserve its existing
+                // last-entry watermark contract rather than changing it to a
+                // max-over-history policy.
+                attachment.last_click_key = Some(key);
+            }
+            if let Some((generation, sequence)) = latest_guide_progress {
+                attachment.last_guide_generation = Some(generation);
+                attachment.last_guide_sequence = sequence;
             }
         }
         let output_frame = attachment.control.next_output_frame();
@@ -68644,13 +68905,25 @@ fn harvest_show_spout_output_failures(
     show_transport: &Mutex<show_spout_transport::ShowSpoutTransportState>,
     _engine: &EngineHandle,
 ) -> Result<(), String> {
-    let failure = show_transport
+    let retiring = show_transport
         .lock()
         .map_err(|_| "Show Spout transport state lock was poisoned".to_string())?
-        .harvest_show_spout_output_failure();
-    let Err(failure) = failure else {
+        .take_failed_active_pair()
+        .map_err(|failure| failure.message)?;
+    let Some(retiring) = retiring else {
         return Ok(());
     };
+    // The second worker drops its SDK sender, then performs the exact engine
+    // retirement acknowledgement. Do not hold `show_transport` while that
+    // physical cleanup and bounded engine wait run.
+    let retired = retiring.retire();
+    let failure = show_transport
+        .lock()
+        .map_err(|_| {
+            "Show Spout transport state lock was poisoned while recording failed-pair cleanup"
+                .to_string()
+        })?
+        .finish_failed_active_pair(retired);
     match failure.automatic_engine_retirement {
         Some(Ok(())) => Err(format!(
             "Show Spout authority was lost, both SDK senders were retired, and its exact engine pair was automatically retired: {}",
@@ -68673,13 +68946,47 @@ fn harvest_show_spout_output_failures(
 /// only after both SDK senders dropped.
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn retire_show_spout_outputs_for_authority_change(state: &AppState) -> Result<(), String> {
-    let result = state
+    let retiring = match state
         .show_spout_transport
         .lock()
         .map_err(|_| {
             "Show Spout transport state lock was poisoned during authority transition".to_string()
         })?
-        .retire_active_for_authority_change();
+        .take_active_for_authority_change()
+    {
+        Ok(retiring) => retiring,
+        Err(failure) => {
+            return match failure.automatic_engine_retirement {
+                Some(Ok(())) => Err(format!(
+                    "strict show Spout native retirement completed its exact engine cleanup but reported a physical teardown error: {}",
+                    failure.message
+                )),
+                Some(Err(retire_error)) => Err(format!(
+                    "strict show Spout authority transition left engine cleanup blocked after native teardown: {}; automatic exact engine retirement failed: {retire_error}",
+                    failure.message
+                )),
+                None => Err(format!(
+                    "strict show Spout authority transition did not report required exact engine retirement after native teardown: {}",
+                    failure.message
+                )),
+            };
+        }
+    };
+    let Some(retiring) = retiring else {
+        return Ok(());
+    };
+    // The detached pair has no active receipt before either worker is asked
+    // to stop. Joining the senders and their exact engine compensation is
+    // deliberately outside the state mutex.
+    let retired = retiring.retire();
+    let result = state
+        .show_spout_transport
+        .lock()
+        .map_err(|_| {
+            "Show Spout transport state lock was poisoned while recording authority-transition cleanup"
+                .to_string()
+        })?
+        .finish_active_for_authority_change(retired);
     match result {
         Ok(()) => Ok(()),
         Err(failure) => match failure.automatic_engine_retirement {
@@ -72153,6 +72460,207 @@ fn enable_show_artnet_loopback_route_with_output_control_fence(
     )
 }
 
+/// The only physical preparation result that may reach the rest of the R4
+/// transaction. A blocked-retirement retry is finalized internally, after
+/// both transport locks are released, and always ends this R4 with the fresh
+/// authorization barrier rather than becoming a sender-construction outcome.
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+enum ShowSpoutR4Preparation {
+    NoOp,
+    Pending(show_spout_transport::ShowSpoutPendingOutputPair),
+}
+
+/// Reserve a strict show pair under both transport mutexes, then perform a
+/// blocked exact engine-retirement acknowledgement only after both guards
+/// have dropped. This is intentionally the production R4 seam; tests use the
+/// same helper to hold that acknowledgement and prove another R4 can acquire
+/// both locks yet fails before fixed Sender construction.
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn prepare_show_spout_outputs_for_r4<F, R>(
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
+    show_transport: &Mutex<show_spout_transport::ShowSpoutTransportState>,
+    engine: &EngineHandle,
+    expected: show_spout_outputs::ShowSpoutOutputs,
+    activation: OutputOwnershipActivation,
+    authority_validator: F,
+    retry_engine_retirement: R,
+) -> Result<ShowSpoutR4Preparation, String>
+where
+    F: FnMut() -> Result<(), String> + Send + 'static,
+    R: FnOnce(&show_spout_transport::ShowSpoutBlockedRetirementRetry) -> Result<(), String>,
+{
+    let prepared = {
+        let mut spout = spout_transport.lock().map_err(|_| {
+            "Spout transport state lock was poisoned before show activation".to_string()
+        })?;
+        let mut show = show_transport.lock().map_err(|_| {
+            "Show Spout transport state lock was poisoned before activation".to_string()
+        })?;
+        show.prepare_show_spout_outputs(
+            &mut spout,
+            engine,
+            expected,
+            activation,
+            authority_validator,
+        )?
+    };
+    match prepared {
+        show_spout_transport::ShowSpoutPrepareOutcome::NoOp => Ok(ShowSpoutR4Preparation::NoOp),
+        show_spout_transport::ShowSpoutPrepareOutcome::Pending(pending) => {
+            Ok(ShowSpoutR4Preparation::Pending(pending))
+        }
+        show_spout_transport::ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => {
+            // The state-owned retry reservation was installed while `show`
+            // was locked above. Both state guards are now gone before the
+            // potentially bounded engine acknowledgement begins.
+            let engine_retirement = retry_engine_retirement(&retry);
+            match show_transport
+                .lock()
+                .map_err(|_| {
+                    "Show Spout transport state lock was poisoned while finalizing a blocked engine-retirement retry"
+                        .to_string()
+                })?
+                .finish_blocked_engine_retirement_retry(retry, engine_retirement)
+            {
+                // A successful retry clears only the old exact cleanup; it
+                // deliberately reports an error requiring a fresh R4.
+                Err(error) => Err(error),
+                Ok(()) => Err(
+                    "strict show Spout blocked-retirement retry finalized without the required fresh-R4 barrier"
+                        .to_string(),
+                ),
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+#[test]
+fn show_spout_r4_retry_ack_releases_both_transport_mutexes_before_engine_wait() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let expected = show_spout_outputs::build_show_spout_outputs(61, 62, 1).unwrap();
+    let safety = engine.safety_blackout_authority();
+    engine
+        .enable_show_spout_outputs_published(
+            expected.background.clone(),
+            expected.foreground.clone(),
+            safety.epoch,
+            safety.generation,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+    let spout_inputs = Arc::new(Mutex::new(HashMap::new()));
+    let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
+    let spout_transport = Arc::new(Mutex::new(spout_transport::SpoutTransportState::new(
+        Arc::clone(&spout_inputs),
+        #[cfg(feature = "ndi")]
+        Arc::new(Mutex::new(HashMap::new())),
+        Arc::clone(&capture_inputs),
+    )));
+    let show_transport = Arc::new(Mutex::new(
+        show_spout_transport::ShowSpoutTransportState::default(),
+    ));
+    show_transport
+        .lock()
+        .unwrap()
+        .record_unresolved_engine_retirement(
+            expected.clone(),
+            "injected post-detach exact engine-retirement ACK loss".to_string(),
+        )
+        .unwrap();
+
+    let (ack_boundary_entered, ack_boundary_observed) = mpsc::sync_channel(0);
+    let (release_ack, await_release_ack) = mpsc::sync_channel(0);
+    let first_spout_transport = Arc::clone(&spout_transport);
+    let first_show_transport = Arc::clone(&show_transport);
+    let first_engine = engine.clone();
+    let first_expected = expected.clone();
+    let first = std::thread::spawn(move || {
+        let activation = first_engine
+            .admit_output_activation(MachineOutputRole::Both)
+            .unwrap();
+        prepare_show_spout_outputs_for_r4(
+            first_spout_transport.as_ref(),
+            first_show_transport.as_ref(),
+            &first_engine,
+            first_expected,
+            activation,
+            || Ok(()),
+            |retry| {
+                ack_boundary_entered
+                    .send(())
+                    .expect("test must observe the actual main R4 ACK boundary");
+                await_release_ack
+                    .recv()
+                    .expect("test must release the actual main R4 engine ACK");
+                first_engine.retire_show_spout_outputs_published(
+                    retry.expected().background.clone(),
+                    retry.expected().foreground.clone(),
+                    Instant::now() + Duration::from_secs(1),
+                )
+            },
+        )
+    });
+    ack_boundary_observed
+        .recv()
+        .expect("the production R4 helper must now be waiting on its engine ACK");
+
+    // The injected engine acknowledgement is outstanding, but the actual
+    // production helper has already released both state guards. Explicitly
+    // acquire them, then submit another R4 through that same helper.
+    {
+        let _spout = spout_transport
+            .try_lock()
+            .expect("engine ACK must not retain the generic Spout mutex");
+        let _show = show_transport
+            .try_lock()
+            .expect("engine ACK must not retain the strict show Spout mutex");
+    }
+    let second_activation = engine
+        .admit_output_activation(MachineOutputRole::Both)
+        .unwrap();
+    let second = match prepare_show_spout_outputs_for_r4(
+        spout_transport.as_ref(),
+        show_transport.as_ref(),
+        &engine,
+        expected.clone(),
+        second_activation,
+        || Ok(()),
+        |_| panic!("second R4 must fail before it can submit an engine retry"),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("second R4 must fail closed while the first exact ACK is outstanding"),
+    };
+    assert!(second.contains("retry reservation"));
+    assert_eq!(
+        spout_transport
+            .lock()
+            .unwrap()
+            .strict_show_startup_resource_count(),
+        0,
+        "the second production R4 must not reach either fixed Sender::new"
+    );
+
+    release_ack
+        .send(())
+        .expect("the first production R4 must still await its exact engine ACK");
+    let first = match first
+        .join()
+        .expect("the first production R4 helper must not panic")
+    {
+        Err(error) => error,
+        Ok(_) => panic!("matching repair ACK must require another fresh R4"),
+    };
+    assert!(first.contains("submit a fresh R4"));
+    let show = show_transport.lock().unwrap();
+    show.ensure_preparation_admitted()
+        .expect("only the matching exact engine ACK may reopen this R4 helper");
+    assert!(engine.snapshot().video.outputs.is_empty());
+}
+
 /// The single local R4 path for the fixed same-machine show Spout pair.  The
 /// IPC action is payloadless; this function derives both sender specs from the
 /// authoritative engine image and performs a bounded two-phase transaction:
@@ -72358,23 +72866,23 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                 state.show_spout_transport.as_ref(),
                                 &state.engine,
                             )?;
-                            let mut spout = state.spout_transport.lock().map_err(|_| {
-                                "Spout transport state lock was poisoned before show activation"
-                                    .to_string()
-                            })?;
-                            let mut show = state.show_spout_transport.lock().map_err(|_| {
-                                "Show Spout transport state lock was poisoned before activation"
-                                    .to_string()
-                            })?;
-                            let prepared = show.prepare_show_spout_outputs(
-                                &mut spout,
+                            let prepared = prepare_show_spout_outputs_for_r4(
+                                state.spout_transport.as_ref(),
+                                state.show_spout_transport.as_ref(),
                                 &state.engine,
                                 expected.clone(),
                                 activation,
                                 validator,
+                                |retry| {
+                                    state.engine.retire_show_spout_outputs_published(
+                                        retry.expected().background.clone(),
+                                        retry.expected().foreground.clone(),
+                                        Instant::now() + Duration::from_secs(2),
+                                    )
+                                },
                             )?;
                             match prepared {
-                                show_spout_transport::ShowSpoutPrepareOutcome::NoOp => {
+                                ShowSpoutR4Preparation::NoOp => {
                                     if !matches!(
                                         current,
                                         show_spout_outputs::ShowSpoutEnsureDecision::NoOp
@@ -72384,12 +72892,17 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                             .to_string(),
                                     );
                                     }
-                                    show.sync_content_state(
-                                        state.engine.snapshot().timeline.playing,
-                                    )?;
+                                    state
+                                        .show_spout_transport
+                                        .lock()
+                                        .map_err(|_| {
+                                            "Show Spout transport state lock was poisoned while synchronizing an existing pair"
+                                                .to_string()
+                                        })?
+                                        .sync_content_state(state.engine.snapshot().timeline.playing)?;
                                     Ok((false, None))
                                 }
-                                show_spout_transport::ShowSpoutPrepareOutcome::Pending(pending) => {
+                                ShowSpoutR4Preparation::Pending(pending) => {
                                     // The worker callbacks remain gated on `published` until
                                     // this acknowledged engine image is exact. Engine-publication
                                     // failure rolls the pending physical pair back explicitly so a
@@ -72423,7 +72936,13 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                             "Show Spout engine publication acknowledgement failed; the pending senders and exact engine pair were retired serially: {error}"
                                         )),
                                         (physical, Err(retire_error)) => {
-                                            let record = show
+                                            let record = state
+                                                .show_spout_transport
+                                                .lock()
+                                                .map_err(|_| {
+                                                    "Show Spout transport state lock was poisoned while recording an unresolved engine retirement"
+                                                        .to_string()
+                                                })?
                                                 .record_unresolved_engine_retirement(
                                                     expected.clone(),
                                                     retire_error.clone(),
@@ -72449,9 +72968,23 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                     };
                                     }
                                     published.store(true, Ordering::Release);
-                                    let live_transfer = match show
-                                        .publish_show_spout_outputs(&state.engine, pending)
-                                    {
+                                    // `publish_show_spout_outputs` waits for
+                                    // both first black frames and either joins
+                                    // both workers or makes the pair active.
+                                    // Release the show mutex before submitting
+                                    // a later engine retire ACK so that exact
+                                    // physical teardown remains the sole
+                                    // ordering boundary.
+                                    let live_transfer = match {
+                                        state
+                                            .show_spout_transport
+                                            .lock()
+                                            .map_err(|_| {
+                                                "Show Spout transport state lock was poisoned while publishing the pending pair"
+                                                    .to_string()
+                                            })?
+                                            .publish_show_spout_outputs(&state.engine, pending)
+                                    } {
                                         Ok(token) => token,
                                         Err(error) => {
                                             let retire =
@@ -72465,7 +72998,13 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                             "Show Spout sender publication failed and the exact engine pair was retired: {error}"
                                         )),
                                         Err(retire_error) => {
-                                            let record = show
+                                            let record = state
+                                                .show_spout_transport
+                                                .lock()
+                                                .map_err(|_| {
+                                                    "Show Spout transport state lock was poisoned while recording an unresolved engine retirement"
+                                                        .to_string()
+                                                })?
                                                 .record_unresolved_engine_retirement(
                                                     expected.clone(),
                                                     retire_error.clone(),
@@ -84242,6 +84781,17 @@ pub(crate) mod tests {
         assert_eq!(first.lifecycle, TimelineCueAudioLifecycle::Running);
         assert_eq!(first.rotation_count, 1);
         assert_ne!(first.runtime_incarnation, 0);
+        let source_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .source_test_counters
+            .clone();
+        assert_eq!(source_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(source_counters.retirements.load(Ordering::Relaxed), 0);
         let audio_guard = audio.lock().unwrap();
         runtime.sync(&timeline, &audio);
         drop(audio_guard);
@@ -84270,23 +84820,115 @@ pub(crate) mod tests {
         let failed = runtime.status().unwrap();
         assert_eq!(failed.lifecycle, TimelineCueAudioLifecycle::Fault);
         let fault_count = failed.fault_count;
-        runtime.sync(&timeline, &audio);
-        assert_eq!(runtime.status().unwrap().fault_count, fault_count);
-
-        {
-            let mut state = runtime.state.lock().unwrap();
-            let attachment = state.attachment.as_mut().unwrap();
-            attachment.last_observed_output_frame = attachment.control.next_output_frame();
-            attachment.last_output_progress_at = Instant::now() - Duration::from_secs(1);
-        }
-        runtime.sync(&timeline, &audio);
-        let stalled = runtime.status().unwrap();
-        assert_eq!(stalled.lifecycle, TimelineCueAudioLifecycle::Stalled);
-        assert_eq!(stalled.applied_settings, None);
-        assert_eq!(stalled.runtime_incarnation, first.runtime_incarnation);
-        assert!(stalled.status_revision > first.status_revision);
-        assert_eq!(stalled.next_output_frame, 0);
+        assert_eq!(source_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(source_counters.retirements.load(Ordering::Relaxed), 1);
         assert!(runtime.state.lock().unwrap().attachment.is_none());
+        assert!(mixed.next().is_none());
+        runtime.sync(&timeline, &audio);
+        let after_retry = runtime.status().unwrap();
+        assert_eq!(after_retry.lifecycle, TimelineCueAudioLifecycle::Fault);
+        assert_eq!(after_retry.fault_count, fault_count);
+        assert!(runtime.state.lock().unwrap().attachment.is_none());
+    }
+
+    #[test]
+    fn timeline_cue_follow_program_replacement_retires_outgoing_source_once() {
+        let runtime = TimelineCueAudioRuntime::default();
+        runtime.initialize(
+            PathBuf::from("C:/test/timeline-cue-audio-settings.json"),
+            Ok(timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()),
+        );
+        let (mixer, _) = rodio::mixer::mixer(2, 48_000);
+        let audio = Arc::new(Mutex::new(MediaAudioPlayback {
+            timeline_test_mixer: Some(mixer),
+            audio_device_generation: 17,
+            ..MediaAudioPlayback::default()
+        }));
+        let timeline = engine::TimelineAudioRuntimeSnapshot {
+            playing: true,
+            metronome_enabled: true,
+            click_schedule_generation: 3,
+            source_projection_authority: engine::TimelineAudioProjectionAuthority {
+                epoch: 41,
+                generation: 73,
+            },
+            click_events: vec![protocol::TimelineClickEventSummary {
+                epoch: 41,
+                transport_generation: 73,
+                sample_frame: 0,
+                measure: 1,
+                beat: 1,
+                downbeat: true,
+                schedule_generation: 3,
+                ..protocol::TimelineClickEventSummary::default()
+            }],
+            ..engine::TimelineAudioRuntimeSnapshot::default()
+        };
+        for _ in 0..100 {
+            runtime.sync(&timeline, &audio);
+            if runtime.status().unwrap().lifecycle == TimelineCueAudioLifecycle::Running {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let outgoing_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .expect("initial Legacy attachment")
+            .source_test_counters
+            .clone();
+        assert_eq!(outgoing_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(outgoing_counters.retirements.load(Ordering::Relaxed), 0);
+
+        audio.lock().unwrap().audio_device_generation = 18;
+        for _ in 0..100 {
+            runtime.sync(&timeline, &audio);
+            let generation_matches = runtime
+                .state
+                .lock()
+                .unwrap()
+                .attachment
+                .as_ref()
+                .is_some_and(|attachment| attachment.program_device_generation == Some(18));
+            let replaced = generation_matches
+                && runtime.status().is_ok_and(|status| {
+                    status.lifecycle == TimelineCueAudioLifecycle::Running
+                        && status.rotation_count == 2
+                });
+            if replaced {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let incoming_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .expect("replacement Legacy attachment")
+            .source_test_counters
+            .clone();
+        assert_eq!(
+            outgoing_counters.activations.load(Ordering::Relaxed),
+            1,
+            "outgoing Legacy source activated more than once"
+        );
+        assert_eq!(
+            outgoing_counters.retirements.load(Ordering::Relaxed),
+            1,
+            "outgoing Legacy source was not retired exactly once"
+        );
+        assert_eq!(incoming_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(incoming_counters.retirements.load(Ordering::Relaxed), 0);
+
+        runtime.sync(&timeline, &audio);
+        assert_eq!(incoming_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(incoming_counters.retirements.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -84955,6 +85597,17 @@ pub(crate) mod tests {
         let first = runtime.status().unwrap();
         assert_eq!(first.lifecycle, TimelineCueAudioLifecycle::Running);
         assert_eq!(first.rotation_count, 1);
+        let source_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .source_test_counters
+            .clone();
+        assert_eq!(source_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(source_counters.retirements.load(Ordering::Relaxed), 0);
         assert!(matches!(
             &runtime
                 .state
@@ -84971,6 +85624,8 @@ pub(crate) mod tests {
         let second = runtime.status().unwrap();
         assert_eq!(second.rotation_count, first.rotation_count);
         assert_eq!(second.config_count, first.config_count);
+        assert_eq!(source_counters.activations.load(Ordering::Relaxed), 1);
+        assert_eq!(source_counters.retirements.load(Ordering::Relaxed), 0);
         let peak = (0..9_600)
             .filter_map(|_| observer.next())
             .map(f32::abs)
@@ -85020,6 +85675,23 @@ pub(crate) mod tests {
         };
         runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
         assert!(runtime.state.lock().unwrap().attachment.is_some());
+        let initial_source_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .source_test_counters
+            .clone();
+        assert_eq!(
+            initial_source_counters.activations.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            initial_source_counters.retirements.load(Ordering::Relaxed),
+            0
+        );
 
         let initial_program_peak = (0..9_600)
             .filter_map(|_| program.next())
@@ -85040,6 +85712,31 @@ pub(crate) mod tests {
 
         context.transport().rotate().unwrap();
         runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_runtime));
+        let rotated_source_counters = runtime
+            .state
+            .lock()
+            .unwrap()
+            .attachment
+            .as_ref()
+            .unwrap()
+            .source_test_counters
+            .clone();
+        assert_eq!(
+            initial_source_counters.activations.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            initial_source_counters.retirements.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            rotated_source_counters.activations.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            rotated_source_counters.retirements.load(Ordering::Relaxed),
+            0
+        );
 
         let post_rotation_program_peak = (0..9_600)
             .filter_map(|_| program.next())

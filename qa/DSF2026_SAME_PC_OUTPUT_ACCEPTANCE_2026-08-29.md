@@ -162,6 +162,27 @@ P2 remains for a single fake-worker integration test spanning every failure
 variant and for an injected reaper-spawn/log-capture test; neither is promoted
 to physical acceptance.
 
+Alpha.37 strengthens the fixed pair beyond that baseline. Each worker must
+complete its cached 1920x1080 opaque-black first send and revalidate the exact
+post-registration SDK sender name before the pair can reach active/R4 success.
+Stop/join is performed outside the show-state mutex under a state-owned
+Reaping reservation, so fixed names cannot be reconstructed while old workers
+still own them. If exact engine retirement is ambiguous or loses its reply,
+the old pair plus prior error and a monotonic reservation receipt remain in
+show state. Neither an empty/CreatePair snapshot nor a stale/substituted
+receipt reopens the names; only matching `expected + prior_error +
+reservation_id` with a successful exact retirement ACK does, and that repair
+still requires a fresh R4 before constructing senders.
+
+Combined exact-linker focused proof passes Show Spout `17/17`, the production
+two-mutex R4 interleaving `1/1`, and generic strict-name retry `2/2`, with
+first-party warnings `0`. The complete Spout-enabled Syndocal surface passes
+`1276 passed / 0 failed / 12 ignored` under the same exact linker. Independent
+Terra xHigh review is GO with P0/P1 `0`.
+Direct pending-publish-reservation and non-synthetic post-join-cleanup-error
+tests remain P2 proof debt; they are not relabeled as Unity/GPU or physical
+sender acceptance.
+
 The non-overwriting authoring tool was independently rereviewed after its
 post-write cleanup was changed to fail closed: a failed post-write validation
 never unlinks or renames a pathname that another process could have replaced.
@@ -198,13 +219,16 @@ native artifact are accepted:
       unchecked below.
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
-- [x] Focused and full deterministic gates pass with zero first-party warnings.
-- [x] A fresh warning-free current alpha.36 native release is built from clean
+- [x] Alpha.37 focused and full deterministic source gates pass with zero
+      first-party warnings.
+- [x] Historical native checkpoint: a warning-free alpha.36 release was built from clean
       pushed HEAD `81a7a9c` with exact MSVC 14.44 and launched from this
-      checkout as exactly one responsive process. Alpha.35 and alpha.34 are
-      historical after the localization/version follow-up.
+      checkout as exactly one responsive process.
 - [x] Win32 `IsZoomed` verifies that exact alpha.36 native window as maximized
       (PID `109972`, title `Syndocal`). This is window-state proof, not
       content-level visual or Unity/GPU acceptance.
+- [ ] A fresh warning-free alpha.37 native release is built from its clean,
+      pushed source checkpoint and launched as exactly one responsive,
+      maximized checkout-owned process.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

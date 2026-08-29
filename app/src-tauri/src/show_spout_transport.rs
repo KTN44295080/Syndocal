@@ -26,6 +26,10 @@ use engine::{EngineHandle, OutputOwnershipActivation};
 
 pub(crate) enum ShowSpoutPrepareOutcome {
     Pending(ShowSpoutPendingOutputPair),
+    /// The old exact engine pair still needs a serialized retirement ACK.
+    /// This token is state-reserved before the caller drops transport locks
+    /// to submit that ACK; it never permits sender construction in this R4.
+    RetryBlockedRetirement(ShowSpoutBlockedRetirementRetry),
     NoOp,
 }
 
@@ -55,6 +59,88 @@ pub(crate) struct ShowSpoutTransportFailure {
     /// physically dropped, the second worker retires this exact pair once.
     /// Harvest reads that recorded outcome and never issues a second retire.
     pub(crate) automatic_engine_retirement: Option<Result<(), String>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShowSpoutReapingKind {
+    AuthorityChange,
+    FailedWorker,
+}
+
+impl ShowSpoutReapingKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::AuthorityChange => "authority-transition",
+            Self::FailedWorker => "failed-worker",
+        }
+    }
+}
+
+/// State-owned interlock that spans the mutex-free physical stop/join and the
+/// second worker's exact engine-retirement acknowledgement. `active = None`
+/// is therefore never sufficient evidence that fixed sender names may be
+/// reused: a fresh R4 must observe this receipt as absent *and* any prior
+/// exact engine cleanup as resolved.
+#[derive(Clone)]
+struct ShowSpoutReaping {
+    expected: ShowSpoutOutputs,
+    kind: ShowSpoutReapingKind,
+    reason: String,
+}
+
+/// Detached only while both physical SDK senders are being joined. Removing
+/// the pair from `ShowSpoutTransportState::active` before this object is
+/// returned makes a concurrent observer fail closed rather than receiving an
+/// active receipt during teardown. Its `retire` method must run without the
+/// transport-state mutex: the second worker's post-drop callback can wait for
+/// the exact engine retirement acknowledgement.
+pub(crate) struct ShowSpoutRetiringOutputPair {
+    pair: Option<ShowSpoutOutputPair>,
+    reaping: ShowSpoutReaping,
+    control: Arc<ShowSpoutWorkerControl>,
+    worker_failure: Option<String>,
+}
+
+pub(crate) struct ShowSpoutPhysicalRetirement {
+    expected: ShowSpoutOutputs,
+    reaping: ShowSpoutReaping,
+    worker_failure: Option<String>,
+    cleanup: Result<(), String>,
+    automatic_engine_retirement: Option<Result<(), String>>,
+}
+
+impl ShowSpoutRetiringOutputPair {
+    fn from_pair(
+        pair: ShowSpoutOutputPair,
+        reaping: ShowSpoutReaping,
+        worker_failure: Option<String>,
+    ) -> Self {
+        Self {
+            reaping,
+            control: Arc::clone(&pair.control),
+            pair: Some(pair),
+            worker_failure,
+        }
+    }
+
+    /// This owns the physical stop/join and deliberately runs outside the
+    /// `ShowSpoutTransportState` mutex. The worker's second physical-drop
+    /// callback retires the exact engine pair only after both SDK resources
+    /// have been destroyed.
+    pub(crate) fn retire(mut self) -> ShowSpoutPhysicalRetirement {
+        let cleanup = self
+            .pair
+            .take()
+            .expect("strict show Spout detached pair was already consumed")
+            .retire();
+        ShowSpoutPhysicalRetirement {
+            expected: self.reaping.expected.clone(),
+            reaping: self.reaping,
+            worker_failure: self.worker_failure,
+            cleanup,
+            automatic_engine_retirement: self.control.automatic_engine_retirement(),
+        }
+    }
 }
 
 impl std::fmt::Display for ShowSpoutTransportFailure {
@@ -462,6 +548,15 @@ impl ShowSpoutWorkerControl {
 
 pub(crate) struct ShowSpoutTransportState {
     active: Option<ShowSpoutOutputPair>,
+    /// Set before an active pair is detached and retained until the detached
+    /// pair reports its physical and exact engine cleanup result. No observer
+    /// may infer that `active: None` makes the fixed sender names reusable.
+    reaping: Option<ShowSpoutReaping>,
+    /// Exact old-engine cleanup is in flight outside this mutex. Like
+    /// `reaping`, this remains visible to every observer until its matching
+    /// engine ACK receipt is finalized under the mutex.
+    blocked_retirement_retry: Option<ShowSpoutBlockedRetirementRetry>,
+    next_blocked_retirement_retry_id: u64,
     /// A worker may have completed physical teardown while the one exact
     /// engine-retire ACK failed.  Keep that named pair process-locally
     /// blocked: a fresh R4 must repair this exact old publication before it
@@ -475,16 +570,101 @@ struct ShowSpoutBlockedEngineRetirement {
     prior_error: String,
 }
 
+/// A one-shot, exact identity receipt for retrying an engine-pair retirement
+/// outside `ShowSpoutTransportState`'s mutex. The nonce prevents a delayed or
+/// substituted completion from clearing a newer reservation for the same
+/// fixed sender names.
+#[derive(Clone)]
+pub(crate) struct ShowSpoutBlockedRetirementRetry {
+    expected: ShowSpoutOutputs,
+    prior_error: String,
+    reservation_id: u64,
+}
+
+impl ShowSpoutBlockedRetirementRetry {
+    pub(crate) fn expected(&self) -> &ShowSpoutOutputs {
+        &self.expected
+    }
+}
+
 impl Default for ShowSpoutTransportState {
     fn default() -> Self {
         Self {
             active: None,
+            reaping: None,
+            blocked_retirement_retry: None,
+            next_blocked_retirement_retry_id: 1,
             blocked_engine_retirement: None,
         }
     }
 }
 
 impl ShowSpoutTransportState {
+    fn reject_reaping(&self, phase: &str) -> Result<(), String> {
+        if let Some(reaping) = self.reaping.as_ref() {
+            return Err(format!(
+                "strict show Spout {phase} is blocked while the exact sender pair is reaping after {} ({})",
+                reaping.kind.label(),
+                reaping.reason,
+            ));
+        }
+        if let Some(retry) = self.blocked_retirement_retry.as_ref() {
+            return Err(format!(
+                "strict show Spout {phase} is blocked while exact blocked-retirement retry reservation {} is awaiting its engine acknowledgement ({})",
+                retry.reservation_id,
+                retry.prior_error,
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_matching_reaping(
+        &self,
+        reaping: &ShowSpoutReaping,
+        phase: &str,
+    ) -> Result<(), String> {
+        let Some(current) = self.reaping.as_ref() else {
+            return Err(format!(
+                "strict show Spout {phase} did not find the required state-owned reaping receipt"
+            ));
+        };
+        if current.expected != reaping.expected
+            || current.kind != reaping.kind
+            || current.reason != reaping.reason
+        {
+            return Err(format!(
+                "strict show Spout {phase} found a different state-owned reaping receipt"
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_matching_physical_retirement(
+        &self,
+        retired: &ShowSpoutPhysicalRetirement,
+        phase: &str,
+    ) -> Result<(), String> {
+        if retired.expected != retired.reaping.expected {
+            return Err(format!(
+                "strict show Spout {phase} physical cleanup receipt did not retain its exact engine pair"
+            ));
+        }
+        self.require_matching_reaping(&retired.reaping, phase)
+    }
+
+    fn finish_reaping(&mut self, reaping: &ShowSpoutReaping, phase: &str) -> Result<(), String> {
+        self.require_matching_reaping(reaping, phase)?;
+        self.reaping = None;
+        Ok(())
+    }
+
+    /// The common R4 admission gate. It is intentionally separate from SDK
+    /// construction so deterministic tests can prove a second request never
+    /// reaches sender preparation while state-owned reaping remains present.
+    pub(crate) fn ensure_preparation_admitted(&self) -> Result<(), String> {
+        self.reject_reaping("sender preparation")
+    }
+
     /// Phase one: construct both SDK senders behind the current authority
     /// fence. No content is published by either worker before phase two.
     pub(crate) fn prepare_show_spout_outputs<F>(
@@ -498,7 +678,10 @@ impl ShowSpoutTransportState {
     where
         F: FnMut() -> Result<(), String> + Send + 'static,
     {
-        self.retry_blocked_engine_retirement(engine)?;
+        self.ensure_preparation_admitted()?;
+        if let Some(retry) = self.reserve_blocked_engine_retirement_retry(engine)? {
+            return Ok(ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry));
+        }
         transport
             .harvest_failed_workers(engine)
             .map_err(|error| error.message)?;
@@ -563,54 +746,102 @@ impl ShowSpoutTransportState {
         ))
     }
 
-    /// The physical workers already dropped before a blocked entry is made.
-    /// Only a new authenticated R4 reaches this retry, and it may retire only
-    /// the original exact pair. Missing, substituted, or conflicted engine
-    /// state is not normalized into a fresh pair.
-    fn retry_blocked_engine_retirement(&mut self, engine: &EngineHandle) -> Result<(), String> {
+    /// Reserve the one exact old-engine retirement retry before releasing the
+    /// transport mutex. The caller must perform the ACK outside this mutex and
+    /// then submit the returned receipt to `finish_blocked_engine_retirement_retry`.
+    /// A reservation never permits this R4 to construct fixed sender names.
+    fn reserve_blocked_engine_retirement_retry(
+        &mut self,
+        engine: &EngineHandle,
+    ) -> Result<Option<ShowSpoutBlockedRetirementRetry>, String> {
+        self.reject_reaping("blocked-retirement retry")?;
         let Some(blocked) = self.blocked_engine_retirement.as_ref().cloned() else {
-            return Ok(());
+            return Ok(None);
         };
-        match decide_show_spout_ensure(&engine.snapshot().video.outputs, &blocked.expected) {
-            Ok(ShowSpoutEnsureDecision::NoOp) => {}
-            Ok(ShowSpoutEnsureDecision::CreatePair) => {
-                // The exact retire ACK may have been lost after the engine
-                // already applied it.  Zero Spout outputs is the only safe
-                // terminal reconciliation: clear this stale block but force
-                // the operator to submit a *new* R4 before construction.
+        if let Err(error) =
+            decide_show_spout_ensure(&engine.snapshot().video.outputs, &blocked.expected)
+        {
+            return Err(format!(
+                "strict show Spout retry is blocked because its old engine pair was substituted or conflicted ({error}); explicit operator recovery is required (prior automatic retirement error: {})",
+                blocked.prior_error
+            ));
+        }
+        // `CreatePair` is deliberately not an acknowledgement. A lost old
+        // engine reply may leave an empty snapshot, but only the matching
+        // exact retry receipt below may clear this state-owned barrier. The
+        // caller will still submit `RetireShowSpoutOutputsPublished`, whose
+        // acknowledgement either proves the exact outcome or keeps the
+        // barrier installed.
+        let reservation_id = self.next_blocked_retirement_retry_id;
+        self.next_blocked_retirement_retry_id = reservation_id.checked_add(1).ok_or_else(|| {
+            "strict show Spout blocked-retirement retry receipt space is exhausted; explicit operator recovery is required"
+                .to_string()
+        })?;
+        let retry = ShowSpoutBlockedRetirementRetry {
+            expected: blocked.expected,
+            prior_error: blocked.prior_error,
+            reservation_id,
+        };
+        self.blocked_retirement_retry = Some(retry.clone());
+        Ok(Some(retry))
+    }
+
+    /// Finalize an exact retry receipt after the caller has awaited the engine
+    /// ACK without holding either Spout transport mutex. The reservation and
+    /// unresolved-retirement barrier are cleared atomically only after the
+    /// same receipt reports success; a delayed or substituted completion must
+    /// leave both barriers intact.
+    pub(crate) fn finish_blocked_engine_retirement_retry(
+        &mut self,
+        retry: ShowSpoutBlockedRetirementRetry,
+        engine_retirement: Result<(), String>,
+    ) -> Result<(), String> {
+        let Some(current) = self.blocked_retirement_retry.as_ref() else {
+            return Err(
+                "strict show Spout blocked-retirement retry finish found no state-owned reservation"
+                    .to_string(),
+            );
+        };
+        if current.expected != retry.expected
+            || current.prior_error != retry.prior_error
+            || current.reservation_id != retry.reservation_id
+        {
+            return Err(
+                "strict show Spout blocked-retirement retry finish found a different state-owned reservation"
+                    .to_string(),
+            );
+        }
+        let Some(blocked) = self.blocked_engine_retirement.as_ref() else {
+            return Err(
+                "strict show Spout blocked-retirement retry finish lost its unresolved exact engine-pair barrier"
+                    .to_string(),
+            );
+        };
+        if blocked.expected != retry.expected || blocked.prior_error != retry.prior_error {
+            return Err(
+                "strict show Spout blocked-retirement retry finish found a different unresolved exact engine-pair barrier"
+                    .to_string(),
+            );
+        }
+        match engine_retirement {
+            Ok(()) => {
                 self.blocked_engine_retirement = None;
-                return Err(format!(
-                    "strict show Spout prior engine retirement is already reconciled (no Spout senders remain); submit a fresh R4 before constructing a new pair (prior automatic retirement error: {})",
-                    blocked.prior_error
-                ));
+                self.blocked_retirement_retry = None;
+                // This R4 was admitted solely to reconcile a possibly-ambiguous
+                // rollback. Do not let it construct a new physical pair after
+                // that repair: the operator must issue a second fresh R4.
+                Err(format!(
+                    "strict show Spout prior engine retirement was repaired; submit a fresh R4 before constructing a new pair (prior automatic retirement error: {})",
+                    retry.prior_error
+                ))
             }
             Err(error) => {
-                return Err(format!(
-                    "strict show Spout retry is blocked because its old engine pair was substituted or conflicted ({error}); explicit operator recovery is required (prior automatic retirement error: {})",
-                    blocked.prior_error
-                ));
+                self.blocked_retirement_retry = None;
+                Err(format!(
+                    "strict show Spout retry remains blocked; exact old engine-pair retirement failed again: {error}"
+                ))
             }
         }
-        engine
-            .retire_show_spout_outputs_published(
-                blocked.expected.background.clone(),
-                blocked.expected.foreground.clone(),
-                Instant::now() + Duration::from_secs(2),
-            )
-            .map_err(|error| {
-                format!(
-                    "strict show Spout retry remains blocked; exact old engine-pair retirement failed again: {error}"
-                )
-            })?;
-        self.blocked_engine_retirement = None;
-        // This R4 was admitted solely to reconcile a possibly-ambiguous
-        // rollback.  Do not let it construct a new physical pair after that
-        // repair: the operator must issue a second, fresh R4 once both the
-        // old engine publication and its fixed names are known gone.
-        Err(format!(
-            "strict show Spout prior engine retirement was repaired; submit a fresh R4 before constructing a new pair (prior automatic retirement error: {})",
-            blocked.prior_error
-        ))
     }
 
     /// A pending pair can fail after the engine published it but before the
@@ -654,6 +885,7 @@ impl ShowSpoutTransportState {
         engine: &EngineHandle,
         mut pending: ShowSpoutPendingOutputPair,
     ) -> Result<ShowSpoutLiveTransferCommitToken, String> {
+        self.reject_reaping("pending-pair publication")?;
         if self.active.is_some() {
             return Err(
                 "strict show Spout pair is already established; pending pair was retired"
@@ -712,6 +944,7 @@ impl ShowSpoutTransportState {
     /// registrations stay open and the worker borrows its cached black frame
     /// on every tick until this is switched back to live.
     pub(crate) fn sync_content_state(&self, timeline_playing: bool) -> Result<(), String> {
+        self.reject_reaping("content status")?;
         self.active
             .as_ref()
             .ok_or_else(|| "strict show Spout pair is not established".to_string())?
@@ -719,14 +952,20 @@ impl ShowSpoutTransportState {
             .sync_timeline_playing(timeline_playing)
     }
 
-    /// Output-role transitions and project replacement retire the strict pair
-    /// through this sole owner. `SpoutRouteWorker::stop` joins after dropping
-    /// the SDK sender; only its second physical-drop callback may retire the
-    /// exact engine pair. The transition waits for that result instead of
-    /// leaving the old pair live across a new authority generation.
-    pub(crate) fn retire_active_for_authority_change(
+    /// Atomically removes the active receipt and returns the physical pair to
+    /// its caller. The caller must stop/join it before reacquiring this state
+    /// mutex to record the engine-retirement result; holding the mutex across
+    /// that acknowledgement can otherwise block a worker's fault/cleanup
+    /// reporting path.
+    pub(crate) fn take_active_for_authority_change(
         &mut self,
-    ) -> Result<(), ShowSpoutTransportFailure> {
+    ) -> Result<Option<ShowSpoutRetiringOutputPair>, ShowSpoutTransportFailure> {
+        if let Err(message) = self.reject_reaping("authority transition") {
+            return Err(ShowSpoutTransportFailure {
+                message,
+                automatic_engine_retirement: None,
+            });
+        }
         let Some(pair) = self.active.take() else {
             if let Some(blocked) = self.blocked_engine_retirement.as_ref() {
                 return Err(ShowSpoutTransportFailure {
@@ -737,15 +976,37 @@ impl ShowSpoutTransportState {
                     automatic_engine_retirement: Some(Err(blocked.prior_error.clone())),
                 });
             }
-            return Ok(());
+            return Ok(None);
         };
-        let expected = pair.expected.clone();
         pair.control.mark_authority_lost();
-        let control = Arc::clone(&pair.control);
-        let cleanup = pair.retire();
-        let cleanup_failed = cleanup.is_err();
-        let automatic_engine_retirement = control.automatic_engine_retirement();
-        let message = match cleanup {
+        let reaping = ShowSpoutReaping {
+            expected: pair.expected.clone(),
+            kind: ShowSpoutReapingKind::AuthorityChange,
+            reason: "authority transition requested physical sender retirement".to_string(),
+        };
+        self.reaping = Some(reaping.clone());
+        Ok(Some(ShowSpoutRetiringOutputPair::from_pair(
+            pair, reaping, None,
+        )))
+    }
+
+    /// Completes an authority-transition retirement after its physical pair
+    /// has been stopped and joined outside the state mutex.
+    pub(crate) fn finish_active_for_authority_change(
+        &mut self,
+        retired: ShowSpoutPhysicalRetirement,
+    ) -> Result<(), ShowSpoutTransportFailure> {
+        let reaping = retired.reaping.clone();
+        if let Err(error) =
+            self.require_matching_physical_retirement(&retired, "authority-transition finish")
+        {
+            return Err(ShowSpoutTransportFailure {
+                message: error,
+                automatic_engine_retirement: retired.automatic_engine_retirement,
+            });
+        }
+        let cleanup_failed = retired.cleanup.is_err();
+        let message = match retired.cleanup {
             Ok(()) => {
                 "strict show Spout active pair was physically retired for authority transition"
                     .to_string()
@@ -754,12 +1015,18 @@ impl ShowSpoutTransportState {
                 "strict show Spout active pair authority-transition retirement reported physical teardown failure: {error}"
             ),
         };
-        match automatic_engine_retirement.as_ref() {
+        match retired.automatic_engine_retirement.as_ref() {
             Some(Ok(())) => {
+                if let Err(error) = self.finish_reaping(&reaping, "authority-transition finish") {
+                    return Err(ShowSpoutTransportFailure {
+                        message: error,
+                        automatic_engine_retirement: retired.automatic_engine_retirement,
+                    });
+                }
                 if cleanup_failed {
                     Err(ShowSpoutTransportFailure {
                         message,
-                        automatic_engine_retirement,
+                        automatic_engine_retirement: retired.automatic_engine_retirement,
                     })
                 } else {
                     Ok(())
@@ -767,55 +1034,108 @@ impl ShowSpoutTransportState {
             }
             Some(Err(error)) => {
                 self.blocked_engine_retirement = Some(ShowSpoutBlockedEngineRetirement {
-                    expected,
+                    expected: retired.expected,
                     prior_error: error.clone(),
                 });
+                // The state mutex remains held until this unresolved exact
+                // engine-pair barrier is installed. Only then may a fresh R4
+                // observe reaping as absent.
+                if let Err(error) = self.finish_reaping(&reaping, "authority-transition finish") {
+                    return Err(ShowSpoutTransportFailure {
+                        message: error,
+                        automatic_engine_retirement: retired.automatic_engine_retirement,
+                    });
+                }
                 Err(ShowSpoutTransportFailure {
                     message,
-                    automatic_engine_retirement,
+                    automatic_engine_retirement: retired.automatic_engine_retirement,
                 })
             }
             None => {
                 self.blocked_engine_retirement = Some(ShowSpoutBlockedEngineRetirement {
-                    expected,
+                    expected: retired.expected,
                     prior_error: "authority transition worker teardown did not report automatic engine retirement"
                         .to_string(),
                 });
+                if let Err(error) = self.finish_reaping(&reaping, "authority-transition finish") {
+                    return Err(ShowSpoutTransportFailure {
+                        message: error,
+                        automatic_engine_retirement: retired.automatic_engine_retirement,
+                    });
+                }
                 Err(ShowSpoutTransportFailure {
                     message,
-                    automatic_engine_retirement,
+                    automatic_engine_retirement: retired.automatic_engine_retirement,
                 })
             }
         }
     }
 
-    pub(crate) fn harvest_show_spout_output_failure(
+    /// Removes a failed pair before its physical retirement. A missing pair
+    /// is not a failure; an active receipt is never retained while cleanup is
+    /// still in progress.
+    pub(crate) fn take_failed_active_pair(
         &mut self,
-    ) -> Result<(), ShowSpoutTransportFailure> {
+    ) -> Result<Option<ShowSpoutRetiringOutputPair>, ShowSpoutTransportFailure> {
+        if let Err(message) = self.reject_reaping("failed-worker harvest") {
+            return Err(ShowSpoutTransportFailure {
+                message,
+                automatic_engine_retirement: None,
+            });
+        }
         let failed = self
             .active
             .as_ref()
             .is_some_and(ShowSpoutOutputPair::has_failed_worker);
         if !failed {
-            return Ok(());
+            return Ok(None);
         }
         let pair = self
             .active
             .take()
             .expect("active show Spout pair was checked");
-        let expected = pair.expected.clone();
         pair.control.mark_authority_lost();
-        let message = pair.failure_message().unwrap_or_else(|| {
+        let worker_failure = pair.failure_message().unwrap_or_else(|| {
             "strict show Spout worker stopped before a failure reason was recorded".to_string()
         });
-        let control = Arc::clone(&pair.control);
-        let cleanup = pair.retire();
-        let automatic_engine_retirement = control.automatic_engine_retirement();
+        let reaping = ShowSpoutReaping {
+            expected: pair.expected.clone(),
+            kind: ShowSpoutReapingKind::FailedWorker,
+            reason: worker_failure.clone(),
+        };
+        self.reaping = Some(reaping.clone());
+        Ok(Some(ShowSpoutRetiringOutputPair::from_pair(
+            pair,
+            reaping,
+            Some(worker_failure),
+        )))
+    }
+
+    /// Records a failed-pair cleanup after physical sender retirement. This
+    /// stays intentionally fail-closed: if the automatic exact engine retire
+    /// did not report success, the next R4 is blocked by this original pair.
+    pub(crate) fn finish_failed_active_pair(
+        &mut self,
+        retired: ShowSpoutPhysicalRetirement,
+    ) -> ShowSpoutTransportFailure {
+        let reaping = retired.reaping.clone();
+        if let Err(error) =
+            self.require_matching_physical_retirement(&retired, "failed-worker finish")
+        {
+            return ShowSpoutTransportFailure {
+                message: error,
+                automatic_engine_retirement: retired.automatic_engine_retirement,
+            };
+        }
+        let worker_failure = retired.worker_failure.unwrap_or_else(|| {
+            "strict show Spout worker stopped before a failure reason was recorded".to_string()
+        });
+        let automatic_engine_retirement = retired.automatic_engine_retirement;
         let record_result = if let Some(Err(error)) = automatic_engine_retirement.as_ref() {
-            self.record_unresolved_engine_retirement(expected.clone(), error.clone())
+            self.record_unresolved_engine_retirement(retired.expected.clone(), error.clone())
         } else if automatic_engine_retirement.is_none() {
             self.record_unresolved_engine_retirement(
-                expected.clone(),
+                retired.expected.clone(),
                 "worker teardown completed without the required automatic engine-retirement result"
                     .to_string(),
             )
@@ -823,21 +1143,27 @@ impl ShowSpoutTransportState {
             Ok(())
         };
         if let Err(record_error) = record_result {
-            return Err(ShowSpoutTransportFailure {
+            return ShowSpoutTransportFailure {
                 message: format!(
                     "strict show Spout authority lost and its unresolved exact engine cleanup could not be recorded: {record_error}"
                 ),
                 automatic_engine_retirement,
-            });
+            };
         }
-        Err(ShowSpoutTransportFailure {
+        if let Err(error) = self.finish_reaping(&reaping, "failed-worker finish") {
+            return ShowSpoutTransportFailure {
+                message: error,
+                automatic_engine_retirement,
+            };
+        }
+        ShowSpoutTransportFailure {
             message: rollback_show_spout_startup_error(
                 "strict show Spout authority lost",
-                message,
-                cleanup,
+                worker_failure,
+                retired.cleanup,
             ),
             automatic_engine_retirement,
-        })
+        }
     }
 }
 
@@ -916,6 +1242,10 @@ impl ShowSpoutOutputPair {
     }
 
     fn retire(self) -> Result<(), String> {
+        // `SpoutRouteWorker::stop` consumes and joins its worker before it
+        // can return an error. Invoke both stops unconditionally, so this
+        // `Err` is post-join teardown evidence, never permission to leave a
+        // live fixed sender behind or silently reuse either reserved name.
         let foreground = self.foreground.stop().map_err(|error| error.message);
         let background = self.background.stop().map_err(|error| error.message);
         match (foreground, background) {
@@ -1121,6 +1451,25 @@ mod tests {
     }
 
     #[test]
+    fn initial_black_timeout_faults_before_any_live_receipt() {
+        let control = control_for_tests(|| Ok(()));
+        control.prepare_keepalive_black().unwrap();
+        control.note_sender_published().unwrap();
+        control.note_sender_published().unwrap();
+        // Only one sender completed its required opaque black frame. The
+        // bounded pair barrier must fail closed rather than treating a
+        // playing timeline or one successful sender as an active receipt.
+        control.note_initial_black_result(Ok(())).unwrap();
+
+        let error = control
+            .wait_for_initial_black_pair(Duration::ZERO)
+            .expect_err("a one-sided first-black timeout must not activate the pair");
+        assert!(error.contains("timed out"));
+        assert!(control.presentation_is_keepalive_black().is_err());
+        assert!(control.automatic_engine_retirement().is_none());
+    }
+
+    #[test]
     fn initial_black_pair_barrier_revalidates_authority_before_active_handoff() {
         let control = control_for_tests(|| Err("R4 fence changed after first black".to_string()));
         control.prepare_keepalive_black().unwrap();
@@ -1222,22 +1571,37 @@ mod tests {
             )
             .unwrap();
 
-        assert!(transport
-            .retire_active_for_authority_change()
-            .expect_err("role/project transitions may not bypass unresolved engine cleanup")
-            .message
-            .contains("blocked until"));
+        let error = match transport.take_active_for_authority_change() {
+            Err(error) => error,
+            Ok(_) => panic!("role/project transitions may not bypass unresolved engine cleanup"),
+        };
+        assert!(error.message.contains("blocked until"));
 
-        // A lost retirement reply can leave no old pair at all. Reconcile
-        // that terminal state, but this R4 still cannot construct a new pair.
+        // A lost retirement reply can leave an empty snapshot, but that
+        // observation is not a receipt. The fresh R4 must reserve and submit
+        // the exact old retirement; the engine refuses because the named pair
+        // is missing, and the barrier remains installed rather than clearing
+        // from `CreatePair` alone.
+        let missing_retry = transport
+            .reserve_blocked_engine_retirement_retry(&engine)
+            .unwrap()
+            .expect("an empty snapshot must still reserve the exact old retirement");
+        let missing_ack = engine.retire_show_spout_outputs_published(
+            missing_retry.expected().background.clone(),
+            missing_retry.expected().foreground.clone(),
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(missing_ack.is_err());
         let missing = transport
-            .retry_blocked_engine_retirement(&engine)
-            .expect_err("the reconciliation request must not also construct");
-        assert!(missing.contains("already reconciled"));
-        assert!(transport.blocked_engine_retirement.is_none());
+            .finish_blocked_engine_retirement_retry(missing_retry, missing_ack)
+            .expect_err("an ACK-less empty snapshot must not reopen sender preparation");
+        assert!(missing.contains("retry remains blocked"));
+        assert!(transport.blocked_engine_retirement.is_some());
+        assert!(transport.blocked_retirement_retry.is_none());
 
         // Model a second failed automatic retirement, this time with the old
         // engine pair still present. Only this exact pair may be retried.
+        let mut transport = ShowSpoutTransportState::default();
         transport
             .record_unresolved_engine_retirement(
                 expected.clone(),
@@ -1255,13 +1619,340 @@ mod tests {
                 Instant::now() + Duration::from_secs(1),
             )
             .unwrap();
+        let retry = transport
+            .reserve_blocked_engine_retirement_retry(&engine)
+            .unwrap()
+            .expect("the exact old engine pair must reserve a serialized retry");
+        let engine_retirement = engine.retire_show_spout_outputs_published(
+            retry.expected().background.clone(),
+            retry.expected().foreground.clone(),
+            Instant::now() + Duration::from_secs(1),
+        );
         let repaired = transport
-            .retry_blocked_engine_retirement(&engine)
+            .finish_blocked_engine_retirement_retry(retry, engine_retirement)
             .expect_err("the repair request must not also construct a new pair");
         assert!(repaired.contains("submit a fresh R4"));
         assert!(transport.blocked_engine_retirement.is_none());
         assert!(engine.snapshot().video.outputs.is_empty());
         assert!(transport.active.is_none());
+    }
+
+    #[test]
+    fn blocked_retirement_retry_reservation_keeps_second_r4_outside_sender_construction_until_matching_ack_finish(
+    ) {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(21, 22, 1).unwrap();
+        let safety = engine.safety_blackout_authority();
+        engine
+            .enable_show_spout_outputs_published(
+                expected.background.clone(),
+                expected.foreground.clone(),
+                safety.epoch,
+                safety.generation,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        // This is the state left by a real active-pair detach: both workers
+        // physically dropped first, but their exact engine retirement ACK did
+        // not return. The first fresh R4 may only reserve that old pair.
+        let state = Arc::new(Mutex::new(ShowSpoutTransportState::default()));
+        state
+            .lock()
+            .unwrap()
+            .record_unresolved_engine_retirement(
+                expected.clone(),
+                "injected post-detach engine retirement ACK loss".to_string(),
+            )
+            .unwrap();
+        let mut first_generic = transport_for_blocked_retry();
+        let first_activation = engine
+            .admit_output_activation(protocol::MachineOutputRole::Both)
+            .unwrap();
+        let retry = match state
+            .lock()
+            .unwrap()
+            .prepare_show_spout_outputs(
+                &mut first_generic,
+                &engine,
+                expected.clone(),
+                first_activation,
+                || Ok(()),
+            )
+            .expect("fresh R4 must reserve the old exact retirement before construction")
+        {
+            ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => retry,
+            _ => panic!("fresh R4 must not construct while an exact retirement is unresolved"),
+        };
+        assert_eq!(first_generic.strict_show_startup_resource_count(), 0);
+
+        // The real engine ACK occurs in this detached continuation. Hold it
+        // at the external ACK boundary: the show mutex is deliberately not
+        // held while it waits, but its state-owned reservation remains live.
+        let (ack_boundary_entered, ack_boundary_observed) = std::sync::mpsc::sync_channel(0);
+        let (release_ack, await_release_ack) = std::sync::mpsc::sync_channel(0);
+        let retry_for_ack = retry.clone();
+        let engine_for_ack = engine.clone();
+        let ack_thread = std::thread::spawn(move || {
+            ack_boundary_entered
+                .send(())
+                .expect("test must observe the blocked external ACK boundary");
+            await_release_ack
+                .recv()
+                .expect("test must release the exact engine retirement ACK");
+            engine_for_ack.retire_show_spout_outputs_published(
+                retry_for_ack.expected().background.clone(),
+                retry_for_ack.expected().foreground.clone(),
+                Instant::now() + Duration::from_secs(1),
+            )
+        });
+        ack_boundary_observed
+            .recv()
+            .expect("the external exact engine ACK must now be blocked");
+
+        // A second R4 interleaving while that ACK is outstanding acquires the
+        // show mutex and fails at the reservation. It therefore proves the
+        // first continuation cannot be holding the mutex while waiting, and
+        // neither fixed Sender::new path was reached.
+        let second_state = Arc::clone(&state);
+        let second_engine = engine.clone();
+        let second_expected = expected.clone();
+        let second = std::thread::spawn(move || {
+            let mut generic = transport_for_blocked_retry();
+            let activation = second_engine
+                .admit_output_activation(protocol::MachineOutputRole::Both)
+                .unwrap();
+            let error = match second_state.lock().unwrap().prepare_show_spout_outputs(
+                &mut generic,
+                &second_engine,
+                second_expected,
+                activation,
+                || Ok(()),
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("second R4 must fail closed while retry ACK is outstanding"),
+            };
+            assert!(error.contains("retry reservation"));
+            assert_eq!(
+                generic.strict_show_startup_resource_count(),
+                0,
+                "retry reservation must reject before either fixed Sender::new"
+            );
+        });
+        second.join().unwrap();
+
+        let mut show = state.lock().unwrap();
+        assert!(show
+            .sync_content_state(true)
+            .expect_err("status must remain closed while the retry ACK is outstanding")
+            .contains("retry reservation"));
+        let authority_error = match show.take_active_for_authority_change() {
+            Err(error) => error,
+            Ok(_) => panic!("authority change must not bypass a retry reservation"),
+        };
+        assert!(authority_error.message.contains("retry reservation"));
+        let harvest_error = match show.take_failed_active_pair() {
+            Err(error) => error,
+            Ok(_) => panic!("harvest must not bypass a retry reservation"),
+        };
+        assert!(harvest_error.message.contains("retry reservation"));
+
+        // A delayed or substituted receipt cannot clear a reservation even if
+        // it lies about success. Each component of the receipt identity is
+        // checked independently and the original exact barrier stays live.
+        let mut wrong_expected = retry.clone();
+        wrong_expected.expected =
+            crate::show_spout_outputs::build_show_spout_outputs(23, 24, 1).unwrap();
+        let wrong = show
+            .finish_blocked_engine_retirement_retry(wrong_expected, Ok(()))
+            .expect_err("a wrong expected pair must not reopen fixed sender names");
+        assert!(wrong.contains("different state-owned reservation"));
+        assert!(show.blocked_retirement_retry.is_some());
+        assert!(show.blocked_engine_retirement.is_some());
+
+        let mut wrong_prior_error = retry.clone();
+        wrong_prior_error.prior_error = "substituted prior retirement error".to_string();
+        let wrong = show
+            .finish_blocked_engine_retirement_retry(wrong_prior_error, Ok(()))
+            .expect_err("a wrong prior error must not reopen fixed sender names");
+        assert!(wrong.contains("different state-owned reservation"));
+        assert!(show.blocked_retirement_retry.is_some());
+        assert!(show.blocked_engine_retirement.is_some());
+
+        let mut wrong_retry = retry.clone();
+        wrong_retry.reservation_id += 1;
+        let wrong = show
+            .finish_blocked_engine_retirement_retry(wrong_retry, Ok(()))
+            .expect_err("a wrong retry receipt must not reopen fixed sender names");
+        assert!(wrong.contains("different state-owned reservation"));
+        assert!(show.blocked_retirement_retry.is_some());
+        assert!(show.blocked_engine_retirement.is_some());
+        drop(show);
+
+        release_ack
+            .send(())
+            .expect("the exact engine ACK continuation must still be waiting");
+        let engine_retirement = ack_thread
+            .join()
+            .expect("the exact engine ACK continuation must not panic");
+        let repaired = state
+            .lock()
+            .unwrap()
+            .finish_blocked_engine_retirement_retry(retry, engine_retirement)
+            .expect_err("repair completion must still require a fresh R4");
+        assert!(repaired.contains("submit a fresh R4"));
+        let show = state.lock().unwrap();
+        assert!(show.blocked_retirement_retry.is_none());
+        assert!(show.blocked_engine_retirement.is_none());
+        show.ensure_preparation_admitted()
+            .expect("only the matching exact engine ACK may reopen sender preparation");
+        assert!(engine.snapshot().video.outputs.is_empty());
+    }
+
+    #[test]
+    fn reaping_interlock_blocks_second_r4_and_status_until_matching_finish() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(31, 32, 1).unwrap();
+        let reaping = ShowSpoutReaping {
+            expected: expected.clone(),
+            kind: ShowSpoutReapingKind::AuthorityChange,
+            reason: "test detached pair is still joining and awaiting exact engine retirement"
+                .to_string(),
+        };
+        let state = Arc::new(Mutex::new(ShowSpoutTransportState {
+            active: None,
+            reaping: Some(reaping.clone()),
+            blocked_retirement_retry: None,
+            next_blocked_retirement_retry_id: 1,
+            blocked_engine_retirement: None,
+        }));
+
+        // Model a second R4 interleaving after detach but before the original
+        // pair's stop/join and engine retirement acknowledgement complete.
+        // It must stop at the state-owned receipt, before either fixed sender
+        // can be constructed or prepared.
+        let second_state = Arc::clone(&state);
+        let second_engine = engine.clone();
+        let second_expected = expected.clone();
+        let second = std::thread::spawn(move || {
+            let mut generic = transport_for_blocked_retry();
+            let activation = second_engine
+                .admit_output_activation(protocol::MachineOutputRole::Both)
+                .unwrap();
+            let error = match second_state.lock().unwrap().prepare_show_spout_outputs(
+                &mut generic,
+                &second_engine,
+                second_expected,
+                activation,
+                || Ok(()),
+            ) {
+                Err(error) => error,
+                Ok(_) => {
+                    panic!("second R4 must not prepare a sender while the old pair is reaping")
+                }
+            };
+            assert!(error.contains("reaping"));
+            assert_eq!(
+                generic.strict_show_startup_resource_count(),
+                0,
+                "reaping must reject before either fixed sender reaches construction"
+            );
+        });
+        second.join().unwrap();
+
+        let mut show = state.lock().unwrap();
+        assert!(show
+            .sync_content_state(true)
+            .expect_err("status must expose reaping rather than a missing active receipt")
+            .contains("reaping"));
+        let authority_error = match show.take_active_for_authority_change() {
+            Err(error) => error,
+            Ok(_) => panic!("authority change must not bypass state-owned reaping"),
+        };
+        assert!(authority_error.message.contains("reaping"));
+        let harvest_error = match show.take_failed_active_pair() {
+            Err(error) => error,
+            Ok(_) => panic!("a second harvest must not bypass state-owned reaping"),
+        };
+        assert!(harvest_error.message.contains("reaping"));
+        let retry_error = match show.reserve_blocked_engine_retirement_retry(&engine) {
+            Err(error) => error,
+            Ok(_) => panic!("blocked-retirement retry must not bypass reaping"),
+        };
+        assert!(retry_error.contains("reaping"));
+
+        let substituted = crate::show_spout_outputs::build_show_spout_outputs(41, 42, 1).unwrap();
+        let mismatch = show
+            .finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+                expected: substituted,
+                reaping: reaping.clone(),
+                worker_failure: None,
+                cleanup: Ok(()),
+                automatic_engine_retirement: Some(Ok(())),
+            })
+            .expect_err("a finish receipt for a different exact engine pair must not reopen R4");
+        assert!(mismatch.message.contains("exact engine pair"));
+        assert!(show.reaping.is_some());
+
+        // This opaque outcome can only be produced by the detached pair's
+        // `retire`: it represents both physical sender joins and the exact
+        // engine-retirement acknowledgement. Only this matching finish clears
+        // the receipt; subsequent R4 preparation may then pass its state gate.
+        show.finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+            expected: expected.clone(),
+            reaping: reaping.clone(),
+            worker_failure: None,
+            cleanup: Ok(()),
+            automatic_engine_retirement: Some(Ok(())),
+        })
+        .unwrap();
+        assert!(show.reaping.is_none());
+        show.ensure_preparation_admitted()
+            .expect("only a matching physical+engine completion may reopen R4 preparation");
+    }
+
+    #[test]
+    fn joined_cleanup_error_is_visible_without_retaining_an_active_sender_receipt() {
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(51, 52, 1).unwrap();
+        let reaping = ShowSpoutReaping {
+            expected: expected.clone(),
+            kind: ShowSpoutReapingKind::AuthorityChange,
+            reason: "test joined sender teardown".to_string(),
+        };
+        let mut show = ShowSpoutTransportState {
+            active: None,
+            reaping: Some(reaping.clone()),
+            blocked_retirement_retry: None,
+            next_blocked_retirement_retry_id: 1,
+            blocked_engine_retirement: None,
+        };
+
+        // `ShowSpoutOutputPair::retire` invokes both consuming worker stops;
+        // each stop joins before returning this error. The result must remain
+        // visible to the authority command, but must not claim a live active
+        // receipt after physical joins and exact engine retirement succeeded.
+        let failure = show
+            .finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+                expected,
+                reaping,
+                worker_failure: None,
+                cleanup: Err("foreground sender reported a post-join fault".to_string()),
+                automatic_engine_retirement: Some(Ok(())),
+            })
+            .expect_err("post-join cleanup error must be returned to the caller");
+        assert!(failure.message.contains("physical teardown failure"));
+        assert!(show.active.is_none());
+        assert!(show.reaping.is_none());
+        assert!(show.blocked_engine_retirement.is_none());
+        show.ensure_preparation_admitted().expect(
+            "the documented join-before-error invariant is the only basis for releasing fixed names after this visible error",
+        );
     }
 
     fn transport_for_blocked_retry() -> SpoutTransportState {
@@ -1274,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_ack_loss_with_failed_serial_retire_blocks_then_reconciles_without_constructor() {
+    fn enable_ack_loss_with_empty_snapshot_keeps_exact_barrier_without_constructor() {
         let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
@@ -1294,16 +1985,28 @@ mod tests {
         let activation = engine
             .admit_output_activation(protocol::MachineOutputRole::Both)
             .unwrap();
-        let error = show
+        let retry = match show
             .prepare_show_spout_outputs(&mut generic, &engine, expected, activation, || Ok(()))
-            .err()
-            .expect("reconciliation R4 must not reach SDK construction");
-        assert!(error.contains("already reconciled"));
-        assert!(show.blocked_engine_retirement.is_none());
+            .expect("reconciliation R4 must reserve the exact old pair before SDK construction")
+        {
+            ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => retry,
+            _ => panic!("reconciliation R4 must not reach SDK construction"),
+        };
+        let engine_retirement = engine.retire_show_spout_outputs_published(
+            retry.expected().background.clone(),
+            retry.expected().foreground.clone(),
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(engine_retirement.is_err());
+        let error = show
+            .finish_blocked_engine_retirement_retry(retry, engine_retirement)
+            .expect_err("an empty snapshot without an exact ACK must not clear the barrier");
+        assert!(error.contains("retry remains blocked"));
+        assert!(show.blocked_engine_retirement.is_some());
         assert_eq!(generic.strict_show_startup_resource_count(), 0);
 
-        // The cleared state is intentionally eligible only on a *next* R4.
-        // No sender was constructed by the reconciliation request itself.
+        // No sender was constructed by the reconciliation request, and the
+        // exact barrier remains until a matching successful engine receipt.
         assert!(show.active.is_none());
     }
 
@@ -1337,10 +2040,21 @@ mod tests {
         let activation = engine
             .admit_output_activation(protocol::MachineOutputRole::Both)
             .unwrap();
-        let error = show
+        let retry = match show
             .prepare_show_spout_outputs(&mut generic, &engine, expected, activation, || Ok(()))
-            .err()
-            .expect("repair R4 must not construct a replacement pair");
+            .expect("repair R4 must reserve old-pair cleanup before SDK construction")
+        {
+            ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => retry,
+            _ => panic!("repair R4 must not construct a replacement pair"),
+        };
+        let engine_retirement = engine.retire_show_spout_outputs_published(
+            retry.expected().background.clone(),
+            retry.expected().foreground.clone(),
+            Instant::now() + Duration::from_secs(1),
+        );
+        let error = show
+            .finish_blocked_engine_retirement_retry(retry, engine_retirement)
+            .expect_err("repair R4 must retain its fresh-R4 barrier");
         assert!(error.contains("prior engine retirement was repaired"));
         assert!(show.blocked_engine_retirement.is_none());
         assert!(engine.snapshot().video.outputs.is_empty());

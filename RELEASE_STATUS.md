@@ -1,9 +1,48 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.36`. The pushed alpha.36 source checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`. The exact-linker alpha.36 native build from that clean pushed HEAD passed and exactly one checkout-owned maximized process is responsive. Earlier pushed authorities include strict Universe-0/Spout hardening `c7218c112b296652fa77f88c67e861c18d6aea1b`, canonical Timeline-audio varispeed `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate gate `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, Unity/GPU, camera hardware, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.35 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.37`. The alpha.37 source integration is under final full-gate validation and is not yet a native or physical acceptance claim. The pushed alpha.36 source checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`. The exact-linker alpha.36 native build from that clean pushed HEAD passed and exactly one checkout-owned maximized process remains the current native authority until the alpha.37 rebuild. Earlier pushed authorities include strict Universe-0/Spout hardening `c7218c112b296652fa77f88c67e861c18d6aea1b`, canonical Timeline-audio varispeed `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate gate `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, Unity/GPU, camera hardware, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.36 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-30 current alpha.36 localization/native checkpoint (physical acceptance pending)
+## 2026-08-30 current alpha.37 CUE-anchor and strict-Spout source checkpoint
+
+Alpha.37 linearizes Timeline CUE event admission before any fresh Legacy/ASIO
+source activation. Pre-anchor history is skipped, exact-anchor and future
+Click/Guide events remain eligible, source activation/publication failure
+retires the attachment and leaves Fault visible, and watermarks commit only
+after successful publication and source activation. A process-unique,
+non-wrapping source-instance token isolates the deterministic callback-race
+proof from value-equal parallel runtimes. Real Legacy replacement and ASIO
+rotation tests directly prove outgoing/incoming activation and retirement
+counts. Independent Terra xHigh review is GO with P0/P1/P2 `0`.
+
+The strict fixed-name Spout pair now requires both cached 1920x1080 opaque
+black first frames and each post-send exact SDK name before live/R4 handoff.
+Physical teardown is joined outside the show mutex under a state-owned Reaping
+reservation. A lost exact engine-retirement ACK installs a second state-owned
+reservation; only the matching `expected + prior_error + reservation_id`
+receipt may reopen the names. Empty/CreatePair snapshots and wrong receipts do
+not count as ACKs. Independent Terra xHigh review is GO with P0/P1 `0`; two
+narrow P2 proof debts remain for a direct pending-publish reservation test and
+a non-synthetic post-join cleanup-error path. No demonstrated runtime defect
+remains in those rows.
+
+Combined exact MSVC `14.44.35207` focused evidence is Timeline CUE `49/49`,
+media-audio `46/46`, Show Spout `17/17`, production R4 interleaving `1/1`, and
+generic strict-name `2/2`; first-party warnings are `0`. Complete exact-linker
+integration passes `1211 passed / 0 failed / 7 ignored` without default
+features and `1276 passed / 0 failed / 12 ignored` with Spout. TypeScript, the
+Vite production build, and `pnpm --dir app run check:release` pass for
+`1.2.0-alpha.37`; the exact ASIO Timeline CUE gate passes `59/59`. Combined
+Terra xHigh review initially found one P1 release-only `dead_code` warning in
+the deterministic source-token seam. The entire seam is now `cfg(test)`, the
+release-profile check is warning-free, and final rereview is GO with P0/P1/P2
+`0`. One first post-fix full Spout run saw the unrelated production-remote-stop
+test return transient `Busy`; the exact test passed three consecutive reruns
+and a fresh complete Spout run passed `1276/0/12`. Native build/window, audible
+device, Unity/GPU, and DJ hardware gates remain open. The alpha.36 PID `109972`
+must remain untouched until the required exact-path native-build stop gate.
+
+## 2026-08-30 historical alpha.36 localization/native checkpoint (physical acceptance pending)
 
 The product identity is `1.2.0-alpha.36`. The current show boundary is same-PC
 only: Art-Net targets `127.0.0.1:6454`, while video uses local Spout. Remote

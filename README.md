@@ -2,18 +2,41 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.36**
+- 製品名: **Syndocal 1.2.0-alpha.37**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.36` on branch
+Current product metadata is `1.2.0-alpha.37` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.36 is the latest accepted native product checkpoint;
+native build. Alpha.37 is the current source train; alpha.36 remains the latest
+accepted native product checkpoint until the required alpha.37 native rebuild;
 same-PC Unity/GPU, audible audio-device, DJ, and camera hardware acceptance
 remain open.
+
+Alpha.37 repairs two show-critical runtime boundaries. Timeline CUE audio now
+publishes the exact-anchor/future event batch before a fresh Legacy or ASIO
+source can enter its callback, skips only pre-anchor history, retires the
+active source on publication/activation failure, and keeps watermarks
+uncommitted on failure. Per-source instance tokens make the callback-race
+proof independent even when two runtimes have value-equal engine identities.
+The fixed show Spout pair now requires each cached opaque-black first frame and
+post-send exact SDK name before R4 success; teardown and lost retirement ACKs
+remain state-owned, and no snapshot observation or substituted receipt can
+reopen the two fixed sender names. Independent Terra xHigh reviews returned GO
+for both production diffs. Exact-linker combined focused proof passes Timeline
+CUE `49/49`, media-audio `46/46`, strict Show Spout `17/17`, production R4
+interleaving `1/1`, and generic strict-name `2/2`, with first-party warnings
+`0`. The same pinned-linker integration then passed the complete no-default
+surface `1211/0/7 ignored` and complete Spout surface `1276/0/12 ignored`;
+the ASIO Timeline CUE gate passed `59/59`, and TypeScript plus the Vite
+production build also pass. A combined Terra xHigh audit first rejected a
+test-token field that would warn in release; moving the whole token seam under
+`cfg(test)` produced a warning-free release check and a final GO with
+P0/P1/P2 `0`. Native, audible, Unity/GPU, and DJ hardware acceptance are still
+pending.
 Alpha.32 established Timeline authoring monitor output, arbitrary PROGRAM/CUE
 device assignment, canonical child-Timeline
 audio varispeed, and fail-closed Windows candidate extraction/verification. `FollowProgram`
@@ -37,7 +60,7 @@ The `61,049,856`-byte `1.2.0-alpha.36` executable has SHA-256
 exactly one checkout-owned process, PID `109972`, is responsive with title
 `Syndocal`, and Win32 `IsZoomed` verified its exact window is maximized.
 
-The current alpha.36 integration carries the alpha.34/alpha.33 camera-capture source
+The accepted alpha.36 native checkpoint carries the alpha.34/alpha.33 camera-capture source
 tranche, which replaces the old free-form DirectShow
 camera route, which was fixed at `1280x720` / `30 fps`, with an explicit
 current-generation device/profile catalog, opaque endpoint identities, and an
@@ -80,8 +103,8 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.36 product and
-installer naming below; that naming does not assert an alpha.36 installer
+acceptance. The release metadata checker expects alpha.37 product and
+installer naming below; that naming does not assert an alpha.37 installer
 exists.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
@@ -269,7 +292,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.36_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.36_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.37_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.37_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

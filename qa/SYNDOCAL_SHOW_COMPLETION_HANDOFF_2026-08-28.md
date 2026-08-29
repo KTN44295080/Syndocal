@@ -6,6 +6,33 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
+- Current source train is `1.2.0-alpha.37` on branch
+  `codex/syndocal-v1.2`, based on upstream-equal HEAD
+  `901e4e09f829705ff488511c53e50f51a511e088` before this tranche. The
+  uncommitted checkpoint integrates Timeline CUE anchor linearization and the
+  strict fixed-name Show Spout first-black/reaping/retirement-ACK state
+  machines. Exact MSVC 14.44 combined focused gates pass Timeline CUE `49/49`,
+  media-audio `46/46`, Show Spout `17/17`, production R4 interleaving `1/1`,
+  and generic strict-name retry `2/2`, with first-party warnings `0`.
+  Complete exact-linker integration passes `1211/0/7 ignored` without default
+  features and `1276/0/12 ignored` with Spout; TypeScript and the Vite
+  production build also pass, and exact ASIO Timeline CUE passes `59/59`.
+  `check:release` passes after synchronizing product metadata to alpha.37.
+  Independent Terra xHigh production review is GO for both diffs; audio is
+  P0/P1/P2 `0`, while Spout retains two explicit P2 proof-only rows for direct
+  pending-publish reservation and non-synthetic post-join cleanup error.
+  Combined Terra xHigh review initially returned NO-GO for a release-only
+  `dead_code` warning in the deterministic source-token field. That complete
+  seam is now `cfg(test)` with no fake production read; release check is
+  warning-free and final rereview is GO with P0/P1/P2 `0`. A first post-fix
+  full Spout run saw one transient `Busy` in the unrelated
+  production-remote-stop test; its exact filter then passed three consecutive
+  runs and a fresh full Spout run passed `1276/0/12`.
+  Native build/window, audible `Music (Elgato Virtual Audio)`, Unity/GPU,
+  camera hardware, installer/updater, dedicated Show-ASIO, DJ hardware, and
+  final show-completion acceptance remain open. Do not stop the current
+  alpha.36 PID `109972` until the exact-path pre-build gate below.
+
 - Alpha.36 source checkpoint `ffdb289da1a3980883807a83b8074f0247ab3ea9`
   (`Localize same-PC show controls for alpha.36`) is pushed to
   `origin/codex/syndocal-v1.2`; immediately after push, local `HEAD` and
@@ -144,7 +171,16 @@ This is the concise authoritative resume note for the final show-critical tranch
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is `1.2.0-alpha.36`. Alpha.32 source integration and its native build, launch, and maximized-window gate remain historical. The alpha.34 same-PC output/camera native build and alpha.35 U0/Spout-hardening native build are also historical. The alpha.36 source checkpoint, exact-linker native build, responsive process, and maximized-window proof are current and recorded above. Real-device audition, physical output routing, DJ acceptance, show completion, real installer/updater inspection, and the dedicated show-ASIO artifact remain open. The camera acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
+- KDMX product metadata is now `1.2.0-alpha.37`. Alpha.32 source integration
+  and its native build, launch, and maximized-window gate remain historical.
+  The alpha.34 same-PC output/camera native build, alpha.35 U0/Spout-hardening
+  native build, and alpha.36 source/native/window authority are also
+  historical checkpoints after the current source bump; alpha.36 PID `109972`
+  remains the temporary running native authority only until the alpha.37
+  exact-path rebuild gate. Real-device audition, physical output routing,
+  camera hardware, DJ acceptance, show completion, real installer/updater
+  inspection, and the dedicated show-ASIO artifact remain open. The camera
+  acceptance authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](CAMERA_INPUT_ACCEPTANCE.md).
 
 ### 2026-08-29 historical alpha.34 same-PC output and camera integration
 

@@ -61,6 +61,615 @@ fn auto_vj_action(sequence: u64, layer_id: VideoLayerId) -> protocol::AutoVjActi
     }
 }
 
+fn timeline_cue_test_runtime(
+    engine_identity: TimelineCueEngineIdentity,
+    canonical_anchor_frame: u64,
+) -> TimelineCueAudioRuntime {
+    timeline_cue_test_runtime_with_observer(engine_identity, canonical_anchor_frame).0
+}
+
+fn timeline_cue_test_runtime_with_observer(
+    engine_identity: TimelineCueEngineIdentity,
+    canonical_anchor_frame: u64,
+) -> (TimelineCueAudioRuntime, rodio::mixer::MixerSource) {
+    let runtime = TimelineCueAudioRuntime::default();
+    let (mixer, observer) = rodio::mixer::mixer(2, 48_000);
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (control, source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        timeline_cue_audio::TimelineCueAuthority {
+            fence: timeline_cue_audio::TimelineCueFence {
+                output_clock_epoch: 1,
+                schedule_generation: engine_identity.schedule_generation,
+                source_fence: 1,
+            },
+            clock: timeline_cue_audio::TimelineCueClockMap {
+                canonical_anchor_frame,
+                output_anchor_frame: 0,
+            },
+        },
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    let source_instance_token = next_timeline_cue_audio_source_instance_token().unwrap();
+    let source_test_counters = TimelineCueAudioSourceTestCounters::default();
+    source_test_counters.activations.store(1, Ordering::Relaxed);
+    mixer.add(source);
+    let mut state = runtime.state.lock().unwrap();
+    state.attachment = Some(TimelineCueAudioAttachment {
+        control,
+        output: TimelineCueAudioAttachmentOutput::Legacy {
+            mixer,
+            _explicit_stream: None,
+        },
+        pending_source: None,
+        source_instance_token,
+        source_test_counters,
+        cue_test_sinks: Vec::new(),
+        route: timeline_cue_audio::TimelineCueAudioRoute::FollowProgram,
+        settings_revision: state.settings_revision,
+        program_device_generation: None,
+        engine_identity,
+        output_clock_epoch: 1,
+        canonical_anchor_frame,
+        source_fence: 1,
+        next_sequence: 1,
+        last_click_key: None,
+        last_guide_generation: None,
+        last_guide_sequence: 0,
+        blocked_event_identity: None,
+        last_observed_output_frame: 0,
+        last_output_progress_at: Instant::now(),
+    });
+    state.lifecycle = TimelineCueAudioLifecycle::Running;
+    drop(state);
+    (runtime, observer)
+}
+
+fn timeline_cue_test_click(
+    sample_frame: u64,
+    measure: u64,
+    beat: u16,
+    identity: &TimelineCueEngineIdentity,
+) -> protocol::TimelineClickEventSummary {
+    protocol::TimelineClickEventSummary {
+        sample_frame,
+        measure,
+        beat,
+        numerator: 4,
+        denominator: 4,
+        downbeat: beat == 1,
+        frequency_hz: if beat == 1 { 880 } else { 440 },
+        duration_frames: 2_400,
+        epoch: identity.epoch,
+        transport_generation: identity.transport_generation,
+        schedule_generation: identity.schedule_generation,
+        source: identity.source,
+        ..protocol::TimelineClickEventSummary::default()
+    }
+}
+
+fn timeline_cue_test_guide(
+    sample_frame: u64,
+    sequence: u64,
+    generation: u64,
+    identity: &TimelineCueEngineIdentity,
+) -> protocol::TimelineGuideCueSummary {
+    protocol::TimelineGuideCueSummary {
+        generation,
+        sequence,
+        at_ms: sample_frame / 48,
+        label: format!("Guide {sequence}"),
+        cue: protocol::TimelineGuideCueKind::Looping,
+        asset: protocol::TimelineGuideAssetKey::Looping,
+        playback_rate_milli: 1_000,
+        sample_frame,
+        epoch: identity.epoch,
+        transport_generation: identity.transport_generation,
+        schedule_generation: identity.schedule_generation,
+        source: identity.source,
+    }
+}
+
+fn timeline_cue_test_snapshot(
+    engine_identity: &TimelineCueEngineIdentity,
+    position_ms: u64,
+    click_events: Vec<protocol::TimelineClickEventSummary>,
+    guide_cues: Vec<protocol::TimelineGuideCueSummary>,
+) -> engine::TimelineAudioRuntimeSnapshot {
+    engine::TimelineAudioRuntimeSnapshot {
+        playing: engine_identity.playing,
+        position_ms,
+        transport_revision: engine_identity.audio_transport_revision,
+        metronome_enabled: engine_identity.metronome_enabled,
+        guide_enabled: engine_identity.guide_enabled,
+        click_schedule_generation: engine_identity.schedule_generation,
+        source_projection_authority: engine::TimelineAudioProjectionAuthority {
+            epoch: engine_identity.epoch,
+            generation: engine_identity.transport_generation,
+        },
+        click_events,
+        guide_cues,
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    }
+}
+
+fn timeline_cue_test_identity(playing: bool, transport_revision: u64) -> TimelineCueEngineIdentity {
+    TimelineCueEngineIdentity {
+        epoch: 41,
+        transport_generation: 73,
+        schedule_generation: 3,
+        source: TimelineScheduleSource::Root,
+        audio_transport_revision: transport_revision,
+        metronome_enabled: true,
+        guide_enabled: true,
+        playing,
+    }
+}
+
+#[test]
+fn timeline_cue_rotation_skips_history_and_keeps_exact_and_future_events_once() {
+    let paused_identity = timeline_cue_test_identity(false, 1);
+    let runtime = timeline_cue_test_runtime(paused_identity.clone(), 0);
+    let initial = timeline_cue_test_snapshot(
+        &paused_identity,
+        0,
+        vec![timeline_cue_test_click(0, 1, 1, &paused_identity)],
+        vec![timeline_cue_test_guide(0, 1, 1, &paused_identity)],
+    );
+    runtime.feed_attachment(&initial, None);
+
+    let playing_identity = timeline_cue_test_identity(true, 2);
+    let playing = timeline_cue_test_snapshot(
+        &playing_identity,
+        100,
+        vec![
+            timeline_cue_test_click(0, 1, 1, &playing_identity),
+            timeline_cue_test_click(4_800, 2, 1, &playing_identity),
+            timeline_cue_test_click(9_600, 3, 1, &playing_identity),
+        ],
+        vec![
+            timeline_cue_test_guide(0, 1, 1, &playing_identity),
+            timeline_cue_test_guide(4_800, 2, 1, &playing_identity),
+            timeline_cue_test_guide(9_600, 3, 1, &playing_identity),
+        ],
+    );
+    runtime.feed_attachment(&playing, None);
+
+    {
+        let state = runtime.state.lock().unwrap();
+        let attachment = state.attachment.as_ref().expect("rotated attachment");
+        assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+        assert_eq!(attachment.canonical_anchor_frame, 4_800);
+        assert_eq!(attachment.last_click_key, Some((9_600, 3, 1, false)));
+        assert_eq!(attachment.last_guide_generation, Some(1));
+        assert_eq!(attachment.last_guide_sequence, 3);
+        assert_eq!(attachment.next_sequence, 5);
+        assert!(attachment.blocked_event_identity.is_none());
+    }
+
+    // Re-observing the same snapshot must not enqueue the future pair again.
+    runtime.feed_attachment(&playing, None);
+    let state = runtime.state.lock().unwrap();
+    let attachment = state.attachment.as_ref().expect("attachment remains live");
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+    assert_eq!(attachment.next_sequence, 5);
+    assert!(state.last_error.is_none());
+}
+
+#[test]
+fn timeline_cue_history_only_tick_advances_watermarks_without_reconsidering_history() {
+    let identity = timeline_cue_test_identity(true, 2);
+    let runtime = timeline_cue_test_runtime(identity.clone(), 4_800);
+    let history_only = timeline_cue_test_snapshot(
+        &identity,
+        100,
+        vec![timeline_cue_test_click(0, 1, 1, &identity)],
+        vec![timeline_cue_test_guide(0, 1, 1, &identity)],
+    );
+
+    runtime.feed_attachment(&history_only, None);
+    {
+        let state = runtime.state.lock().unwrap();
+        let attachment = state.attachment.as_ref().expect("attachment remains live");
+        assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+        assert_eq!(attachment.last_click_key, Some((0, 1, 1, false)));
+        assert_eq!(attachment.last_guide_generation, Some(1));
+        assert_eq!(attachment.last_guide_sequence, 1);
+        assert_eq!(attachment.next_sequence, 1);
+        assert!(state.last_error.is_none());
+    }
+
+    runtime.feed_attachment(&history_only, None);
+    let state = runtime.state.lock().unwrap();
+    let attachment = state.attachment.as_ref().expect("attachment remains live");
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+    assert_eq!(attachment.next_sequence, 1);
+    assert!(state.last_error.is_none());
+}
+
+#[test]
+fn timeline_cue_seek_rotation_keeps_exact_anchor_and_future_events() {
+    let initial_identity = timeline_cue_test_identity(true, 1);
+    let runtime = timeline_cue_test_runtime(initial_identity.clone(), 0);
+    let initial = timeline_cue_test_snapshot(
+        &initial_identity,
+        0,
+        vec![timeline_cue_test_click(0, 1, 1, &initial_identity)],
+        vec![timeline_cue_test_guide(0, 1, 1, &initial_identity)],
+    );
+    runtime.feed_attachment(&initial, None);
+
+    let seek_identity = TimelineCueEngineIdentity {
+        epoch: 42,
+        transport_generation: 74,
+        schedule_generation: 4,
+        source: TimelineScheduleSource::Root,
+        audio_transport_revision: 2,
+        metronome_enabled: true,
+        guide_enabled: true,
+        playing: true,
+    };
+    let seeked = timeline_cue_test_snapshot(
+        &seek_identity,
+        200,
+        vec![
+            timeline_cue_test_click(0, 1, 1, &seek_identity),
+            timeline_cue_test_click(9_600, 2, 1, &seek_identity),
+            timeline_cue_test_click(14_400, 3, 1, &seek_identity),
+        ],
+        vec![
+            timeline_cue_test_guide(0, 1, 2, &seek_identity),
+            timeline_cue_test_guide(9_600, 2, 2, &seek_identity),
+            timeline_cue_test_guide(14_400, 3, 2, &seek_identity),
+        ],
+    );
+    runtime.feed_attachment(&seeked, None);
+
+    let state = runtime.state.lock().unwrap();
+    let attachment = state.attachment.as_ref().expect("seeked attachment");
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+    assert_eq!(attachment.canonical_anchor_frame, 9_600);
+    assert_eq!(attachment.last_click_key, Some((14_400, 3, 1, false)));
+    assert_eq!(attachment.last_guide_generation, Some(2));
+    assert_eq!(attachment.last_guide_sequence, 3);
+    assert_eq!(attachment.next_sequence, 5);
+    assert!(state.last_error.is_none());
+}
+
+#[test]
+fn timeline_cue_enqueue_failure_retires_active_source_without_watermark_commit() {
+    let identity = timeline_cue_test_identity(true, 1);
+    let (runtime, mut observer) = timeline_cue_test_runtime_with_observer(identity.clone(), 0);
+    let control_for_assert = {
+        let state = runtime.state.lock().unwrap();
+        state
+            .attachment
+            .as_ref()
+            .expect("active attachment")
+            .control
+            .clone()
+    };
+    assert!(observer.next().is_some());
+    assert!(observer.next().is_some());
+    assert_eq!(control_for_assert.next_output_frame(), 1);
+    let click_events = (0..=timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY)
+        .map(|index| timeline_cue_test_click(index as u64, index as u64 + 1, 1, &identity))
+        .collect();
+    let overflowing = timeline_cue_test_snapshot(&identity, 0, click_events, Vec::new());
+
+    runtime.feed_attachment(&overflowing, None);
+    let state = runtime.state.lock().unwrap();
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(state.attachment.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("queue is full")));
+    assert_eq!(control_for_assert.next_output_frame(), 1);
+    drop(state);
+    // Retiring the attachment stops the active mixer source before any stale
+    // queued event can be rendered.  The next mixer poll removes that source.
+    assert!(observer.next().is_none());
+
+    // A later scheduler tick cannot retry the failed batch because no active
+    // attachment remains and its watermarks were never committed.
+    runtime.feed_attachment(&overflowing, None);
+    let state = runtime.state.lock().unwrap();
+    assert!(state.attachment.is_none());
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert_eq!(control_for_assert.next_output_frame(), 1);
+}
+
+#[test]
+fn timeline_cue_source_admission_precedes_callback_progress() {
+    let identity = timeline_cue_test_identity(true, 1);
+    let authority = timeline_cue_audio::TimelineCueAuthority {
+        fence: timeline_cue_audio::TimelineCueFence {
+            output_clock_epoch: 1,
+            schedule_generation: identity.schedule_generation,
+            source_fence: 1,
+        },
+        clock: timeline_cue_audio::TimelineCueClockMap {
+            canonical_anchor_frame: 0,
+            output_anchor_frame: 0,
+        },
+    };
+    let exact_event = timeline_cue_audio::TimelineCueEvent {
+        canonical_frame: 0,
+        sequence: 1,
+        kind: timeline_cue_audio::TimelineCueEventKind::Click { accented: true },
+        playback_rate_milli: 1_000,
+    };
+
+    // This is the rejected ordering: one stereo callback frame starts before
+    // admission, so the exact-anchor event is deterministically PastDue.  It
+    // is the race that the runtime boundary below must make unreachable.
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (old_control, mut old_source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        authority,
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    assert!(old_source.next().is_some());
+    assert!(old_source.next().is_some());
+    assert_eq!(old_control.next_output_frame(), 1);
+    let old_error = old_control
+        .enqueue_batch(authority.fence, &[exact_event])
+        .expect_err("an already-started callback must reject the exact anchor");
+    assert!(old_error.contains("lookahead"));
+
+    // The live path keeps its source detached, admits the exact anchor, and
+    // only then adds it to the mixer.  Polling the observer after feed proves
+    // that the physical callback source is still usable after admission.
+    let runtime = Arc::new(TimelineCueAudioRuntime::default());
+    let (mixer, mut observer) = rodio::mixer::mixer(2, 48_000);
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (control, source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        authority,
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    let control_for_assert = control.clone();
+    let source_instance_token = next_timeline_cue_audio_source_instance_token().unwrap();
+    let source_test_counters = TimelineCueAudioSourceTestCounters::default();
+    let mut state = runtime.state.lock().unwrap();
+    state.attachment = Some(TimelineCueAudioAttachment {
+        control,
+        output: TimelineCueAudioAttachmentOutput::Legacy {
+            mixer,
+            _explicit_stream: None,
+        },
+        pending_source: Some(source),
+        source_instance_token,
+        source_test_counters,
+        cue_test_sinks: Vec::new(),
+        route: timeline_cue_audio::TimelineCueAudioRoute::FollowProgram,
+        settings_revision: state.settings_revision,
+        program_device_generation: None,
+        engine_identity: identity.clone(),
+        output_clock_epoch: authority.fence.output_clock_epoch,
+        canonical_anchor_frame: authority.clock.canonical_anchor_frame,
+        source_fence: authority.fence.source_fence,
+        next_sequence: 1,
+        last_click_key: None,
+        last_guide_generation: None,
+        last_guide_sequence: 0,
+        blocked_event_identity: None,
+        last_observed_output_frame: 0,
+        last_output_progress_at: Instant::now(),
+    });
+    state.lifecycle = TimelineCueAudioLifecycle::Running;
+    drop(state);
+
+    let snapshot = timeline_cue_test_snapshot(
+        &identity,
+        0,
+        vec![timeline_cue_test_click(0, 1, 1, &identity)],
+        Vec::new(),
+    );
+    let activation_gate = Arc::new((Mutex::new(false), Condvar::new()));
+    *TIMELINE_CUE_AUDIO_SOURCE_ACTIVATION_HOOK.lock().unwrap() =
+        Some(TimelineCueAudioSourceActivationHook {
+            target_source_instance_token: source_instance_token,
+            gate: Arc::clone(&activation_gate),
+        });
+    // A separate runtime with the same value-equal engine identity must not
+    // be able to release the target's admission gate.  The source token, not
+    // the snapshot identity, is the ownership boundary.
+    let second_runtime = Arc::new(TimelineCueAudioRuntime::default());
+    let (second_mixer, _second_observer) = rodio::mixer::mixer(2, 48_000);
+    let second_assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (second_control, second_source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        second_assets,
+        authority,
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    let second_token = next_timeline_cue_audio_source_instance_token().unwrap();
+    assert_ne!(second_token, source_instance_token);
+    let second_counters = TimelineCueAudioSourceTestCounters::default();
+    let mut second_state = second_runtime.state.lock().unwrap();
+    second_state.attachment = Some(TimelineCueAudioAttachment {
+        control: second_control,
+        output: TimelineCueAudioAttachmentOutput::Legacy {
+            mixer: second_mixer,
+            _explicit_stream: None,
+        },
+        pending_source: Some(second_source),
+        source_instance_token: second_token,
+        source_test_counters: second_counters.clone(),
+        cue_test_sinks: Vec::new(),
+        route: timeline_cue_audio::TimelineCueAudioRoute::FollowProgram,
+        settings_revision: second_state.settings_revision,
+        program_device_generation: None,
+        engine_identity: identity.clone(),
+        output_clock_epoch: authority.fence.output_clock_epoch,
+        canonical_anchor_frame: authority.clock.canonical_anchor_frame,
+        source_fence: authority.fence.source_fence,
+        next_sequence: 1,
+        last_click_key: None,
+        last_guide_generation: None,
+        last_guide_sequence: 0,
+        blocked_event_identity: None,
+        last_observed_output_frame: 0,
+        last_output_progress_at: Instant::now(),
+    });
+    second_state.lifecycle = TimelineCueAudioLifecycle::Applying;
+    drop(second_state);
+    second_runtime.feed_attachment(&snapshot, None);
+    assert_eq!(second_counters.activations.load(Ordering::Relaxed), 1);
+    let (gate_state, _) = &*activation_gate;
+    assert!(!*gate_state.lock().unwrap());
+
+    let runtime_for_feed = Arc::clone(&runtime);
+    let feed_thread = std::thread::spawn(move || {
+        runtime_for_feed.feed_attachment(&snapshot, None);
+    });
+    let (gate_state, gate_ready) = &*activation_gate;
+    let gate_guard = gate_state.lock().unwrap();
+    let (gate_guard, _) = gate_ready
+        .wait_timeout_while(gate_guard, Duration::from_secs(1), |released| !*released)
+        .unwrap();
+    let source_was_activated = *gate_guard;
+    drop(gate_guard);
+    let callback_observed = if source_was_activated {
+        let first = observer.next().is_some();
+        let second = observer.next().is_some();
+        first && second
+    } else {
+        false
+    };
+    let callback_frame = control_for_assert.next_output_frame();
+    let mut gate_guard = gate_state.lock().unwrap();
+    *gate_guard = false;
+    gate_ready.notify_all();
+    drop(gate_guard);
+    feed_thread.join().unwrap();
+    *TIMELINE_CUE_AUDIO_SOURCE_ACTIVATION_HOOK.lock().unwrap() = None;
+    assert!(
+        source_was_activated,
+        "source activation hook was not reached"
+    );
+    assert!(callback_observed, "activated source did not reach callback");
+    assert_eq!(callback_frame, 1);
+
+    let state = runtime.state.lock().unwrap();
+    let attachment = state.attachment.as_ref().expect("attachment remains live");
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Running);
+    assert!(attachment.pending_source.is_none());
+    assert_eq!(attachment.last_click_key, Some((0, 1, 1, false)));
+    assert_eq!(control_for_assert.next_output_frame(), callback_frame);
+    drop(state);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn timeline_cue_source_activation_failure_retires_without_watermark_commit() {
+    let identity = timeline_cue_test_identity(true, 1);
+    let output_identity = asio_timeline_output::TimelineOutputIdentity::new(
+        1,
+        1,
+        protocol::TimelineAudioOutputBus::Cue,
+    )
+    .unwrap();
+    let authority = timeline_cue_audio::TimelineCueAuthority {
+        fence: timeline_cue_audio::TimelineCueFence {
+            output_clock_epoch: 1,
+            schedule_generation: identity.schedule_generation,
+            source_fence: 1,
+        },
+        clock: timeline_cue_audio::TimelineCueClockMap {
+            canonical_anchor_frame: 0,
+            output_anchor_frame: 0,
+        },
+    };
+    let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(48_000).unwrap();
+    let (control, source) = timeline_cue_audio::create_timeline_cue_audio_source(
+        48_000,
+        2,
+        timeline_cue_audio::MAX_TIMELINE_CUE_QUEUE_CAPACITY,
+        assets,
+        authority,
+        1.0,
+        1.0,
+    )
+    .unwrap();
+    let control_for_assert = control.clone();
+    let source_instance_token = next_timeline_cue_audio_source_instance_token().unwrap();
+    let source_test_counters = TimelineCueAudioSourceTestCounters::default();
+    let runtime = TimelineCueAudioRuntime::default();
+    let (mixer, _observer) = rodio::mixer::mixer(2, 48_000);
+    let mut state = runtime.state.lock().unwrap();
+    state.attachment = Some(TimelineCueAudioAttachment {
+        control,
+        output: TimelineCueAudioAttachmentOutput::AsioCue {
+            identity: output_identity,
+            sink: None,
+        },
+        pending_source: Some(source),
+        source_instance_token,
+        source_test_counters,
+        cue_test_sinks: Vec::new(),
+        route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
+        settings_revision: state.settings_revision,
+        program_device_generation: None,
+        engine_identity: identity.clone(),
+        output_clock_epoch: authority.fence.output_clock_epoch,
+        canonical_anchor_frame: authority.clock.canonical_anchor_frame,
+        source_fence: authority.fence.source_fence,
+        next_sequence: 1,
+        last_click_key: None,
+        last_guide_generation: None,
+        last_guide_sequence: 0,
+        blocked_event_identity: None,
+        last_observed_output_frame: 0,
+        last_output_progress_at: Instant::now(),
+    });
+    state.lifecycle = TimelineCueAudioLifecycle::Running;
+    drop(state);
+
+    let snapshot = timeline_cue_test_snapshot(
+        &identity,
+        0,
+        vec![timeline_cue_test_click(0, 1, 1, &identity)],
+        Vec::new(),
+    );
+    // `feed_attachment` has no ASIO owner, so admission succeeds but source
+    // activation cannot.  The attachment is retired instead of being kept
+    // with advanced watermarks or a detached source that could be retried.
+    runtime.feed_attachment(&snapshot, None);
+
+    let state = runtime.state.lock().unwrap();
+    assert_eq!(state.lifecycle, TimelineCueAudioLifecycle::Fault);
+    assert!(state.attachment.is_none());
+    assert!(state
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("ASIO output runtime owner")));
+    assert_eq!(control_for_assert.next_output_frame(), 0);
+    drop(state);
+    drop(mixer);
+}
+
 #[test]
 fn empty_audio_monitor_status_does_not_open_an_output_device() {
     let mut playback = MediaAudioPlayback::default();
@@ -490,6 +1099,9 @@ fn explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink() {
                 mixer: mixer.clone(),
                 _explicit_stream: None,
             },
+            pending_source: None,
+            source_instance_token: next_timeline_cue_audio_source_instance_token().unwrap(),
+            source_test_counters: TimelineCueAudioSourceTestCounters::default(),
             cue_test_sinks: Vec::new(),
             route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
             settings_revision: state.settings_revision,
@@ -505,6 +1117,7 @@ fn explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink() {
                 playing: true,
             },
             output_clock_epoch,
+            canonical_anchor_frame: 0,
             source_fence: 1,
             next_sequence: 1,
             last_click_key: None,
@@ -628,6 +1241,9 @@ fn published_explicit_wdm_cue_test_runtime() -> Arc<TimelineCueAudioRuntime> {
             mixer,
             _explicit_stream: None,
         },
+        pending_source: None,
+        source_instance_token: next_timeline_cue_audio_source_instance_token().unwrap(),
+        source_test_counters: TimelineCueAudioSourceTestCounters::default(),
         cue_test_sinks: Vec::new(),
         route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
         settings_revision: state.settings_revision,
@@ -643,6 +1259,7 @@ fn published_explicit_wdm_cue_test_runtime() -> Arc<TimelineCueAudioRuntime> {
             playing: false,
         },
         output_clock_epoch,
+        canonical_anchor_frame: 0,
         source_fence: 1,
         next_sequence: 1,
         last_click_key: None,
