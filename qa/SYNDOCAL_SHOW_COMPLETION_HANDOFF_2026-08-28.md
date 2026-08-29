@@ -7,9 +7,11 @@ This is the concise authoritative resume note for the final show-critical tranch
 ## Source authority
 
 - Current source train is `1.2.0-alpha.37` on branch
-  `codex/syndocal-v1.2`, based on upstream-equal HEAD
-  `901e4e09f829705ff488511c53e50f51a511e088` before this tranche. The
-  uncommitted checkpoint integrates Timeline CUE anchor linearization and the
+  `codex/syndocal-v1.2`. Checkpoint
+  `1636aeb440c718c628a953b58e4f0c59d4874e35` is pushed and exactly equal to
+  `origin/codex/syndocal-v1.2`; its pre-tranche base was upstream-equal HEAD
+  `901e4e09f829705ff488511c53e50f51a511e088`. The checkpoint integrates
+  Timeline CUE anchor linearization and the
   strict fixed-name Show Spout first-black/reaping/retirement-ACK state
   machines. Exact MSVC 14.44 combined focused gates pass Timeline CUE `49/49`,
   media-audio `46/46`, Show Spout `17/17`, production R4 interleaving `1/1`,

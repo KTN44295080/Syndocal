@@ -9,7 +9,9 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
 Current product metadata is `1.2.0-alpha.37` on branch
-`codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
+`codex/syndocal-v1.2`; source checkpoint
+`1636aeb440c718c628a953b58e4f0c59d4874e35` is pushed and upstream-equal.
+Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
 native build. Alpha.37 is the current source train; alpha.36 remains the latest
 accepted native product checkpoint until the required alpha.37 native rebuild;

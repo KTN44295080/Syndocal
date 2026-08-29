@@ -1,7 +1,26 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.37`. The alpha.37 source integration is under final full-gate validation and is not yet a native or physical acceptance claim. The pushed alpha.36 source checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`. The exact-linker alpha.36 native build from that clean pushed HEAD passed and exactly one checkout-owned maximized process remains the current native authority until the alpha.37 rebuild. Earlier pushed authorities include strict Universe-0/Spout hardening `c7218c112b296652fa77f88c67e861c18d6aea1b`, canonical Timeline-audio varispeed `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate gate `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, Unity/GPU, camera hardware, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.36 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.37`.
+The warning-free alpha.37 source checkpoint
+`1636aeb440c718c628a953b58e4f0c59d4874e35` is pushed and upstream-equal, but
+is not yet a native or physical acceptance claim. The pushed alpha.36 source
+checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume
+record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`.
+The exact-linker alpha.36 native build from that clean pushed HEAD passed and
+exactly one checkout-owned maximized process remains the current native
+authority until the alpha.37 rebuild. Earlier pushed authorities include
+strict Universe-0/Spout hardening `c7218c112b296652fa77f88c67e861c18d6aea1b`,
+canonical Timeline-audio varispeed `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`,
+Windows candidate gate `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`,
+synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`,
+and same-PC Art-Net/camera/fixed-Spout baseline
+`138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. Machine-local selection of the
+uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but
+audible real-device, Unity/GPU, camera hardware, real installer/updater,
+dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open.
+Historical alpha.36 and earlier native/DJ evidence remains immutable below;
+HW-4 remains exactly `0/12`.
 
 ## 2026-08-30 current alpha.37 CUE-anchor and strict-Spout source checkpoint
 
