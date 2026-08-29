@@ -1208,6 +1208,13 @@ const japaneseText: Record<string, string> = {
   "Video Layers": "映像レイヤー",
   "Video Outputs": "映像出力",
   "Video Output Config": "映像出力設定",
+  "Same-PC show video uses exactly": "同一PCの公演映像では",
+  "Spout senders at 1920×1080. Stopped content keeps both senders alive with opaque RGB-black frames.":
+    "の2つのSpout送信元だけを1920×1080で使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
+  "Confirm and enable show Spout outputs": "公演用Spout出力を確定して有効化",
+  "Staged same-PC Art-Net loopback show route enabled.": "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。",
+  "Same-PC Syndocal Background/Foreground Spout outputs enabled.":
+    "同一PCのSyndocal Background と Syndocal Foreground Spout出力を有効化しました。",
   "Video Output Enable": "映像出力を有効化",
   "Video Output Blackout": "映像出力ブラックアウト",
   "Video Output Opacity": "映像出力の不透明度",
@@ -3309,6 +3316,16 @@ const japaneseText: Record<string, string> = {
   "I/O connections": "I/O接続",
   "I/O connection selectors": "I/O接続セレクター",
   "DMX Connections": "DMX接続",
+  "Same-PC production show route": "同一PCの本番公演ルート",
+  "Confirm and enable Art-Net loopback": "Art-Netループバックを確定して有効化",
+  "Art-Net · ArtDmx": "Art-Net · ArtDmx方式",
+  "Wire U0 · 512ch · 40–44fps": "ワイヤーU0 · 512ch · 40–44fps",
+  "Same-PC only: completed DMX Universe 1 is emitted unchanged as ArtDmx wire Universe 0. DMX ch1 maps to payload[0]; unused ch500 is forced to 0.":
+    "同一PC限定: 完成済みDMXユニバース1をArtDmxワイヤーユニバース0として変更せず送信します。DMX ch1はpayload[0]に対応し、未使用のch500は0に固定します。",
+  "The show route must remain Art-Net / 127.0.0.1:6454 / wire U0 with no serial interface. It is intentionally not configurable from this control.":
+    "公演ルートはArt-Net / 127.0.0.1:6454 / ワイヤーU0（シリアルインターフェースなし）を維持します。この操作からは意図的に設定変更できません。",
+  "Confirmation retains the native lease, safety-blackout, exact route, sender-open, acknowledgement, and rollback fences. USB serial DMX is not a show-route fallback.":
+    "確定後もネイティブリース、セーフティブラックアウト、正確なルート、送信元オープン、確認応答、ロールバックの各フェンスを保持します。USBシリアルDMXは公演ルートの代替ではありません。",
   "Production show route": "本番公演ルート",
   "Enable staged FTDI COM3 show route": "設定済みFTDI COM3公演ルートを有効化",
   "Authored route": "公演設定済みルート",

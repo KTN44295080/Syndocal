@@ -2,18 +2,19 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.35**
+- 製品名: **Syndocal 1.2.0-alpha.36**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.35` on branch
+Current product metadata is `1.2.0-alpha.36` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.32 remains the latest accepted native product checkpoint
-for Timeline authoring
-monitor output, arbitrary PROGRAM/CUE device assignment, canonical child-Timeline
+native build. Alpha.35 remains the latest accepted native product checkpoint;
+the current alpha.36 frontend/version tranche still requires its own rebuild.
+Alpha.32 established Timeline authoring monitor output, arbitrary PROGRAM/CUE
+device assignment, canonical child-Timeline
 audio varispeed, and fail-closed Windows candidate extraction/verification. `FollowProgram`
 remains the existing Normal route; with `ExplicitDevice`, every Timeline media
 clip (logical PROGRAM or CUE) plus generated Guide/Click material is sent to
@@ -23,7 +24,15 @@ and output selection. Endpoint name/topology and session/generation are
 revalidated; missing, ambiguous, stale, changed, or failed state stays silent
 and fail-closed without default/PROGRAM fallback.
 
-The current alpha.35 integration carries the alpha.34/alpha.33 camera-capture source
+Alpha.36 completes Japanese coverage for the same-PC Art-Net/Spout activation
+surface and status messages while keeping `Syndocal Background` and
+`Syndocal Foreground` byte-for-byte visible as external sender identifiers.
+Focused localization is `3632/3632` (`100.0%`); Timeline context-menu and I/O
+remote-scroll browser contracts plus TypeScript pass. Independent Terra xHigh
+rereview is GO with P0/P1/P2 `0`; a fresh alpha.36 native build is still
+required.
+
+The current alpha.36 integration carries the alpha.34/alpha.33 camera-capture source
 tranche, which replaces the old free-form DirectShow
 camera route, which was fixed at `1280x720` / `30 fps`, with an explicit
 current-generation device/profile catalog, opaque endpoint identities, and an
@@ -34,7 +43,7 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
-alpha.34 native build passed, while the current alpha.35 rebuild, visual UI,
+alpha.34 native build passed, while the current alpha.36 rebuild, visual UI,
 and hardware probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
@@ -65,8 +74,8 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.35 product and
-installer naming below; that naming does not assert an alpha.35 installer
+acceptance. The release metadata checker expects alpha.36 product and
+installer naming below; that naming does not assert an alpha.36 installer
 exists.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
@@ -246,7 +255,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.35_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.35_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.36_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.36_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

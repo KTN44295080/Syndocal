@@ -38,6 +38,10 @@ const colorEffectEditorSource = await readFile(
   new URL("../src/components/ColorEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const videoOutputCreatePanelSource = await readFile(
+  new URL("../src/components/VideoOutputCreatePanel.tsx", import.meta.url),
+  "utf8",
+);
 const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 
 assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
@@ -62,6 +66,18 @@ assert.equal(localization.translateUiText("Follow Program", "ja"), "プログラ
 assert.equal(localization.translateUiText("Explicit Device", "ja"), "出力デバイスを指定");
 assert.equal(localization.translateUiText("Click gain", "ja"), "クリック音量");
 assert.equal(localization.translateUiText("Refresh outputs", "ja"), "出力を更新");
+assert.equal(localization.translateUiText("Staged same-PC Art-Net loopback show route enabled.", "ja"), "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。");
+assert.equal(localization.translateUiText("Same-PC Syndocal Background/Foreground Spout outputs enabled.", "ja"), "同一PCのSyndocal Background と Syndocal Foreground Spout出力を有効化しました。");
+assert.match(
+  videoOutputCreatePanelSource,
+  /<strong data-no-localize>Syndocal Background<\/strong>/,
+  "the exact Syndocal Background sender name must remain outside UI localization",
+);
+assert.match(
+  videoOutputCreatePanelSource,
+  /<strong data-no-localize>Syndocal Foreground<\/strong>/,
+  "the exact Syndocal Foreground sender name must remain outside UI localization",
+);
 assert.equal(localization.translateUiText("Output topology changed. Reselect the device.", "ja"), "出力トポロジーが変わりました。デバイスを再選択してください。");
 assert.equal(localization.translateUiText("CUE route", "ja"), "CUE経路");
 assert.equal(localization.translateUiText("Same ASIO", "ja"), "同じASIO");
@@ -886,7 +902,7 @@ async function collectTsx(directory) {
 await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
-  "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
+  "Syndocal", "Syndocal Background", "Syndocal Foreground", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
   "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin", "Rainbow",

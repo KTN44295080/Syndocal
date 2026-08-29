@@ -1,11 +1,11 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.35`. The pushed source checkpoint is `c7218c112b296652fa77f88c67e861c18d6aea1b`, including strict Universe-0 input isolation and Spout first-physical-black hardening. The exact-linker alpha.35 native build from clean pushed HEAD `31a577cfaad54c0ea981a0fc98a4254b0f5cb8db` passed and exactly one checkout-owned process is responsive; maximized visual and physical acceptance remain open. Earlier pushed authorities include canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.34 native build remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.34 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.36`. The pushed source checkpoint is `c7218c112b296652fa77f88c67e861c18d6aea1b`, including strict Universe-0 input isolation and Spout first-physical-black hardening. The exact-linker alpha.35 native build from clean pushed HEAD `31a577cfaad54c0ea981a0fc98a4254b0f5cb8db` passed and exactly one checkout-owned process is responsive; maximized visual and physical acceptance remain open. Earlier pushed authorities include canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera/fixed-Spout baseline `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.34 native build remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.34 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-30 current alpha.35 same-PC output isolation (native responsive; visual/hardware pending)
+## 2026-08-30 current alpha.36 localization follow-up (native rebuild pending; alpha.35 responsive)
 
-The product identity is `1.2.0-alpha.35`. The current show boundary is same-PC
+The product identity is `1.2.0-alpha.36`. The current show boundary is same-PC
 only: Art-Net targets `127.0.0.1:6454`, while video uses local Spout. Remote
 Art-Net and NDI are deliberately outside this acceptance scope. Source, native,
 visual, and physical acceptance are not conflated. The old camera route accepted a
@@ -18,6 +18,15 @@ no more than `60 fps`, and capture rates up to `120 fps` only when the device
 advertises that profile. Output presentation remains capped at `60 Hz`, while
 screen capture is unchanged at `1280x720` / `30 fps`. The acceptance authority
 is [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md).
+
+Alpha.36 localizes the new same-PC Art-Net/Spout activation copy and success
+status while preserving `Syndocal Background` and `Syndocal Foreground` as
+exact unlocalized external identifiers. The focused localization gate passes
+`3632/3632` (`100.0%`), Timeline context-menu and I/O remote-scroll browser
+contracts pass, and TypeScript passes. Independent Terra xHigh rereview is GO
+with P0/P1/P2 `0`. The alpha.36 native rebuild remains pending; the responsive
+alpha.35 process below is historical execution evidence after this source
+change.
 
 On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
 `30 fps`; `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`; and no
@@ -33,7 +42,7 @@ remains open. A `4096x2160` RGBA frame is about
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`; the Syndocal profile probe still proves one frame only, so
 sustained 4K remains unverified and
-no 4K60 or broad sustained-4K claim is made. Current alpha.35 UI and hardware
+no 4K60 or broad sustained-4K claim is made. Current alpha.36 UI and hardware
 probes remain pending.
 
 Alpha.35 closes a newly found show-safety boundary on the strict local Art-Net
