@@ -118,6 +118,17 @@ process exit while a deferred reaper is pending remains an explicit unverified
 OS boundary. The tranche remains NO-GO for native/UI/sustained-4K acceptance until the
 unchecked gates below are observed on the versioned executable.
 
+The 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
+`14.44.35207` with the Community linker first in `where.exe` and passes the
+current `capture_catalog` set `21 passed / 0 failed / 0 ignored`, first-party
+warnings `0`. The parser now accepts only complete adjacent DirectShow
+video/alternative-identity pairs from one strict dshow source and requires the
+terminal `Error opening input file dummy.` marker for the modern heading-free
+FFmpeg 7 listing. Audio/none entries, foreign/intervening sources, malformed
+identities, incomplete listings, and raw device-name disclosure fail closed.
+Independent Terra xHigh rereview is GO. Native UI/profile evidence remains
+unchecked below.
+
 ## Performance claim boundary
 
 The capture registry owns one latest frame per camera layer, so it does not

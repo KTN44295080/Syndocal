@@ -75,7 +75,7 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
     matches!(
         action,
         OutputControlActionV2::ReleaseBlackout { .. }
-            | OutputControlActionV2::EnableShowSerialDmxRoute { .. }
+            | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
             | OutputControlActionV2::AddDisplay { .. }
@@ -607,9 +607,8 @@ where
             &lease_request,
             lease_now_ms,
         ),
-        OutputControlActionV2::EnableShowSerialDmxRoute { .. } => {
-            super::enable_show_serial_dmx_route_with_output_control_fence(
-                app,
+        OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
+            super::enable_show_artnet_loopback_route_with_output_control_fence(
                 state,
                 &request.expected_fence,
                 &lease_request,
@@ -901,8 +900,8 @@ fn validate_output_action_current(
 ) -> Result<(), String> {
     match action {
         OutputControlActionV2::EnableOutput => Ok(()),
-        OutputControlActionV2::EnableShowSerialDmxRoute { .. } => {
-            super::validate_current_staged_show_serial_dmx_route(state).map(|_| ())
+        OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
+            super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
         }
         OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
@@ -1713,7 +1712,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
     let expected_outcome = match action {
         OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::Arm { .. }
-        | OutputControlActionV2::EnableShowSerialDmxRoute { .. }
+        | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
@@ -4545,16 +4544,16 @@ mod tests {
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-        let show_serial_route = OutputControlActionV2::EnableShowSerialDmxRoute {
+        let show_artnet_route = OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             lease: OutputLeaseAuthorityV1 {
                 lease_id: "lease-0000000000000001".to_string(),
                 generation: 1,
             },
         };
         assert_eq!(
-            output_confirmation_gate(&show_serial_route, &deny),
+            output_confirmation_gate(&show_artnet_route, &deny),
             Err(OutputControlErrorCodeV2::Forbidden),
-            "the COM3 show route can never bypass the local native R4 confirmation"
+            "the Art-Net loopback show route can never bypass the local native R4 confirmation"
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 

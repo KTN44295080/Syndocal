@@ -3886,11 +3886,11 @@ define_engine_command! {
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
     /// The one show-specific route activation path. Its payload is the exact
-    /// disabled route captured after the native control plane's final fence
-    /// and device checks; this command cannot configure arbitrary routes.
-    EnableShowSerialDmxRoutePublished {
+    /// disabled Art-Net loopback route captured after the native control
+    /// plane's final fence checks; this command cannot configure arbitrary
+    /// routes.
+    EnableShowArtNetLoopbackRoutePublished {
         expected_disabled_output: DmxOutputConfig,
-        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expires_at: Instant,
@@ -5306,7 +5306,7 @@ macro_rules! engine_command_video_presentation_relevance {
             // DMX output routing and DMX input streams are lighting-domain.
             EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
-            | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
+            | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
             | EngineCommand::ClearDmxInput(_) => false,
             // Output ownership is fenced by its own epoch in every transport;
@@ -5587,7 +5587,7 @@ impl EngineCommand {
                 | EngineCommand::LoadProjectSnapshotPublished { .. }
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
-                | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
+                | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
                 | EngineCommand::FenceOutputOwnership { .. }
                 | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -6725,35 +6725,35 @@ impl EngineHandle {
     }
 
     /// Enable only the native control plane's already-validated staged show
-    /// serial route and wait until the resulting engine snapshot is published.
+    /// Art-Net loopback route and wait until the resulting engine snapshot is published.
     /// The worker repeats the exact route and lighting-authority checks, so a
     /// caller cannot use this ACK path as a generic output configuration API.
-    pub fn enable_show_serial_dmx_route_published(
+    pub fn enable_show_artnet_loopback_route_published(
         &self,
         expected_disabled_output: DmxOutputConfig,
-        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::EnableShowSerialDmxRoutePublished {
+        self.send(EngineCommand::EnableShowArtNetLoopbackRoutePublished {
             expected_disabled_output,
-            expected_device,
             expected_safety_epoch,
             expected_safety_generation,
             expires_at,
             ack,
         })
-        .map_err(|error| format!("Show serial DMX route activation could not enqueue: {error}"))?;
+        .map_err(|error| {
+            format!("Show Art-Net loopback route activation could not enqueue: {error}")
+        })?;
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(
-                "Show serial DMX route activation did not receive an acknowledged snapshot"
+                "Show Art-Net loopback route activation did not receive an acknowledged snapshot"
                     .to_string(),
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(
-                "Show serial DMX route activation worker disconnected before acknowledgement"
+                "Show Art-Net loopback route activation worker disconnected before acknowledgement"
                     .to_string(),
             ),
         }
@@ -7115,7 +7115,7 @@ impl EngineHandle {
             .map_err(EngineError::InvalidAllocatorCapacity)?;
         if matches!(command, EngineCommand::SafetyBlackoutEngagePublished { .. }) {
             // Reserve the S0 authority before the command becomes observable
-            // in the priority queue.  `apply_show_serial_dmx_route_enable_*`
+            // in the priority queue.  `apply_show_artnet_loopback_route_enable_*`
             // takes this same gate at its irreversible publication point, so
             // an S0 that has successfully queued can never lose to a
             // low-latency live DMX tick in the same engine turn.
@@ -10903,7 +10903,7 @@ impl EngineHandle {
             | EngineCommand::RemoveStageObject(_)
             | EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
-            | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
+            | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
             | EngineCommand::FenceOutputOwnership { .. }
             | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -18581,8 +18581,8 @@ enum PendingCommandRollback {
     },
     /// The route begins disabled and has no sender by contract. Retaining
     /// this exact A image lets an acknowledged publication failure drop the
-    /// newly-opened serial sender and restore the authored disabled route.
-    RestoreShowSerialDmxRouteEnable {
+    /// newly-opened Art-Net sender and restore the authored disabled route.
+    RestoreShowArtNetLoopbackRouteEnable {
         output: DmxOutputConfig,
         dmx_sender_recovery: DmxRouteRecovery,
         dmx_route_configuration_generation: u64,
@@ -18903,7 +18903,7 @@ impl PendingCommandRollback {
         matches!(
             self,
             Self::RemoveAddedEffect { .. }
-                | Self::RestoreShowSerialDmxRouteEnable { .. }
+                | Self::RestoreShowArtNetLoopbackRouteEnable { .. }
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreNodeGraphs { .. }
@@ -20185,7 +20185,6 @@ impl EngineRuntime {
         let ingress_current_schema = !snapshot.timeline_bank.is_empty();
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
-        normalize_retired_show_serial_dmx_project_alias(&mut snapshot);
         // Runtime authority is never imported with project JSON or an
         // in-memory authored image. The live process owns its epoch.
         snapshot.timeline.transport_epoch = 0;
@@ -22494,15 +22493,14 @@ impl EngineRuntime {
                 self.bump_dmx_route_configuration_generation();
                 self.last_error = first_error;
             }
-            EngineCommand::EnableShowSerialDmxRoutePublished {
+            EngineCommand::EnableShowArtNetLoopbackRoutePublished {
                 expected_disabled_output,
-                expected_device,
                 expected_safety_epoch,
                 expected_safety_generation,
                 expires_at,
                 ack,
             } => {
-                let rollback = PendingCommandRollback::RestoreShowSerialDmxRouteEnable {
+                let rollback = PendingCommandRollback::RestoreShowArtNetLoopbackRouteEnable {
                     output: self.output.clone(),
                     dmx_sender_recovery: self.dmx_sender_recovery.clone(),
                     dmx_route_configuration_generation: self.dmx_route_configuration_generation,
@@ -22510,13 +22508,12 @@ impl EngineRuntime {
                 };
                 let result = if Instant::now() > expires_at {
                     Err(
-                        "Show serial DMX route activation expired before engine execution"
+                        "Show Art-Net loopback route activation expired before engine execution"
                             .to_string(),
                     )
                 } else {
-                    self.apply_show_serial_dmx_route_enable(
+                    self.apply_show_artnet_loopback_route_enable(
                         &expected_disabled_output,
-                        &expected_device,
                         expected_safety_epoch,
                         expected_safety_generation,
                     )
@@ -22526,7 +22523,7 @@ impl EngineRuntime {
                     result,
                     rollback,
                     publication_error:
-                        "Show serial DMX route activation could not publish an acknowledged snapshot",
+                        "Show Art-Net loopback route activation could not publish an acknowledged snapshot",
                 });
             }
             EngineCommand::SetDmxInputFrame {
@@ -28874,14 +28871,14 @@ impl EngineRuntime {
                 self.touch_surface = touch_surface;
                 self.last_error = last_error;
             }
-            PendingCommandRollback::RestoreShowSerialDmxRouteEnable {
+            PendingCommandRollback::RestoreShowArtNetLoopbackRouteEnable {
                 output,
                 dmx_sender_recovery,
                 dmx_route_configuration_generation,
                 last_error,
             } => {
                 // This operation admits only a disabled, sender-free single
-                // route. Dropping B's serial worker before restoring A keeps
+                // route. Dropping B's Art-Net sender before restoring A keeps
                 // a failed publication from leaving a live physical output.
                 self.dmx_sender = None;
                 self.output = output;
@@ -47984,51 +47981,39 @@ impl EngineRuntime {
             .collect()
     }
 
-    fn apply_show_serial_dmx_route_enable_with_sender_factory<F>(
+    fn apply_show_artnet_loopback_route_enable_with_sender_factory<F>(
         &mut self,
         expected_disabled_output: &DmxOutputConfig,
-        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         mut create_sender: F,
     ) -> Result<(), String>
     where
-        F: FnMut(
-            &DmxOutputConfig,
-            bool,
-            &io::serial_dmx::VerifiedUsbSerialPortIdentity,
-            &OpenDmxSafetyWriteGate,
-        ) -> Result<Option<DmxSender>, String>,
+        F: FnMut(&DmxOutputConfig, bool) -> Result<Option<DmxSender>, String>,
     {
-        if !show_serial_dmx_route_is_exact_staged(expected_disabled_output) {
+        if !show_artnet_loopback_route_is_exact_staged(expected_disabled_output) {
             return Err(
-                "Show serial DMX route request did not name the exact disabled logical Enttec Open DMX/250000/U0 route"
+                "Show Art-Net route request did not name the exact disabled 127.0.0.1:6454/U0 route"
                     .to_string(),
             );
         }
         if !self.additional_dmx_outputs.is_empty() {
             return Err(
-                "Show serial DMX route activation requires exactly one authored DMX route"
+                "Show Art-Net loopback route activation requires exactly one authored DMX route"
                     .to_string(),
             );
         }
         if self.output != *expected_disabled_output
-            || !show_serial_dmx_route_is_exact_staged(&self.output)
+            || !show_artnet_loopback_route_is_exact_staged(&self.output)
         {
             return Err(
-                "Show serial DMX route changed or is already enabled; reload the exact staged show route before enabling"
+                "Show Art-Net loopback route changed or is already enabled; reload the exact staged show route before enabling"
                     .to_string(),
             );
         }
         if self.dmx_sender.is_some() {
             return Err(
-                "Show serial DMX route sender state is ambiguous while the staged route is disabled"
-                    .to_string(),
-            );
-        }
-        if !show_serial_dmx_device_identity_is_exact(expected_device) {
-            return Err(
-                "Show serial DMX route requires an exact machine-local USB-DMX hardware identity"
+                "Show Art-Net loopback route sender state is ambiguous while the staged route is disabled"
                     .to_string(),
             );
         }
@@ -48039,23 +48024,18 @@ impl EngineRuntime {
             || !ownership.lighting_allowed
         {
             return Err(
-                "Show serial DMX route activation requires the current local Both lighting authority"
+                "Show Art-Net loopback route activation requires the current local Both lighting authority"
                     .to_string(),
             );
         }
 
-        // Create the serial sender before touching the authoritative route.
-        // A missing/busy/failed selected interface leaves the complete A image untouched.
+        // Create the exact loopback sender before touching the authoritative
+        // route. A socket-open failure leaves the complete A image untouched.
         let enabled_output = DmxOutputConfig {
             enabled: true,
             ..expected_disabled_output.clone()
         };
-        let sender = create_sender(
-            &enabled_output,
-            true,
-            expected_device,
-            &self.shared_telemetry.open_dmx_safety_write_gate,
-        )?;
+        let sender = create_sender(&enabled_output, true)?;
         // Safety engage uses a priority queue on another worker. Linearize
         // the route commit against the priority-enqueue gate after opening
         // but before publishing any live route. A successfully queued S0 has
@@ -48068,16 +48048,16 @@ impl EngineRuntime {
             .safety_blackout_enqueue_gate
             .lock()
             .map_err(|_| {
-                "Safety blackout enqueue gate was poisoned before show serial DMX activation"
+                "Safety blackout enqueue gate was poisoned before show Art-Net loopback activation"
                     .to_string()
             })?;
         let safety = shared_telemetry.safety_blackout.lock().map_err(|_| {
-            "Safety blackout authority lock was poisoned before show serial DMX activation"
+            "Safety blackout authority lock was poisoned before show Art-Net loopback activation"
                 .to_string()
         })?;
         if shared_telemetry.has_pending_safety_blackout_enqueue()? {
             return Err(
-                "Show serial DMX route activation was superseded by a queued emergency blackout"
+                "Show Art-Net loopback route activation was superseded by a queued emergency blackout"
                     .to_string(),
             );
         }
@@ -48086,7 +48066,7 @@ impl EngineRuntime {
             || safety.generation != expected_safety_generation
         {
             return Err(
-                "Show serial DMX route activation was superseded by an emergency blackout authority change"
+                "Show Art-Net loopback route activation was superseded by an emergency blackout authority change"
                     .to_string(),
             );
         }
@@ -48098,19 +48078,17 @@ impl EngineRuntime {
         Ok(())
     }
 
-    fn apply_show_serial_dmx_route_enable(
+    fn apply_show_artnet_loopback_route_enable(
         &mut self,
         expected_disabled_output: &DmxOutputConfig,
-        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
     ) -> Result<(), String> {
-        self.apply_show_serial_dmx_route_enable_with_sender_factory(
+        self.apply_show_artnet_loopback_route_enable_with_sender_factory(
             expected_disabled_output,
-            expected_device,
             expected_safety_epoch,
             expected_safety_generation,
-            create_verified_show_serial_dmx_sender,
+            create_verified_show_artnet_loopback_sender,
         )
     }
 
@@ -62407,6 +62385,15 @@ fn send_output_frame_with_recovery(
             }
         }
     }
+    let mut sanitized_show_frame = *frame;
+    let frame = if universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
+        && show_artnet_loopback_route_is_exact_enabled(config)
+    {
+        sanitized_show_frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX] = 0;
+        &sanitized_show_frame
+    } else {
+        frame
+    };
     let result = send_dmx_frame_at_safety_boundary(sender, universe, frame, shared_telemetry);
     match result {
         Ok(bytes) => {
@@ -62470,86 +62457,57 @@ fn create_enabled_dmx_sender(
     }
 }
 
-const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
-const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
+const SHOW_ARTNET_LOOPBACK_TARGET_IP: &str = "127.0.0.1";
+const SHOW_ARTNET_LOOPBACK_PORT: u16 = 6454;
+const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 = 0;
+/// DSF2026 intentionally leaves channel 500 unpatched.  Keep that slot
+/// hard-zeroed on the bounded show route so a malformed project cannot drive
+/// an otherwise-unused physical address.
+const SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX: usize = 499;
 
 /// This is deliberately narrower than normal DMX validation. It identifies
 /// the one disabled authored route that the R4 local-confirmed control may
 /// activate; all other output configuration remains unavailable.
-fn show_serial_dmx_route_is_exact_staged(output: &DmxOutputConfig) -> bool {
+fn show_artnet_loopback_route_is_exact_staged(output: &DmxOutputConfig) -> bool {
     !output.enabled
-        && output.protocol == DmxOutputProtocol::EnttecOpenDmx
-        // The project is portable. The selected COM alias belongs only to
-        // machine-local USB-DMX binding, never to a show/project snapshot.
+        && output.protocol == DmxOutputProtocol::ArtNet
+        && output.target_ip == SHOW_ARTNET_LOOPBACK_TARGET_IP
+        && output.port == SHOW_ARTNET_LOOPBACK_PORT
         && output.serial_port.is_empty()
-        && output.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
-        && output.universe == SHOW_SERIAL_DMX_UNIVERSE
+        && output.universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
 }
 
-/// v1 machine-binding clean break: a previously authored Open-DMX COM alias
-/// was a host detail accidentally retained in projects. The only retired
-/// shape we normalize is the disabled production logical route; no enabled or
-/// arbitrary serial route is touched. Saving the loaded project persists the
-/// portable empty alias, while selecting hardware lives exclusively outside
-/// the project in the machine-local store.
-fn normalize_retired_show_serial_dmx_project_alias(snapshot: &mut EngineSnapshot) {
-    let normalize = |output: &mut DmxOutputConfig| {
-        if !output.enabled
-            && output.protocol == DmxOutputProtocol::EnttecOpenDmx
-            && output.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
-            && output.universe == SHOW_SERIAL_DMX_UNIVERSE
-            && !output.serial_port.trim().is_empty()
-        {
-            output.serial_port.clear();
-        }
-    };
-    normalize(&mut snapshot.output);
-    for output in &mut snapshot.dmx_outputs {
-        normalize(output);
-    }
+fn show_artnet_loopback_route_is_exact_enabled(output: &DmxOutputConfig) -> bool {
+    output.enabled
+        && output.protocol == DmxOutputProtocol::ArtNet
+        && output.target_ip == SHOW_ARTNET_LOOPBACK_TARGET_IP
+        && output.port == SHOW_ARTNET_LOOPBACK_PORT
+        && output.serial_port.is_empty()
+        && output.universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
 }
 
-fn show_serial_dmx_device_identity_is_exact(
-    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
-) -> bool {
-    !identity.port_name.trim().is_empty()
-        && !identity.port_type.trim().is_empty()
-        && identity.usb_vid != 0
-        && identity.usb_pid != 0
-        && !identity.manufacturer.trim().is_empty()
-        && !identity.product.trim().is_empty()
-        && !identity.serial_number.trim().is_empty()
-        && identity
-            .windows_device_instance_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-}
-
-fn create_verified_show_serial_dmx_sender(
+fn create_verified_show_artnet_loopback_sender(
     output: &DmxOutputConfig,
     lighting_allowed: bool,
-    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
-    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
 ) -> Result<Option<DmxSender>, String> {
     if !output.enabled || !lighting_allowed {
         return Ok(None);
     }
-    if output.protocol != DmxOutputProtocol::EnttecOpenDmx
+    if output.protocol != DmxOutputProtocol::ArtNet
+        || output.target_ip != SHOW_ARTNET_LOOPBACK_TARGET_IP
+        || output.port != SHOW_ARTNET_LOOPBACK_PORT
+        || output.universe != SHOW_ARTNET_LOOPBACK_UNIVERSE
         || !output.serial_port.is_empty()
-        || !show_serial_dmx_device_identity_is_exact(identity)
     {
         return Err(
-            "Show serial DMX sender identity is not an exact machine-local USB-DMX binding"
+            "Show Art-Net sender is not the exact 127.0.0.1:6454 universe 0 loopback route"
                 .to_string(),
         );
     }
-    EnttecOpenDmxSender::new_verified_with_safety_write_gate(
-        identity,
-        open_dmx_safety_write_gate.clone(),
-    )
-    .map(DmxSender::EnttecOpenDmx)
-    .map(Some)
-    .map_err(|error| error.to_string())
+    ArtNetSender::new(SHOW_ARTNET_LOOPBACK_TARGET_IP, SHOW_ARTNET_LOOPBACK_PORT)
+        .map(DmxSender::ArtNet)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 impl DmxSender {
@@ -129824,7 +129782,7 @@ mod tests {
         assert!(!has_complete(&stale));
     }
 
-    fn staged_show_serial_dmx_output() -> DmxOutputConfig {
+    fn disabled_open_dmx_output() -> DmxOutputConfig {
         DmxOutputConfig {
             enabled: false,
             protocol: DmxOutputProtocol::EnttecOpenDmx,
@@ -129836,29 +129794,12 @@ mod tests {
         }
     }
 
-    fn verified_show_serial_dmx_device() -> io::serial_dmx::VerifiedUsbSerialPortIdentity {
-        io::serial_dmx::VerifiedUsbSerialPortIdentity {
-            port_name: "COM3".to_string(),
-            port_type: "USB 0403:6001 USB Serial Port".to_string(),
-            usb_vid: 0x0403,
-            usb_pid: 0x6001,
-            serial_number: "FTDI-SHOW-INSTANCE-1".to_string(),
-            manufacturer: "FTDI".to_string(),
-            product: "USB Serial Port".to_string(),
-            windows_device_instance_id: Some(
-                r"FTDIBUS\VID_0403+PID_6001+FTDI-SHOW-INSTANCE-1\0000".to_string(),
-            ),
-        }
-    }
-
     fn live_open_dmx_runtime_with_test_sender(
         shared_telemetry: Arc<EngineSharedTelemetry>,
         sender: EnttecOpenDmxSender,
     ) -> EngineRuntime {
-        let mut runtime = EngineRuntime::new_with_shared_telemetry(
-            staged_show_serial_dmx_output(),
-            shared_telemetry,
-        );
+        let mut runtime =
+            EngineRuntime::new_with_shared_telemetry(disabled_open_dmx_output(), shared_telemetry);
         runtime.output.enabled = true;
         runtime.dmx_sender = Some(DmxSender::EnttecOpenDmx(sender));
         runtime.apply_command(EngineCommand::PatchFixture {
@@ -130063,50 +130004,110 @@ mod tests {
             .all(|payload| payload[1..].iter().all(|value| *value == 0)));
     }
 
-    #[test]
-    fn retired_disabled_show_serial_com_alias_is_migrated_without_touching_enabled_or_other_routes()
-    {
-        let retired = DmxOutputConfig {
-            serial_port: "COM3".to_string(),
-            ..staged_show_serial_dmx_output()
-        };
-        let enabled = DmxOutputConfig {
-            enabled: true,
-            ..retired.clone()
-        };
-        let other_universe = DmxOutputConfig {
-            universe: 1,
-            ..retired.clone()
-        };
-        let mut snapshot = EngineSnapshot {
-            output: retired.clone(),
-            dmx_outputs: vec![retired, enabled.clone(), other_universe.clone()],
-            ..EngineSnapshot::default()
-        };
-        normalize_retired_show_serial_dmx_project_alias(&mut snapshot);
-        assert!(snapshot.output.serial_port.is_empty());
-        assert!(snapshot.dmx_outputs[0].serial_port.is_empty());
-        assert_eq!(snapshot.dmx_outputs[1], enabled);
-        assert_eq!(snapshot.dmx_outputs[2], other_universe);
+    fn staged_show_artnet_loopback_output() -> DmxOutputConfig {
+        DmxOutputConfig {
+            enabled: false,
+            protocol: DmxOutputProtocol::ArtNet,
+            target_ip: SHOW_ARTNET_LOOPBACK_TARGET_IP.to_string(),
+            port: SHOW_ARTNET_LOOPBACK_PORT,
+            universe: SHOW_ARTNET_LOOPBACK_UNIVERSE,
+            serial_port: String::new(),
+            serial_baud_rate: DmxOutputConfig::default().serial_baud_rate,
+        }
     }
 
     #[test]
-    fn show_serial_dmx_route_enable_is_exact_atomic_and_sender_bound() {
-        let staged = staged_show_serial_dmx_output();
-        let device = verified_show_serial_dmx_device();
+    fn show_artnet_loopback_route_matcher_rejects_every_non_contract_field() {
+        let staged = staged_show_artnet_loopback_output();
+        assert!(show_artnet_loopback_route_is_exact_staged(&staged));
+        for invalid in [
+            DmxOutputConfig {
+                enabled: true,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                protocol: DmxOutputProtocol::Sacn,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                target_ip: "192.168.50.2".to_string(),
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                port: 6455,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                universe: 1,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                serial_port: "COM3".to_string(),
+                ..staged
+            },
+        ] {
+            assert!(!show_artnet_loopback_route_is_exact_staged(&invalid));
+        }
+    }
+
+    #[test]
+    fn show_artnet_loopback_writes_artdmx_u0_full_frame_with_the_minimal_red_probe() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("loopback receiver");
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("loopback receiver timeout");
+        let port = receiver.local_addr().expect("loopback address").port();
+        let config = DmxOutputConfig {
+            enabled: true,
+            ..staged_show_artnet_loopback_output()
+        };
+        let mut sender = Some(
+            ArtNetSender::new(SHOW_ARTNET_LOOPBACK_TARGET_IP, port)
+                .map(DmxSender::ArtNet)
+                .expect("loopback Art-Net sender"),
+        );
+        let mut recovery = DmxRouteRecovery::default();
+        let mut frame = [0u8; 512];
+        frame[0] = 255; // DMX ch1 -> payload[0], Mega PAR red.
+        frame[4] = 255; // DMX ch5 -> payload[4], Mega PAR dimmer.
+        frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX] = 255;
+        let shared = EngineSharedTelemetry::new();
+        let outcome = send_output_frame_with_recovery(
+            &mut sender,
+            &mut recovery,
+            &config,
+            SHOW_ARTNET_LOOPBACK_UNIVERSE,
+            &frame,
+            Instant::now(),
+            true,
+            &shared,
+        );
+        assert_eq!(outcome.result.expect("ArtDmx write"), 530);
+        let mut bytes = [0u8; 600];
+        let (received, _) = receiver.recv_from(&mut bytes).expect("ArtDmx packet");
+        let packet = parse_art_dmx_packet(&bytes[..received]).expect("ArtDmx parse");
+        assert_eq!(packet.universe, SHOW_ARTNET_LOOPBACK_UNIVERSE);
+        assert_eq!(packet.data.len(), 512);
+        assert_eq!(packet.data[0], 255);
+        assert_eq!(packet.data[4], 255);
+        assert_eq!(packet.data[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX], 0);
+    }
+
+    #[test]
+    fn show_artnet_loopback_route_enable_is_exact_atomic_and_sender_bound() {
+        let staged = staged_show_artnet_loopback_output();
         let mut runtime = EngineRuntime::new(staged.clone());
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         let generation_before = runtime.dmx_route_configuration_generation;
         let mut sender_inputs = Vec::new();
 
         runtime
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &staged,
-                &device,
                 safety.epoch,
                 safety.generation,
-                |output, allowed, identity, _physical_gate| {
-                    sender_inputs.push((output.clone(), allowed, identity.clone()));
+                |output, allowed| {
+                    sender_inputs.push((output.clone(), allowed));
                     Ok(None)
                 },
             )
@@ -130114,19 +130115,19 @@ mod tests {
 
         assert_eq!(sender_inputs.len(), 1);
         assert!(sender_inputs[0].1);
-        assert_eq!(sender_inputs[0].2, device);
         assert_eq!(
             sender_inputs[0].0,
             DmxOutputConfig {
                 enabled: true,
                 ..staged.clone()
             },
-            "the serial sender receives the exact route with only enabled changed"
+            "the Art-Net sender receives the exact route with only enabled changed"
         );
         assert_eq!(runtime.dmx_output_snapshot().len(), 1);
-        assert_eq!(runtime.output.protocol, DmxOutputProtocol::EnttecOpenDmx);
+        assert_eq!(runtime.output.protocol, DmxOutputProtocol::ArtNet);
         assert!(runtime.output.serial_port.is_empty());
-        assert_eq!(runtime.output.serial_baud_rate, 250_000);
+        assert_eq!(runtime.output.target_ip, SHOW_ARTNET_LOOPBACK_TARGET_IP);
+        assert_eq!(runtime.output.port, SHOW_ARTNET_LOOPBACK_PORT);
         assert_eq!(runtime.output.universe, 0);
         assert!(runtime.output.enabled);
         assert_eq!(
@@ -130138,16 +130139,15 @@ mod tests {
         let rejected_before = rejected.build_snapshot(0);
         let rejected_generation = rejected.dmx_route_configuration_generation;
         let wrong_route = DmxOutputConfig {
-            serial_port: "COM4".to_string(),
+            target_ip: "192.168.50.2".to_string(),
             ..staged.clone()
         };
         assert!(rejected
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &wrong_route,
-                &device,
                 safety.epoch,
                 safety.generation,
-                |_, _, _, _| panic!("a rejected route must not reach serial sender creation"),
+                |_, _| panic!("a rejected route must not reach Art-Net sender creation"),
             )
             .is_err());
         assert_eq!(rejected.build_snapshot(0), rejected_before);
@@ -130156,35 +130156,17 @@ mod tests {
             rejected_generation
         );
 
-        let mut missing_instance = device.clone();
-        missing_instance.serial_number.clear();
-        assert!(rejected
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
-                &staged,
-                &missing_instance,
-                safety.epoch,
-                safety.generation,
-                |_, _, _, _| panic!(
-                    "an identity without a hardware instance must not open the selected interface"
-                ),
-            )
-            .is_err());
-        assert_eq!(rejected.build_snapshot(0), rejected_before);
-
         let mut already_enabled = EngineRuntime::new(DmxOutputConfig {
             enabled: true,
             ..staged.clone()
         });
         let already_enabled_before = already_enabled.build_snapshot(0);
         assert!(already_enabled
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &staged,
-                &device,
                 safety.epoch,
                 safety.generation,
-                |_, _, _, _| panic!(
-                    "an already enabled route must not reach serial sender creation"
-                ),
+                |_, _| panic!("an already enabled route must not reach Art-Net sender creation"),
             )
             .is_err());
         assert_eq!(already_enabled.build_snapshot(0), already_enabled_before);
@@ -130202,43 +130184,38 @@ mod tests {
             });
         let multiple_routes_before = multiple_routes.build_snapshot(0);
         assert!(multiple_routes
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &staged,
-                &device,
                 safety.epoch,
                 safety.generation,
-                |_, _, _, _| panic!(
-                    "multiple authored routes must not reach serial sender creation"
-                ),
+                |_, _| panic!("multiple authored routes must not reach serial sender creation"),
             )
             .is_err());
         assert_eq!(multiple_routes.build_snapshot(0), multiple_routes_before);
 
-        let mut unavailable_device = EngineRuntime::new(staged.clone());
-        let unavailable_device_before = unavailable_device.build_snapshot(0);
-        let unavailable_device_generation = unavailable_device.dmx_route_configuration_generation;
-        assert!(unavailable_device
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+        let mut unavailable_sender = EngineRuntime::new(staged.clone());
+        let unavailable_sender_before = unavailable_sender.build_snapshot(0);
+        let unavailable_sender_generation = unavailable_sender.dmx_route_configuration_generation;
+        assert!(unavailable_sender
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &staged,
-                &device,
                 safety.epoch,
                 safety.generation,
-                |_, _, _, _| Err("selected USB-DMX interface is unavailable".to_string()),
+                |_, _| Err("Art-Net loopback socket is unavailable".to_string()),
             )
             .is_err());
         assert_eq!(
-            unavailable_device.build_snapshot(0),
-            unavailable_device_before
+            unavailable_sender.build_snapshot(0),
+            unavailable_sender_before
         );
         assert_eq!(
-            unavailable_device.dmx_route_configuration_generation,
-            unavailable_device_generation
+            unavailable_sender.dmx_route_configuration_generation,
+            unavailable_sender_generation
         );
 
         let (ack, receiver) = mpsc::sync_channel(1);
-        rejected.apply_command(EngineCommand::EnableShowSerialDmxRoutePublished {
+        rejected.apply_command(EngineCommand::EnableShowArtNetLoopbackRoutePublished {
             expected_disabled_output: rejected.output.clone(),
-            expected_device: device,
             expected_safety_epoch: safety.epoch,
             expected_safety_generation: safety.generation,
             expires_at: Instant::now() - Duration::from_millis(1),
@@ -130252,21 +130229,72 @@ mod tests {
     }
 
     #[test]
-    fn show_serial_dmx_route_enable_linearizes_after_priority_blackout() {
-        let staged = staged_show_serial_dmx_output();
-        let device = verified_show_serial_dmx_device();
+    fn show_artnet_loopback_route_publication_failure_drops_sender_and_restores_staged_route() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let before = runtime.build_snapshot(0);
+        let generation_before = runtime.dmx_route_configuration_generation;
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::EnableShowArtNetLoopbackRoutePublished {
+            expected_disabled_output: staged.clone(),
+            expected_safety_epoch: safety.epoch,
+            expected_safety_generation: safety.generation,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        assert!(
+            runtime.output.enabled,
+            "B must open the exact Art-Net route before publication"
+        );
+        assert!(
+            runtime.dmx_sender.is_some(),
+            "B must own the newly opened Art-Net sender"
+        );
+        assert_eq!(
+            runtime.dmx_route_configuration_generation,
+            generation_before + 1
+        );
+
+        runtime.fail_next_pending_publication = true;
+        let published = RwLock::new(before.clone());
+        runtime.publish_pending_command_acks(0, &published);
+
+        assert!(receiver
+            .recv()
+            .expect("the failed publication must acknowledge")
+            .is_err());
+        assert_eq!(
+            runtime.output, staged,
+            "the authored A route must be restored"
+        );
+        assert!(
+            runtime.dmx_sender.is_none(),
+            "rollback must drop the B sender"
+        );
+        assert_eq!(
+            runtime.dmx_route_configuration_generation, generation_before,
+            "rollback must restore the original route generation"
+        );
+        assert_eq!(runtime.build_snapshot(0), before);
+        assert_eq!(*published.read().unwrap(), before);
+    }
+
+    #[test]
+    fn show_artnet_loopback_route_enable_linearizes_after_priority_blackout() {
+        let staged = staged_show_artnet_loopback_output();
         let mut runtime = EngineRuntime::new(staged.clone());
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         let before = runtime.build_snapshot(0);
         let generation = runtime.dmx_route_configuration_generation;
         let telemetry = Arc::clone(&runtime.shared_telemetry);
 
-        let result = runtime.apply_show_serial_dmx_route_enable_with_sender_factory(
+        let result = runtime.apply_show_artnet_loopback_route_enable_with_sender_factory(
             &staged,
-            &device,
             safety.epoch,
             safety.generation,
-            |_, _, _, _| {
+            |_, _| {
                 // This is the same mutex transition used by the priority S0
                 // command. It deterministically interleaves after the handle opens
                 // but before the route can become live.
@@ -130285,9 +130313,8 @@ mod tests {
     }
 
     #[test]
-    fn show_serial_dmx_route_rejects_an_actual_priority_s0_enqueue_before_any_live_tick() {
-        let staged = staged_show_serial_dmx_output();
-        let device = verified_show_serial_dmx_device();
+    fn show_artnet_loopback_route_rejects_an_actual_priority_s0_enqueue_before_any_live_tick() {
+        let staged = staged_show_artnet_loopback_output();
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
         let mut runtime =
             EngineRuntime::new_with_shared_telemetry(staged.clone(), Arc::clone(&shared_telemetry));
@@ -130304,12 +130331,11 @@ mod tests {
             enqueue_handle.safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
         });
 
-        let route_result = runtime.apply_show_serial_dmx_route_enable_with_sender_factory(
+        let route_result = runtime.apply_show_artnet_loopback_route_enable_with_sender_factory(
             &staged,
-            &device,
             safety_before.epoch,
             safety_before.generation,
-            |_, _, _, _| {
+            |_, _| {
                 let deadline = Instant::now() + Duration::from_millis(250);
                 while handle.safety_queue.is_empty() && Instant::now() < deadline {
                     thread::yield_now();
@@ -130350,13 +130376,12 @@ mod tests {
     }
 
     #[test]
-    fn show_serial_dmx_route_queued_s0_forces_zero_before_the_worker_consumes_priority() {
+    fn show_artnet_loopback_route_queued_s0_forces_zero_before_the_worker_consumes_priority() {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         receiver
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
-        let staged = staged_show_serial_dmx_output();
-        let device = verified_show_serial_dmx_device();
+        let staged = staged_show_artnet_loopback_output();
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
         let mut runtime =
             EngineRuntime::new_with_shared_telemetry(staged.clone(), Arc::clone(&shared_telemetry));
@@ -130364,19 +130389,17 @@ mod tests {
         handle.shared_telemetry = Arc::clone(&shared_telemetry);
         let safety_before = runtime.shared_telemetry.safety_blackout_authority();
 
-        // Commit the exact logical serial route first. The injected Art-Net
-        // sender is a loopback-only test transport; production can only
-        // create the verified Open DMX sender. It proves that the next tick
-        // reaches a real DMX sender boundary rather than merely zeroing a
-        // preview buffer.
+        // Commit the exact logical loopback route first. The injected sender
+        // uses a private test port; production can only use 127.0.0.1:6454.
+        // It proves that the next tick reaches a real ArtDmx boundary rather
+        // than merely zeroing a preview buffer.
         let loopback_port = receiver.local_addr().unwrap().port();
         runtime
-            .apply_show_serial_dmx_route_enable_with_sender_factory(
+            .apply_show_artnet_loopback_route_enable_with_sender_factory(
                 &staged,
-                &device,
                 safety_before.epoch,
                 safety_before.generation,
-                |_, _, _, _| {
+                |_, _| {
                     ArtNetSender::new("127.0.0.1", loopback_port)
                         .map(DmxSender::ArtNet)
                         .map(Some)

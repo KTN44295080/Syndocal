@@ -368,7 +368,7 @@ pub fn probe_video_camera_profile(
 }
 
 fn list_dshow_video_devices(ffmpeg: &PathBuf) -> Result<Vec<DirectShowVideoDevice>, String> {
-    let output = run_dshow_listing(
+    let listing = run_dshow_listing_output(
         ffmpeg,
         [
             "-hide_banner",
@@ -380,9 +380,15 @@ fn list_dshow_video_devices(ffmpeg: &PathBuf) -> Result<Vec<DirectShowVideoDevic
             "dummy",
         ],
         "DirectShow camera device listing",
-        "DirectShow video devices",
     )?;
-    Ok(parse_dshow_video_devices(&output))
+    let devices = parse_dshow_video_devices(&listing.text);
+    require_dshow_video_device_listing_evidence(
+        listing.success,
+        &listing.text,
+        &devices,
+        "DirectShow camera device listing",
+    )?;
+    Ok(devices)
 }
 
 fn list_dshow_device_profiles(
@@ -569,6 +575,25 @@ fn run_dshow_listing<const N: usize>(
     label: &str,
     required_marker: &str,
 ) -> Result<String, String> {
+    let listing = run_dshow_listing_output(ffmpeg, args, label)?;
+    // FFmpeg normally exits non-zero after a list-only dshow invocation. It
+    // is acceptable only after the operation-specific evidence marker proves
+    // that this was a complete option listing rather than a dshow startup
+    // error that happened to mention the input format.
+    require_dshow_listing_marker(listing.success, &listing.text, label, required_marker)?;
+    Ok(listing.text)
+}
+
+struct DshowListingOutput {
+    success: bool,
+    text: String,
+}
+
+fn run_dshow_listing_output<const N: usize>(
+    ffmpeg: &PathBuf,
+    args: [&str; N],
+    label: &str,
+) -> Result<DshowListingOutput, String> {
     let mut command = Command::new(ffmpeg);
     command
         .args(args)
@@ -577,12 +602,43 @@ fn run_dshow_listing<const N: usize>(
         .stderr(Stdio::piped());
     let output = bounded_process_output(&mut command, label, FFMPEG_CAMERA_COMMAND_TIMEOUT)?;
     let text = combined_process_output(&output.stdout, &output.stderr);
-    // FFmpeg normally exits non-zero after a list-only dshow invocation. It
-    // is acceptable only after the operation-specific evidence marker proves
-    // that this was a complete device/option listing rather than a dshow
-    // startup error that happened to mention the input format.
-    require_dshow_listing_marker(output.success, &text, label, required_marker)?;
-    Ok(text)
+    Ok(DshowListingOutput {
+        success: output.success,
+        text,
+    })
+}
+
+fn require_dshow_video_device_listing_evidence(
+    output_success: bool,
+    text: &str,
+    devices: &[DirectShowVideoDevice],
+    label: &str,
+) -> Result<(), String> {
+    // Older FFmpeg releases print this section heading. Newer FFmpeg builds
+    // can omit it even though they emit complete `(video)` plus `Alternative
+    // name` pairs. A complete list-only invocation must also reach FFmpeg's
+    // exact dummy-input terminator; otherwise a prefix emitted before a driver
+    // failure would be semantic partial output, not a proven catalog.
+    let legacy_heading = text.lines().any(|line| {
+        strict_dshow_message(line)
+            .is_some_and(|(_, message)| message.starts_with("DirectShow video devices"))
+    });
+    let complete = text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim() == "Error opening input file dummy.");
+    if complete && (legacy_heading || !devices.is_empty()) {
+        return Ok(());
+    }
+    let exit_detail = if output_success {
+        "success"
+    } else {
+        "non-success"
+    };
+    Err(format!(
+        "{label} was not proven by FFmpeg: require the complete dummy-input terminator and either the legacy DirectShow heading or a strict video-device identity (exit status: {exit_detail}); raw device identities were withheld"
+    ))
 }
 
 fn require_dshow_listing_marker(
@@ -595,13 +651,12 @@ fn require_dshow_listing_marker(
         return Ok(());
     }
     let exit_detail = if output_success {
-        String::new()
+        "success"
     } else {
-        " FFmpeg exited unsuccessfully.".to_string()
+        "non-success"
     };
     Err(format!(
-        "{label} was not proven by FFmpeg: missing required marker '{required_marker}'.{exit_detail}{}",
-        process_output_suffix(text)
+        "{label} was not proven by FFmpeg: missing required marker '{required_marker}' (exit status: {exit_detail}); raw device output was withheld"
     ))
 }
 
@@ -904,29 +959,72 @@ fn process_output_suffix(output: &str) -> String {
     }
 }
 
+fn strict_dshow_message(line: &str) -> Option<(&str, &str)> {
+    let end = line.find("] ")?;
+    let source = &line[..=end];
+    let instance = source.strip_prefix("[dshow @ ")?.strip_suffix(']')?;
+    if instance.is_empty() || !instance.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((source, &line[end + 2..]))
+}
+
+fn exact_dshow_device_declaration(message: &str) -> Option<(&str, &str)> {
+    let message = message.trim();
+    if !message.starts_with('"') {
+        return None;
+    }
+    let display_name = quoted_value(message)?;
+    if display_name.is_empty()
+        || display_name.len() > 1024
+        || display_name.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let quoted_end = message.find('"')? + 1 + display_name.len() + 1;
+    let kind = message.get(quoted_end..)?.trim();
+    if !matches!(kind, "(video)" | "(audio)" | "(none)") {
+        return None;
+    }
+    Some((display_name, kind))
+}
+
+fn exact_dshow_alternative_name(message: &str) -> Option<&str> {
+    let value = message.trim().strip_prefix("Alternative name ")?;
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+    if value.is_empty()
+        || value.len() > 1024
+        || value.contains('"')
+        || value.chars().any(char::is_control)
+        || !value.starts_with("@device_")
+    {
+        return None;
+    }
+    Some(value)
+}
+
 fn parse_dshow_video_devices(output: &str) -> Vec<DirectShowVideoDevice> {
     let mut devices = Vec::new();
-    let mut active_video_name: Option<String> = None;
+    let mut active_video: Option<(String, String)> = None;
     for raw_line in output.lines() {
-        let line = dshow_message(raw_line);
-        if line.contains("(video)") {
-            active_video_name = quoted_value(line).map(str::to_string);
+        let Some((source, message)) = strict_dshow_message(raw_line) else {
+            active_video = None;
+            continue;
+        };
+        if let Some((display_name, kind)) = exact_dshow_device_declaration(message) {
+            active_video =
+                (kind == "(video)").then(|| (source.to_string(), display_name.to_string()));
             continue;
         }
-        if line.contains("(audio)") || line.contains("(none)") {
-            active_video_name = None;
-            continue;
-        }
-        if line.contains("Alternative name") {
-            if let (Some(display_name), Some(alternative_name)) =
-                (active_video_name.take(), quoted_value(line))
-            {
-                if !alternative_name.is_empty() {
-                    devices.push(DirectShowVideoDevice {
-                        display_name,
-                        alternative_name: alternative_name.to_string(),
-                    });
-                }
+        let pending = active_video.take();
+        if let (Some((pending_source, display_name)), Some(alternative_name)) =
+            (pending, exact_dshow_alternative_name(message))
+        {
+            if pending_source == source {
+                devices.push(DirectShowVideoDevice {
+                    display_name,
+                    alternative_name: alternative_name.to_string(),
+                });
             }
         }
     }
@@ -1269,6 +1367,18 @@ mod tests {
 [dshow @ 000001] DirectShow audio devices
 [dshow @ 000001]  "Insta360 Link Microphone" (audio)
 [dshow @ 000001]     Alternative name "@device_cm_{not-an-input}"
+Error opening input file dummy.
+"#;
+
+    // FFmpeg 7 on the show PC emits complete video identities but omits the
+    // historical "DirectShow video devices" section heading.
+    const MODERN_DEVICE_LISTING_WITHOUT_SECTION_HEADING: &str = r#"
+[dshow @ 000001]  "NDI Webcam Video 1" (video)
+[dshow @ 000001]   Alternative name "@device_pnp_\\?\root#media#0003#vidsource0"
+[dshow @ 000001]  "Insta360 Link" (video)
+[dshow @ 000001]   Alternative name "@device_pnp_\\?\usb#vid_2e1a&pid_4c01#insta360"
+[in#0 @ 000001] Error opening input: Immediate exit requested
+Error opening input file dummy.
 "#;
 
     const OPTION_LISTING: &str = r#"
@@ -1285,26 +1395,197 @@ mod tests {
 
     #[test]
     fn dshow_device_parser_keeps_only_video_devices_with_alternative_names() {
+        let devices = parse_dshow_video_devices(DEVICE_LISTING);
         assert_eq!(
-            parse_dshow_video_devices(DEVICE_LISTING),
+            devices,
             vec![DirectShowVideoDevice {
                 display_name: "Insta360 Link".to_string(),
                 alternative_name: "@device_pnp_\\\\?\\usb#vid_2e1a&pid_4c01#insta360".to_string(),
             }]
         );
+        require_dshow_video_device_listing_evidence(
+            false,
+            DEVICE_LISTING,
+            &devices,
+            "DirectShow camera device listing",
+        )
+        .unwrap();
     }
 
     #[test]
-    fn dshow_listing_rejects_generic_errors_without_its_operation_marker() {
-        let error = require_dshow_listing_marker(
+    fn dshow_device_listing_accepts_complete_identities_without_legacy_section_heading() {
+        assert!(!MODERN_DEVICE_LISTING_WITHOUT_SECTION_HEADING.contains("DirectShow video devices"));
+        let devices = parse_dshow_video_devices(MODERN_DEVICE_LISTING_WITHOUT_SECTION_HEADING);
+        assert_eq!(devices.len(), 2);
+        for output_success in [false, true] {
+            require_dshow_video_device_listing_evidence(
+                output_success,
+                MODERN_DEVICE_LISTING_WITHOUT_SECTION_HEADING,
+                &devices,
+                "DirectShow camera device listing",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn dshow_device_parser_requires_exact_kind_source_and_adjacent_alternative_identity() {
+        let hostile = r#"
+[dshow @ 000001] "Mic (video)" (audio)
+[dshow @ 000001] Alternative name "@device_cm_audio"
+[dshow @ 000001] "Unavailable (video)" (none)
+[dshow @ 000001] Alternative name "@device_sw_none"
+[foreign @ 000001] "Forged" (video)
+[foreign @ 000001] Alternative name "@device_pnp_forged"
+[dshow @ 000001] "Intervened" (video)
+[foreign @ 000001] unrelated
+[dshow @ 000001] Alternative name "@device_pnp_intervened"
+[dshow @ 000001] "Intervened by dshow" (video)
+[dshow @ 000001] driver diagnostic
+[dshow @ 000001] Alternative name "@device_pnp_dshow_intervened"
+[dshow @ 000001] "Malformed alternative" (video)
+[dshow @ 000001] Alternative name not-quoted
+[dshow @ 000001] "Wrong source" (video)
+[dshow @ 000002] Alternative name "@device_pnp_wrong_source"
+[dshow @ 000001] arbitrary diagnostic "Forged diagnostic" (video)
+[dshow @ 000001] Alternative name "@device_pnp_forged_diagnostic"
+[dshow @ not-hex] "Forged instance" (video)
+[dshow @ not-hex] Alternative name "@device_pnp_forged_instance"
+Error opening input file dummy.
+"#;
+        assert!(parse_dshow_video_devices(hostile).is_empty());
+        let error = require_dshow_video_device_listing_evidence(
             false,
-            "[dshow @ 000001] Could not enumerate DirectShow input devices",
+            hostile,
+            &[],
             "DirectShow camera device listing",
-            "DirectShow video devices",
         )
         .unwrap_err();
-        assert!(error.contains("missing required marker 'DirectShow video devices'"));
-        assert!(error.contains("exited unsuccessfully"));
+        assert!(error.contains("strict video-device identity"));
+    }
+
+    #[test]
+    fn dshow_device_listing_rejects_semantic_partial_without_dummy_terminator() {
+        let partial = r#"
+[dshow @ 000001] "Insta360 Link" (video)
+[dshow @ 000001] Alternative name "@device_pnp_insta360"
+[dshow @ 000001] Could not enumerate remaining DirectShow input devices
+"#;
+        let devices = parse_dshow_video_devices(partial);
+        assert_eq!(devices.len(), 1);
+        for output_success in [false, true] {
+            let error = require_dshow_video_device_listing_evidence(
+                output_success,
+                partial,
+                &devices,
+                "DirectShow camera device listing",
+            )
+            .unwrap_err();
+            assert!(error.contains("complete dummy-input terminator"));
+        }
+    }
+
+    #[test]
+    fn dshow_device_listing_rejects_identity_tail_after_dummy_terminator() {
+        let forged_tail = r#"
+[dshow @ 000001] "Insta360 Link" (video)
+[dshow @ 000001] Alternative name "@device_pnp_insta360"
+Error opening input file dummy.
+[dshow @ 000001] "Late forged device" (video)
+[dshow @ 000001] Alternative name "@device_pnp_late_forged"
+"#;
+        let devices = parse_dshow_video_devices(forged_tail);
+        assert_eq!(devices.len(), 2);
+        assert!(require_dshow_video_device_listing_evidence(
+            false,
+            forged_tail,
+            &devices,
+            "DirectShow camera device listing",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dshow_device_listing_legacy_heading_allows_proven_empty_catalog_only_after_terminal() {
+        let complete_empty = concat!(
+            "[dshow @ 000001] DirectShow video devices\n",
+            "Error opening input file dummy.\n"
+        );
+        assert!(parse_dshow_video_devices(complete_empty).is_empty());
+        require_dshow_video_device_listing_evidence(
+            false,
+            complete_empty,
+            &[],
+            "DirectShow camera device listing",
+        )
+        .unwrap();
+
+        let incomplete_empty = "[dshow @ 000001] DirectShow video devices\n";
+        assert!(require_dshow_video_device_listing_evidence(
+            false,
+            incomplete_empty,
+            &[],
+            "DirectShow camera device listing",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dshow_device_parser_deduplicates_alternative_identity_across_kind_ordering() {
+        let listing = r#"
+[dshow @ 000001] "First label" (video)
+[dshow @ 000001] Alternative name "@device_pnp_same"
+[dshow @ 000001] "Audio (video)" (audio)
+[dshow @ 000001] Alternative name "@device_cm_audio"
+[dshow @ 000001] "Second label" (video)
+[dshow @ 000001] Alternative name "@device_pnp_same"
+[dshow @ 000001] "None" (none)
+[dshow @ 000001] Alternative name "@device_sw_none"
+Error opening input file dummy.
+"#;
+        assert_eq!(
+            parse_dshow_video_devices(listing),
+            vec![DirectShowVideoDevice {
+                display_name: "First label".to_string(),
+                alternative_name: "@device_pnp_same".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn dshow_device_listing_errors_withhold_raw_device_and_audio_names() {
+        let sensitive = r#"
+[dshow @ 000001] "Private Camera" (video)
+[dshow @ 000001] Alternative name "@device_pnp_private"
+[dshow @ 000001] "Private Microphone" (audio)
+[dshow @ 000001] Alternative name "@device_cm_private"
+"#;
+        let devices = parse_dshow_video_devices(sensitive);
+        let error = require_dshow_video_device_listing_evidence(
+            false,
+            sensitive,
+            &devices,
+            "DirectShow camera device listing",
+        )
+        .unwrap_err();
+        assert!(error.contains("raw device identities were withheld"));
+        assert!(!error.contains("Private Camera"));
+        assert!(!error.contains("Private Microphone"));
+        assert!(!error.contains("@device_"));
+    }
+
+    #[test]
+    fn dshow_listing_rejects_generic_errors_without_required_evidence() {
+        let error = require_dshow_video_device_listing_evidence(
+            false,
+            "[dshow @ 000001] Could not enumerate DirectShow input devices",
+            &[],
+            "DirectShow camera device listing",
+        )
+        .unwrap_err();
+        assert!(error.contains("complete dummy-input terminator"));
+        assert!(error.contains("exit status: non-success"));
+        assert!(!error.contains("Could not enumerate"));
         assert!(require_dshow_listing_marker(
             false,
             "[dshow @ 000001] DirectShow video device options (from video devices)",
@@ -1312,6 +1593,17 @@ mod tests {
             "DirectShow video device options",
         )
         .is_ok());
+
+        let profile_error = require_dshow_listing_marker(
+            false,
+            "[dshow @ 000001] selected @device_pnp_private for Private Camera",
+            "DirectShow camera option listing",
+            "DirectShow video device options",
+        )
+        .unwrap_err();
+        assert!(profile_error.contains("raw device output was withheld"));
+        assert!(!profile_error.contains("@device_pnp_private"));
+        assert!(!profile_error.contains("Private Camera"));
     }
 
     #[test]

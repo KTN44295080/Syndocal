@@ -9,7 +9,6 @@ import type {
   DmxOutputConfig,
   EngineSnapshot,
   EngineTelemetryReport,
-  SerialDmxMachineBindingStatus,
   SerialPortSummary,
 } from "./types";
 
@@ -80,19 +79,6 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   const [dmxTestChannel, setDmxTestChannel] = createSignal(1);
   const [dmxTestWidth, setDmxTestWidth] = createSignal(1);
   const [dmxTestValue, setDmxTestValue] = createSignal(255);
-  const [serialDmxMachineBinding, setSerialDmxMachineBinding] = createSignal<SerialDmxMachineBindingStatus | null>(null);
-
-  const refreshSerialDmxMachineBinding = async () => {
-    try {
-      setSerialDmxMachineBinding(await options.invoke<SerialDmxMachineBindingStatus>(
-        "get_serial_dmx_machine_binding_status_v1",
-      ));
-    } catch (error) {
-      setSerialDmxMachineBinding(null);
-      options.setMessage(String(error));
-    }
-  };
-
   const refreshEngineTelemetryReport = async () => {
     try {
       setEngineTelemetryReport(await options.invoke<EngineTelemetryReport>("get_engine_telemetry_report"));
@@ -128,18 +114,18 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     );
   };
 
-  const enableStagedShowSerialDmxRoute = async () => {
+  const enableStagedShowArtNetLoopbackRoute = async () => {
     try {
       const lease = selectOnlyActiveOutputLease(
         await queryOutputLeaseAuthority(options.invoke),
         ["lighting", "video"],
       );
       await executeOutputControl(options.invoke, {
-        kind: "enable_show_serial_dmx_route",
+        kind: "enable_show_artnet_loopback_route",
         lease,
       });
       await options.refreshSnapshot();
-      options.setMessage("Staged machine-local USB-DMX show route enabled.");
+      options.setMessage("Staged same-PC Art-Net loopback show route enabled.");
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -201,24 +187,8 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     try {
       const ports = await options.invoke<SerialPortSummary[]>("list_serial_ports");
       options.setSerialPorts(ports);
-      await refreshSerialDmxMachineBinding();
     } catch (error) {
       options.setMessage(String(error));
-    }
-  };
-
-  const selectSerialDmxMachineBinding = async (port: SerialPortSummary) => {
-    try {
-      const instance = port.windows_device_instance_id?.trim();
-      if (!instance) throw new Error("Selected USB-DMX interface does not expose a Windows PnP instance.");
-      setSerialDmxMachineBinding(await options.invoke<SerialDmxMachineBindingStatus>(
-        "select_serial_dmx_machine_binding_v1",
-        { request: { portName: port.name, windowsDeviceInstanceId: instance } },
-      ));
-      options.setMessage(`Confirmed machine-local USB-DMX interface ${port.name}.`);
-    } catch (error) {
-      options.setMessage(String(error));
-      await refreshSerialDmxMachineBinding();
     }
   };
 
@@ -233,13 +203,12 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     dmxTestWidth,
     setDmxTestWidth,
     dmxTestValue,
-    serialDmxMachineBinding,
     setDmxTestValue,
     refreshEngineTelemetryReport,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
     applyOutput,
-    enableStagedShowSerialDmxRoute,
+    enableStagedShowArtNetLoopbackRoute,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     dmxRouteLabel,
@@ -250,7 +219,5 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     setDmxRouteEnabled,
     setOutputProtocol,
     refreshSerialPorts,
-    refreshSerialDmxMachineBinding,
-    selectSerialDmxMachineBinding,
   };
 }

@@ -6,6 +6,37 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
+- The same-PC output/camera repair checkpoint is based on clean pushed parent
+  `c152356beef2b8ec5447b85149df89ad2ea4ca78` on
+  `codex/syndocal-v1.2`. The same-PC show-output clean break replaces the
+  retired show-only USB/Enttec activation with a payloadless, locally
+  confirmed Art-Net route fixed at `127.0.0.1:6454`, wire U0, 512 bytes, and
+  no serial field. Generic serial DMX remains available outside this exact
+  show path. The strict sender masks DMX channel 500 to zero immediately
+  before packet encoding.
+- Exact MSVC `14.44.35207` focused evidence after the final rollback/UI repair:
+  camera catalog `21/21`, engine Art-Net `7/7`, Syndocal Art-Net `3/3`, and
+  protocol control-plane `1/1`; failures and ignored tests are zero and
+  first-party warnings are zero. The wire proof observes ch1/ch5 at payload
+  bytes 0/4 and ch500 zero at payload byte 499. Independent Terra xHigh review
+  is GO after closing the stale Setup I/O fixture and publication-failure
+  rollback proof. Ox was unavailable for this narrow review exception.
+- A fixed two-Sender Spout state/validation module is source-complete and has
+  independent Terra xHigh static GO: exact names `Syndocal Background` and
+  `Syndocal Foreground`, exact `1920x1080`, cached RGBA black, explicit sender
+  establishment, authority-restored recovery, and fail-closed composition
+  identity. It is not yet registered or integrated into runtime/UI, so no
+  production or native Spout claim follows from this checkpoint.
+- C: reached zero free bytes during the focused build. A dry run proved that
+  Cargo profile `dev` alone owned `205,503` generated files / `400.0 GiB`.
+  `cargo clean --profile dev` removed only those regenerable development
+  artifacts, retained `target/release`, QA evidence, source, and authored SDC
+  files, and restored `188,021,350,400` bytes free. The subsequent exact-linker
+  focused builds regenerated their required graph successfully.
+- The authoritative same-PC output gate is
+  [qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md](DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md).
+  Remote Art-Net/NDI is deliberately out of the current acceptance scope.
+
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
 - Last pushed alpha.30 source checkpoint: `9c9a96da6955f1ee0098468f30e16221ccaf779e` (`feat: add hybrid ASIO program and WDM cue routing`). It was pushed to `origin/codex/syndocal-v1.2` with exact upstream equality. No alpha.30 native artifact is accepted yet.

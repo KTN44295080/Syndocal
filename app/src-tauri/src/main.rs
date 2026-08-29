@@ -18,7 +18,7 @@ use std::{
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
 #[cfg(test)]
-mod serial_show_dmx_route_tests;
+mod show_artnet_loopback_route_tests;
 
 use base64::Engine as _;
 use dj_link_persistence_runtime::{
@@ -66,7 +66,7 @@ use protocol::{
         OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
         OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
         OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
@@ -166,7 +166,6 @@ mod ndi_transport;
 mod normal_audio_output;
 mod output_lease;
 mod scene_creation;
-mod serial_dmx_machine;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
 pub mod timeline_cue_audio;
@@ -23661,7 +23660,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_art_rdm_devices",
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
-    "enable_show_serial_dmx_route_v1",
+    "enable_show_art_net_loopback_route_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -23702,7 +23701,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
     "select_normal_audio_output",
-    "select_serial_dmx_machine_binding_v1",
     "send_art_rdm_request",
     "send_dmx_routes_test_frame",
     "send_dmx_test_frame",
@@ -24213,7 +24211,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
     match command {
         EngineCommand::SetOutput(..)
         | EngineCommand::SetDmxOutputs(..)
-        | EngineCommand::EnableShowSerialDmxRoutePublished { .. }
+        | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
         | EngineCommand::SetOutputOwnershipRole { .. }
         | EngineCommand::FenceOutputOwnership { .. }
         | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -24581,29 +24579,17 @@ mod legacy_output_control_route_tests {
     }
 
     #[test]
-    fn show_serial_dmx_engine_command_is_not_an_external_or_remote_bypass() {
+    fn show_artnet_loopback_engine_command_is_not_an_external_or_remote_bypass() {
         let (ack, _receiver) = mpsc::sync_channel(1);
-        let command = EngineCommand::EnableShowSerialDmxRoutePublished {
+        let command = EngineCommand::EnableShowArtNetLoopbackRoutePublished {
             expected_disabled_output: DmxOutputConfig {
                 enabled: false,
-                protocol: DmxOutputProtocol::EnttecOpenDmx,
-                target_ip: String::new(),
-                port: 0,
+                protocol: DmxOutputProtocol::ArtNet,
+                target_ip: "127.0.0.1".to_string(),
+                port: 6454,
                 universe: 0,
                 serial_port: String::new(),
-                serial_baud_rate: 250_000,
-            },
-            expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity {
-                port_name: "COM3".to_string(),
-                port_type: "USB 0403:6001 USB Serial Port".to_string(),
-                usb_vid: 0x0403,
-                usb_pid: 0x6001,
-                serial_number: "FTDI-SHOW-INSTANCE-1".to_string(),
-                manufacturer: "FTDI".to_string(),
-                product: "USB Serial Port".to_string(),
-                windows_device_instance_id: Some(
-                    r"FTDIBUS\VID_0403+PID_6001+FTDI-SHOW-INSTANCE-1\0000".to_string(),
-                ),
+                serial_baud_rate: 57_600,
             },
             expected_safety_epoch: 1,
             expected_safety_generation: 1,
@@ -24612,7 +24598,7 @@ mod legacy_output_control_route_tests {
         };
         assert!(
             external_output_command_requires_local_r4(&command).is_some(),
-            "MIDI, OSC, DMX input, and remote callbacks cannot enqueue the local R4-only route activation"
+            "MIDI, OSC, DMX input, and remote callbacks cannot enqueue the local R4-only Art-Net route activation"
         );
     }
 
@@ -28313,42 +28299,6 @@ fn list_midi_outputs() -> Result<Vec<MidiOutputSummary>, String> {
 #[tauri::command]
 fn list_serial_ports() -> Result<Vec<SerialPortSummary>, String> {
     io::serial_dmx::list_serial_ports().map_err(|error| error.to_string())
-}
-
-fn serial_dmx_machine_binding_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_local_data_dir()
-        .map(|directory| serial_dmx_machine::serial_dmx_machine_binding_path(&directory))
-        .map_err(|error| format!("Unable to resolve machine-local USB-DMX selection path: {error}"))
-}
-
-/// Read-only status for the one host-local USB-DMX selection. This is never
-/// loaded from, saved to, or inferred from a project/show file.
-#[tauri::command]
-fn get_serial_dmx_machine_binding_status_v1(
-    app: tauri::AppHandle,
-) -> Result<serial_dmx_machine::SerialDmxMachineBindingStatusV1, String> {
-    let ports = list_serial_ports()?;
-    Ok(serial_dmx_machine::binding_status_from_path(
-        &serial_dmx_machine_binding_path(&app)?,
-        &ports,
-    ))
-}
-
-/// The UI's explicit “confirm selected USB-DMX interface” action. The request
-/// names an already enumerated COM alias plus its Windows PnP instance; the
-/// backend re-enumerates and persists only that machine-local identity.
-#[tauri::command]
-fn select_serial_dmx_machine_binding_v1(
-    app: tauri::AppHandle,
-    request: serial_dmx_machine::SelectSerialDmxMachineBindingRequestV1,
-) -> Result<serial_dmx_machine::SerialDmxMachineBindingStatusV1, String> {
-    let ports = list_serial_ports()?;
-    serial_dmx_machine::select_binding_from_ports(
-        &serial_dmx_machine_binding_path(&app)?,
-        &request,
-        &ports,
-    )
 }
 
 #[tauri::command]
@@ -47950,12 +47900,11 @@ async fn enable_output_control_v2(
     execute_output_control_off_event_loop(app, window, OUTPUT_ENABLE_OPERATION_ID, request).await
 }
 
-/// R4-only local-confirmed activation of the already staged show serial
-/// route. This is not a generic output setter: its empty route payload is
-/// fenced and the native core accepts only Enttec Open DMX / COM3 / 250000 / U0
-/// after exact FTDI re-enumeration.
+/// R4-only local-confirmed activation of the already staged show Art-Net
+/// loopback route. This is not a generic output setter: its empty route
+/// payload is fenced and the native core accepts only 127.0.0.1:6454 / U0.
 #[tauri::command]
-async fn enable_show_serial_dmx_route_v1(
+async fn enable_show_art_net_loopback_route_v1(
     app: tauri::AppHandle,
     window: WebviewWindow,
     request: OutputControlCommandRequestV2,
@@ -47963,7 +47912,7 @@ async fn enable_show_serial_dmx_route_v1(
     execute_output_control_off_event_loop(
         app,
         window,
-        OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
         request,
     )
     .await
@@ -54612,7 +54561,7 @@ fn output_lease_resources_for_control_action(
             }
         },
         protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
-        | protocol::control_plane_command::OutputControlActionV2::EnableShowSerialDmxRoute {
+        | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             ..
         }
         | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
@@ -54702,7 +54651,7 @@ pub(crate) fn build_output_lease_authorization_request(
         }
         OutputControlActionV2::Arm { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
-        | OutputControlActionV2::EnableShowSerialDmxRoute { lease }
+        | OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
         | OutputControlActionV2::TakeOverStandby { lease, .. }
         | OutputControlActionV2::AssignVideoOutputComposition { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
@@ -71706,25 +71655,26 @@ pub(crate) fn enable_output_with_output_control_fence(
     )
 }
 
-const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
-const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
+const SHOW_ARTNET_LOOPBACK_TARGET_IP: &str = "127.0.0.1";
+const SHOW_ARTNET_LOOPBACK_PORT: u16 = 6454;
+const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 = 0;
 
-fn is_exact_staged_show_serial_dmx_route(route: &DmxOutputConfig) -> bool {
+fn is_exact_staged_show_artnet_loopback_route(route: &DmxOutputConfig) -> bool {
     !route.enabled
-        && route.protocol == DmxOutputProtocol::EnttecOpenDmx
-        // COM aliases are host-local evidence, never portable project data.
+        && route.protocol == DmxOutputProtocol::ArtNet
+        && route.target_ip == SHOW_ARTNET_LOOPBACK_TARGET_IP
+        && route.port == SHOW_ARTNET_LOOPBACK_PORT
         && route.serial_port.is_empty()
-        && route.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
-        && route.universe == SHOW_SERIAL_DMX_UNIVERSE
+        && route.universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
 }
 
-fn validate_current_staged_show_serial_dmx_route(
+fn validate_current_staged_show_artnet_loopback_route(
     state: &AppState,
 ) -> Result<DmxOutputConfig, String> {
     let snapshot = state.engine.snapshot();
     if snapshot.dmx_outputs.len() != 1 {
         return Err(
-            "Show serial DMX route activation requires exactly one authored disabled route"
+            "Show Art-Net loopback route activation requires exactly one authored disabled route"
                 .to_string(),
         );
     }
@@ -71735,96 +71685,30 @@ fn validate_current_staged_show_serial_dmx_route(
         .clone();
     if snapshot.output != route {
         return Err(
-            "Show serial DMX route activation rejected an ambiguous primary route projection"
+            "Show Art-Net loopback route activation rejected an ambiguous primary route projection"
                 .to_string(),
         );
     }
     if route.enabled {
         return Err(
-            "Show serial DMX route is already enabled; disable/reload the staged show route before retrying"
+            "Show Art-Net loopback route is already enabled; disable/reload the staged show route before retrying"
                 .to_string(),
         );
     }
-    if !is_exact_staged_show_serial_dmx_route(&route) {
+    if !is_exact_staged_show_artnet_loopback_route(&route) {
         return Err(
-            "Show serial DMX route must be the staged logical Enttec Open DMX / 250000 / universe 0 route with no project COM alias"
+            "Show Art-Net loopback route must be the staged Art-Net / 127.0.0.1:6454 / universe 0 route with no serial alias"
                 .to_string(),
         );
     }
     Ok(route)
 }
 
-fn validate_exact_show_serial_dmx_device_matches(
-    ports: &[SerialPortSummary],
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
-) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String> {
-    validate_exact_show_serial_dmx_device_matches_with_capture(ports, selected, |port| {
-        io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary_with_windows_com_binding(port)
-            .map_err(|error| format!("Show serial DMX device identity is incomplete: {error}"))
-    })
-}
-
-fn validate_exact_show_serial_dmx_device_matches_with_capture<F>(
-    ports: &[SerialPortSummary],
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
-    capture_windows_identity: F,
-) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>
-where
-    F: FnOnce(&SerialPortSummary) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>,
-{
-    let matches = ports
-        .iter()
-        .filter(|port| selected.matches_summary(port))
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [port] => {
-            let identity = capture_windows_identity(port)?;
-            let observed_matches_selection = identity.port_name == selected.port_name
-                && identity.port_type == selected.port_type
-                && identity.usb_vid == selected.usb_vid
-                && identity.usb_pid == selected.usb_pid
-                && identity.serial_number == selected.serial_number
-                && identity.manufacturer == selected.manufacturer
-                && identity.product == selected.product
-                && identity.windows_device_instance_id.as_deref()
-                    == Some(selected.windows_device_instance_id.as_str());
-            if !observed_matches_selection {
-                return Err(format!(
-                    "Show serial DMX hardware identity changed after selection; expected {}, observed {:?}. Output remains disabled.",
-                    selected.label(), identity,
-                ));
-            }
-            Ok(identity)
-        }
-        [] => Err(
-            "Selected machine-local USB-DMX interface is absent or stale; refresh and explicitly reselect it. No interface was substituted."
-                .to_string(),
-        ),
-        _ => Err(
-            "Selected machine-local USB-DMX interface is ambiguous; output remains disabled until explicit reselection"
-            .to_string(),
-        ),
-    }
-}
-
-fn verify_current_show_serial_dmx_device(
-    app: &tauri::AppHandle,
-) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String> {
-    let ports = io::serial_dmx::list_serial_ports()
-        .map_err(|error| format!("Show serial DMX device enumeration failed: {error}"))?;
-    let selected = serial_dmx_machine::resolve_selected_identity_from_path(
-        &serial_dmx_machine_binding_path(app)?,
-        &ports,
-    )?;
-    validate_exact_show_serial_dmx_device_matches(&ports, &selected)
-}
-
 /// The single local R4 path that can enable the pre-authored show DMX route.
 /// It accepts no route data, mutates only `enabled`, and holds the same output
-/// transition/project fence through the final serial enumeration and engine
+/// transition/project fence through final Art-Net socket creation and engine
 /// publication. All generic output editing remains unavailable.
-fn enable_show_serial_dmx_route_with_output_control_fence(
-    app: &tauri::AppHandle,
+fn enable_show_artnet_loopback_route_with_output_control_fence(
     state: &AppState,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
@@ -71838,14 +71722,14 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
     String,
 > {
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
-        "Standby synchronization lifecycle lock was poisoned before show serial DMX activation"
+        "Standby synchronization lifecycle lock was poisoned before show Art-Net loopback activation"
             .to_string()
     })?;
     let _external_admission = lock_project_external_command_admission(state)?;
     // The transition helper invokes its two closures serially while retaining
     // the same guard. Keep the coordinator behind a local RefCell so each
     // closure borrows it only for its revalidation; no mutable borrow crosses
-    // the selected physical-interface publication boundary.
+    // the physical route publication boundary.
     let coordinator = RefCell::new(lock_project_coordinator(state)?);
     with_revalidated_output_transition(
         || lock_output_ownership_transition(state),
@@ -71861,7 +71745,7 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                     || ensure_no_pending_project_transaction(&*coordinator).is_err()
                 {
                     return Err(
-                        "Output control fence changed before show serial DMX activation"
+                        "Output control fence changed before show Art-Net loopback activation"
                             .to_string(),
                     );
                 }
@@ -71873,7 +71757,7 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                 || !ownership.lighting_allowed
             {
                 return Err(
-                    "Show serial DMX activation requires the active local Both output authority"
+                    "Show Art-Net loopback activation requires the active local Both output authority"
                         .to_string(),
                 );
             }
@@ -71883,17 +71767,16 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                 || safety.generation != expected_fence.safety_blackout_generation
             {
                 return Err(
-                    "Show serial DMX activation requires the exact currently-clear safety blackout authority"
+                    "Show Art-Net loopback activation requires the exact currently-clear safety blackout authority"
                         .to_string(),
                 );
             }
-            let route = validate_current_staged_show_serial_dmx_route(state)?;
-            let device = verify_current_show_serial_dmx_device(app)?;
-            Ok((route, device))
+            let route = validate_current_staged_show_artnet_loopback_route(state)?;
+            Ok(route)
         },
-        |_transition_guard, (route, device)| {
+        |_transition_guard, route| {
             let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
-                "Output lease registry lock was poisoned before show serial DMX activation"
+                "Output lease registry lock was poisoned before show Art-Net loopback activation"
                     .to_string()
             })?;
             let final_lease_now_ms = state.output_lease_now_ms()?;
@@ -71902,11 +71785,11 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                 &mut lease_registry,
                 lease_request,
                 final_lease_now_ms,
-                "show serial DMX route activation",
+                "show Art-Net loopback route activation",
                 || {
-                    // Recheck all mutable and physical truth immediately
-                    // before the engine opens the selected interface. A stale/removed/duplicated
-                    // device or project leaves the engine and lease registry at A.
+                    // Recheck all mutable truth immediately before the engine
+                    // opens its fixed loopback socket. A stale project leaves
+                    // the engine and lease registry at A.
                     {
                         let mut coordinator = coordinator.borrow_mut();
                         if reconcile_project_checkpoint_for_coordinator(state, &mut *coordinator)
@@ -71919,7 +71802,7 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                             || ensure_no_pending_project_transaction(&*coordinator).is_err()
                         {
                             return Err(
-                                "Output control fence changed before show serial DMX publication"
+                                "Output control fence changed before show Art-Net loopback publication"
                                     .to_string(),
                             );
                         }
@@ -71931,7 +71814,7 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                         || !ownership.lighting_allowed
                     {
                         return Err(
-                            "Show serial DMX activation lost its local Both output authority"
+                            "Show Art-Net loopback activation lost its local Both output authority"
                                 .to_string(),
                         );
                     }
@@ -71941,34 +71824,27 @@ fn enable_show_serial_dmx_route_with_output_control_fence(
                         || safety.generation != expected_fence.safety_blackout_generation
                     {
                         return Err(
-                            "Show serial DMX activation was superseded by an emergency blackout authority change"
+                            "Show Art-Net loopback activation was superseded by an emergency blackout authority change"
                                 .to_string(),
                         );
                     }
-                    let current = validate_current_staged_show_serial_dmx_route(state)?;
+                    let current = validate_current_staged_show_artnet_loopback_route(state)?;
                     if current != route {
                         return Err(
-                            "Show serial DMX route changed before final publication".to_string()
-                        );
-                    }
-                    let current_device = verify_current_show_serial_dmx_device(app)?;
-                    if current_device != device {
-                        return Err(
-                            "Show serial DMX hardware instance changed before final publication"
+                            "Show Art-Net loopback route changed before final publication"
                                 .to_string(),
                         );
                     }
                     state
                         .engine
-                        .enable_show_serial_dmx_route_published(
+                        .enable_show_artnet_loopback_route_published(
                             current,
-                            device,
                             expected_fence.safety_blackout_epoch,
                             expected_fence.safety_blackout_generation,
                             Instant::now() + Duration::from_secs(2),
                         )
                         .map_err(|error| {
-                            format!("Show serial DMX route activation failed: {error}")
+                            format!("Show Art-Net loopback route activation failed: {error}")
                         })?;
                     Ok(true)
                 },
@@ -134272,8 +134148,6 @@ fn main() {
             list_midi_inputs,
             list_midi_outputs,
             list_serial_ports,
-            get_serial_dmx_machine_binding_status_v1,
-            select_serial_dmx_machine_binding_v1,
             connect_midi_clock,
             disconnect_midi_clock,
             connect_midi_control,
@@ -134556,7 +134430,7 @@ fn main() {
             query_output_control_authority_v1,
             release_blackout_output_control_v2,
             arm_output_control_v2,
-            enable_show_serial_dmx_route_v1,
+            enable_show_art_net_loopback_route_v1,
             enable_output_control_v2,
             take_over_output_control_v2,
             add_display_output_v2,

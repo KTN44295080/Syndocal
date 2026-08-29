@@ -186,31 +186,6 @@ export interface SerialPortSummary {
   recommended_protocol?: DmxOutputProtocol | null;
 }
 
-export type SerialDmxMachineBindingState =
-  | "missing_selection"
-  | "selected_and_present"
-  | "stale_or_missing"
-  | "ambiguous"
-  | "blocked_persistence";
-
-/** Machine-local USB interface evidence. It is deliberately not project data. */
-export interface SerialDmxMachineBindingIdentity {
-  port_name: string;
-  port_type: string;
-  usb_vid: number;
-  usb_pid: number;
-  serial_number: string;
-  manufacturer: string;
-  product: string;
-  windows_device_instance_id: string;
-}
-
-export interface SerialDmxMachineBindingStatus {
-  state: SerialDmxMachineBindingState;
-  selected: SerialDmxMachineBindingIdentity | null;
-  detail: string;
-}
-
 export interface OscInputConfig {
   bind_ip: string;
   port: number;

@@ -33,11 +33,11 @@ const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.trans
 
 const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
   || action.kind === "add_display" || action.kind === "assign_video_output_composition"
-  || action.kind === "enable_show_serial_dmx_route"
+  || action.kind === "enable_show_artnet_loopback_route"
   ? ["lighting", "video"] : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
-  enable_show_serial_dmx_route: runtime.OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+  enable_show_artnet_loopback_route: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
   arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -51,7 +51,7 @@ const operationFor = (action) => ({
 })[action.kind];
 const commandFor = (action) => ({
   enable_output: "enable_output_control_v2",
-  enable_show_serial_dmx_route: "enable_show_serial_dmx_route_v1",
+  enable_show_artnet_loopback_route: "enable_show_art_net_loopback_route_v1",
   arm: "arm_output_control_v2",
   release_blackout: "release_blackout_output_control_v2",
   take_over_standby: "take_over_output_control_v2",
@@ -65,7 +65,7 @@ const commandFor = (action) => ({
 })[action.kind];
 
 const enableAction = { kind: "enable_output" };
-const showSerialRouteAction = { kind: "enable_show_serial_dmx_route", lease: lease() };
+const showArtNetLoopbackRouteAction = { kind: "enable_show_artnet_loopback_route", lease: lease() };
 const ordinaryActions = [
   { kind: "arm", role: "lighting", lease: lease() },
   { kind: "release_blackout", lease: lease() },
@@ -94,7 +94,7 @@ const ordinaryActions = [
     composition_id: 7,
     lease: lease(),
   },
-  showSerialRouteAction,
+  showArtNetLoopbackRouteAction,
 ];
 const lifecycleActions = [
   { kind: "acquire_lease", role: "both" },
@@ -142,7 +142,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   const outcome = ({
     arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
-    enable_show_serial_dmx_route: "authorized",
+    enable_show_artnet_loopback_route: "authorized",
     acquire_lease: "acquired", enable_output: recoveringEnable ? "recovered" : "acquired",
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
@@ -223,18 +223,18 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
     : action.kind === "enable_output" || action.kind === "arm" || action.kind === "release_blackout"
       || action.kind === "take_over_standby" || action.kind === "add_display"
       || action.kind === "assign_video_output_composition"
-      || action.kind === "enable_show_serial_dmx_route"
+      || action.kind === "enable_show_artnet_loopback_route"
       ? await runtime.executeOutputControl(harness.invoke, action)
       : await runtime.executeOutputLeaseLifecycle(harness.invoke, action);
   assert.equal(receipt.operation_id, operationFor(action));
   assert.equal(harness.executeCalls, 1);
 }
 
-const showSerialHarness = createHarness({ action: showSerialRouteAction, queryState: "active" });
-const showSerialReceipt = await runtime.executeOutputControl(showSerialHarness.invoke, showSerialRouteAction);
-assert.equal(showSerialReceipt.operation_id, runtime.OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID);
+const showArtNetLoopbackHarness = createHarness({ action: showArtNetLoopbackRouteAction, queryState: "active" });
+const showArtNetLoopbackReceipt = await runtime.executeOutputControl(showArtNetLoopbackHarness.invoke, showArtNetLoopbackRouteAction);
+assert.equal(showArtNetLoopbackReceipt.operation_id, runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID);
 assert.deepEqual(
-  Object.keys(showSerialHarness.executeArgs[0].request.action).sort(),
+  Object.keys(showArtNetLoopbackHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the show route action must not carry route/protocol/port fields",
 );
@@ -412,7 +412,6 @@ const [
   querySource,
   controlPlaneSource,
   registrySource,
-  serialDmxMachineSource,
 ] = await Promise.all([
   read("src/tauriInvokeCommands.ts"),
   read("src/tauri-invoke-manifest.json"),
@@ -426,7 +425,6 @@ const [
   read("src-tauri/src/control_plane_query.rs"),
   read("src-tauri/src/control_plane.rs"),
   read("../crates/protocol/src/control_plane_registry_v2.rs"),
-  read("src-tauri/src/serial_dmx_machine.rs"),
 ]);
 const commandBody = (source, commandName) => {
   const functionMarker = `fn ${commandName}(`;
@@ -440,7 +438,7 @@ const commandBody = (source, commandName) => {
 const requiredCommands = [
   "enable_output_control_v2", "add_display_output_v2", "arm_output_control_v2",
   "assign_video_output_composition_v2",
-  "enable_show_serial_dmx_route_v1",
+  "enable_show_art_net_loopback_route_v1",
   "release_blackout_output_control_v2", "take_over_output_control_v2",
   "acquire_output_lease_v2", "force_transfer_output_lease_v2", "query_output_lease_authority_v1",
   "recover_output_lease_v2", "relinquish_output_lease_v2", "renew_output_lease_v2",
@@ -457,7 +455,7 @@ const canonicalOutputMutationWrappers = [
   "arm_output_control_v2",
   "assign_video_output_composition_v2",
   "enable_output_control_v2",
-  "enable_show_serial_dmx_route_v1",
+  "enable_show_art_net_loopback_route_v1",
   "force_transfer_output_lease_v2",
   "recover_output_lease_v2",
   "release_blackout_output_control_v2",
@@ -470,7 +468,7 @@ const outputControlWrappers = new Set([
   "assign_video_output_composition_v2",
   "arm_output_control_v2",
   "enable_output_control_v2",
-  "enable_show_serial_dmx_route_v1",
+  "enable_show_art_net_loopback_route_v1",
   "release_blackout_output_control_v2",
   "take_over_output_control_v2",
 ]);
@@ -490,7 +488,7 @@ for (const command of legacyCommands) {
 }
 const detectedAsyncOutputMutationWrappers = [
   ...mainSource.matchAll(
-    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_serial_dmx_route_v1))\(/g,
+    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_art_net_loopback_route_v1))\(/g,
   ),
 ].map((match) => match[1])
   .filter((command) => canonicalOutputMutationWrappers.includes(command))
@@ -656,7 +654,7 @@ for (const operationId of [
   "syndocal.output.standby.takeover.v2",
   "syndocal.output.display.add.v2",
   "syndocal.output.video.composition.assign.v2",
-  "syndocal.output.show_serial_dmx_route.enable.v1",
+  "syndocal.output.show_artnet_loopback_route.enable.v1",
   "syndocal.output.lease.acquire.v2",
   "syndocal.output.lease.renew.v2",
   "syndocal.output.lease.recover.v2",
@@ -684,7 +682,7 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowSerialDmxRoute", "ForceTransferLease"]) {
+for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(
@@ -749,51 +747,40 @@ assert.match(mainSource, /OutputControlActionV2::AddDisplay[\s\S]*vec!\[OutputLe
 assert.match(appSource, /selectOnlyActiveOutputLease\(leaseQuery, \["lighting", "video"\]\)/);
 assert.match(appSource, /fullscreen: target\.fullscreen/);
 assert.match(appSource, /width: target\.width[\s\S]*height: target\.height/);
+const setupIoFixtureStart = appSource.indexOf('if (viewportFixture === "setup-io") {');
+const setupIoFixtureEnd = appSource.indexOf("const refreshDmxInputStatus", setupIoFixtureStart);
+assert.notEqual(setupIoFixtureStart, -1, "the Setup I/O viewport fixture must remain explicit");
+assert.notEqual(setupIoFixtureEnd, -1, "the Setup I/O viewport fixture must have a bounded source slice");
+const setupIoFixtureSource = appSource.slice(setupIoFixtureStart, setupIoFixtureEnd);
+assert.match(setupIoFixtureSource, /enabled: false/);
+assert.match(setupIoFixtureSource, /protocol: "ArtNet" as const/);
+assert.match(setupIoFixtureSource, /target_ip: "127\.0\.0\.1"/);
+assert.match(setupIoFixtureSource, /port: 6454/);
+assert.match(setupIoFixtureSource, /universe: 0/);
+assert.match(setupIoFixtureSource, /serial_port: ""/);
+assert.doesNotMatch(setupIoFixtureSource, /EnttecOpenDmx|serial_baud_rate: 250_000/,
+  "the Setup I/O fixture must stage the exact Art-Net show route, not a retired serial route");
 assert.match(runtimeSource, /OutputControlActionV2::EnableOutput[\s\S]*enable_output_with_output_control_fence/);
-assert.match(runtimeSource, /OutputControlActionV2::EnableShowSerialDmxRoute[\s\S]*enable_show_serial_dmx_route_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::EnableShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route_with_output_control_fence/);
 assert.match(controlPlaneSource, /enable_output_control_v2/);
-assert.match(controlPlaneSource, /enable_show_serial_dmx_route_v1/);
+assert.match(controlPlaneSource, /enable_show_art_net_loopback_route_v1/);
 assert.match(
   appSource,
-  /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*serialPorts=\{serialPorts\(\)\}[\s\S]*binding=\{serialDmxMachineBinding\(\)\}[\s\S]*onRefreshSerialPorts=\{refreshSerialPorts\}[\s\S]*onSelectMachineBinding=\{selectSerialDmxMachineBinding\}[\s\S]*onEnableStagedShowSerialRoute=\{enableStagedShowSerialDmxRoute\}/,
-  "the DMX workbench must pass its actual route and current USB observations to the show-route surface",
+  /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*onEnableStagedShowArtNetLoopbackRoute=\{enableStagedShowArtNetLoopbackRoute\}/,
+  "the DMX workbench must pass its actual route to the fixed Art-Net show-route surface",
 );
-assert.match(dmxOutputPanelSource, /output\.protocol === "EnttecOpenDmx"/);
+assert.match(dmxOutputPanelSource, /output\.protocol === "ArtNet"/);
+assert.match(dmxOutputPanelSource, /output\.target_ip === "127\.0\.0\.1"/);
+assert.match(dmxOutputPanelSource, /output\.port === 6454/);
 assert.match(dmxOutputPanelSource, /output\.serial_port === ""/);
-assert.match(dmxOutputPanelSource, /output\.serial_baud_rate === 250_000/);
 assert.match(dmxOutputPanelSource, /output\.universe === 0/);
+assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-artnet-loopback-route"/);
 assert.match(
   dmxOutputPanelSource,
-  /props\.serialPorts[\s\S]*windows_device_instance_id/,
-  "the DMX surface must render enumerated PnP evidence",
+  /disabled=\{!exactRoute\(\) \|\| props\.output\.enabled\}/,
+  "the show-route enable action must fail closed for a logical-route mismatch",
 );
-assert.match(dmxOutputPanelSource, /Machine-local USB-DMX interface/);
-assert.match(dmxOutputPanelSource, /Selected identity:/);
-assert.match(dmxOutputPanelSource, /hardware is never substituted/);
-assert.match(dmxOutputPanelSource, /data-io-control="serial-dmx-machine-binding"/);
-assert.match(dmxOutputPanelSource, /data-io-control="confirm-serial-dmx-machine-binding"/);
-assert.match(dmxOutputPanelSource, /Confirm selected USB-DMX interface/);
-assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-serial-route"/);
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!ready\(\) \|\| props\.output\.enabled\}/,
-  "the show-route enable action must fail closed for logical-route or local-binding mismatch",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /role="alert"[\s\S]*stale, renumbered, or ambiguous hardware/,
-  "an unusable machine-local binding must be explicit to the operator",
-);
-assert.match(outputDiagnosticsSource, /get_serial_dmx_machine_binding_status_v1/);
-assert.match(outputDiagnosticsSource, /select_serial_dmx_machine_binding_v1/);
-assert.match(mainSource, /get_serial_dmx_machine_binding_status_v1/);
-assert.match(mainSource, /select_serial_dmx_machine_binding_v1/);
-assert.match(serialDmxMachineSource, /SERIAL_DMX_MACHINE_BINDING_FILE/);
-assert.match(serialDmxMachineSource, /StaleOrMissing/);
-assert.match(serialDmxMachineSource, /Ambiguous/);
-assert.match(serialDmxMachineSource, /no interface was substituted/);
-assert.doesNotMatch(serialDmxMachineSource, /COM3/,
-  "the product must not hardcode the current host COM alias");
+assert.match(dmxOutputPanelSource, /role="alert"[\s\S]*127\.0\.0\.1:6454/);
 assert.doesNotMatch(
   dmxOutputPanelSource,
   /onAddDmxRoute|onRemoveDmxRoute|onApplyDmxRoute|setOutputProtocol/,
@@ -802,10 +789,10 @@ assert.doesNotMatch(
 assert.match(ioConnectionDeckSource, /id: "dmx"[\s\S]*summary: "Output routing and optional input"/);
 assert.doesNotMatch(
   ioConnectionDeckSource,
-  /dmx-enable-staged-show-serial-route/,
+  /dmx-enable-staged-show-artnet-loopback-route/,
   "the route mutation stays in the DMX workbench, not the compact connection selector",
 );
-assert.match(outputDiagnosticsSource, /enableStagedShowSerialDmxRoute[\s\S]*enable_show_serial_dmx_route/);
+assert.match(outputDiagnosticsSource, /enableStagedShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route/);
 assert.doesNotMatch(
   outputDiagnosticsSource,
   /invoke(?:<[^>]*>)?\(\s*["']set_dmx_outputs["']/,
@@ -1026,4 +1013,4 @@ assert.equal(enableMutationHarness.rawPending, false);
 assert.equal(enableMutationHarness.authority, "unavailable",
   "a late terminal response must not directly restore enabled UI state");
 
-console.log("output control runtime contract: PASS (v2 output commands, logical serial route, machine-local USB binding, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v2 output commands, fixed same-PC Art-Net loopback, strict receipts, fail-closed query)");

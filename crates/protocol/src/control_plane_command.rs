@@ -1643,7 +1643,10 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 /// OutputControl v2 changed the command shape and confirmation boundary. Its
 /// request/response schema identity is therefore distinct from the v1
 /// inventory schema and the Rust mutation DTO names now match that boundary.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 2;
+// v3 clean-break: the former USB serial show activation is retired.  The
+// sole show-specific output action is now the fixed local Art-Net loopback
+// route and old wire action names are rejected by `deny_unknown_fields`.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 3;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
@@ -1668,11 +1671,11 @@ pub const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID: &str =
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
-/// The only show-specific serial DMX mutation. No route fields travel on the
-/// wire: the native control plane may enable only its already-loaded disabled
-/// show route after revalidating the authored route and FTDI device identity.
-pub const OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID: &str =
-    "syndocal.output.show_serial_dmx_route.enable.v1";
+/// The only show-specific DMX mutation. No route fields travel on the wire:
+/// the native control plane may enable only its already-loaded disabled
+/// Art-Net loopback route after revalidating its fixed network contract.
+pub const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID: &str =
+    "syndocal.output.show_artnet_loopback_route.enable.v1";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -2289,7 +2292,7 @@ impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputControlActionV2 {
     EnableOutput,
-    EnableShowSerialDmxRoute {
+    EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
     Arm {
@@ -2340,7 +2343,7 @@ pub enum OutputControlActionV2 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum OutputControlActionV2Wire {
     EnableOutput {},
-    EnableShowSerialDmxRoute {
+    EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
     Arm {
@@ -2391,8 +2394,8 @@ impl OutputControlActionV2 {
     pub const fn operation_id(&self) -> &'static str {
         match self {
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
-            Self::EnableShowSerialDmxRoute { .. } => {
-                OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+            Self::EnableShowArtNetLoopbackRoute { .. } => {
+                OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
@@ -2433,7 +2436,7 @@ impl OutputControlActionV2 {
         }
         match self {
             Self::EnableOutput => {}
-            Self::EnableShowSerialDmxRoute { lease }
+            Self::EnableShowArtNetLoopbackRoute { lease }
             | Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
             | Self::RenewLease { lease }
@@ -2474,8 +2477,8 @@ impl OutputControlActionV2 {
     fn wire(&self) -> OutputControlActionV2Wire {
         match self {
             Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
-            Self::EnableShowSerialDmxRoute { lease } => {
-                OutputControlActionV2Wire::EnableShowSerialDmxRoute {
+            Self::EnableShowArtNetLoopbackRoute { lease } => {
+                OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute {
                     lease: lease.clone(),
                 }
             }
@@ -2546,7 +2549,7 @@ impl OutputControlActionV2 {
             Self::EnableOutput => {
                 output.push(9);
             }
-            Self::EnableShowSerialDmxRoute { lease } => {
+            Self::EnableShowArtNetLoopbackRoute { lease } => {
                 // 0..=11 are frozen. This action intentionally carries only
                 // the exact active lease; it cannot smuggle route edits.
                 output.push(12);
@@ -2665,8 +2668,8 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
         let wire = OutputControlActionV2Wire::deserialize(deserializer)?;
         let value = match wire {
             OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
-            OutputControlActionV2Wire::EnableShowSerialDmxRoute { lease } => {
-                Self::EnableShowSerialDmxRoute { lease }
+            OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute { lease } => {
+                Self::EnableShowArtNetLoopbackRoute { lease }
             }
             OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
             OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
@@ -3118,7 +3121,7 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
-            OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID => {
+            OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
             OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
@@ -3278,7 +3281,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3305,7 +3308,7 @@ impl OutputControlReceiptV2 {
                     && matches!(
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
-                            | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -3319,7 +3322,7 @@ impl OutputControlReceiptV2 {
                     && !matches!(
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
-                            | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -3402,7 +3405,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -4262,7 +4265,7 @@ mod tests {
             response
         );
         let physical_route_receipt = OutputControlReceiptV2 {
-            operation_id: OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID.to_string(),
+            operation_id: OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID.to_string(),
             request_id: 26,
             shape_sha256: hash('f'),
             argument_fingerprint: hash('a'),
@@ -4410,7 +4413,7 @@ mod tests {
         enable.append_canonical_bytes(&mut enable_shape).unwrap();
         assert_eq!(enable_shape, vec![9]);
         let authority = lease_authority();
-        let show_route_enable = OutputControlActionV2::EnableShowSerialDmxRoute {
+        let show_route_enable = OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             lease: authority.clone(),
         };
         let mut show_route_shape = Vec::new();
@@ -4419,19 +4422,19 @@ mod tests {
             .unwrap();
         assert_eq!(
             show_route_enable.operation_id(),
-            OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+            OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
         );
         assert_eq!(show_route_shape.first(), Some(&12));
         let show_route_json = serde_json::to_value(&show_route_enable).unwrap();
         assert_eq!(
             show_route_json,
             serde_json::json!({
-                "kind": "enable_show_serial_dmx_route",
+                "kind": "enable_show_art_net_loopback_route",
                 "lease": serde_json::to_value(lease_authority()).unwrap(),
             })
         );
         let mut forged_show_route_json = show_route_json.clone();
-        forged_show_route_json["serial_port"] = serde_json::json!("COM4");
+        forged_show_route_json["target_ip"] = serde_json::json!("192.168.1.10");
         assert!(serde_json::from_value::<OutputControlActionV2>(forged_show_route_json).is_err());
         assert_eq!(
             serde_json::from_value::<OutputControlActionV2>(show_route_json).unwrap(),

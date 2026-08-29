@@ -5922,13 +5922,10 @@ export default function App() {
     refreshEngineTelemetryReport,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
-    enableStagedShowSerialDmxRoute,
+    enableStagedShowArtNetLoopbackRoute,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     refreshSerialPorts,
-    refreshSerialDmxMachineBinding,
-    serialDmxMachineBinding,
-    selectSerialDmxMachineBinding,
   } = createOutputDiagnosticsController({
     invoke,
     setMessage,
@@ -5976,16 +5973,17 @@ export default function App() {
     );
   }
   if (viewportFixture === "setup-io") {
-    const stagedShowDmxOutput = {
+    const stagedShowArtNetLoopbackOutput = {
       ...defaultOutput,
       enabled: false,
-      protocol: "EnttecOpenDmx" as const,
+      protocol: "ArtNet" as const,
+      target_ip: "127.0.0.1",
+      port: 6454,
       universe: 0,
       serial_port: "",
-      serial_baud_rate: 250_000,
     };
-    setOutput(stagedShowDmxOutput);
-    setDmxOutputRoutes([stagedShowDmxOutput]);
+    setOutput(stagedShowArtNetLoopbackOutput);
+    setDmxOutputRoutes([stagedShowArtNetLoopbackOutput]);
     setMidiInputs([{ index: 7, name: "Viewport MIDI Input" }]);
     setMidiOutputs([{ index: 9, name: "Viewport MIDI Output" }]);
     setSelectedMidiInput(7);
@@ -28491,11 +28489,7 @@ export default function App() {
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
-            serialPorts={serialPorts()}
-            binding={serialDmxMachineBinding()}
-            onRefreshSerialPorts={refreshSerialPorts}
-            onSelectMachineBinding={selectSerialDmxMachineBinding}
-            onEnableStagedShowSerialRoute={enableStagedShowSerialDmxRoute}
+            onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
           />
           <div class="ioDisclosureStack">
           <IoDisclosure

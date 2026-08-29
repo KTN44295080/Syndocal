@@ -4628,22 +4628,10 @@ function installSetupIoInvokeMockInPage() {
       windows_device_instance_id: "USB\\VID_0403&PID_6001\\VIEWPORT-DMX-SHOW",
       recommended_protocol: "EnttecOpenDmx",
     }];
-    const bindingIdentity = (serialPort) => ({
-      port_name: serialPort.name,
-      port_type: serialPort.port_type,
-      usb_vid: serialPort.usb_vid,
-      usb_pid: serialPort.usb_pid,
-      serial_number: serialPort.serial_number,
-      manufacturer: serialPort.manufacturer,
-      product: serialPort.product,
-      windows_device_instance_id: serialPort.windows_device_instance_id,
-    });
     const mock = {
       calls: [],
       transactionId: 0,
       serialPorts,
-      serialBindingSelected: null,
-      serialBindingRequests: [],
       djLinkWiredCandidates: [],
       djLinkWiredCandidatesDelayMs: 0,
       djLinkWiredCandidatesError: null,
@@ -4673,35 +4661,6 @@ function installSetupIoInvokeMockInPage() {
         if (command === "cancel_project_transaction") return undefined;
         if (command === "get_snapshot") throw new Error("Setup I/O viewport snapshot refresh intentionally omitted");
         if (command === "list_serial_ports") return clone(serialPorts);
-        if (command === "get_serial_dmx_machine_binding_status_v1") {
-          return mock.serialBindingSelected
-            ? {
-              state: "selected_and_present",
-              selected: clone(bindingIdentity(mock.serialBindingSelected)),
-              detail: "The selected machine-local USB-DMX identity is present. Opening revalidates the real Windows handle again.",
-            }
-            : {
-              state: "missing_selection",
-              selected: null,
-              detail: "No machine-local USB-DMX interface is selected. Select and confirm an enumerated interface on this PC.",
-            };
-        }
-        if (command === "select_serial_dmx_machine_binding_v1") {
-          mock.serialBindingRequests.push(clone(args?.request));
-          const selected = serialPorts.find((serialPort) =>
-            args?.request?.portName === serialPort.name &&
-            args?.request?.windowsDeviceInstanceId === serialPort.windows_device_instance_id
-          );
-          if (!selected) {
-            throw new Error("Setup I/O fixture received a non-exact machine-local USB-DMX selection");
-          }
-          mock.serialBindingSelected = selected;
-          return {
-            state: "selected_and_present",
-            selected: clone(bindingIdentity(selected)),
-            detail: "The selected machine-local USB-DMX identity is present. Opening revalidates the real Windows handle again.",
-          };
-        }
         if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
         if (command === "remote_control_status") return clone(remoteStatus);
         if (command === "get_dj_link_machine_status") return djLinkMachineStatus;
@@ -5047,92 +5006,23 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
   const routePagination = await exerciseDmxRoutePagination(client);
   const logicalRoute = routePagination.routeSignatures[0] ?? null;
-  await clickVisibleByText(client, 'button', 'Refresh USB-DMX interfaces');
-  const expectedBindings = [{
-    portName: 'COM37',
-    marker: 'VIEWPORT-DMX-DECOY',
-    windowsDeviceInstanceId: 'USB\\VID_0403&PID_6001\\VIEWPORT-DMX-DECOY',
-  }, {
-    portName: 'COM58',
-    marker: 'VIEWPORT-DMX-SHOW',
-    windowsDeviceInstanceId: 'USB\\VID_0403&PID_6001\\VIEWPORT-DMX-SHOW',
-  }];
-  const bindingSelections = [];
-  let bindingControlsBeforeConfirm = null;
-  for (const expected of expectedBindings) {
-    const valuePrefix = `${expected.portName}\u0000`;
-    await waitForClientCondition(
-      client,
-      `(() => {
-        const select = document.querySelector('[data-io-control="serial-dmx-machine-binding"]');
-        return Boolean(select && [...select.options].some((option) =>
-          option.value.startsWith(${JSON.stringify(valuePrefix)}) &&
-          option.value.includes(${JSON.stringify(expected.marker)})
-        ));
-      })()`,
-      `Setup I/O enumerated machine-local USB-DMX identity ${expected.portName}`,
-    );
-    const pending = await evaluatePageFunction(client, (portName, marker) => {
-      const select = document.querySelector('[data-io-control="serial-dmx-machine-binding"]');
-      if (!(select instanceof HTMLSelectElement)) return null;
-      const option = [...select.options].find((candidate) =>
-        candidate.value.startsWith(`${portName}\u0000`) && candidate.value.includes(marker));
-      if (!option) return null;
-      select.value = option.value;
-      select.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      return { value: select.value, label: option.textContent?.trim() ?? '' };
-    }, expected.portName, expected.marker);
-    await waitForClientCondition(
-      client,
-      `document.querySelector('[data-io-control="confirm-serial-dmx-machine-binding"]')?.disabled === false`,
-      `Setup I/O machine-local USB-DMX confirmation readiness ${expected.portName}`,
-    );
-    if (bindingControlsBeforeConfirm === null) {
-      bindingControlsBeforeConfirm = await evaluatePageFunction(client, () => {
-        const visible = (element) => {
-          if (!(element instanceof HTMLElement)) return false;
-          const rect = element.getBoundingClientRect();
-          const style = getComputedStyle(element);
-          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-        };
-        const select = document.querySelector('[data-io-control="serial-dmx-machine-binding"]');
-        const confirm = document.querySelector('[data-io-control="confirm-serial-dmx-machine-binding"]');
-        const enable = document.querySelector('[data-io-control="dmx-enable-staged-show-serial-route"]');
-        return {
-          selectVisible: visible(select),
-          confirmVisible: visible(confirm),
-          confirmEnabled: confirm instanceof HTMLButtonElement && !confirm.disabled,
-          enableVisible: visible(enable),
-          routeEnableDisabled: enable instanceof HTMLButtonElement && enable.disabled,
-        };
-      });
-    }
-    await clickVisibleSelector(client, '[data-io-control="confirm-serial-dmx-machine-binding"]');
-    await waitForClientCondition(
-      client,
-      `(() => {
-        const detail = document.querySelector('[data-io-selected-windows-instance]')?.textContent ?? '';
-        return detail.includes(${JSON.stringify(expected.portName)}) && detail.includes(${JSON.stringify(expected.marker)});
-      })()`,
-      `Setup I/O confirmed machine-local USB-DMX identity ${expected.portName}`,
-    );
-    bindingSelections.push({
-      expected,
-      pending,
-      confirmed: await evaluatePageFunction(client, () => ({
-        selectedIdentity: document.querySelector('[data-io-selected-windows-instance]')?.textContent?.trim() ?? '',
-        selectValue: document.querySelector('[data-io-control="serial-dmx-machine-binding"]')?.value ?? '',
-        routeEnableEnabled: document.querySelector('[data-io-control="dmx-enable-staged-show-serial-route"]')?.disabled === false,
-      })),
-    });
-  }
-  measurements.ioAfterMachineBinding = await measure(
+  const showRouteControl = await evaluatePageFunction(client, () => {
+    const panel = document.querySelector('.dmxOutputConfigPanel');
+    const control = panel?.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]');
+    if (!(control instanceof HTMLButtonElement)) return null;
+    const rect = control.getBoundingClientRect();
+    const style = getComputedStyle(control);
+    return {
+      visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+      disabled: control.disabled,
+      routeState: panel?.querySelector('.ioConnectionState')?.textContent?.trim() ?? '',
+      mismatchAlertPresent: Boolean(panel?.querySelector('[role="alert"]')),
+    };
+  });
+  measurements.ioAfterShowRoute = await measure(
     client,
-    `setup-io-machine-binding-${viewport.width}x${viewport.height}`,
+    `setup-io-show-artnet-loopback-${viewport.width}x${viewport.height}`,
   );
-  const dmxCalls = await readSetupIoMockCalls(client);
-  const bindingRequests = dmxCalls.filter((call) => call.command === 'select_serial_dmx_machine_binding_v1');
   flows.dmx = {
     logicalRouteExact:
       measurements.io.ioRouteTotalCount === 1 &&
@@ -5145,30 +5035,16 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       routePagination.firstPageRestored &&
       routePagination.forwardClicks === routePagination.backwardClicks &&
       routePagination.allVisitedRowsComplete &&
-      logicalRoute?.protocol === 'Enttec Open DMX' &&
-      logicalRoute?.target === 'Machine-local USB binding' &&
-      logicalRoute?.universe === 'U0 · 250000',
-    serialMachineBindingControlsReachable:
-      bindingSelections.every(({ expected, pending }) =>
-        pending?.value.startsWith(`${expected.portName}\u0000`) === true &&
-        pending?.label.includes(expected.marker) === true
-      ) &&
-      bindingControlsBeforeConfirm !== null &&
-      Object.values(bindingControlsBeforeConfirm).every(Boolean),
-    serialMachineBindingExact:
-      bindingRequests.length === expectedBindings.length &&
-      expectedBindings.every((expected, index) =>
-        bindingRequests[index].args?.request?.portName === expected.portName &&
-        bindingRequests[index].args?.request?.windowsDeviceInstanceId === expected.windowsDeviceInstanceId
-      ) &&
-      bindingSelections.every(({ expected, confirmed }) =>
-        confirmed.selectedIdentity.includes(expected.portName) &&
-        confirmed.selectedIdentity.includes(expected.marker) &&
-        confirmed.selectValue.startsWith(`${expected.portName}\u0000`) &&
-        confirmed.routeEnableEnabled
-      ) &&
-      measurements.ioAfterMachineBinding.ioDocumentAndAppScrollZero &&
-      isContained(measurements.ioAfterMachineBinding),
+      logicalRoute?.protocol === 'Art-Net · ArtDmx' &&
+      logicalRoute?.target === '127.0.0.1:6454' &&
+      logicalRoute?.universe === 'Wire U0 · 512ch · 40–44fps',
+    showArtNetLoopbackControlReachable:
+      showRouteControl?.visible === true &&
+      showRouteControl.disabled === false &&
+      showRouteControl.routeState === 'Staged disabled' &&
+      showRouteControl.mismatchAlertPresent === false &&
+      measurements.ioAfterShowRoute.ioDocumentAndAppScrollZero &&
+      isContained(measurements.ioAfterShowRoute),
   };
   disclosures.dmx = [
     await exerciseSetupIoDisclosure(client, 'dmx-input', '[data-io-control="dmx-input-protocol"]'),
@@ -5418,10 +5294,10 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  // The operator surface now has one explicit staged-show serial-route action
+  // The operator surface now has one explicit staged-show Art-Net action
   // in addition to its existing primary DMX controls. Keep the count exact
   // and assert that the added control is the intended one.
-  const expectedDmxControlCount = 7;
+  const expectedDmxControlCount = 4;
   const expectedDmxDisclosureCount = 3;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
@@ -5463,7 +5339,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     dmxControlsAndDisclosuresPreserved:
       measurements.io.ioZoneVisibleControlCounts.dmx === expectedDmxControlCount &&
       measurements.io.ioActiveZoneVisibleControlCount === expectedDmxControlCount &&
-      measurements.io.visibleDmxEnableStagedShowSerialRouteCount === 1 &&
+      measurements.io.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 1 &&
       measurements.io.ioZoneDisclosureCounts.dmx === expectedDmxDisclosureCount &&
       measurements.io.ioZoneOpenDisclosureCounts.dmx === 0 &&
       measurements.io.ioDisclosureCount === expectedDmxDisclosureCount,
@@ -5471,8 +5347,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
     disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
     dmxLogicalRouteExact: flows.dmx.logicalRouteExact,
-    serialMachineBindingControlsReachable: flows.dmx.serialMachineBindingControlsReachable,
-    serialMachineBindingExact: flows.dmx.serialMachineBindingExact,
+    showArtNetLoopbackControlReachable: flows.dmx.showArtNetLoopbackControlReachable,
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
     remoteStartFlow: dmxOnly || flows.remote.passed,
@@ -10549,20 +10424,12 @@ async function measure(client, label) {
         row.querySelector('[data-io-route-target]') &&
         row.querySelector('[data-io-route-universe]')
       ).length,
-      ioSerialMachineBindingControlsReachable: Boolean(
-        visibleInteractiveElements(setupIoPanel).includes(
-          setupIoPanel?.querySelector('[data-io-control="serial-dmx-machine-binding"]'),
-        ) &&
-        visibleInteractiveElements(setupIoPanel).includes(
-          setupIoPanel?.querySelector('[data-io-control="confirm-serial-dmx-machine-binding"]'),
-        ) &&
-        visibleInteractiveElements(setupIoPanel).includes(
-          setupIoPanel?.querySelector('[data-io-control="dmx-enable-staged-show-serial-route"]'),
-        )
+      ioShowArtNetLoopbackControlReachable: visibleInteractiveElements(setupIoPanel).includes(
+        setupIoPanel?.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]'),
       ),
       visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-io .dmxOutputConfigPanel'),
-      visibleDmxEnableStagedShowSerialRouteCount: visibleCount(
-        '.setupMode-io [data-io-control="dmx-enable-staged-show-serial-route"]',
+      visibleDmxEnableStagedShowArtNetLoopbackRouteCount: visibleCount(
+        '.setupMode-io [data-io-control="dmx-enable-staged-show-artnet-loopback-route"]',
       ),
       visibleArtRdmPanelCount: visibleCount('.setupMode-io .artRdmPanel'),
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-io .outputDiagnosticsDesk'),
@@ -13028,9 +12895,9 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 7 &&
-      result.visibleDmxEnableStagedShowSerialRouteCount === 1 &&
-      result.ioSerialMachineBindingControlsReachable &&
+      result.ioActiveZoneVisibleControlCount === 4 &&
+      result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 1 &&
+      result.ioShowArtNetLoopbackControlReachable &&
       JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 3 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
       result.ioDisclosureCount === 3 &&
@@ -37620,8 +37487,7 @@ async function main() {
               `${Object.values(result.disclosures).flat().length} ` +
             `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
             `legacy=${result.legacyStoredTabs.states.filter((state) => state.storedSetupSubTab === 'io').length}/4 ` +
-            `serialBinding=${Number(result.flows.dmx.serialMachineBindingControlsReachable)}/` +
-              `${Number(result.flows.dmx.serialMachineBindingExact)} ` +
+            `showArtNet=${Number(result.flows.dmx.showArtNetLoopbackControlReachable)} ` +
             `logicalRoute=${Number(result.flows.dmx.logicalRouteExact)} ` +
             `routePages=${result.routePagination.visitedRouteCount}/` +
               `${result.routePagination.totalRouteCount}:${result.routePagination.pageCount} ` +

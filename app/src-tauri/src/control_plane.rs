@@ -26,7 +26,7 @@ use protocol::control_plane_command::{
     OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
     OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
     OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
-    OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+    OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
     OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
     SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID, SET_EFFECT_ENABLED_OPERATION_ID,
     TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
@@ -276,7 +276,6 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_project_control_mappings"
             | "get_project_history_status"
             | "get_project_recovery_authority_status"
-            | "get_serial_dmx_machine_binding_status_v1"
             | "get_snapshot"
             | "get_snapshot_delta"
             | "get_timeline_cue_audio_status"
@@ -375,7 +374,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "disarm_dj_link_machine"
             | "discover_art_rdm_devices"
             | "discover_usb_rdm_devices"
-            | "enable_show_serial_dmx_route_v1"
+            | "enable_show_art_net_loopback_route_v1"
             | "enable_output_control_v2"
             | "end_media_asset_preview"
             | "fade_video_layer_opacity"
@@ -427,7 +426,6 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "seek_video_clip_slot_authoritative"
             | "seek_vj_preview"
             | "select_normal_audio_output"
-            | "select_serial_dmx_machine_binding_v1"
             | "send_art_rdm_request"
             | "send_dmx_routes_test_frame"
             | "send_dmx_test_frame"
@@ -1162,7 +1160,7 @@ enum ReviewedCanonicalOperation {
     AddDisplayOutput,
     SetDisplayWindowOpen,
     AssignVideoOutputComposition,
-    EnableShowSerialDmxRoute,
+    EnableShowArtNetLoopbackRoute,
     EnableOutput,
     AcquireOutputLease,
     RenewOutputLease,
@@ -1189,7 +1187,9 @@ impl ReviewedCanonicalOperation {
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
             Self::SetDisplayWindowOpen => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
             Self::AssignVideoOutputComposition => OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
-            Self::EnableShowSerialDmxRoute => OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+            Self::EnableShowArtNetLoopbackRoute => {
+                OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+            }
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
             Self::AcquireOutputLease => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewOutputLease => OUTPUT_LEASE_RENEW_OPERATION_ID,
@@ -1225,8 +1225,8 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "assign_video_output_composition_v2" => {
             Some(ReviewedCanonicalOperation::AssignVideoOutputComposition)
         }
-        "enable_show_serial_dmx_route_v1" => {
-            Some(ReviewedCanonicalOperation::EnableShowSerialDmxRoute)
+        "enable_show_art_net_loopback_route_v1" => {
+            Some(ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute)
         }
         "enable_output_control_v2" => Some(ReviewedCanonicalOperation::EnableOutput),
         "acquire_output_lease_v2" => Some(ReviewedCanonicalOperation::AcquireOutputLease),
@@ -1350,7 +1350,7 @@ fn canonical_descriptor_for_source(
         | ReviewedCanonicalOperation::TakeOverStandby
         | ReviewedCanonicalOperation::AddDisplayOutput
         | ReviewedCanonicalOperation::AssignVideoOutputComposition
-        | ReviewedCanonicalOperation::EnableShowSerialDmxRoute
+        | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
         | ReviewedCanonicalOperation::ForceTransferOutputLease => (
             OperationClass::Mutation,
             vec![
@@ -1400,7 +1400,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
-                | ReviewedCanonicalOperation::EnableShowSerialDmxRoute
+                | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -1425,7 +1425,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
-                | ReviewedCanonicalOperation::EnableShowSerialDmxRoute
+                | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -1450,7 +1450,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
-                | ReviewedCanonicalOperation::EnableShowSerialDmxRoute
+                | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
@@ -1482,7 +1482,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
-                | ReviewedCanonicalOperation::EnableShowSerialDmxRoute
+                | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             ConsentPolicy::NativeDangerConfirmation
@@ -1612,7 +1612,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
         operation_id,
         "add_display_output_v2"
             | "assign_video_output_composition_v2"
-            | "enable_show_serial_dmx_route_v1"
+            | "enable_show_art_net_loopback_route_v1"
             | "set_display_output_window_open_v2"
             | "enable_output_control_v2"
             | "acquire_output_lease_v2"
@@ -1796,7 +1796,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -1973,14 +1973,6 @@ mod tests {
             ),
             (
                 "disarm_dj_link_machine",
-                TauriRouteAdmissionClass::RuntimeMutation,
-            ),
-            (
-                "get_serial_dmx_machine_binding_status_v1",
-                TauriRouteAdmissionClass::ReadOnly,
-            ),
-            (
-                "select_serial_dmx_machine_binding_v1",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
             ("get_asio_output_status", TauriRouteAdmissionClass::ReadOnly),
@@ -2233,8 +2225,8 @@ mod tests {
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
             (
-                "enable_show_serial_dmx_route_v1",
-                OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+                "enable_show_art_net_loopback_route_v1",
+                OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
             ),
             ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
@@ -2492,7 +2484,7 @@ mod tests {
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                        | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                        | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                         | OUTPUT_ENABLE_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2510,8 +2502,8 @@ mod tests {
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
             (
-                "enable_show_serial_dmx_route_v1",
-                OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID,
+                "enable_show_art_net_loopback_route_v1",
+                OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
             ),
             ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
@@ -3088,7 +3080,7 @@ mod tests {
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                    | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3230,7 +3222,7 @@ mod tests {
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
-                    | OUTPUT_SHOW_SERIAL_DMX_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID

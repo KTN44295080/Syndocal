@@ -362,7 +362,6 @@ export const installCueAudioMock = (eventTargets) => {
       "list_midi_inputs",
       "list_midi_outputs",
       "list_serial_ports",
-      "get_serial_dmx_machine_binding_status_v1",
       "dmx_input_status",
       "list_project_backups",
       "get_project_history_status",
@@ -525,14 +524,6 @@ export const installCueAudioMock = (eventTargets) => {
       if (command === "get_engine_telemetry_report") {
         if (!exactKeys(args, [])) throw new Error("Cue Audio telemetry startup payload must be empty");
         return createProductionTelemetryReport();
-      }
-      if (command === "get_serial_dmx_machine_binding_status_v1") {
-        if (!exactKeys(args, [])) throw new Error("Cue Audio USB-DMX machine-binding startup payload must be empty");
-        return {
-          state: "missing_selection",
-          selected: null,
-          detail: "No machine-local USB-DMX interface is selected in this browser gate.",
-        };
       }
       if (command === "list_midi_inputs" || command === "list_midi_outputs" || command === "list_serial_ports" || command === "list_project_backups" || command === "get_fixture_profile_health" || command === "list_gdtf_fixture_cache") {
         if (!exactKeys(args, [])) throw new Error(`Cue Audio ${command} startup payload must be empty`);
