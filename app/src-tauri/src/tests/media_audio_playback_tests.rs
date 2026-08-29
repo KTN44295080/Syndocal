@@ -1,8 +1,10 @@
 use super::*;
 
-fn write_timeline_audio_test_wav(path: &Path) {
+fn write_timeline_audio_test_wav_with_duration(path: &Path, duration_secs: u32) {
     let sample_rate = 8_000_u32;
-    let sample_count = sample_rate * 2;
+    let sample_count = sample_rate
+        .checked_mul(duration_secs)
+        .expect("timeline audio test duration must fit a WAV data chunk");
     let data_bytes = sample_count * 2;
     let mut wav = Vec::with_capacity((44 + data_bytes) as usize);
     wav.extend_from_slice(b"RIFF");
@@ -19,6 +21,10 @@ fn write_timeline_audio_test_wav(path: &Path) {
     wav.extend_from_slice(&data_bytes.to_le_bytes());
     wav.resize((44 + data_bytes) as usize, 0);
     fs::write(path, wav).unwrap();
+}
+
+fn write_timeline_audio_test_wav(path: &Path) {
+    write_timeline_audio_test_wav_with_duration(path, 2);
 }
 
 fn completed_timeline_audio_prepare_job(
@@ -130,6 +136,7 @@ fn audio_device_generation_exhaustion_is_fail_closed_without_runtime_delta() {
                 path: PathBuf::from("existing.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
             error: "existing failure".to_string(),
@@ -352,6 +359,7 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
                 path: path.clone(),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 2_000,
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         },
@@ -372,7 +380,56 @@ fn timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback() 
     );
     let mut prepared = prepared.pop().unwrap().unwrap();
     assert_eq!(prepared.request.source_position_ms, 100);
+    assert_eq!(prepared.sink.as_ref().unwrap().speed(), 2.0);
     assert!(prepared.decoder.is_none());
+    prepared.stop();
+    let _ = fs::remove_file(path);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn asio_timeline_audio_attachment_applies_authoritative_varispeed() {
+    let suffix = current_unix_ms();
+    let path = std::env::temp_dir().join(format!("syndocal-asio-timeline-varispeed-{suffix}.wav"));
+    write_timeline_audio_test_wav(&path);
+    let (runtime, _context, _program, _cue) =
+        asio_output_runtime::AsioOutputRuntime::active_in_memory(714, 73).unwrap();
+    let runtime = Arc::new(Mutex::new(runtime));
+    let request = TimelineAudioPrepareRequest {
+        key: TimelineAudioSinkKey::Root(704),
+        clip: TimelineAudioClipSummary {
+            id: 704,
+            layer_id: 44,
+            media_asset_id: None,
+            path: path.to_string_lossy().into_owned(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 2_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
+        },
+        source_position_ms: 0,
+        volume: 1.0,
+        source: TimelineAudioSourceConfig {
+            path: path.clone(),
+            gain: 1.0,
+            offset_ms: 0,
+            speed_milli: 1_500,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
+        },
+    };
+
+    let prepared = prepare_asio_timeline_audio_clip(request, &runtime).unwrap();
+    let mut results = append_prepared_timeline_audio_decoders(
+        seek_prepared_timeline_audio_decoders(vec![Ok(prepared)]),
+        Some(&runtime),
+        None,
+        None,
+    );
+    let mut prepared = results.pop().unwrap().unwrap();
+    assert_eq!(prepared.sink.as_ref().unwrap().speed(), 1.5);
     prepared.stop();
     let _ = fs::remove_file(path);
 }
@@ -484,12 +541,14 @@ fn explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink() {
                 path: path.clone(),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 500,
                 output_bus: protocol::TimelineAudioOutputBus::Cue,
             },
         },
         &output,
     )
     .unwrap();
+    assert_eq!(prepared.sink.as_ref().unwrap().speed(), 0.5);
     let prepared = seek_prepared_timeline_audio_decoders(vec![Ok(prepared)]);
     let runtime_for_stop = Arc::clone(&runtime);
     let mut stop_between_append_and_postcheck = move || {
@@ -923,6 +982,7 @@ fn external_wdm_commit_rejects_an_old_playback_fence_after_observer_delay() {
                 path: PathBuf::from("cue.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Cue,
             },
         );
@@ -1062,6 +1122,7 @@ fn normal_program_replacement_preserves_only_the_independent_authoring_timeline(
             path: PathBuf::from("authoring.wav"),
             gain: 1.0,
             offset_ms: 0,
+            speed_milli: 1_000,
             output_bus: protocol::TimelineAudioOutputBus::Program,
         },
     );
@@ -3366,6 +3427,391 @@ fn timeline_audio_playback_lifecycle_recues_on_play_and_seek_and_stops_on_pause(
 }
 
 #[test]
+fn invalid_timeline_audio_rate_is_visible_and_cue_only_does_not_fault_program_settlement() {
+    let snapshot_for = |output_bus, playback_rate_milli| engine::TimelineAudioRuntimeSnapshot {
+        child_clips: vec![engine::ChildTimelineAudioRuntimeClip {
+            root: engine::ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id: 17,
+                generation: 3,
+            },
+            path: Arc::from(Vec::<ChildTimelineTransportPathSegment>::new()),
+            position_ms: 100,
+            playback_rate_milli,
+            clip: TimelineAudioClipSummary {
+                id: 44,
+                layer_id: 5,
+                media_asset_id: None,
+                path: "rate-test.wav".to_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 1_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                output_bus,
+            },
+        }],
+        playing: true,
+        position_ms: 100,
+        transport_revision: 1,
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    };
+
+    let mut cue_playback = MediaAudioPlayback::default();
+    let cue_plan = cue_playback
+        .plan_timeline_audio_sync(&snapshot_for(protocol::TimelineAudioOutputBus::Cue, 0))
+        .expect("invalid CUE rate must stay isolated from PROGRAM settlement");
+    assert!(cue_plan.prepares.is_empty());
+    assert_eq!(cue_plan.errors, Vec::<String>::new());
+    assert_eq!(cue_plan.cue_errors.len(), 1);
+    assert!(cue_plan.cue_errors[0].contains("invalid-rate sentinel"));
+    assert!(cue_playback.timeline_sinks.is_empty());
+
+    let mut program_playback = MediaAudioPlayback::default();
+    let error = match program_playback
+        .plan_timeline_audio_sync(&snapshot_for(protocol::TimelineAudioOutputBus::Program, 0))
+    {
+        Ok(_) => panic!("invalid PROGRAM rate must reject Timeline settlement"),
+        Err(error) => error,
+    };
+    assert!(error.contains("invalid-rate sentinel"));
+    assert!(program_playback.timeline_sinks.is_empty());
+
+    let mut cue_evidenced = MediaAudioPlayback::default();
+    cue_evidenced
+        .sync_to_timeline_audio_evidenced(&snapshot_for(protocol::TimelineAudioOutputBus::Cue, 0))
+        .expect("test-only sync must retain production CUE-only settlement isolation");
+    assert!(cue_evidenced
+        .timeline_last_sync_error
+        .as_deref()
+        .is_some_and(|error| error.contains("invalid-rate sentinel")));
+
+    let mut program_evidenced = MediaAudioPlayback::default();
+    assert!(program_evidenced
+        .sync_to_timeline_audio_evidenced(&snapshot_for(
+            protocol::TimelineAudioOutputBus::Program,
+            0,
+        ))
+        .is_err());
+}
+
+#[test]
+fn timeline_audio_source_clock_uses_source_time_for_half_double_and_post_seek_resync() {
+    let half = TimelineAudioSourceClock {
+        source_anchor_ms: 1_000,
+        output_anchor_ms: 200,
+    };
+    let half_normal = timeline_audio_source_position_at_output_time(half, 400, 500).unwrap();
+    assert_eq!(half_normal, 1_100);
+    assert_eq!(timeline_audio_source_drift_ms(half_normal, 1_100), 0);
+    assert!(
+        !media_audio_resync_required(
+            timeline_audio_source_drift_ms(half_normal, 1_100),
+            Duration::MAX,
+        ),
+        "a 0.5x normal output tick must not be mistaken for source drift"
+    );
+    assert!(media_audio_resync_required(
+        timeline_audio_source_drift_ms(half_normal, 1_200),
+        Duration::MAX,
+    ));
+
+    let double = TimelineAudioSourceClock {
+        source_anchor_ms: 2_500,
+        output_anchor_ms: 700,
+    };
+    let double_normal = timeline_audio_source_position_at_output_time(double, 825, 2_000).unwrap();
+    assert_eq!(double_normal, 2_750);
+    assert_eq!(timeline_audio_source_drift_ms(double_normal, 2_750), 0);
+    assert!(
+        !media_audio_resync_required(
+            timeline_audio_source_drift_ms(double_normal, 2_750),
+            Duration::MAX,
+        ),
+        "a 2x normal output tick must not be mistaken for source drift"
+    );
+    assert!(media_audio_resync_required(
+        timeline_audio_source_drift_ms(double_normal, 2_650),
+        Duration::MAX,
+    ));
+
+    let post_seek = TimelineAudioSourceClock {
+        source_anchor_ms: 6_000,
+        output_anchor_ms: 900,
+    };
+    assert_eq!(
+        timeline_audio_source_position_at_output_time(post_seek, 975, 2_000).unwrap(),
+        6_150,
+        "a nonzero seek must replace both source and output anchors"
+    );
+    assert_eq!(
+        timeline_audio_source_position_at_output_time(post_seek, 1_100, 2_000).unwrap(),
+        6_400,
+        "source-time conversion must stay correct after the reseek"
+    );
+}
+
+#[test]
+fn canonical_fractional_timeline_audio_rate_does_not_false_resync_after_190_seconds() {
+    // Engine canonicalizes authored 1.2346x to the published 1235 millirate
+    // before its child position clock advances. The Sink receives that same
+    // 1.235x speed, so its output-time coordinate maps back to this exact
+    // source position rather than the raw-float 1.2346x position.
+    let canonical_source = timeline_audio_source_position_at_output_time(
+        TimelineAudioSourceClock {
+            source_anchor_ms: 0,
+            output_anchor_ms: 0,
+        },
+        190_000,
+        1_235,
+    )
+    .unwrap();
+    assert_eq!(canonical_source, 234_650);
+    assert!(
+        !media_audio_resync_required(
+            timeline_audio_source_drift_ms(canonical_source, 234_650),
+            Duration::MAX,
+        ),
+        "the engine source clock and Sink clock must share canonical 1.235x"
+    );
+
+    let raw_authored_source = 234_574_u64;
+    assert!(
+        media_audio_resync_required(
+            timeline_audio_source_drift_ms(canonical_source, raw_authored_source),
+            Duration::MAX,
+        ),
+        "the old 1.2346x clock would drift 76 ms and trigger a false reseek"
+    );
+}
+
+#[test]
+fn nested_canonical_fractional_timeline_audio_rate_does_not_false_resync_after_339_seconds() {
+    // The engine's nested 1.2346x * 1.2346x projection publishes 1525 and
+    // the matching runtime-only audio source coordinate 516_975. Lighting's
+    // legacy recursive local-rate position is 517_051, so using it here would
+    // create a false 76 ms Sink re-seek.
+    let canonical_source = timeline_audio_source_position_at_output_time(
+        TimelineAudioSourceClock {
+            source_anchor_ms: 0,
+            output_anchor_ms: 0,
+        },
+        339_000,
+        1_525,
+    )
+    .unwrap();
+    assert_eq!(canonical_source, 516_975);
+    assert!(
+        !media_audio_resync_required(
+            timeline_audio_source_drift_ms(canonical_source, 516_975),
+            Duration::MAX,
+        ),
+        "the nested audio source projection must match the cumulative Sink clock"
+    );
+    assert!(
+        media_audio_resync_required(
+            timeline_audio_source_drift_ms(canonical_source, 517_051),
+            Duration::MAX,
+        ),
+        "the legacy recursive lighting position must not drive audio resync"
+    );
+}
+
+#[test]
+fn timeline_audio_sink_seek_converts_authoritative_source_time_to_output_time() {
+    let suffix = current_unix_ms();
+    let path = std::env::temp_dir().join(format!(
+        "syndocal-timeline-audio-sink-seek-coordinate-{suffix}.wav"
+    ));
+    write_timeline_audio_test_wav_with_duration(&path, 16);
+
+    let (mixer, mut mixer_source) = rodio::mixer::mixer(1, 8_000);
+    let stop_consumer = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_consumer_worker = Arc::clone(&stop_consumer);
+    let consumer = std::thread::spawn(move || {
+        while !stop_consumer_worker.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = mixer_source.next();
+            std::thread::yield_now();
+        }
+    });
+
+    for (speed_milli, expected_output_ms) in [(2_000, 3_000), (500, 12_000)] {
+        let sink = rodio::Sink::connect_new(&mixer);
+        let decoder = rodio::Decoder::try_from(fs::File::open(&path).unwrap()).unwrap();
+        sink.append(decoder);
+        sink.set_speed(validate_timeline_audio_speed(speed_milli).unwrap());
+        sink.pause();
+
+        seek_timeline_audio_sink_to_source_ms(&sink, 6_000, speed_milli).unwrap();
+        assert_eq!(
+            timeline_audio_sink_output_position_ms(&sink),
+            expected_output_ms,
+            "Rodio Sink must receive output-time, not raw 6000 ms source-time"
+        );
+
+        let post_seek = TimelineAudioSourceClock {
+            source_anchor_ms: 6_000,
+            output_anchor_ms: expected_output_ms,
+        };
+        assert_eq!(
+            timeline_audio_source_position_at_output_time(
+                post_seek,
+                timeline_audio_sink_output_position_ms(&sink),
+                speed_milli,
+            )
+            .unwrap(),
+            6_000,
+            "the installed source/output clock must remain exact immediately after seek"
+        );
+        sink.stop();
+    }
+
+    stop_consumer.store(true, std::sync::atomic::Ordering::Release);
+    consumer.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn timeline_audio_sink_seek_coordinate_rounds_down_and_rejects_invalid_rates() {
+    assert_eq!(
+        timeline_audio_sink_output_position_for_source_ms(0, 500).unwrap(),
+        0
+    );
+    assert_eq!(
+        timeline_audio_sink_output_position_for_source_ms(6_000, 2_000).unwrap(),
+        3_000
+    );
+    assert_eq!(
+        timeline_audio_sink_output_position_for_source_ms(6_000, 500).unwrap(),
+        12_000
+    );
+    assert_eq!(
+        timeline_audio_sink_output_position_for_source_ms(1_001, 1_500).unwrap(),
+        667,
+        "fractional output coordinates round down"
+    );
+    assert_eq!(
+        timeline_audio_source_position_at_output_time(
+            TimelineAudioSourceClock {
+                source_anchor_ms: 0,
+                output_anchor_ms: 0,
+            },
+            667,
+            1_500,
+        )
+        .unwrap(),
+        1_000,
+        "rounding down must not place the fixed-point source coordinate after the request"
+    );
+    assert_eq!(
+        timeline_audio_sink_output_position_for_source_ms(u64::MAX, 250).unwrap(),
+        u64::MAX,
+        "overflow clamps at the only representable Sink millisecond coordinate"
+    );
+    for invalid in [0, 249, 4_001] {
+        assert!(timeline_audio_sink_output_position_for_source_ms(1, invalid).is_err());
+    }
+}
+
+#[test]
+fn stale_rate_prepared_clip_is_retired_without_attaching_old_speed() {
+    let suffix = current_unix_ms();
+    let path =
+        std::env::temp_dir().join(format!("syndocal-timeline-audio-stale-speed-{suffix}.wav"));
+    write_timeline_audio_test_wav(&path);
+    let (mixer, _mixer_source) = rodio::mixer::mixer(2, 48_000);
+    let authority = engine::TimelineAudioProjectionAuthority {
+        epoch: 3,
+        generation: 8,
+    };
+    let key = TimelineAudioSinkKey::DirectChild {
+        parent_cue_id: 17,
+        generation: 9,
+        path: Arc::from(Vec::<ChildTimelineTransportPathSegment>::new()),
+        clip_id: 44,
+    };
+    let clip = TimelineAudioClipSummary {
+        id: 44,
+        layer_id: 5,
+        media_asset_id: None,
+        path: path.to_string_lossy().into_owned(),
+        start_ms: 0,
+        offset_ms: 125,
+        duration_ms: 1_000,
+        gain: 1.0,
+        fade_in_ms: 0,
+        fade_out_ms: 0,
+        output_bus: protocol::TimelineAudioOutputBus::Program,
+    };
+    let stale_source = TimelineAudioSourceConfig {
+        path: path.clone(),
+        gain: 1.0,
+        offset_ms: 125,
+        speed_milli: 500,
+        output_bus: protocol::TimelineAudioOutputBus::Program,
+    };
+    let stale_request = TimelineAudioPrepareRequest {
+        key: key.clone(),
+        clip: clip.clone(),
+        source_position_ms: 225,
+        volume: 1.0,
+        source: stale_source,
+    };
+    let prepared = prepare_timeline_audio_clip(stale_request, &mixer).unwrap();
+    let current = engine::TimelineAudioRuntimeSnapshot {
+        child_clips: vec![engine::ChildTimelineAudioRuntimeClip {
+            root: engine::ChildTimelineAudioRuntimeRoot::Direct {
+                parent_cue_id: 17,
+                generation: 9,
+            },
+            path: Arc::from(Vec::<ChildTimelineTransportPathSegment>::new()),
+            position_ms: 100,
+            playback_rate_milli: 2_000,
+            clip,
+        }],
+        playing: true,
+        position_ms: 100,
+        transport_revision: 1,
+        source_projection_authority: authority,
+        ..engine::TimelineAudioRuntimeSnapshot::default()
+    };
+    let mut playback = MediaAudioPlayback {
+        timeline_source_projection_authority: Some(authority),
+        ..MediaAudioPlayback::default()
+    };
+    let plan = TimelineAudioSyncPlan {
+        authority,
+        device_generation: playback.audio_device_generation,
+        hybrid_cue_output_generation: playback.hybrid_cue_output_generation,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        external_wdm_timeline_owner: playback.external_wdm_timeline_owner,
+        requested_device_name: playback.requested_device_name.clone(),
+        mixer: None,
+        prepares: Vec::new(),
+        seeks: Vec::new(),
+        errors: Vec::new(),
+        cue_errors: Vec::new(),
+    };
+    let mut prepared_output = None;
+    playback
+        .commit_timeline_audio_sync(
+            plan,
+            &current,
+            &mut prepared_output,
+            vec![Ok(prepared)],
+            Vec::new(),
+        )
+        .unwrap();
+    assert!(
+        !playback.timeline_sinks.contains_key(&key),
+        "a prepared 0.5x sink may not attach after authoritative 2x publication"
+    );
+    assert!(!playback.timeline_sources.contains_key(&key));
+    assert!(!playback.timeline_source_clocks.contains_key(&key));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn timeline_audio_sink_domain_recreates_clip_id_on_seek_and_stops_on_pause_or_mute() {
     let (mixer, _mixer_source) = rodio::mixer::mixer(2, 48_000);
     let mut playback = MediaAudioPlayback::default();
@@ -3380,6 +3826,7 @@ fn timeline_audio_sink_domain_recreates_clip_id_on_seek_and_stops_on_pause_or_mu
                 path: PathBuf::from("fixture.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
@@ -3428,6 +3875,7 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
                 path: PathBuf::from(path),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
@@ -3505,6 +3953,7 @@ fn timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once() {
             path: PathBuf::from("same-source.wav"),
             gain: 1.0,
             offset_ms: 0,
+            speed_milli: 1_000,
             output_bus: protocol::TimelineAudioOutputBus::Program,
         },
     );
@@ -3707,6 +4156,7 @@ fn cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settle
             path: PathBuf::from("program.wav"),
             gain: 1.0,
             offset_ms: 0,
+            speed_milli: 1_000,
             output_bus: protocol::TimelineAudioOutputBus::Program,
         },
     );
@@ -3731,6 +4181,7 @@ fn cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settle
             path: PathBuf::from("cue.wav"),
             gain: 1.0,
             offset_ms: 0,
+            speed_milli: 1_000,
             output_bus: protocol::TimelineAudioOutputBus::Cue,
         },
     };

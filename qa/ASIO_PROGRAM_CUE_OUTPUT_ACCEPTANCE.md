@@ -274,10 +274,50 @@ generation barrier. Save/edit, import, paste, duplicate, split/trim, lane move,
 and undo/restore equivalents may publish the new bus only after old queued
 blocks are retired; not one frame may remain audible on the old bus after the
 authoritative change.
-The current Timeline clip path does not yet publish or apply an authoritative
-audio speed. V3 may claim speed preservation only after that source of truth and
-its render barrier are implemented and tested; otherwise non-default speed must
-reject visibly instead of being silently ignored.
+Timeline clip speed is a runtime-only, authoritative `playback_rate_milli`
+source (1000 = 1.0) published with each active Child Timeline transport. Its
+250..=4000 bound is the existing authored Program varispeed envelope and is
+validated before attachment; zero is an explicit invalid-rate
+sentinel and is rejected visibly, never normalized to 1.0. A valid authored or
+conformed audio rate is rounded once to that millirate before child transport
+position integration, so the child source clock, published rate, and Sink all
+use one canonical rate. Nested audio owns a separate runtime-only
+`audio_position_ms`: it advances directly at the canonical cumulative
+millirate, while lighting retains its legacy recursive local-rate
+`position_ms`. The audio path must never use that lighting position; this is
+what prevents a nested fractional rate (for example 1.235 x 1.235 -> 1.525)
+from accumulating a false re-seek. An ambiguous conform result keeps only the
+historical lighting fallback; audio publishes zero and refuses attachment. A
+rate-only change is a Timeline publication and ASIO render-generation barrier.
+`audio_active` is a second runtime-only admission bit for source-time: a
+negative child `source_offset_ms` is a delay, so audio remains unattached at
+the clamped lighting position zero until the root output reaches the exact
+positive delay boundary. This also propagates to nested descendants. Initial
+seek/restart anchoring reconstructs the child event's root-output start rather
+than treating the clamped zero as decoded source zero, so output 0/1/99 ms for
+a -100 ms offset cannot attach early; output 100 ms attaches at source zero.
+Loop-fill preserves that delayed anchor across wraps. No persisted project or
+UI field represents this admission state.
+The current implementation uses Rodio `Sink::set_speed`, so this is deliberate
+varispeed: duration and pitch both change. It does not claim pitch-preserving
+time stretch.
+Rodio `Sink::get_pos` reports output-time, not decoded source-time at a
+non-1x rate. Timeline drift decisions use a runtime-only integer source/output
+anchor pair and the exact published millirate; a successful re-seek replaces
+both anchors. This avoids a false re-seek at 0.5x or 2x while keeping actual
+source-time drift fail-closed. For every Speed-wrapped Rodio Sink (Normal and
+explicit-WDM CUE), the shared seek helper converts authoritative source-time to
+the Sink's output-time coordinate with `floor(source_ms * 1000 / rate_milli)`
+before `Sink::try_seek`; Rodio then multiplies that coordinate before seeking
+the decoder. Floor deliberately cannot put the fixed-point decoder coordinate
+after the requested source position. The ASIO attachment preparation retains
+its direct `Decoder::try_seek` in raw source-time before attaching the decoder,
+so it does not apply the Sink-coordinate conversion twice.
+
+Open P1, deliberately outside this Timeline-audio tranche: the Video layer
+keeps its own legacy varispeed/seek model. Timeline-audio source/output clock
+proof must not be treated as Video synchronization proof until that independent
+path receives an explicit audit and acceptance coverage.
 
 ## DSF2026 machine profile
 

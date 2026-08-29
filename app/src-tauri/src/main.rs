@@ -16798,6 +16798,10 @@ struct MediaAudioPlayback {
     last_resync_at: HashMap<VideoLayerId, Instant>,
     timeline_sinks: HashMap<TimelineAudioSinkKey, rodio::Sink>,
     timeline_sources: HashMap<TimelineAudioSinkKey, TimelineAudioSourceConfig>,
+    /// Converts Rodio's output-time `Sink::get_pos` back into Timeline's
+    /// authoritative source-time coordinates. It is runtime-only and is
+    /// retired with the sink; no project image can restore a stale clock.
+    timeline_source_clocks: HashMap<TimelineAudioSinkKey, TimelineAudioSourceClock>,
     timeline_failures: HashMap<TimelineAudioSinkKey, TimelineAudioPlaybackFailure>,
     timeline_last_resync_at: HashMap<TimelineAudioSinkKey, Instant>,
     timeline_transport: TimelineAudioTransportState,
@@ -16855,10 +16859,23 @@ struct TimelineAudioSourceConfig {
     path: PathBuf,
     gain: f32,
     offset_ms: u64,
+    /// Authoritative runtime varispeed. This deliberately changes pitch with
+    /// duration because Timeline audio uses Rodio's `Sink::set_speed`.
+    speed_milli: u32,
     /// This is a logical source identity. Device/channel selection remains a
     /// separate machine-local router concern; until that integration lands,
     /// a PROGRAM/CUE change must still retire the old sink before rebuilding.
     output_bus: protocol::TimelineAudioOutputBus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimelineAudioSourceClock {
+    /// Source-time position at `output_anchor_ms`, including the initial
+    /// decoder seek or a successful drift re-seek.
+    source_anchor_ms: u64,
+    /// Rodio output-time position sampled at the same instant. `Sink::get_pos`
+    /// is not source time while varispeed is active.
+    output_anchor_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16896,6 +16913,7 @@ struct TimelineAudioSeekRequest {
     clip_id: TimelineAudioClipId,
     sink: rodio::Sink,
     source_position_ms: u64,
+    speed_milli: u32,
 }
 
 struct TimelineAudioSyncPlan {
@@ -17132,6 +17150,7 @@ fn take_active_normal_program_output(
         }
         sinks.extend(playback.timeline_sinks.drain().map(|(_, sink)| sink));
         playback.timeline_sources.clear();
+        playback.timeline_source_clocks.clear();
         playback.timeline_failures.clear();
         playback.timeline_last_resync_at.clear();
         playback.timeline_source_projection_authority = None;
@@ -17281,6 +17300,82 @@ type PreparedTimelineAudioClipResult =
 
 const MEDIA_AUDIO_RESYNC_THRESHOLD_MS: u64 = 75;
 const MEDIA_AUDIO_RESYNC_COOLDOWN: Duration = Duration::from_millis(250);
+const TIMELINE_AUDIO_SPEED_MIN_MILLI: u32 = 250;
+const TIMELINE_AUDIO_SPEED_MAX_MILLI: u32 = 4_000;
+
+fn validate_timeline_audio_speed(speed_milli: u32) -> Result<f32, String> {
+    if !(TIMELINE_AUDIO_SPEED_MIN_MILLI..=TIMELINE_AUDIO_SPEED_MAX_MILLI).contains(&speed_milli) {
+        return Err(format!(
+            "Timeline audio playback rate must be within {TIMELINE_AUDIO_SPEED_MIN_MILLI}..={TIMELINE_AUDIO_SPEED_MAX_MILLI} milli (got {speed_milli}); zero is an invalid-rate sentinel"
+        ));
+    }
+    Ok(speed_milli as f32 / 1_000.0)
+}
+
+fn timeline_audio_sink_output_position_ms(sink: &rodio::Sink) -> u64 {
+    sink.get_pos().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+/// Converts Timeline source-time into the output-time coordinate expected by
+/// `rodio::Sink::try_seek` when `Sink::set_speed` is active.
+///
+/// Rodio's `Speed::try_seek` multiplies the Sink coordinate by the speed before
+/// seeking its wrapped decoder. We therefore divide the authoritative source
+/// position by the fixed-point millirate here. The division deliberately rounds
+/// down: the exact fixed-point source coordinate can be at, but never after,
+/// the requested Timeline source position. This is a seek-coordinate conversion,
+/// not a drift calculation; it stays integer-only and rejects the same invalid
+/// rate sentinel as attachment.
+fn timeline_audio_sink_output_position_for_source_ms(
+    source_position_ms: u64,
+    speed_milli: u32,
+) -> Result<u64, String> {
+    if !(TIMELINE_AUDIO_SPEED_MIN_MILLI..=TIMELINE_AUDIO_SPEED_MAX_MILLI).contains(&speed_milli) {
+        return Err(format!(
+            "Timeline audio Sink seek rejected invalid playback rate {speed_milli} milli"
+        ));
+    }
+    let output_position_ms =
+        u128::from(source_position_ms).saturating_mul(1_000) / u128::from(speed_milli);
+    Ok(output_position_ms.min(u128::from(u64::MAX)) as u64)
+}
+
+/// Seeks a Speed-wrapped Rodio Sink to an authoritative Timeline source
+/// position. Decoder seeks intentionally remain in raw source-time elsewhere.
+fn seek_timeline_audio_sink_to_source_ms(
+    sink: &rodio::Sink,
+    source_position_ms: u64,
+    speed_milli: u32,
+) -> Result<(), String> {
+    let output_position_ms =
+        timeline_audio_sink_output_position_for_source_ms(source_position_ms, speed_milli)?;
+    sink.try_seek(Duration::from_millis(output_position_ms))
+        .map_err(|error| error.to_string())
+}
+
+/// Deterministically maps Rodio output-time into source-time. This uses only
+/// integer arithmetic so resync decisions cannot accumulate float error.
+fn timeline_audio_source_position_at_output_time(
+    clock: TimelineAudioSourceClock,
+    output_position_ms: u64,
+    speed_milli: u32,
+) -> Result<u64, String> {
+    if !(TIMELINE_AUDIO_SPEED_MIN_MILLI..=TIMELINE_AUDIO_SPEED_MAX_MILLI).contains(&speed_milli) {
+        return Err(format!(
+            "Timeline audio source clock rejected invalid playback rate {speed_milli} milli"
+        ));
+    }
+    let elapsed_output_ms = output_position_ms.saturating_sub(clock.output_anchor_ms);
+    let elapsed_source_ms =
+        u128::from(elapsed_output_ms).saturating_mul(u128::from(speed_milli)) / 1_000;
+    let elapsed_source_ms = elapsed_source_ms.min(u128::from(u64::MAX)) as u64;
+    Ok(clock.source_anchor_ms.saturating_add(elapsed_source_ms))
+}
+
+fn timeline_audio_source_drift_ms(actual_source_ms: u64, desired_source_ms: u64) -> i64 {
+    let drift = i128::from(actual_source_ms) - i128::from(desired_source_ms);
+    drift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
 const MEDIA_AUDIO_SYNC_INTERVAL: Duration = Duration::from_millis(25);
 const MEDIA_AUDIO_SYNC_IDLE_INTERVAL: Duration = Duration::from_millis(250);
 const TIMELINE_AUDIO_PREPARE_TRANSACTION_BUDGET: Duration = Duration::from_millis(750);
@@ -17501,7 +17596,7 @@ fn timeline_audio_transport_action(
 
 fn timeline_audio_active_clips(
     timeline: &engine::TimelineAudioRuntimeSnapshot,
-) -> Vec<(TimelineAudioSinkKey, TimelineAudioClipSummary, u64)> {
+) -> Vec<(TimelineAudioSinkKey, TimelineAudioClipSummary, u64, u32)> {
     let mut active = timeline
         .clips
         .iter()
@@ -17516,6 +17611,7 @@ fn timeline_audio_active_clips(
                 TimelineAudioSinkKey::Root(clip.id),
                 clip,
                 timeline.position_ms,
+                1_000,
             )
         })
         .collect::<Vec<_>>();
@@ -17553,7 +17649,12 @@ fn timeline_audio_active_clips(
                 clip_id: child.clip.id,
             },
         };
-        (key, child.clip.clone(), child.position_ms)
+        (
+            key,
+            child.clip.clone(),
+            child.position_ms,
+            child.playback_rate_milli,
+        )
     }));
     active
 }
@@ -17961,9 +18062,11 @@ fn sync_timeline_audio_without_blocking_playback_lock(
         .into_iter()
         .map(|seek| {
             let result = if authority_is_current() {
-                seek.sink
-                    .try_seek(Duration::from_millis(seek.source_position_ms))
-                    .map_err(|error| error.to_string())
+                seek_timeline_audio_sink_to_source_ms(
+                    &seek.sink,
+                    seek.source_position_ms,
+                    seek.speed_milli,
+                )
             } else {
                 Err("source projection changed before drift resync".to_string())
             };
@@ -20067,6 +20170,10 @@ fn prepare_timeline_audio_clip(
     request: TimelineAudioPrepareRequest,
     mixer: &rodio::mixer::Mixer,
 ) -> PreparedTimelineAudioClipResult {
+    let speed = match validate_timeline_audio_speed(request.source.speed_milli) {
+        Ok(speed) => speed,
+        Err(error) => return Err(Box::new((request, error))),
+    };
     let file = match fs::File::open(&request.clip.path) {
         Ok(file) => file,
         Err(error) => {
@@ -20090,6 +20197,7 @@ fn prepare_timeline_audio_clip(
     let sink = rodio::Sink::connect_new(mixer);
     sink.pause();
     sink.set_volume(request.volume.clamp(0.0, 2.0));
+    sink.set_speed(speed);
     Ok(PreparedTimelineAudioClip {
         request,
         sink: Some(sink),
@@ -20119,6 +20227,9 @@ fn prepare_asio_timeline_audio_clip(
     request: TimelineAudioPrepareRequest,
     runtime: &Arc<Mutex<asio_output_runtime::AsioOutputRuntime>>,
 ) -> PreparedTimelineAudioClipResult {
+    if let Err(error) = validate_timeline_audio_speed(request.source.speed_milli) {
+        return Err(Box::new((request, error)));
+    }
     let identity = match runtime
         .lock()
         .map_err(|_| "show-ASIO output runtime lock was poisoned".to_owned())
@@ -20162,17 +20273,18 @@ fn rebase_prepared_timeline_audio_clips(
 ) -> Vec<PreparedTimelineAudioClipResult> {
     let active = timeline_audio_active_clips(current)
         .into_iter()
-        .map(|(key, clip, position_ms)| (key, (clip, position_ms)))
+        .map(|(key, clip, position_ms, speed)| (key, (clip, position_ms, speed)))
         .collect::<HashMap<_, _>>();
     prepared_clips
         .into_iter()
         .map(|prepared| {
             let mut prepared = prepared?;
-            let Some((clip, position_ms)) = active.get(&prepared.request.key) else {
+            let Some((clip, position_ms, speed)) = active.get(&prepared.request.key) else {
                 return Ok(prepared);
             };
             if clip.path != prepared.request.clip.path
                 || clip.offset_ms != prepared.request.clip.offset_ms
+                || *speed != prepared.request.source.speed_milli
             {
                 return Ok(prepared);
             }
@@ -20309,6 +20421,11 @@ fn append_prepared_timeline_audio_decoders(
                     Err(error) => return Err(Box::new((prepared.request, error))),
                 };
                 sink.set_volume(prepared.request.volume.clamp(0.0, 2.0));
+                let speed = match validate_timeline_audio_speed(prepared.request.source.speed_milli) {
+                    Ok(speed) => speed,
+                    Err(error) => return Err(Box::new((prepared.request, error))),
+                };
+                sink.set_speed(speed);
                 prepared.sink = Some(sink);
                 return Ok(prepared);
             }
@@ -20330,17 +20447,18 @@ fn prepared_timeline_audio_clips_need_rebase(
 ) -> bool {
     let active = timeline_audio_active_clips(current)
         .into_iter()
-        .map(|(key, clip, position_ms)| (key, (clip, position_ms)))
+        .map(|(key, clip, position_ms, speed)| (key, (clip, position_ms, speed)))
         .collect::<HashMap<_, _>>();
     prepared_clips.iter().any(|prepared| {
         let Ok(prepared) = prepared else {
             return false;
         };
-        let Some((clip, position_ms)) = active.get(&prepared.request.key) else {
+        let Some((clip, position_ms, speed)) = active.get(&prepared.request.key) else {
             return false;
         };
         if clip.path != prepared.request.clip.path
             || clip.offset_ms != prepared.request.clip.offset_ms
+            || *speed != prepared.request.source.speed_milli
         {
             return false;
         }
@@ -20511,6 +20629,7 @@ impl MediaAudioPlayback {
         self.sources.clear();
         self.last_resync_at.clear();
         self.timeline_sources.clear();
+        self.timeline_source_clocks.clear();
         self.timeline_failures.clear();
         self.timeline_last_resync_at.clear();
         match prepared {
@@ -20678,6 +20797,7 @@ impl MediaAudioPlayback {
         clip: &TimelineAudioClipSummary,
         source_position_ms: u64,
         volume: f32,
+        speed_milli: u32,
     ) -> Result<(), String> {
         #[cfg(test)]
         {
@@ -20686,6 +20806,7 @@ impl MediaAudioPlayback {
         if let Some(previous) = self.timeline_sinks.remove(&key) {
             previous.stop();
         }
+        self.timeline_source_clocks.remove(&key);
         let requested_device_name = self.requested_device_name.clone();
         let file = fs::File::open(&clip.path).map_err(|error| {
             format!(
@@ -20710,12 +20831,18 @@ impl MediaAudioPlayback {
             .playback_mixer()
             .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
         let sink = rodio::Sink::connect_new(&mixer);
+        let speed = validate_timeline_audio_speed(speed_milli)?;
         sink.append(decoder);
         sink.set_volume(volume.clamp(0.0, 2.0));
+        sink.set_speed(speed);
         if source_position_ms > 0 {
-            sink.try_seek(Duration::from_millis(source_position_ms))
+            seek_timeline_audio_sink_to_source_ms(&sink, source_position_ms, speed_milli)
                 .map_err(|error| format!("Timeline audio clip {} seek failed: {error}", clip.id))?;
         }
+        let source_clock = TimelineAudioSourceClock {
+            source_anchor_ms: source_position_ms,
+            output_anchor_ms: timeline_audio_sink_output_position_ms(&sink),
+        };
         sink.play();
         self.timeline_sinks.insert(key.clone(), sink);
         self.timeline_sources.insert(
@@ -20724,9 +20851,12 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                speed_milli,
                 output_bus: clip.output_bus,
             },
         );
+        self.timeline_source_clocks
+            .insert(key.clone(), source_clock);
         self.timeline_last_resync_at.insert(key, Instant::now());
         Ok(())
     }
@@ -20740,6 +20870,7 @@ impl MediaAudioPlayback {
             sink.stop();
         }
         self.timeline_sources.remove(&key);
+        self.timeline_source_clocks.remove(&key);
         self.timeline_failures.remove(&key);
         self.timeline_last_resync_at.remove(&key);
     }
@@ -20866,7 +20997,7 @@ impl MediaAudioPlayback {
         let active_clips = timeline_audio_active_clips(timeline);
         let active_ids = active_clips
             .iter()
-            .map(|(key, _, _)| key.clone())
+            .map(|(key, _, _, _)| key.clone())
             .collect::<HashSet<_>>();
         let stale_ids = self
             .timeline_sinks
@@ -20880,7 +21011,7 @@ impl MediaAudioPlayback {
         self.timeline_failures
             .retain(|key, _| active_ids.contains(key));
 
-        for (key, clip, local_position_ms) in active_clips {
+        for (key, clip, local_position_ms, speed_milli) in active_clips {
             let source_position_ms = local_position_ms
                 .saturating_sub(clip.start_ms)
                 .saturating_add(clip.offset_ms);
@@ -20889,11 +21020,28 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                speed_milli,
                 output_bus: clip.output_bus,
             };
+            if let Err(error) = validate_timeline_audio_speed(speed_milli) {
+                self.stop_timeline_clip(key.clone());
+                self.timeline_failures.insert(
+                    key,
+                    TimelineAudioPlaybackFailure {
+                        source,
+                        error: error.clone(),
+                    },
+                );
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    plan.cue_errors.push(error);
+                    continue;
+                }
+                return Err(error);
+            }
             let source_changed = self.timeline_sources.get(&key).is_some_and(|current| {
                 current.path != source.path
                     || current.offset_ms != source.offset_ms
+                    || current.speed_milli != source.speed_milli
                     || current.output_bus != source.output_bus
             });
             if source_changed {
@@ -20930,6 +21078,7 @@ impl MediaAudioPlayback {
             if let Some(source_state) = self.timeline_sources.get_mut(&key) {
                 source_state.gain = clip.gain.clamp(0.0, 2.0);
                 source_state.offset_ms = clip.offset_ms;
+                source_state.speed_milli = speed_milli;
                 source_state.output_bus = clip.output_bus;
             }
             let Some(sink) = self.timeline_sinks.get(&key) else {
@@ -20939,9 +21088,36 @@ impl MediaAudioPlayback {
             if sink.empty() {
                 continue;
             }
-            let actual_ms = sink.get_pos().as_millis().min(i64::MAX as u128) as i64;
-            let desired_ms = source_position_ms.min(i64::MAX as u64) as i64;
-            let drift_ms = actual_ms.saturating_sub(desired_ms);
+            let Some(source_clock) = self.timeline_source_clocks.get(&key).copied() else {
+                let error = format!(
+                    "Timeline audio clip {} lost its source-time clock; sink was retired fail-closed",
+                    clip.id
+                );
+                self.stop_timeline_clip(key.clone());
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    plan.cue_errors.push(error);
+                } else {
+                    plan.errors.push(error);
+                }
+                continue;
+            };
+            let actual_source_ms = match timeline_audio_source_position_at_output_time(
+                source_clock,
+                timeline_audio_sink_output_position_ms(sink),
+                speed_milli,
+            ) {
+                Ok(position_ms) => position_ms,
+                Err(error) => {
+                    self.stop_timeline_clip(key.clone());
+                    if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                        plan.cue_errors.push(error);
+                    } else {
+                        plan.errors.push(error);
+                    }
+                    continue;
+                }
+            };
+            let drift_ms = timeline_audio_source_drift_ms(actual_source_ms, source_position_ms);
             self.last_drift_ms = drift_ms;
             self.max_abs_drift_ms = self.max_abs_drift_ms.max(drift_ms.unsigned_abs());
             let cooldown_elapsed = self
@@ -20959,6 +21135,7 @@ impl MediaAudioPlayback {
                     clip_id: clip.id,
                     sink,
                     source_position_ms,
+                    speed_milli,
                 });
             }
         }
@@ -21001,16 +21178,17 @@ impl MediaAudioPlayback {
         }
         let active = timeline_audio_active_clips(current)
             .into_iter()
-            .map(|(key, clip, position_ms)| {
+            .map(|(key, clip, position_ms, speed_milli)| {
                 let source = TimelineAudioSourceConfig {
                     path: PathBuf::from(&clip.path),
                     gain: clip.gain.clamp(0.0, 2.0),
                     offset_ms: clip.offset_ms,
+                    speed_milli,
                     output_bus: clip.output_bus,
                 };
-                (key, (clip, position_ms, source))
+                Ok((key, (clip, position_ms, source)))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<Result<HashMap<_, _>, String>>()?;
         let now = Instant::now();
         let mut errors = plan.errors;
         let mut cue_errors = plan.cue_errors;
@@ -21021,16 +21199,43 @@ impl MediaAudioPlayback {
                 && !self.timeline_sinks.contains_key(&seek.key);
             if !still_current {
                 seek.sink.stop();
+                self.timeline_source_clocks.remove(&seek.key);
                 continue;
             }
             match result {
                 Ok(()) => {
                     self.resync_count = self.resync_count.saturating_add(1);
+                    let speed_milli = current_source
+                        .expect("current Timeline source must exist for an admitted drift re-seek")
+                        .speed_milli;
+                    // `speed_milli` is an immutable source identity guard. It
+                    // is revalidated here so a malformed stale seek cannot
+                    // install a clock under an invalid rate.
+                    if let Err(error) = validate_timeline_audio_speed(speed_milli) {
+                        seek.sink.stop();
+                        self.timeline_source_clocks.remove(&seek.key);
+                        if current_source.is_some_and(|source| {
+                            source.output_bus == protocol::TimelineAudioOutputBus::Cue
+                        }) {
+                            cue_errors.push(error);
+                        } else {
+                            errors.push(error);
+                        }
+                        continue;
+                    }
+                    self.timeline_source_clocks.insert(
+                        seek.key.clone(),
+                        TimelineAudioSourceClock {
+                            source_anchor_ms: seek.source_position_ms,
+                            output_anchor_ms: timeline_audio_sink_output_position_ms(&seek.sink),
+                        },
+                    );
                     self.timeline_last_resync_at.insert(seek.key.clone(), now);
                     self.timeline_sinks.insert(seek.key, seek.sink);
                 }
                 Err(error) => {
                     seek.sink.stop();
+                    self.timeline_source_clocks.remove(&seek.key);
                     let error = format!(
                         "Timeline audio clip {} drift resync failed: {error}",
                         seek.clip_id
@@ -21056,6 +21261,7 @@ impl MediaAudioPlayback {
                     };
                     if current_source.path != prepared.request.source.path
                         || current_source.offset_ms != prepared.request.source.offset_ms
+                        || current_source.speed_milli != prepared.request.source.speed_milli
                         || current_source.output_bus != prepared.request.source.output_bus
                         || self.timeline_sinks.contains_key(&prepared.request.key)
                     {
@@ -21091,6 +21297,13 @@ impl MediaAudioPlayback {
                     self.timeline_last_install_source_position_ms.insert(
                         prepared.request.key.clone(),
                         prepared.request.source_position_ms,
+                    );
+                    self.timeline_source_clocks.insert(
+                        prepared.request.key.clone(),
+                        TimelineAudioSourceClock {
+                            source_anchor_ms: prepared.request.source_position_ms,
+                            output_anchor_ms: timeline_audio_sink_output_position_ms(&sink),
+                        },
                     );
                     sink.play();
                     self.timeline_sources
@@ -21164,6 +21377,7 @@ impl MediaAudioPlayback {
                     TimelineAudioSinkKey::Root(clip.id),
                     clip,
                     timeline.position_ms,
+                    1_000,
                 )
             })
             .collect::<Vec<_>>();
@@ -21201,11 +21415,16 @@ impl MediaAudioPlayback {
                     clip_id: child.clip.id,
                 },
             };
-            (key, &child.clip, child.position_ms)
+            (
+                key,
+                &child.clip,
+                child.position_ms,
+                child.playback_rate_milli,
+            )
         }));
         let active_ids = active_clips
             .iter()
-            .map(|(key, _, _)| key.clone())
+            .map(|(key, _, _, _)| key.clone())
             .collect::<HashSet<_>>();
         let stale_ids = self
             .timeline_sinks
@@ -21220,7 +21439,8 @@ impl MediaAudioPlayback {
             .retain(|key, _| active_ids.contains(key));
 
         let mut errors = Vec::new();
-        for (key, clip, local_position_ms) in active_clips {
+        let mut cue_errors = Vec::new();
+        for (key, clip, local_position_ms, speed_milli) in active_clips {
             let source_position_ms = local_position_ms
                 .saturating_sub(clip.start_ms)
                 .saturating_add(clip.offset_ms);
@@ -21229,11 +21449,29 @@ impl MediaAudioPlayback {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
                 offset_ms: clip.offset_ms,
+                speed_milli,
                 output_bus: clip.output_bus,
             };
+            if let Err(error) = validate_timeline_audio_speed(speed_milli) {
+                self.stop_timeline_clip(key.clone());
+                self.timeline_failures.insert(
+                    key,
+                    TimelineAudioPlaybackFailure {
+                        source: source_config,
+                        error: error.clone(),
+                    },
+                );
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    cue_errors.push(error);
+                } else {
+                    errors.push(error);
+                }
+                continue;
+            }
             let source_changed = self.timeline_sources.get(&key).is_some_and(|source| {
                 source.path.as_path() != Path::new(&clip.path)
                     || source.offset_ms != clip.offset_ms
+                    || source.speed_milli != speed_milli
                     || source.output_bus != clip.output_bus
             });
             if source_changed {
@@ -21244,7 +21482,11 @@ impl MediaAudioPlayback {
                     if failure.source == source_config
                         && matches!(action, TimelineAudioTransportAction::Sync)
                     {
-                        errors.push(failure.error.clone());
+                        if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                            cue_errors.push(failure.error.clone());
+                        } else {
+                            errors.push(failure.error.clone());
+                        }
                         continue;
                     }
                 }
@@ -21255,6 +21497,7 @@ impl MediaAudioPlayback {
                     clip,
                     source_position_ms,
                     volume,
+                    speed_milli,
                 ) {
                     self.stop_timeline_clip(key.clone());
                     self.timeline_failures.insert(
@@ -21264,13 +21507,18 @@ impl MediaAudioPlayback {
                             error: error.clone(),
                         },
                     );
-                    errors.push(error);
+                    if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                        cue_errors.push(error);
+                    } else {
+                        errors.push(error);
+                    }
                     continue;
                 }
             }
             if let Some(source) = self.timeline_sources.get_mut(&key) {
                 source.gain = clip.gain.clamp(0.0, 2.0);
                 source.offset_ms = clip.offset_ms;
+                source.speed_milli = speed_milli;
                 source.output_bus = clip.output_bus;
             }
             let Some(sink) = self.timeline_sinks.get(&key) else {
@@ -21280,9 +21528,36 @@ impl MediaAudioPlayback {
             if sink.empty() {
                 continue;
             }
-            let actual_ms = sink.get_pos().as_millis().min(i64::MAX as u128) as i64;
-            let desired_ms = source_position_ms.min(i64::MAX as u64) as i64;
-            let drift_ms = actual_ms.saturating_sub(desired_ms);
+            let Some(source_clock) = self.timeline_source_clocks.get(&key).copied() else {
+                let error = format!(
+                    "Timeline audio clip {} lost its source-time clock; sink was retired fail-closed",
+                    clip.id
+                );
+                self.stop_timeline_clip(key.clone());
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    cue_errors.push(error);
+                } else {
+                    errors.push(error);
+                }
+                continue;
+            };
+            let actual_source_ms = match timeline_audio_source_position_at_output_time(
+                source_clock,
+                timeline_audio_sink_output_position_ms(sink),
+                speed_milli,
+            ) {
+                Ok(position_ms) => position_ms,
+                Err(error) => {
+                    self.stop_timeline_clip(key.clone());
+                    if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                        cue_errors.push(error);
+                    } else {
+                        errors.push(error);
+                    }
+                    continue;
+                }
+            };
+            let drift_ms = timeline_audio_source_drift_ms(actual_source_ms, source_position_ms);
             self.last_drift_ms = drift_ms;
             self.max_abs_drift_ms = self.max_abs_drift_ms.max(drift_ms.unsigned_abs());
             let cooldown_elapsed = self
@@ -21291,23 +21566,43 @@ impl MediaAudioPlayback {
                 .map(|last| now.saturating_duration_since(*last))
                 .unwrap_or(Duration::MAX);
             if media_audio_resync_required(drift_ms, cooldown_elapsed) {
-                match sink.try_seek(Duration::from_millis(source_position_ms)) {
+                match seek_timeline_audio_sink_to_source_ms(sink, source_position_ms, speed_milli) {
                     Ok(()) => {
                         self.resync_count = self.resync_count.saturating_add(1);
+                        self.timeline_source_clocks.insert(
+                            key.clone(),
+                            TimelineAudioSourceClock {
+                                source_anchor_ms: source_position_ms,
+                                output_anchor_ms: timeline_audio_sink_output_position_ms(sink),
+                            },
+                        );
                         self.timeline_last_resync_at.insert(key, now);
                     }
-                    Err(error) => errors.push(format!(
-                        "Timeline audio clip {} drift resync failed: {error}",
-                        clip.id
-                    )),
+                    Err(error) => {
+                        let error = format!(
+                            "Timeline audio clip {} drift resync failed: {error}",
+                            clip.id
+                        );
+                        if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                            cue_errors.push(error);
+                        } else {
+                            errors.push(error);
+                        }
+                    }
                 }
             }
         }
-        self.timeline_last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
-        match self.timeline_last_sync_error.clone() {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        self.timeline_last_sync_error = (!errors.is_empty() || !cue_errors.is_empty()).then(|| {
+            errors
+                .iter()
+                .chain(cue_errors.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        (!errors.is_empty())
+            .then(|| errors.join("; "))
+            .map_or(Ok(()), Err)
     }
 
     #[cfg(test)]
@@ -83486,6 +83781,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("program.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
@@ -83495,6 +83791,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("cue.wav"),
                 gain: 1.0,
                 offset_ms: 0,
+                speed_milli: 1_000,
                 output_bus: protocol::TimelineAudioOutputBus::Cue,
             },
         );
@@ -83547,6 +83844,7 @@ pub(crate) mod tests {
                     path: PathBuf::from(path),
                     gain: 1.0,
                     offset_ms: 0,
+                    speed_milli: 1_000,
                     output_bus: bus,
                 },
             );

@@ -5861,6 +5861,10 @@ pub struct ChildTimelineAudioRuntimeClip {
     pub root: ChildTimelineAudioRuntimeRoot,
     pub path: Arc<[ChildTimelineTransportPathSegment]>,
     pub position_ms: u64,
+    /// The runtime-only, authoritative source rate of this Child Timeline in
+    /// deterministic thousandths (1000 = 1.0). Zero remains an explicit
+    /// invalid-rate sentinel, never an implicit 1.0 fallback.
+    pub playback_rate_milli: u32,
     pub clip: TimelineAudioClipSummary,
 }
 
@@ -10279,6 +10283,7 @@ impl EngineHandle {
                                         ChildTimelineTransportPathSegment,
                                     >::new()),
                                     position_ms,
+                                    playback_rate_milli: 1_000,
                                     clip,
                                 }
                             }));
@@ -12108,6 +12113,7 @@ struct TimelineAudioCommitSignature {
         ChildTimelineAudioRuntimeRoot,
         Vec<ChildTimelineTransportPathSegment>,
         TimelineAudioClipId,
+        u32,
     )>,
 }
 
@@ -18031,6 +18037,20 @@ struct RuntimeChildTransport {
     iteration_period_ms: u64,
     rate: f32,
     effective_rate: f32,
+    /// Audio-only transport truth. Lighting/automation keeps the historic
+    /// `effective_rate` fallback semantics, while invalid authored audio
+    /// rates remain `None` so the runtime summary publishes the explicit
+    /// zero sentinel instead of silently becoming 1x.
+    audio_effective_rate: Option<f32>,
+    /// Audio maintains its own source coordinate so nested local-rate rounding
+    /// never diverges from the cumulative millirate published to a Sink.
+    /// Lighting keeps `position_ms` and its established local-rate semantics.
+    audio_position_ms: u64,
+    audio_active: bool,
+    audio_root_output_position_ms: u64,
+    audio_output_anchor_ms: u64,
+    audio_position_offset_ms: i128,
+    audio_clock_initialized: bool,
     tempo_driven: bool,
     loop_fill: bool,
     source_offset_ms: i64,
@@ -18070,6 +18090,10 @@ struct ChildTransportBuildContext {
     window_start_ms: u64,
     window_end_ms: u64,
     iteration_period_ms: u64,
+    /// Audio keeps a separate validity boundary from legacy lighting. `None`
+    /// is the explicit fail-closed audio authority for an ambiguous conform
+    /// result; the lighting `rate` continues to use its historical fallback.
+    audio_rate: Option<f32>,
     rate: f32,
     loop_fill: bool,
     source_offset_ms: i64,
@@ -32209,6 +32233,7 @@ impl EngineRuntime {
             window_start_ms,
             window_end_ms,
             iteration_period_ms,
+            audio_rate,
             rate,
             loop_fill,
             source_offset_ms,
@@ -32239,7 +32264,11 @@ impl EngineRuntime {
                 // grid as a whole; the block conform bit controls source-rate
                 // inheritance rather than independently rewriting placement.
                 event.iteration_period_ms = event.duration_ms;
-                event.rate = summary.rate.map(valid_effect_rate);
+                // Keep the authored raw rate here. Lighting/effect activation
+                // still applies `valid_effect_rate` at its existing use sites,
+                // but a child Timeline with audio must retain an invalid
+                // authored rate until it is fail-closed at audio ingress.
+                event.rate = summary.rate;
                 event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
                 event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
                 events.push(event);
@@ -32311,9 +32340,17 @@ impl EngineRuntime {
         } else {
             1.0
         };
-        let transport_rate = (f64::from(valid_effect_rate(rate)) * f64::from(tempo_rate))
+        let lighting_transport_rate = (f64::from(valid_effect_rate(rate)) * f64::from(tempo_rate))
             .clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX))
             as f32;
+        let audio_effective_rate =
+            audio_rate.and_then(|audio_rate| timeline_audio_effective_rate(audio_rate, tempo_rate));
+        // A valid Timeline audio rate becomes the child transport's canonical
+        // integration rate before any position is calculated. The published
+        // millirate, source clock, and Rodio Sink therefore share one rate;
+        // invalid/ambiguous audio deliberately leaves lighting on its historic
+        // fallback and publishes the audio zero sentinel instead.
+        let transport_rate = audio_effective_rate.unwrap_or(lighting_transport_rate);
         let event_count = events.len();
         Ok(RuntimeChildTransport {
             owner_cue_id,
@@ -32324,6 +32361,13 @@ impl EngineRuntime {
             iteration_period_ms: iteration_period_ms.max(1),
             rate: transport_rate,
             effective_rate: transport_rate,
+            audio_effective_rate,
+            audio_position_ms: 0,
+            audio_active: false,
+            audio_root_output_position_ms: 0,
+            audio_output_anchor_ms: 0,
+            audio_position_offset_ms: 0,
+            audio_clock_initialized: false,
             tempo_driven,
             loop_fill,
             source_offset_ms,
@@ -32398,6 +32442,7 @@ impl EngineRuntime {
                     window_start_ms: parent_event.time_ms,
                     window_end_ms: timeline_event_end_ms(&parent_event),
                     iteration_period_ms: timeline_event_iteration_period_ms(&parent_event),
+                    audio_rate: timeline_event_audio_rate(&parent_event),
                     rate: parent_event.rate.unwrap_or(1.0),
                     loop_fill: parent_event.loop_fill,
                     source_offset_ms: parent_event.source_offset_ms,
@@ -32436,6 +32481,7 @@ impl EngineRuntime {
                     window_start_ms: 0,
                     window_end_ms: u64::MAX,
                     iteration_period_ms: 1,
+                    audio_rate: Some(1.0),
                     rate: 1.0,
                     loop_fill: false,
                     source_offset_ms: 0,
@@ -32501,19 +32547,24 @@ impl EngineRuntime {
         cue_dispatch: &HashMap<CueId, CueDispatchEntry>,
         first_error: &mut Option<String>,
     ) {
-        let Some((direct_parent_cue_id, parent_effective_rate, event_specs)) =
-            self.child_transport(parent_transport_id).map(|transport| {
-                (
-                    transport.direct_parent_cue_id,
-                    transport.effective_rate,
-                    transport
-                        .events
-                        .iter()
-                        .enumerate()
-                        .map(|(event_index, event)| (event_index, event.clone()))
-                        .collect::<Vec<_>>(),
-                )
-            })
+        let Some((
+            direct_parent_cue_id,
+            parent_effective_rate,
+            parent_audio_effective_rate,
+            event_specs,
+        )) = self.child_transport(parent_transport_id).map(|transport| {
+            (
+                transport.direct_parent_cue_id,
+                transport.effective_rate,
+                transport.audio_effective_rate,
+                transport
+                    .events
+                    .iter()
+                    .enumerate()
+                    .map(|(event_index, event)| (event_index, event.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        })
         else {
             return;
         };
@@ -32538,6 +32589,7 @@ impl EngineRuntime {
                     window_start_ms: event.time_ms,
                     window_end_ms: timeline_event_end_ms(&event),
                     iteration_period_ms: timeline_event_iteration_period_ms(&event),
+                    audio_rate: timeline_event_audio_rate(&event),
                     rate: event.rate.unwrap_or(1.0),
                     loop_fill: event.loop_fill,
                     source_offset_ms: event.source_offset_ms,
@@ -32551,6 +32603,11 @@ impl EngineRuntime {
                         * f64::from(transport.rate))
                     .clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX))
                         as f32;
+                    transport.audio_effective_rate = parent_audio_effective_rate
+                        .zip(transport.audio_effective_rate)
+                        .and_then(|(parent_rate, rate)| {
+                            timeline_audio_multiply_effective_rates(parent_rate, rate)
+                        });
                     let nested_index = self.nested_child_transports.len();
                     let nested_id = RuntimeChildTransportId::Nested(nested_index);
                     self.nested_child_transports.push(transport);
@@ -36409,7 +36466,6 @@ impl EngineRuntime {
             // Fixed-time Scene Blocks may carry an explicit source playback rate
             // (notably Daslight DVC SPEED). Preserve that authored rate instead of
             // treating every serialized value as derived conform state.
-            event.rate = event.rate.map(valid_effect_rate);
             event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
             event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
             return Ok(event);
@@ -38816,6 +38872,12 @@ impl EngineRuntime {
             transport.position_offset_ms = 0;
             transport.previous_position_ms = if replay_from_start { 0 } else { position_ms };
             transport.position_ms = position_ms;
+            transport.audio_position_ms = position_ms;
+            transport.audio_active = false;
+            transport.audio_root_output_position_ms = 0;
+            transport.audio_output_anchor_ms = 0;
+            transport.audio_position_offset_ms = 0;
+            transport.audio_clock_initialized = false;
             transport.activated_events.fill(false);
         }
     }
@@ -38882,6 +38944,12 @@ impl EngineRuntime {
         transport.position_offset_ms = 0;
         transport.previous_position_ms = 0;
         transport.position_ms = 0;
+        transport.audio_position_ms = 0;
+        transport.audio_active = false;
+        transport.audio_root_output_position_ms = 0;
+        transport.audio_output_anchor_ms = 0;
+        transport.audio_position_offset_ms = 0;
+        transport.audio_clock_initialized = false;
         transport.direct_started_at = Some(started_at);
         transport.direct_paused = false;
         transport.direct_paused_at = None;
@@ -38947,6 +39015,12 @@ impl EngineRuntime {
             transport.boundary_armed = false;
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
+            transport.audio_position_ms = 0;
+            transport.audio_active = false;
+            transport.audio_root_output_position_ms = 0;
+            transport.audio_output_anchor_ms = 0;
+            transport.audio_position_offset_ms = 0;
+            transport.audio_clock_initialized = false;
             transport.parent_iteration = 0;
             transport.activation_generation = 0;
             transport.position_offset_ms = 0;
@@ -39658,7 +39732,12 @@ impl EngineRuntime {
         if !active || direct_paused {
             return false;
         }
-        let parent_position = if let Some(parent_transport_id) = parent_transport_id {
+        let (
+            parent_position,
+            audio_root_output_position_ms,
+            parent_audio_active,
+            parent_audio_clock,
+        ) = if let Some(parent_transport_id) = parent_transport_id {
             let Some(parent) = self
                 .child_transport(parent_transport_id)
                 .filter(|transport| transport.active)
@@ -39666,11 +39745,23 @@ impl EngineRuntime {
                 self.deactivate_child_transport_by_id(transport_id);
                 return false;
             };
-            parent.position_ms
+            (
+                parent.position_ms,
+                parent.audio_root_output_position_ms,
+                parent.audio_active,
+                Some((
+                    parent.audio_position_ms,
+                    parent
+                        .audio_effective_rate
+                        .map(timeline_audio_playback_rate_milli)
+                        .unwrap_or(0),
+                )),
+            )
         } else {
-            direct_started_at
+            let parent_position = direct_started_at
                 .map(|started_at| now.saturating_duration_since(started_at).as_millis() as u64)
-                .unwrap_or(self.timeline_position_ms)
+                .unwrap_or(self.timeline_position_ms);
+            (parent_position, parent_position, true, None)
         };
         let Some(transport) = self.child_transport(transport_id) else {
             return false;
@@ -39683,6 +39774,19 @@ impl EngineRuntime {
         let current_position_ms = child_transport_position_ms(transport, parent_position);
         let previous_position_ms = transport.previous_position_ms;
         let duration_ms = transport.duration_ms;
+        let (
+            audio_position_ms,
+            audio_output_anchor_ms,
+            audio_position_offset_ms,
+            audio_active,
+            audio_clock_initialized,
+        ) = child_transport_audio_clock_at_root_output(
+            transport,
+            current_position_ms,
+            audio_root_output_position_ms,
+            parent_audio_active,
+            parent_audio_clock,
+        );
         let include_previous = self
             .child_transport_mut(transport_id)
             .map(|transport| std::mem::take(&mut transport.boundary_armed))
@@ -39717,6 +39821,12 @@ impl EngineRuntime {
         if let Some(transport) = self.child_transport_mut(transport_id) {
             transport.previous_position_ms = current_position_ms;
             transport.position_ms = current_position_ms;
+            transport.audio_position_ms = audio_position_ms;
+            transport.audio_active = audio_active;
+            transport.audio_root_output_position_ms = audio_root_output_position_ms;
+            transport.audio_output_anchor_ms = audio_output_anchor_ms;
+            transport.audio_position_offset_ms = audio_position_offset_ms;
+            transport.audio_clock_initialized = audio_clock_initialized;
             transport.parent_iteration = parent_position.saturating_sub(transport.window_start_ms)
                 / transport.iteration_period_ms.max(1);
         }
@@ -39951,6 +40061,7 @@ impl EngineRuntime {
                 window_start_ms: 0,
                 window_end_ms: u64::MAX,
                 iteration_period_ms: target.duration_ms.max(1),
+                audio_rate: Some(1.0),
                 rate: 1.0,
                 loop_fill: false,
                 source_offset_ms: 0,
@@ -40245,6 +40356,9 @@ impl EngineRuntime {
 
         let mut active_child_clips = Vec::new();
         for transport in self.active_child_timeline_transport_summaries() {
+            if !transport.audio_active {
+                continue;
+            }
             let Some(child) = self
                 .cues
                 .iter()
@@ -40288,7 +40402,8 @@ impl EngineRuntime {
             append_child_timeline_audio_runtime_clips(
                 &mut clips,
                 child,
-                transport.position_ms,
+                transport.audio_position_ms,
+                transport.playback_rate_milli,
                 root,
                 Arc::from(transport.path),
             );
@@ -40296,7 +40411,14 @@ impl EngineRuntime {
                 clips
                     .into_iter()
                     .filter(|child| clip_is_available(&child.clip))
-                    .map(|child| (child.root, child.path.to_vec(), child.clip.id)),
+                    .map(|child| {
+                        (
+                            child.root,
+                            child.path.to_vec(),
+                            child.clip.id,
+                            child.playback_rate_milli,
+                        )
+                    }),
             );
         }
         if follow_transitioning {
@@ -40341,6 +40463,7 @@ impl EngineRuntime {
                                     },
                                     Vec::new(),
                                     clip.id,
+                                    1_000,
                                 )
                             }),
                     );
@@ -40351,6 +40474,7 @@ impl EngineRuntime {
             ChildTimelineAudioRuntimeRoot,
             Vec<ChildTimelineTransportPathSegment>,
             TimelineAudioClipId,
+            u32,
         )| {
             let mut key = match child.0 {
                 ChildTimelineAudioRuntimeRoot::Timeline {
@@ -44488,6 +44612,12 @@ impl EngineRuntime {
             .filter(|transport| transport.active)?;
         let owner_cue_id = transport.owner_cue_id;
         let position_ms = transport.position_ms;
+        let audio_position_ms = transport.audio_position_ms;
+        let audio_active = transport.audio_active;
+        let playback_rate_milli = transport
+            .audio_effective_rate
+            .map(timeline_audio_playback_rate_milli)
+            .unwrap_or(0);
         let mut cursor = transport_id;
         let mut path = Vec::new();
         let max_depth = self.nested_child_transports.len().saturating_add(2);
@@ -44517,6 +44647,9 @@ impl EngineRuntime {
                     root,
                     path,
                     position_ms,
+                    audio_position_ms,
+                    audio_active,
+                    playback_rate_milli,
                 });
             };
             path.push(ChildTimelineTransportPathSegment {
@@ -50721,6 +50854,79 @@ fn valid_effect_rate(rate: f32) -> f32 {
     }
 }
 
+/// Keeps audio's input authority separate from lighting/effect compatibility
+/// normalization. A malformed authored rate must reach the runtime summary as
+/// the explicit invalid sentinel rather than becoming a valid 1x source. A
+/// valid rate is immediately canonicalized to the same millirate used by the
+/// audio transport summary and Rodio Sink before child position integration.
+fn timeline_audio_effective_rate(rate: f32, tempo_rate: f32) -> Option<f32> {
+    if !rate.is_finite() || rate <= 0.0 || !tempo_rate.is_finite() || tempo_rate <= 0.0 {
+        return None;
+    }
+    let effective = f64::from(rate) * f64::from(tempo_rate);
+    if !effective.is_finite() || effective <= 0.0 || effective > f64::from(f32::MAX) {
+        return None;
+    }
+    timeline_audio_canonical_rate_from_milli(timeline_audio_playback_rate_milli(effective as f32))
+}
+
+fn timeline_audio_canonical_rate_from_milli(rate_milli: u32) -> Option<f32> {
+    const MIN_MILLI: u32 = 250;
+    const MAX_MILLI: u32 = 4_000;
+    (MIN_MILLI..=MAX_MILLI)
+        .contains(&rate_milli)
+        .then_some(rate_milli as f32 / 1_000.0)
+}
+
+/// Combines already-canonical Timeline-audio rates without returning to an
+/// authored float. Nested transport integration and its Sink therefore use the
+/// same deterministic thousandths representation.
+fn timeline_audio_multiply_effective_rates(parent_rate: f32, rate: f32) -> Option<f32> {
+    let parent_milli = timeline_audio_playback_rate_milli(parent_rate);
+    let rate_milli = timeline_audio_playback_rate_milli(rate);
+    if parent_milli == 0 || rate_milli == 0 {
+        return None;
+    }
+    let combined_milli = (u64::from(parent_milli)
+        .saturating_mul(u64::from(rate_milli))
+        .saturating_add(500))
+        / 1_000;
+    let combined_milli = combined_milli.min(u64::from(u32::MAX)) as u32;
+    timeline_audio_canonical_rate_from_milli(combined_milli)
+}
+
+/// `None` on a conformed event is normally a resolved timing failure, not the
+/// ordinary fixed-time 1x default. In particular a loop-fill event with two
+/// incompatible free-run periods is ambiguous: lighting retains its historic
+/// `valid_effect_rate(1.0)` behavior, while audio must publish zero and refuse
+/// attachment.
+fn timeline_event_audio_rate(event: &RuntimeTimelineEvent) -> Option<f32> {
+    if event.conform_to_tempo && event.rate.is_none() {
+        None
+    } else {
+        Some(event.rate.unwrap_or(1.0))
+    }
+}
+
+/// Timeline media uses a bounded, deterministic varispeed representation.
+/// Invalid or unsupported rates become the explicit zero sentinel so the
+/// native audio route can reject visibly; they must never be normalized to
+/// 1.0 like generic effect rates.
+fn timeline_audio_playback_rate_milli(rate: f32) -> u32 {
+    const MIN_MILLI: u32 = 250;
+    const MAX_MILLI: u32 = 4_000;
+    // This is the authored Program varispeed envelope. Validate the original
+    // float before rounding so 0.2499 cannot round up into an accepted 0.250.
+    if !rate.is_finite() || !(0.25..=4.0).contains(&rate) {
+        return 0;
+    }
+    let milli = (f64::from(rate) * 1_000.0).round();
+    if !milli.is_finite() || milli < f64::from(MIN_MILLI) || milli > f64::from(MAX_MILLI) {
+        return 0;
+    }
+    milli as u32
+}
+
 fn timeline_source_position_ms(elapsed_ms: u64, source_offset_ms: i64) -> i128 {
     i128::from(elapsed_ms).saturating_add(i128::from(source_offset_ms))
 }
@@ -50856,11 +51062,130 @@ fn child_transport_position_ms(transport: &RuntimeChildTransport, parent_positio
     }
 }
 
+/// Resolves the audio-only child source coordinate against the root output
+/// clock. A nested lighting transport continues to compose local `f32` rates
+/// for legacy rendering, but Timeline audio must instead advance directly at
+/// its already-canonical cumulative millirate. This prevents a 1.235 * 1.235
+/// lighting path from drifting away from the published 1.525 Sink rate.
+fn child_transport_audio_clock_at_root_output(
+    transport: &RuntimeChildTransport,
+    current_lighting_position_ms: u64,
+    root_output_position_ms: u64,
+    parent_audio_active: bool,
+    parent_audio_clock: Option<(u64, u32)>,
+) -> (u64, u64, i128, bool, bool) {
+    if !parent_audio_active {
+        // A nested descendant must inherit its parent's delayed audio start.
+        // Reinitialize when that parent reaches its boundary rather than
+        // silently accumulating source time behind the parent's zero clamp.
+        return (0, root_output_position_ms, 0, false, false);
+    }
+    let playback_rate_milli = transport
+        .audio_effective_rate
+        .map(timeline_audio_playback_rate_milli)
+        .unwrap_or(0);
+    if playback_rate_milli == 0 {
+        // This source can never attach, but retaining lighting's position in
+        // the runtime projection keeps the invalid-rate fault actionable.
+        return (
+            current_lighting_position_ms,
+            root_output_position_ms,
+            0,
+            true,
+            true,
+        );
+    }
+
+    let (audio_output_anchor_ms, audio_position_offset_ms) = if transport.audio_clock_initialized {
+        (
+            transport.audio_output_anchor_ms,
+            transport.audio_position_offset_ms,
+        )
+    } else {
+        // Establish the fixed-point audio clock at the current authoritative
+        // seek/activation position. Floor mirrors the Sink seek coordinate
+        // contract; the signed offset preserves that exact initial source
+        // position until future root-output ticks advance it at millirate.
+        let base_position_ms =
+            i128::from(transport.source_offset_ms).saturating_add(transport.position_offset_ms);
+        let unoffset_source_ms = i128::from(current_lighting_position_ms)
+            .saturating_sub(base_position_ms)
+            .clamp(0, i128::from(u64::MAX)) as u64;
+        // If a negative source offset is still clamped at zero, zero is not
+        // an ordinary source seek. Preserve the root anchor and its negative
+        // baseline so output 1 cannot invent one millisecond of audio before
+        // the delay boundary.
+        if current_lighting_position_ms == 0 && base_position_ms < 0 {
+            // A clamped lighting position loses the negative elapsed source
+            // coordinate. Recover the source Timeline event's root-output
+            // start instead of anchoring at the arbitrary seek frame. For a
+            // nested event, parent audio reports its current source position
+            // and canonical rate; ceiling inversion cannot move this child
+            // earlier than the parent source coordinate. Root events use the
+            // authored root-Timeline placement directly.
+            let anchor = if let Some((parent_audio_position_ms, parent_rate_milli)) =
+                parent_audio_clock.filter(|(_, rate)| *rate > 0)
+            {
+                let source_delta_ms =
+                    parent_audio_position_ms.saturating_sub(transport.window_start_ms);
+                let output_delta_ms = (u128::from(source_delta_ms)
+                    .saturating_mul(1_000)
+                    .saturating_add(u128::from(parent_rate_milli.saturating_sub(1)))
+                    / u128::from(parent_rate_milli))
+                .min(u128::from(u64::MAX)) as u64;
+                root_output_position_ms.saturating_sub(output_delta_ms)
+            } else {
+                transport.window_start_ms
+            };
+            (anchor, 0)
+        } else {
+            let output_elapsed_ms = (u128::from(unoffset_source_ms).saturating_mul(1_000)
+                / u128::from(playback_rate_milli))
+            .min(u128::from(u64::MAX)) as u64;
+            let anchor = root_output_position_ms.saturating_sub(output_elapsed_ms);
+            let canonical_source_ms = (u128::from(root_output_position_ms.saturating_sub(anchor))
+                .saturating_mul(u128::from(playback_rate_milli))
+                / 1_000)
+                .min(u128::from(u64::MAX)) as u64;
+            let offset = i128::from(current_lighting_position_ms)
+                .saturating_sub(base_position_ms)
+                .saturating_sub(i128::from(canonical_source_ms));
+            (anchor, offset)
+        }
+    };
+    let elapsed_root_output_ms = root_output_position_ms.saturating_sub(audio_output_anchor_ms);
+    let scaled_source_ms = (u128::from(elapsed_root_output_ms)
+        .saturating_mul(u128::from(playback_rate_milli))
+        / 1_000)
+        .min(u128::from(u64::MAX)) as u64;
+    let unclamped_audio_position_ms = i128::from(scaled_source_ms)
+        .saturating_add(i128::from(transport.source_offset_ms))
+        .saturating_add(transport.position_offset_ms)
+        .saturating_add(audio_position_offset_ms);
+    let audio_active = unclamped_audio_position_ms >= 0;
+    let audio_position_ms = unclamped_audio_position_ms.clamp(0, i128::from(u64::MAX)) as u64;
+    let audio_position_ms = if transport.loop_fill && transport.duration_ms > 0 {
+        audio_position_ms % transport.duration_ms
+    } else {
+        audio_position_ms.min(transport.duration_ms)
+    };
+    (
+        audio_position_ms,
+        audio_output_anchor_ms,
+        audio_position_offset_ms,
+        audio_active,
+        true,
+    )
+}
+
 fn child_timeline_audio_runtime_clips(
     snapshot: &EngineSnapshot,
 ) -> Vec<ChildTimelineAudioRuntimeClip> {
     let mut active = Vec::new();
     for transport in &snapshot.timeline.active_child_transports {
+        if !transport.audio_active {
+            continue;
+        }
         let Some(cue) = snapshot
             .cues
             .iter()
@@ -50905,7 +51230,8 @@ fn child_timeline_audio_runtime_clips(
         append_child_timeline_audio_runtime_clips(
             &mut active,
             child,
-            transport.position_ms,
+            transport.audio_position_ms,
+            transport.playback_rate_milli,
             root,
             Arc::from(transport.path.clone()),
         );
@@ -50934,6 +51260,7 @@ fn append_child_timeline_audio_runtime_clips(
     active: &mut Vec<ChildTimelineAudioRuntimeClip>,
     child: &ChildTimelineSummary,
     child_position_ms: u64,
+    playback_rate_milli: u32,
     root: ChildTimelineAudioRuntimeRoot,
     path: Arc<[ChildTimelineTransportPathSegment]>,
 ) {
@@ -50963,6 +51290,7 @@ fn append_child_timeline_audio_runtime_clips(
                     root: root.clone(),
                     path: Arc::clone(&path),
                     position_ms: child_position_ms,
+                    playback_rate_milli,
                     clip,
                 });
             }
@@ -50980,6 +51308,7 @@ fn append_child_timeline_audio_runtime_clips(
                 root: root.clone(),
                 path: Arc::clone(&path),
                 position_ms: child_position_ms,
+                playback_rate_milli,
                 clip: clip.clone(),
             });
         }
@@ -123745,6 +124074,28 @@ mod tests {
                 }),
             )
             .unwrap();
+        let mut leaf_clip = timeline_test_audio_clip(78, 50);
+        leaf_clip.start_ms = 0;
+        leaf_clip.duration_ms = 300;
+        leaf_clip.output_bus = TimelineAudioOutputBus::Program;
+        runtime
+            .set_cue_child_timeline_state(
+                3,
+                Some(ChildTimelineSummary {
+                    layers: vec![timeline_test_layer(
+                        50,
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Audio,
+                    )],
+                    audio_clips: vec![leaf_clip],
+                    duration_ms: 300,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
         let mut parent = timeline_test_event(200, 2, 1_000, 0, 1_000, 1);
         parent.rate = Some(2.0);
         runtime.timeline_events = vec![parent];
@@ -125532,6 +125883,9 @@ mod tests {
             },
             path: Vec::new(),
             position_ms: 1_000,
+            audio_position_ms: 1_000,
+            audio_active: true,
+            playback_rate_milli: 2_000,
         }];
         let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
         child.layers = vec![timeline_test_layer(
@@ -125558,6 +125912,7 @@ mod tests {
             }
         );
         assert_eq!(mapped[0].position_ms, 1_000);
+        assert_eq!(mapped[0].playback_rate_milli, 2_000);
         assert_eq!(mapped[0].clip.id, 77);
         assert_eq!(mapped[0].clip.output_bus, TimelineAudioOutputBus::Cue);
 
@@ -125622,6 +125977,538 @@ mod tests {
     }
 
     #[test]
+    fn timeline_audio_rate_milli_is_bounded_and_never_defaults_invalid_input() {
+        assert_eq!(timeline_audio_playback_rate_milli(1.0), 1_000);
+        assert_eq!(timeline_audio_playback_rate_milli(1.234_6), 1_235);
+        assert_eq!(timeline_audio_playback_rate_milli(0.25), 250);
+        assert_eq!(timeline_audio_playback_rate_milli(4.0), 4_000);
+        assert_eq!(timeline_audio_playback_rate_milli(0.249_9), 0);
+        assert_eq!(timeline_audio_playback_rate_milli(4.001), 0);
+        assert_eq!(timeline_audio_playback_rate_milli(f32::NAN), 0);
+        assert_eq!(timeline_audio_playback_rate_milli(f32::INFINITY), 0);
+    }
+
+    #[test]
+    fn timeline_audio_invalid_authored_child_rates_keep_lighting_fallback_but_publish_audio_zero() {
+        for invalid_rate in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut parent_event = direct_child_static_event(201, 2, 0, 300);
+            parent_event.rate = Some(invalid_rate);
+            let mut runtime = direct_child_static_test_runtime(vec![parent_event]);
+            let mut clip = timeline_test_audio_clip(77, 50);
+            clip.start_ms = 0;
+            clip.duration_ms = 300;
+            clip.output_bus = TimelineAudioOutputBus::Cue;
+            runtime
+                .set_cue_child_timeline_state(
+                    2,
+                    Some(ChildTimelineSummary {
+                        layers: vec![timeline_test_layer(
+                            50,
+                            0,
+                            false,
+                            false,
+                            false,
+                            TimelineLayerKind::Audio,
+                        )],
+                        audio_clips: vec![clip],
+                        duration_ms: 300,
+                        ..ChildTimelineSummary::default()
+                    }),
+                )
+                .unwrap();
+            runtime.rebuild_effect_activations(Instant::now());
+
+            let started_at = Instant::now();
+            runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+            runtime.advance_child_transports(started_at + Duration::from_millis(100));
+
+            let transport = runtime
+                .nested_child_transports
+                .iter()
+                .find(|transport| transport.owner_cue_id == 2)
+                .expect("child transport remains available to the lighting runtime");
+            assert_eq!(
+                transport.effective_rate, 1.0,
+                "invalid authored rate must retain the historic lighting fallback"
+            );
+            assert_eq!(transport.audio_effective_rate, None);
+
+            let snapshot = runtime.build_snapshot(0);
+            let summary = snapshot
+                .timeline
+                .active_child_transports
+                .iter()
+                .find(|transport| transport.owner_cue_id == 2)
+                .expect("invalid authored child remains a runtime transport");
+            assert_eq!(summary.playback_rate_milli, 0);
+            let audio = child_timeline_audio_runtime_clips(&snapshot)
+                .into_iter()
+                .find(|child| child.clip.id == 77)
+                .expect("invalid audio child remains visible to the audio ingress");
+            assert_eq!(audio.playback_rate_milli, 0);
+        }
+    }
+
+    #[test]
+    fn timeline_audio_child_rate_only_change_republishes_without_continuous_position_churn() {
+        let mut runtime = direct_child_static_test_runtime(Vec::new());
+        let mut child = runtime.cues[0]
+            .child_timeline
+            .clone()
+            .expect("direct child Timeline");
+        child.layers = vec![timeline_test_layer(
+            50,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let mut clip = timeline_test_audio_clip(77, 50);
+        clip.start_ms = 0;
+        clip.duration_ms = 1_000;
+        child.audio_clips = vec![clip];
+        runtime
+            .set_cue_child_timeline_state(1, Some(child))
+            .unwrap();
+        runtime.rebuild_effect_activations(Instant::now());
+
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(100));
+        let initial = runtime
+            .prepare_timeline_audio_commit_publication()
+            .unwrap()
+            .expect("active child audio must publish");
+        let initial_generation = initial.0;
+        runtime.commit_timeline_audio_commit_publication(Some(initial));
+
+        // Keep the test transport's position clock in the same canonical
+        // domain as the replacement audio source. A rate-only publication
+        // must never manufacture a second, raw-float source clock.
+        runtime.direct_child_transports[0].rate = 0.5;
+        runtime.direct_child_transports[0].effective_rate = 0.5;
+        runtime.direct_child_transports[0].audio_effective_rate = Some(0.5);
+        let rate_only = runtime
+            .prepare_timeline_audio_commit_publication()
+            .unwrap()
+            .expect("audio rate-only change must publish a new source identity");
+        assert_eq!(rate_only.0, initial_generation + 1);
+        assert!(rate_only
+            .1
+            .active_child_clips
+            .iter()
+            .any(|clip| clip.3 == 500));
+        runtime.commit_timeline_audio_commit_publication(Some(rate_only));
+
+        runtime.advance_child_transports(started_at + Duration::from_millis(101));
+        assert_eq!(
+            runtime.prepare_timeline_audio_commit_publication().unwrap(),
+            None,
+            "ordinary child-position ticks must not create rate publication churn"
+        );
+    }
+
+    #[test]
+    fn timeline_audio_tempo_rebuild_reprepares_active_child_audio_rate() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 1_500, 500)]);
+        let mut child = runtime.cues[0]
+            .child_timeline
+            .clone()
+            .expect("direct child Timeline");
+        child.layers = vec![
+            timeline_test_layer(1, 0, false, false, false, TimelineLayerKind::Lighting),
+            timeline_test_layer(50, 1, false, false, false, TimelineLayerKind::Audio),
+        ];
+        let mut clip = timeline_test_audio_clip(77, 50);
+        clip.start_ms = 0;
+        clip.duration_ms = 2_000;
+        child.audio_clips = vec![clip];
+        runtime
+            .set_cue_child_timeline_state(1, Some(child))
+            .unwrap();
+
+        let configured_at = Instant::now();
+        enable_direct_child_tempo_driving(&mut runtime, 1, 4.0, 120.0, configured_at);
+        let started_at = configured_at + Duration::from_millis(10);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let bpm_changed_at = started_at + Duration::from_millis(500);
+        runtime.advance_child_transports(bpm_changed_at);
+        let before = runtime
+            .prepare_timeline_audio_commit_publication()
+            .unwrap()
+            .expect("initial tempo-derived audio rate must publish");
+        assert!(before
+            .1
+            .active_child_clips
+            .iter()
+            .any(|clip| clip.3 == 1_000));
+        let before_generation = before.0;
+        runtime.commit_timeline_audio_commit_publication(Some(before));
+
+        runtime.clock.set_bpm(60.0, bpm_changed_at);
+        runtime.rebuild_effect_activations(bpm_changed_at);
+        let after = runtime
+            .prepare_timeline_audio_commit_publication()
+            .unwrap()
+            .expect("BPM rebuild changing audio rate must reprepare");
+        assert_eq!(after.0, before_generation + 1);
+        assert!(after.1.active_child_clips.iter().any(|clip| clip.3 == 500));
+    }
+
+    #[test]
+    fn timeline_audio_fractional_rate_uses_one_canonical_nested_source_clock() {
+        let mut parent_event = direct_child_static_event(201, 2, 0, 400_000);
+        // Each local authored rate canonicalizes to 1.235x. Their cumulative
+        // Sink rate is 1.525x; at 339 seconds, recursive lighting positions
+        // would otherwise differ by 76 ms from that published Sink clock.
+        parent_event.rate = Some(1.234_6);
+        let mut runtime = direct_child_static_test_runtime(vec![parent_event]);
+
+        let mut nested_event = direct_child_static_event(301, 3, 0, 600_000);
+        nested_event.layer_id = Some(1);
+        nested_event.rate = Some(1.234_6);
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    layers: vec![timeline_test_layer(
+                        1,
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Lighting,
+                    )],
+                    events: vec![nested_event],
+                    duration_ms: 600_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime
+            .set_cue_child_timeline_state(
+                3,
+                Some(ChildTimelineSummary {
+                    layers: vec![timeline_test_layer(
+                        60,
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Audio,
+                    )],
+                    audio_clips: vec![TimelineAudioClipSummary {
+                        id: 78,
+                        layer_id: 60,
+                        media_asset_id: None,
+                        path: "C:/media/fractional-nested-leaf.wav".to_string(),
+                        start_ms: 0,
+                        offset_ms: 0,
+                        duration_ms: 700_000,
+                        gain: 1.0,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
+                        output_bus: TimelineAudioOutputBus::Cue,
+                    }],
+                    duration_ms: 700_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.rebuild_effect_activations(Instant::now());
+
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(339_000));
+
+        let snapshot = runtime.build_snapshot(0);
+        let nested = snapshot
+            .timeline
+            .active_child_transports
+            .iter()
+            .find(|transport| transport.owner_cue_id == 3)
+            .expect("fractional nested leaf transport");
+        assert_eq!(nested.playback_rate_milli, 1_525);
+        assert_eq!(nested.position_ms, 517_051);
+        assert_eq!(nested.audio_position_ms, 516_975);
+        assert_eq!(
+            nested.position_ms.saturating_sub(nested.audio_position_ms),
+            76,
+            "lighting retains local-rate composition while audio owns its exact cumulative clock"
+        );
+
+        let leaf = child_timeline_audio_runtime_clips(&snapshot)
+            .into_iter()
+            .find(|clip| clip.clip.id == 78)
+            .expect("fractional nested leaf audio projection");
+        assert_eq!(leaf.position_ms, 516_975);
+        assert_eq!(leaf.playback_rate_milli, 1_525);
+
+        let prepared = runtime
+            .prepare_timeline_audio_commit_publication()
+            .unwrap()
+            .expect("fractional canonical rate must publish");
+        assert!(prepared
+            .1
+            .active_child_clips
+            .iter()
+            .any(|clip| clip.3 == 1_525));
+        runtime.commit_timeline_audio_commit_publication(Some(prepared));
+        runtime.advance_child_transports(started_at + Duration::from_millis(339_001));
+        assert_eq!(
+            runtime.prepare_timeline_audio_commit_publication().unwrap(),
+            None,
+            "ordinary ticks at the canonical fractional rate must not republish/resync"
+        );
+    }
+
+    #[test]
+    fn timeline_audio_negative_source_offset_waits_for_root_boundary_across_nested_loop_seek_and_restart(
+    ) {
+        let configured_runtime = || {
+            let mut parent_event = direct_child_static_event(201, 2, 0, 600);
+            // This is a source-time delay, not an audio seek to source zero.
+            // Lighting remains clamped at zero until root output reaches 100 ms.
+            parent_event.source_offset_ms = -100;
+            let mut runtime = direct_child_static_test_runtime(vec![parent_event]);
+
+            let mut nested_event = direct_child_static_event(301, 3, 0, 200);
+            nested_event.layer_id = Some(1);
+            nested_event.loop_fill = true;
+            nested_event.loop_count = 3;
+            runtime
+                .set_cue_child_timeline_state(
+                    2,
+                    Some(ChildTimelineSummary {
+                        layers: vec![timeline_test_layer(
+                            1,
+                            0,
+                            false,
+                            false,
+                            false,
+                            TimelineLayerKind::Lighting,
+                        )],
+                        events: vec![nested_event],
+                        duration_ms: 600,
+                        ..ChildTimelineSummary::default()
+                    }),
+                )
+                .unwrap();
+            runtime
+                .set_cue_child_timeline_state(
+                    3,
+                    Some(ChildTimelineSummary {
+                        layers: vec![timeline_test_layer(
+                            60,
+                            0,
+                            false,
+                            false,
+                            false,
+                            TimelineLayerKind::Audio,
+                        )],
+                        audio_clips: vec![TimelineAudioClipSummary {
+                            id: 78,
+                            layer_id: 60,
+                            media_asset_id: None,
+                            path: "C:/media/negative-offset-nested-leaf.wav".to_string(),
+                            start_ms: 0,
+                            offset_ms: 0,
+                            duration_ms: 200,
+                            gain: 1.0,
+                            fade_in_ms: 0,
+                            fade_out_ms: 0,
+                            output_bus: TimelineAudioOutputBus::Cue,
+                        }],
+                        duration_ms: 200,
+                        ..ChildTimelineSummary::default()
+                    }),
+                )
+                .unwrap();
+            runtime.rebuild_effect_activations(Instant::now());
+            runtime
+        };
+
+        let nested_audio = |runtime: &EngineRuntime| {
+            let snapshot = runtime.build_snapshot(0);
+            let outer = snapshot
+                .timeline
+                .active_child_transports
+                .iter()
+                .find(|transport| transport.owner_cue_id == 2)
+                .expect("negative-offset outer child transport");
+            let leaf = snapshot
+                .timeline
+                .active_child_transports
+                .iter()
+                .find(|transport| transport.owner_cue_id == 3)
+                .expect("negative-offset nested leaf transport");
+            let projected = child_timeline_audio_runtime_clips(&snapshot)
+                .into_iter()
+                .find(|clip| clip.clip.id == 78)
+                .map(|clip| clip.position_ms);
+            (
+                outer.audio_active,
+                outer.audio_position_ms,
+                leaf.audio_active,
+                leaf.audio_position_ms,
+                projected,
+            )
+        };
+
+        let started_at = Instant::now();
+        let mut runtime = configured_runtime();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        for output_ms in [0, 1, 99] {
+            runtime.advance_child_transports(started_at + Duration::from_millis(output_ms));
+            assert_eq!(
+                nested_audio(&runtime),
+                (false, 0, false, 0, None),
+                "root output {output_ms} ms must not attach before a negative source offset reaches zero"
+            );
+        }
+
+        runtime.advance_child_transports(started_at + Duration::from_millis(100));
+        assert_eq!(
+            nested_audio(&runtime),
+            (true, 0, true, 0, Some(0)),
+            "the exact boundary attaches at source zero, never before it"
+        );
+        runtime.advance_child_transports(started_at + Duration::from_millis(101));
+        assert_eq!(nested_audio(&runtime), (true, 1, true, 1, Some(1)));
+
+        // The nested leaf uses its authored loop-fill period while keeping the
+        // delayed root anchor: 300 ms output -> 200 ms source -> loop source 0.
+        runtime.advance_child_transports(started_at + Duration::from_millis(300));
+        assert_eq!(nested_audio(&runtime), (true, 200, true, 0, Some(0)));
+
+        let restarted_at = started_at + Duration::from_millis(1_000);
+        runtime.start_cue(1, restarted_at, PendingCueTriggerSource::Manual);
+        assert_eq!(
+            nested_audio(&runtime),
+            (false, 0, false, 0, None),
+            "restart must discard the old positive audio anchor"
+        );
+        runtime.advance_child_transports(restarted_at + Duration::from_millis(100));
+        assert_eq!(nested_audio(&runtime), (true, 0, true, 0, Some(0)));
+
+        // Seeking into the same Timeline graph must establish the exact same
+        // delayed boundary rather than treating the lighting clamp as a 0-ms
+        // decoded-audio seek.
+        let seek_at = started_at + Duration::from_millis(2_000);
+        let mut seek_runtime = configured_runtime();
+        seek_runtime.timeline_events = vec![timeline_test_event(401, 1, 0, 0, 600, 1)];
+        seek_runtime.rebuild_effect_activations(seek_at);
+        seek_runtime.timeline_playing = true;
+        seek_runtime.timeline_position_ms = 99;
+        seek_runtime.establish_child_transports_at_position(seek_at);
+        assert_eq!(nested_audio(&seek_runtime), (false, 0, false, 0, None));
+        seek_runtime.timeline_position_ms = 100;
+        seek_runtime.advance_child_transports(seek_at + Duration::from_millis(1));
+        assert_eq!(nested_audio(&seek_runtime), (true, 0, true, 0, Some(0)));
+        seek_runtime.timeline_position_ms = 101;
+        seek_runtime.advance_child_transports(seek_at + Duration::from_millis(2));
+        assert_eq!(nested_audio(&seek_runtime), (true, 1, true, 1, Some(1)));
+    }
+
+    #[test]
+    fn timeline_audio_ambiguous_conform_publishes_zero_without_changing_lighting_fallback() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![
+                owned_lfo_target(
+                    901,
+                    test_lfo_request(
+                        "Ambiguous one-second period",
+                        LfoShape::Sine,
+                        1_000,
+                        0.0,
+                        EffectBlendMode::Override,
+                        0,
+                        u16::MAX,
+                    ),
+                ),
+                owned_lfo_target(
+                    902,
+                    test_lfo_request(
+                        "Ambiguous two-second period",
+                        LfoShape::Sine,
+                        2_000,
+                        0.0,
+                        EffectBlendMode::Override,
+                        0,
+                        u16::MAX,
+                    ),
+                ),
+            ],
+        );
+        runtime.cues[0].authored_beats = Some(4.0);
+        runtime
+            .set_cue_child_timeline_state(
+                1,
+                Some(ChildTimelineSummary {
+                    layers: vec![timeline_test_layer(
+                        50,
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Audio,
+                    )],
+                    audio_clips: vec![TimelineAudioClipSummary {
+                        id: 77,
+                        layer_id: 50,
+                        media_asset_id: None,
+                        path: "C:/media/ambiguous-conform.wav".to_string(),
+                        start_ms: 0,
+                        offset_ms: 0,
+                        duration_ms: 4_000,
+                        gain: 1.0,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
+                        output_bus: TimelineAudioOutputBus::Program,
+                    }],
+                    duration_ms: 4_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.cue_free_run_period_ms(1),
+            CueFreeRunPeriodResolution::Ambiguous
+        ));
+        add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 0.0, 4_000, None);
+        assert_eq!(runtime.timeline_events[0].rate, None);
+
+        let now = Instant::now();
+        runtime.rebuild_effect_activations(now);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 100;
+        runtime.establish_child_transports_at_position(now + Duration::from_millis(100));
+
+        let snapshot = runtime.build_snapshot(0);
+        let transport = snapshot
+            .timeline
+            .active_child_transports
+            .iter()
+            .find(|transport| transport.owner_cue_id == 1)
+            .expect("ambiguous conform keeps the lighting transport live");
+        assert_eq!(transport.playback_rate_milli, 0);
+        assert_eq!(
+            runtime.child_transports[0].effective_rate, 1.0,
+            "ambiguous conform retains only the historic lighting fallback"
+        );
+        let audio = child_timeline_audio_runtime_clips(&snapshot)
+            .into_iter()
+            .find(|clip| clip.clip.id == 77)
+            .expect("ambiguous conform remains visible to the audio ingress");
+        assert_eq!(audio.playback_rate_milli, 0);
+    }
+
+    #[test]
     fn child_timeline_audio_uses_audio_only_mute_solo_and_ignores_lane_reorder() {
         let mut snapshot = super_scene_test_runtime(1.0).build_persistence_snapshot();
         snapshot.timeline.active_child_transports = vec![ChildTimelineTransportRuntimeSummary {
@@ -125632,6 +126519,9 @@ mod tests {
             },
             path: Vec::new(),
             position_ms: 1_000,
+            audio_position_ms: 1_000,
+            audio_active: true,
+            playback_rate_milli: 1_000,
         }];
         let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
         child.layers = vec![
@@ -125704,6 +126594,9 @@ mod tests {
             },
             path: Vec::new(),
             position_ms: 1_000,
+            audio_position_ms: 1_000,
+            audio_active: true,
+            playback_rate_milli: 1_000,
         }];
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
@@ -125724,11 +126617,15 @@ mod tests {
     }
 
     #[test]
-    fn nested_child_audio_uses_exact_runtime_path_position_and_direct_generation() {
-        let mut runtime =
-            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 0, 300)]);
+    fn timeline_audio_nested_child_uses_exact_runtime_path_position_and_direct_generation() {
+        let mut parent_event = direct_child_static_event(201, 2, 0, 300);
+        // The nested audio transport must publish the cumulative rate, not
+        // its local rate: 0.5 (parent) * 2.0 (child) = 1.0.
+        parent_event.rate = Some(0.5);
+        let mut runtime = direct_child_static_test_runtime(vec![parent_event]);
         let mut nested_event = direct_child_static_event(301, 3, 0, 300);
         nested_event.layer_id = Some(1);
+        nested_event.rate = Some(2.0);
         let mut clip = timeline_test_audio_clip(77, 50);
         clip.start_ms = 50;
         clip.duration_ms = 200;
@@ -125748,6 +126645,36 @@ mod tests {
                 }),
             )
             .unwrap();
+        runtime
+            .set_cue_child_timeline_state(
+                3,
+                Some(ChildTimelineSummary {
+                    layers: vec![timeline_test_layer(
+                        60,
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Audio,
+                    )],
+                    audio_clips: vec![TimelineAudioClipSummary {
+                        id: 78,
+                        layer_id: 60,
+                        media_asset_id: None,
+                        path: "C:/media/nested-leaf.wav".to_string(),
+                        start_ms: 0,
+                        offset_ms: 0,
+                        duration_ms: 300,
+                        gain: 1.0,
+                        fade_in_ms: 0,
+                        fade_out_ms: 0,
+                        output_bus: TimelineAudioOutputBus::Program,
+                    }],
+                    duration_ms: 300,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
         runtime.rebuild_effect_activations(Instant::now());
 
         let started_at = Instant::now();
@@ -125760,7 +126687,19 @@ mod tests {
             .iter()
             .find(|transport| transport.owner_cue_id == 2)
             .expect("nested child transport summary");
-        assert_eq!(nested_transport.position_ms, 100);
+        // The nested event starts after the 0.5x parent has advanced 50 ms,
+        // while the child itself runs at the cumulative 1.0x rate.
+        assert_eq!(nested_transport.position_ms, 50);
+        assert_eq!(nested_transport.playback_rate_milli, 500);
+        assert_eq!(
+            runtime
+                .nested_child_transports
+                .iter()
+                .find(|transport| transport.owner_cue_id == 3)
+                .expect("second nested child transport")
+                .effective_rate,
+            1.0
+        );
         assert_eq!(
             nested_transport.root,
             ChildTimelineTransportRootSummary::Direct {
@@ -125777,18 +126716,45 @@ mod tests {
         );
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);
-        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped.len(), 2);
+        let parent_audio = mapped
+            .iter()
+            .find(|child| child.clip.id == 77)
+            .expect("parent child audio clip");
         assert_eq!(
-            mapped[0].root,
+            parent_audio.root,
             ChildTimelineAudioRuntimeRoot::Direct {
                 parent_cue_id: 1,
                 generation: 1,
             }
         );
-        assert_eq!(mapped[0].path.as_ref(), nested_transport.path.as_slice());
-        assert_eq!(mapped[0].position_ms, 100);
-        assert_eq!(mapped[0].clip.id, 77);
-        assert_eq!(mapped[0].clip.output_bus, TimelineAudioOutputBus::Cue);
+        assert_eq!(parent_audio.path.as_ref(), nested_transport.path.as_slice());
+        assert_eq!(parent_audio.position_ms, 50);
+        assert_eq!(parent_audio.playback_rate_milli, 500);
+        assert_eq!(parent_audio.clip.output_bus, TimelineAudioOutputBus::Cue);
+
+        let leaf_audio = mapped
+            .iter()
+            .find(|child| child.clip.id == 78)
+            .expect("nested leaf audio clip on Cue 3");
+        assert_eq!(
+            leaf_audio.path.as_ref(),
+            [
+                ChildTimelineTransportPathSegment {
+                    event_id: 201,
+                    iteration: 0,
+                },
+                ChildTimelineTransportPathSegment {
+                    event_id: 301,
+                    iteration: 0,
+                }
+            ]
+        );
+        assert_eq!(
+            leaf_audio.playback_rate_milli, 1_000,
+            "nested leaf must use the cumulative 0.5 * 2.0 audio rate"
+        );
+        assert_eq!(leaf_audio.clip.output_bus, TimelineAudioOutputBus::Program);
     }
 
     #[test]

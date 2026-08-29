@@ -5822,6 +5822,24 @@ pub struct ChildTimelineTransportRuntimeSummary {
     #[serde(default)]
     pub path: Vec<ChildTimelineTransportPathSegment>,
     pub position_ms: u64,
+    /// Runtime-only source coordinate for Timeline audio. This can differ by
+    /// deterministic fixed-point rounding from lighting's `position_ms` on a
+    /// nested fractional-rate path; it is the only position that an audio
+    /// Sink may use with `playback_rate_milli`.
+    #[serde(default)]
+    pub audio_position_ms: u64,
+    /// Runtime-only audio admission. A negative source offset holds this false
+    /// until its source-time delay reaches zero, so a clip cannot attach early
+    /// merely because its clamped position is also zero.
+    #[serde(default)]
+    pub audio_active: bool,
+    /// Runtime-only effective transport rate for media attached to this child
+    /// Timeline, represented as deterministic thousandths (1000 = 1.0).
+    /// Zero is an explicit invalid-rate sentinel, never a 1.0 fallback. This
+    /// is published only through `active_child_transports`, which is never
+    /// serialized into a project or exposed to the UI.
+    #[serde(default)]
+    pub playback_rate_milli: u32,
 }
 
 /// Authored timeline content owned by a Cue. Transport state deliberately remains on the
@@ -14084,6 +14102,9 @@ mod tests {
                         iteration: 3,
                     }],
                     position_ms: 450,
+                    audio_position_ms: 450,
+                    audio_active: true,
+                    playback_rate_milli: 500,
                 },
                 super::ChildTimelineTransportRuntimeSummary {
                     owner_cue_id: 8,
@@ -14093,6 +14114,9 @@ mod tests {
                     },
                     path: Vec::new(),
                     position_ms: 1_000,
+                    audio_position_ms: 1_000,
+                    audio_active: true,
+                    playback_rate_milli: 1_000,
                 },
             ],
             ..Default::default()
@@ -14109,6 +14133,18 @@ mod tests {
 
         let encoded = serde_json::to_string(&snapshot).unwrap();
         assert!(!encoded.contains("active_child_transports"));
+        assert!(
+            !encoded.contains("playback_rate_milli"),
+            "runtime-only child audio speed must never enter project JSON"
+        );
+        assert!(
+            !encoded.contains("audio_position_ms"),
+            "runtime-only child audio coordinate must never enter project JSON"
+        );
+        assert!(
+            !encoded.contains("audio_active"),
+            "runtime-only child audio admission must never enter project JSON"
+        );
         let decoded: super::TimelineSnapshot = serde_json::from_str(&encoded).unwrap();
         assert!(decoded.active_child_transports.is_empty());
     }
