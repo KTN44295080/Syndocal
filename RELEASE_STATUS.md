@@ -1,7 +1,7 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.31`. The current alpha.31 worktree contains the Timeline authoring-monitor source/UI tranche on top of the historical hybrid ASIO PROGRAM + explicit WDM CUE route. Its software evidence is recorded below, but it has no accepted alpha.31 native artifact, launch, real-device audition, physical-I/O, or show-completion evidence. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.31 evidence. Historical alpha.30 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.31`. The Timeline authoring-monitor source is pushed through `602b96a8fcb0de3fd3a3e281324550fe1d7b5630`, and the normal native no-bundle artifact and responsive maximized window are accepted as recorded below. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, installer/updater, dedicated show-ASIO, and show-completion evidence remain open. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.31 evidence. Historical alpha.30 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
 ## 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
@@ -35,7 +35,7 @@ show is a pre-show risk; no extraction is claimed here.
 
 ## 2026-08-29 current alpha.31 Timeline authoring-monitor source checkpoint
 
-Alpha.31 is the current dirty source/UI tranche for ordinary Timeline
+Alpha.31 is the current pushed source/UI tranche for ordinary Timeline
 authoring. `FollowProgram` remains the existing Normal-route behavior. When the
 operator selects `ExplicitDevice`, every Timeline media clip (regardless of
 its logical PROGRAM/CUE bus) and generated Guide/Click material is routed to
@@ -56,8 +56,15 @@ Community linker was pinned and first in `where.exe`; the ASIO-enabled full
 Syndocal suite finished `1456 discovered / 1444 passed / 0 failed / 12
 ignored`, and the focused media-audio gate finished `72/72`. TypeScript,
 Vite, release metadata/checking, audio-output control/panel, Timeline-audio,
-command-routing, and localization checkers also passed. The exact alpha.31
-native build/launch/window gate and real `Music (Wave Link)` audition remain
+command-routing, and localization checkers also passed. The normal Windows
+native no-bundle build passed from clean pushed HEAD `602b96a` with exact MSVC
+14.44. The resulting `60,756,480`-byte executable has SHA-256
+`6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`;
+exactly one launched process was responsive and the exact native window was
+maximized through its verified process handle. The current WDM catalog exposed
+one selectable `Music (Elgato Virtual Audio)` endpoint. Its exact name and
+topology fingerprint were saved to the machine-local authoring settings while
+Syndocal was stopped, followed by a successful relaunch; audible output remains
 unverified. Ox was unavailable for this tranche; under the documented narrow
 exception, an independent Terra xHigh source review returned GO with no P0/P1.
 

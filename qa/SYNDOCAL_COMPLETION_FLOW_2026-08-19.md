@@ -2811,13 +2811,12 @@ module split or extraction completion. This section is historical and is
 superseded by the current alpha.31 checkpoint below; the alpha.28/29
 “pending/not implemented” statements above remain historical.
 
-## 62. 2026-08-29 CURRENT alpha.31 Timeline authoring-monitor source checkpoint (unaccepted)
+## 62. 2026-08-29 CURRENT alpha.31 Timeline authoring-monitor native checkpoint (partial)
 
 The current product metadata is `1.2.0-alpha.31` on branch
-`codex/syndocal-v1.2`. The dirty alpha.31 source/UI tranche is based on
-`2f8458ec7de176e147244d707d84a62dbbf1eb33`, the last pushed alpha.30
-documentation/source base; alpha.31 itself has no accepted commit or push at
-this checkpoint.
+`codex/syndocal-v1.2`. The alpha.31 Timeline-authoring source and the normal-build
+cfg correction are pushed through
+`602b96a8fcb0de3fd3a3e281324550fe1d7b5630`.
 
 The Normal route now has a dedicated Timeline authoring monitor. Existing
 `FollowProgram` behavior remains available. With operator-selected
@@ -2845,8 +2844,14 @@ Verified source evidence for this checkpoint is:
 - TypeScript, Vite, release metadata/checking, audio-output control/panel,
   Timeline-audio, command-routing, and localization checkers passed.
 
-The alpha.31 native release build/launch/window gate and real
-`Music (Wave Link)` audition remain unverified. Physical WDM/ASIO output,
+The normal alpha.31 native no-bundle build passed from clean pushed HEAD
+`602b96a` with exact MSVC 14.44. Its `60,756,480`-byte executable has SHA-256
+`6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`, and
+exactly one launched process was responsive and the exact native window was
+maximized through its verified process handle. Product-path enumeration found
+one selectable `Music (Elgato Virtual Audio)` endpoint; its exact name and
+topology fingerprint were persisted while the app was stopped, then the app
+was relaunched successfully. Audible confirmation remains unverified. Physical WDM/ASIO output,
 serial DMX, DJ Link, reconnect, venue routing, and show completion remain
 external gates. Ox was unavailable for this tranche; under the documented
 narrow exception, an independent Terra xHigh source review returned GO with no
@@ -2855,5 +2860,5 @@ P0/P1.
 The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` stays
 deferred until after show acceptance because moving ownership/lifecycle
 boundaries before native and venue acceptance is a pre-show risk. The first
-safe resume action is to commit/push this reviewed source checkpoint, then run
-the native build/window gate and real endpoint audition.
+safe resume action is the real endpoint audition; installer/updater and
+dedicated show-ASIO builds remain separate.

@@ -9,13 +9,27 @@ This is the concise authoritative resume note for the final show-critical tranch
 - KDMX checkout: `C:\Users\kouty\Documents\KDMX`
 - Branch: `codex/syndocal-v1.2`
 - Last pushed alpha.30 source checkpoint: `9c9a96da6955f1ee0098468f30e16221ccaf779e` (`feat: add hybrid ASIO program and WDM cue routing`). It was pushed to `origin/codex/syndocal-v1.2` with exact upstream equality. No alpha.30 native artifact is accepted yet.
-- The current alpha.31 source/UI tranche is dirty on base HEAD `2f8458ec7de176e147244d707d84a62dbbf1eb33`; it is not yet committed or pushed. Alpha.30 remains the last pushed source authority until the alpha.31 checkpoint is validated.
+- Current alpha.31 source authority: `602b96a8fcb0de3fd3a3e281324550fe1d7b5630` on `origin/codex/syndocal-v1.2`. It contains the Timeline authoring monitor plus the reviewed normal-build cfg correction.
+- The documentation checkpoint containing this record is accepted only after
+  its commit is pushed, `HEAD` equals `origin/codex/syndocal-v1.2`, and the
+  primary worktree is clean; the close procedure rechecks all three conditions.
+  Three detached alpha18/19 release-gate worktrees are clean. The
+  separate `C:\Users\kouty\Documents\KDMX-asio-persistence` worktree retains
+  its pre-existing owned changes in `app/scripts/check-backend-operator-contract.mjs`,
+  `check-frontend-command-routing.mjs`, `check-live-audio-input.mjs`,
+  `app/src-tauri/src/control_plane.rs`, `app/src-tauri/src/main.rs`,
+  `app/src/App.tsx`, `app/src/tauri-invoke-manifest.json`,
+  `app/src/tauriInvokeCommands.ts`, `app/src/types.ts`,
+  `qa/ASIO_INPUT_ACCEPTANCE.md`, `qa/harnesses/README.md`, and
+  `qa/harnesses/check-asio-build.ps1`; none was touched by this checkpoint.
+- Preserved stashes are `stash@{0}` (`e9209d6` alpha.9 validation WIP) and
+  `stash@{1}` (orphaned open-DMX pacing WIP). Neither was applied or modified.
 - Historical alpha.29 source checkpoint: `54a4ffcce0e2029d9f0aecc713ae4436228a4d3c`, committed as `fix: stabilize ASIO output lifecycle` and pushed to `origin/codex/syndocal-v1.2` on 2026-08-29 JST.
 - DJ Agent checkout: `C:\Users\kouty\Desktop\rb-output`
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is synchronized at `1.2.0-alpha.31`. The current alpha.31 Timeline-authoring monitor and its software-gate evidence are recorded below. Native build/launch, real-device audition, physical output routing, show completion, normal installer/updater inspection, and the dedicated show-ASIO artifact remain open.
+- KDMX product metadata is synchronized at `1.2.0-alpha.31`. The current alpha.31 Timeline-authoring monitor, normal native build, launch, and maximized-window evidence are recorded below. Real-device audition, physical output routing, show completion, normal installer/updater inspection, and the dedicated show-ASIO artifact remain open.
 
 ### 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
@@ -49,7 +63,7 @@ This is the concise authoritative resume note for the final show-critical tranch
 - The next show-critical source item is a separate Timeline-authoring monitor:
   while the output router is Normal, media-library Timeline clips plus generated
   Guide/Click must share one explicitly selected WDM endpoint such as
-  `Music (Wave Link)`. Entering show ASIO must retire that authoring route;
+  `Music (Elgato Virtual Audio)`. Entering show ASIO must retire that authoring route;
   missing, ambiguous, or changed endpoints must remain silent and fail closed.
 
 ### 2026-08-29 current alpha.31 Timeline-authoring monitor checkpoint
@@ -69,15 +83,31 @@ This is the concise authoritative resume note for the final show-critical tranch
   failed / 12 ignored`; focused media-audio passed `72/72`. TypeScript, Vite,
   release metadata/checking, audio-output control/panel, Timeline-audio,
   command-routing, and localization checkers passed.
-- The alpha.31 native release build/launch/window gate and real
-  `Music (Wave Link)` audition are not yet verified. Physical output, venue
+- The normal alpha.31 native no-bundle build passed from clean pushed HEAD
+  `602b96a` using exact MSVC 14.44. `target/release/syndocal.exe` is
+  `60,756,480` bytes with SHA-256
+  `6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`.
+  Exactly one launched process was responsive. The exact native window was
+  maximized through its verified process handle. Product-path enumeration found
+  exactly one selectable `Music (Elgato Virtual Audio)` endpoint with topology
+  fingerprint
+  `A2D9603C75ED1A6ECBC37F0FE851AAD56C632DFF31314544F2F606C220C9479C`.
+  The exact selection was persisted at
+  `%LOCALAPPDATA%\jp.seraf.ktn.syndocal\timeline-cue-audio-settings.json` while
+  Syndocal was stopped, followed by a successful relaunch; audible output is
+  not yet verified. The currently responsive maximized process is PID `100320`.
+  Physical output, venue
   routing, DJ Link, serial DMX, reconnect, and show completion remain external
   gates. Ox was unavailable for this tranche; under the documented narrow
   exception, an independent Terra xHigh review returned GO with no P0/P1.
 - The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` is
   intentionally deferred until after show acceptance; no module-split
-  completion is claimed. The next safe action is commit/push of this reviewed
-  source checkpoint before the required native build.
+  completion is claimed. The next safe action is the real endpoint audition.
+- The first normal native attempt exposed a non-ASIO-only compile defect: the
+  ASIO-gated `route_gate` declaration had one unconditional `drop`. The new
+  path applies the identical cfg to that drop, preserving ASIO lock order while
+  removing the undefined name from normal builds. The one-line fix is commit
+  `602b96a`; an independent Terra xHigh rereview returned GO with no P0/P1.
 
 ### 2026-08-29 historical alpha.29 ASIO lifecycle safety checkpoint
 
@@ -332,15 +362,16 @@ integrated source checkpoint above is authoritative for current source status.
   ExplicitDevice quiesce, machine-local IPC and compact Audio UI, independent
   app/UI review, exact normal and show-ASIO native builds, real loader smoke,
   and all MOTU M4/M32/DL16 physical rows.
-- Cleanup inventory was read-only: `target` 364,735,087,090 logical bytes
-  (339.69 GiB), `app/node_modules` 545,338,492 bytes, bridge `target`
-  1,778,080,767 bytes, and `app/dist` 5,131,553 bytes. The accepted recurring
+- Cleanup inventory was refreshed read-only at this checkpoint: `target`
+  428,244,808,551 logical bytes (398.83 GiB), `app/node_modules` 545,338,492
+  bytes, `tools/asio-bridge/target` 1,774,985,879 bytes, and `app/dist`
+  5,183,649 bytes. The accepted recurring
   deletion conditions are not currently satisfied, so no cleanup Apply or
   ad-hoc deletion ran and reclaimed bytes remain 0.
 
 ## Required remaining acceptance
 
-1. Build and launch the alpha.31 native app, then select the operator's exact WDM endpoint (the current test target is `Music (Wave Link)`) and audibly verify that Timeline media-library clips plus Guide/Click share it in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
+1. The built/launched alpha.31 native app is maximized and the current test target `Music (Elgato Virtual Audio)` is already persisted. Audibly verify that Timeline media-library clips plus Guide/Click share it in Normal mode. Also verify ASIO Start retires the authoring route and stale/missing/ambiguous devices remain silent.
 2. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
 3. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
 4. Implement and prove authoritative non-default Timeline speed synchronization for PROGRAM and CUE; the current explicit rejection is fail-closed but does not complete the acceptance row.
@@ -352,6 +383,6 @@ integrated source checkpoint above is authoritative for current source status.
 ## First safe resume actions
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
-- Keep the current Syndocal/Rekordbox/DJ Link processes alive until immediately before the exact alpha.31 native release build boundary, unless the operator is intentionally doing local authoring only.
-- Commit/push the independently reviewed alpha.31 source checkpoint, then resolve its artifact source identity `S`, evidence HEAD `E`, and source branch `B=codex/syndocal-v1.2` before native actions. Require a clean pushed evidence tree and run the v3 authority checker before the dedicated show-ASIO build.
+- Keep the current Syndocal process alive for authoring; the DJ-Link PC may remain stopped until the final integration gate.
+- Use source identity `S=E=602b96a8fcb0de3fd3a3e281324550fe1d7b5630` and `B=codex/syndocal-v1.2` for the normal alpha.31 artifact. Complete the `Music (Elgato Virtual Audio)` audition. Run the v3 authority checker before the separate dedicated show-ASIO build.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.

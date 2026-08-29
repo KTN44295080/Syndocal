@@ -151,7 +151,7 @@ Normal behavior. With the operator-selected `ExplicitDevice` route, every
 Timeline media-library clip, whether its logical bus is PROGRAM or CUE, and
 generated Guide/Click material are sent to one exact WDM endpoint. The endpoint
 is selected from the current device catalog and may be any supported output,
-including a machine-local endpoint such as `Music (Wave Link)`; the product
+including a machine-local endpoint such as `Music (Elgato Virtual Audio)`; the product
 does not silently choose that name.
 
 The saved selection is machine-local and is accepted only when its exact name,
@@ -464,9 +464,12 @@ the device schema or silently reroute CUE.
 - [x] Packaging tests prove the default build/installer/updater contains no ASIO
       SDK-linked artifact or enabled ASIO feature.
 - [x] Focused Rust/UI tests pass with zero first-party warnings.
-- [ ] Exact Windows native gate and normal MIT
-      `pnpm --dir app tauri build --no-bundle` pass, with proof that the normal
-      executable/installer/updater contains no ASIO SDK-linked artifact.
+- [x] Exact Windows native gate and normal MIT
+      `pnpm --dir app tauri build --no-bundle` pass. The alpha.31 build passed
+      from clean pushed HEAD `602b96a` with exact MSVC 14.44.
+- [ ] Inspect the normal executable, installer, and updater outputs to prove
+      that none contains an ASIO SDK-linked artifact. Source packaging tests
+      and the successful no-bundle build do not close this artifact row.
 - [ ] A separate dedicated show-ASIO native build passes with the exact v2-nine
       plus v3-nine bridge exports, reviewed manifest/source hashes, real app
       loader Start/Stop/Fault smoke, and exactly one responsive maximized
@@ -483,11 +486,23 @@ the documented narrow exception, an independent Terra xHigh source review
 returned GO with no P0/P1. These results close the authoring-monitor software rows above; they do
 not close the native or physical rows below.
 
+The normal Windows no-bundle build then passed from clean pushed HEAD
+`602b96a8fcb0de3fd3a3e281324550fe1d7b5630` with the exact MSVC 14.44 linker
+first. The resulting `target/release/syndocal.exe` is `60,756,480` bytes with
+SHA-256 `6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`.
+Exactly one process launched and responded. Its exact native window was
+maximized through the verified process handle. Product-path enumeration found
+one selectable `Music (Elgato Virtual Audio)` endpoint with topology fingerprint
+`A2D9603C75ED1A6ECBC37F0FE851AAD56C632DFF31314544F2F606C220C9479C`.
+That exact selection was persisted while Syndocal was stopped, and the app was
+relaunched successfully. Audible endpoint acceptance is not promoted.
+
 ## Normal Timeline authoring monitor acceptance
 
 This is the ordinary authoring path and is separate from the show-ASIO physical
 PROGRAM/CUE rows. The endpoint selector is operator-driven and can use any
-supported output device. `Music (Wave Link)` is only a test target, not a
+supported output device. `Music (Elgato Virtual Audio)` is only the current
+machine's test target, not a
 hard-coded choice.
 
 - [x] In Normal + `FollowProgram`, the existing output behavior remains intact.
@@ -498,9 +513,9 @@ hard-coded choice.
       visible and silent without fallback.
 - [x] Entering Show ASIO retires every Normal-authoring Timeline sink and
       pending preparation, including with no Normal PROGRAM stream open.
-- [ ] Build and launch the alpha.31 native app, select the displayed
-      `Music (Wave Link)` endpoint, and audibly verify both Timeline media and
-      Guide/Click through that endpoint.
+- [ ] The alpha.31 native app is built/launched/maximized and the uniquely
+      enumerated `Music (Elgato Virtual Audio)` endpoint is persisted. Audibly
+      verify both Timeline media and Guide/Click through that endpoint.
 
 ## Physical MOTU M4 acceptance
 

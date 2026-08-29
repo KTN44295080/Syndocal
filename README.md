@@ -26,16 +26,23 @@ The current source gates passed with first-party warnings 0: the exact MSVC
 full suite finished `1456 discovered / 1444 passed / 0 failed / 12 ignored`,
 and the focused media-audio gate passed `72/72`. TypeScript, Vite, release
 metadata/packaging, audio-output control/panel, Timeline-audio, command
-routing, and localization checkers also passed. No alpha.31 native build or
-launch, real `Music (Wave Link)` audition, physical I/O, or show acceptance
-is recorded. Ox was unavailable for this tranche; under the documented narrow
+routing, and localization checkers also passed. The normal Windows
+`tauri build --no-bundle` then passed from clean pushed HEAD `602b96a` with the
+exact linker gate; its `60,756,480`-byte executable has SHA-256
+`6F9BF17A2802A2FC5F8935E8EFFEB0C57CA4A3A21B245C68BFA62315152C7F4A`.
+Exactly one process was launched, was responsive, and its exact native window
+was maximized through the verified process handle. The current machine's WDM
+catalog contained one selectable `Music (Elgato Virtual Audio)` endpoint. Its
+exact name and topology fingerprint were saved while Syndocal was stopped, and
+the app was relaunched successfully; audible readback, physical I/O, and show
+acceptance remain open. Ox was unavailable
+for this tranche; under the documented narrow
 exception, an independent Terra xHigh source review returned GO with no P0/P1.
 The oversized `app/src-tauri/src/main.rs` audio-runtime extraction is deferred
 until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.31 acceptance. No alpha.31 artifact hash, size, source HEAD, or
-PID is accepted yet. The release metadata checker expects alpha.31 product and
+it is not alpha.31 acceptance. The release metadata checker expects alpha.31 product and
 installer naming below; that naming does not assert an alpha.31 installer
 exists.
 
