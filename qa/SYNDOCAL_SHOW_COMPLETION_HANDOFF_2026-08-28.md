@@ -62,13 +62,11 @@ This is the concise authoritative resume note for the final show-critical tranch
   bytes 0/4 and ch500 zero at payload byte 499. Independent Terra xHigh review
   is GO after closing the stale Setup I/O fixture and publication-failure
   rollback proof. Ox was unavailable for this narrow review exception.
-- A fixed two-Sender Spout state/validation module is integrated in the current
-  committed alpha.34 tranche: exact names `Syndocal Background` and
-  `Syndocal Foreground`, exact `1920x1080`, cached opaque RGBA black, explicit
-  sender establishment, tick-driven live/black presentation, and fail-closed
-  authority/composition identity. Focused integration tests and independent
-  adversarial review are still running, so no production or native Spout claim
-  follows from this in-progress state.
+- The historical alpha.34 tranche established the fixed two-Sender Spout
+  state/validation baseline. Current alpha.35 supersedes it with the strict
+  first-physical-black and post-send exact-name barrier recorded above;
+  focused tests, independent review, and the native build passed. Physical
+  Unity/GPU observation remains open and is not inferred from source evidence.
 - The non-overwriting authoring tool received independent Terra xHigh GO after
   post-write cleanup was changed to retain an unverifiable target for explicit
   quarantine/manual removal instead of risking pathname-based deletion. It
