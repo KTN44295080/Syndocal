@@ -1,12 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.34`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and same-PC Art-Net/camera checkpoint `fd0d40698ae849a0f327fa7769b06b2af182c82f`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the current alpha.34 same-PC Spout/camera integration has no native/UI acceptance yet. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.34`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`, and complete same-PC Art-Net/camera/fixed-Spout checkpoint `138f6c3e7bd536c10a589bc644bb9bc6df269f7a`. The alpha.34 exact-linker native build and single responsive-process gate passed; maximized UI and physical output acceptance remain open. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.34 same-PC output and camera integration (native pending)
+## 2026-08-29 current alpha.34 same-PC output and camera integration (native built; UI/hardware pending)
 
-The product identity is `1.2.0-alpha.34`; this is a source checkpoint and not
-yet a versioned native acceptance. The old camera route accepted a
+The product identity is `1.2.0-alpha.34`. Source and native build identity are
+now fixed, but visual and physical acceptance remain open. The old camera route accepted a
 free-form DirectShow endpoint at fixed `1280x720` / `30 fps`. The new source
 path uses an explicit current-generation DirectShow device/profile catalog,
 persists only an opaque endpoint identity, and requires an exact one-frame
@@ -31,8 +31,8 @@ remains open. A `4096x2160` RGBA frame is about
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`; the Syndocal profile probe still proves one frame only, so
 sustained 4K remains unverified and
-no 4K60 or broad sustained-4K claim is made. Native alpha.34 build, UI, and
-hardware probes remain pending.
+no 4K60 or broad sustained-4K claim is made. Native alpha.34 UI and hardware
+probes remain pending.
 
 The pushed camera/Art-Net checkpoint
 `fd0d40698ae849a0f327fa7769b06b2af182c82f` received independent source GO.
@@ -40,7 +40,7 @@ Its later serialized full app evidence was `1203/0/7` without default features
 and `1239/0/12` with default libav/Spout features. Those counts predate the
 current fixed two-Sender implementation and are not promoted to its acceptance.
 
-The current uncommitted alpha.34 Spout integration has focused exact-linker
+The current committed alpha.34 Spout integration has focused exact-linker
 evidence of Syndocal show-Spout `20/0/0`, engine strict-pair `5/0/0`, and
 protocol v4 command `11/0/0`, with first-party warnings `0`. The pair remains
 opaque black through initial registration and durable output-lease commit;
@@ -57,9 +57,14 @@ Syndocal default `1263/0/12`, and engine `920/0/2`; all remaining workspace
 crates exited successfully and first-party warnings were `0`. The initial run
 exposed a stale command-inventory count and an older dead Cue 3 test fixture;
 both received minimal test-only repairs before focused and full reruns passed.
-Native alpha.34 build/window and Unity/GPU observation remain pending. Frontend
-production build, typed command and output-control checks, `check:release`,
-format, and diff gates currently pass.
+A fresh exact-linker native build from pushed HEAD `138f6c3` completed in
+`3m45s` with first-party warnings `0`. Its `61,039,104`-byte executable reports
+Product/FileVersion `1.2.0-alpha.34` and SHA-256
+`1FCB899E2B118B94F92B5D87ECD7A5EA3FFE32D33448319FE697D39841FA642F`.
+Exactly one checkout-owned PID `85492` is responsive. Computer Use did not
+expose the window as targetable after explicit-path recovery, so maximized UI
+and Unity/GPU observation remain pending. Frontend production build, typed
+command and output-control checks, `check:release`, format, and diff gates pass.
 
 ## 2026-08-29 historical alpha.32 source/native integration (hardware pending)
 

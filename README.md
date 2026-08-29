@@ -33,8 +33,8 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 `120 fps` only when the device advertises that profile. Output presentation
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
-[qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); alpha.34 native
-build, UI, and hardware probes remain pending.
+[qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the alpha.34
+native build passed, while visual UI and hardware probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
@@ -96,7 +96,11 @@ matrix passed Syndocal no-default `1205/0/7`, Syndocal default `1263/0/12`, and
 engine `920/0/2`; remaining workspace crates also exited successfully, with
 first-party warnings `0`. This show checkpoint is same-PC only. Remote Art-Net,
 NDI, and other cross-PC video transport are outside its acceptance boundary.
-Native alpha.34 and Unity/GPU observation remain pending.
+The alpha.34 exact-linker native build from pushed HEAD `138f6c3` produced a
+`61,039,104`-byte `1.2.0-alpha.34` executable with SHA-256
+`1FCB899E2B118B94F92B5D87ECD7A5EA3FFE32D33448319FE697D39841FA642F`.
+Exactly one checkout-owned process launched responsive. Maximized-window and
+Unity/GPU observation remain pending.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
 Deck 1 playing `More One Night × 動く、動く (Agate Trance&Makina bootleg)`;

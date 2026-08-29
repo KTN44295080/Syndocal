@@ -111,7 +111,7 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The current uncommitted alpha.34 Spout integration has additionally passed the
+The current committed alpha.34 Spout integration has additionally passed the
 same exact linker gate for Syndocal show-Spout tests `20 passed / 0 failed`,
 engine strict-pair tests `5 passed / 0 failed`, and protocol v4 command tests
 `11 passed / 0 failed`, with `0` first-party warnings in each run. These tests
@@ -172,8 +172,10 @@ native artifact are accepted:
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
 - [x] Focused and full deterministic gates pass with zero first-party warnings.
-- [ ] A fresh warning-free native release is built with exact MSVC 14.44,
-      launched from this checkout, and verified as one responsive maximized
-      Syndocal window.
+- [x] A fresh warning-free native release is built with exact MSVC 14.44 and
+      launched from this checkout as exactly one responsive process.
+- [ ] Computer Use verifies that exact native window as maximized. Its process
+      is responsive, but the helper did not expose it as a targetable window in
+      the first post-build attempt.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

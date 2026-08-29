@@ -145,7 +145,7 @@ render pacing is required before broadening that claim.
 
 ## Native and hardware gates still required
 
-- [ ] Exact alpha.34 release build with MSVC 14.44, first-party warnings 0.
+- [x] Exact alpha.34 release build with MSVC 14.44, first-party warnings 0.
 - [ ] Exactly one responsive, maximized window from this checkout's release
   executable.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
