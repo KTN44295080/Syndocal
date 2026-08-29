@@ -107,6 +107,17 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.audioOutputFieldGrid.audioOutputFieldGrid--normal {
+  grid-template-columns: minmax(0, 360px);
+}
+
+.audioOutputNormalNotice {
+  max-width: 86ch;
+  margin: 0;
+  color: #aeb8c5;
+  text-wrap: pretty;
+}
+
 .audioOutputField {
   display: grid;
   min-width: 0;

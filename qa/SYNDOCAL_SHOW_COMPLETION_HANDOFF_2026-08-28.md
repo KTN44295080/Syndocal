@@ -103,6 +103,14 @@ This is the concise authoritative resume note for the final show-critical tranch
 - The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` is
   intentionally deferred until after show acceptance; no module-split
   completion is claimed. The next safe action is the real endpoint audition.
+- A subsequent source-only I/O clarity delta keeps the backend selector visible
+  in Normal WASAPI, hides Show-ASIO-only lifecycle/channel/preflight controls,
+  identifies PROGRAM as the Windows default output, and directs arbitrary WDM
+  Timeline media/Guide/Click routing to Timeline tools -> Timeline authoring
+  monitor -> Explicit Device. Its focused panel checker passed `58` assertions,
+  localization passed `3616/3616` with zero unprotected labels, TypeScript
+  passed, and independent Terra xHigh review returned GO with no P0/P1/P2.
+  Native visual acceptance of this delta remains open.
 - The first normal native attempt exposed a non-ASIO-only compile defect: the
   ASIO-gated `route_gate` declaration had one unconditional `drop`. The new
   path applies the identical cfg to that drop, preserving ASIO lock order while

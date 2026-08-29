@@ -307,7 +307,11 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
       <header class="audioOutputPanelHeader">
         <div>
           <h3 id="audio-output-panel-title">Audio</h3>
-          <p>PROGRAM stereo and CUE output control</p>
+          <p>
+            {props.view.backend === "normal-wasapi"
+              ? "Windows default PROGRAM output"
+              : "PROGRAM stereo and CUE output control"}
+          </p>
         </div>
         <output
           class={`audioOutputState audioOutputState--${props.view.state.toLowerCase()}`}
@@ -319,6 +323,7 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
         </output>
       </header>
 
+      <Show when={props.view.backend === "show-asio"}>
       <div class="audioOutputActions" aria-label="Audio output actions">
         <button
           type="button"
@@ -367,11 +372,15 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
           Return to normal
         </button>
       </div>
+      </Show>
 
       <details class="audioOutputDisclosure" data-audio-output-disclosure="configuration" open>
         <summary>Output configuration</summary>
         <div class="audioOutputDisclosureBody">
-          <div class="audioOutputFieldGrid audioOutputFieldGrid--backend">
+          <div
+            class="audioOutputFieldGrid audioOutputFieldGrid--backend"
+            classList={{ "audioOutputFieldGrid--normal": props.view.backend === "normal-wasapi" }}
+          >
             <label class="audioOutputField" data-audio-output-field="backend">
               <span>Backend</span>
               <select
@@ -387,6 +396,7 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
                 </For>
               </select>
             </label>
+            <Show when={props.view.backend === "show-asio"}>
             <label class="audioOutputField" data-audio-output-field="driver">
               <span>Driver</span>
               <select
@@ -419,6 +429,8 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
                 </Show>
               </select>
             </label>
+            </Show>
+            <Show when={props.view.backend === "show-asio"}>
             <label class="audioOutputField" data-audio-output-field="sample-rate">
               <span>Sample rate</span>
               <select
@@ -436,6 +448,8 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
                 </For>
               </select>
             </label>
+            </Show>
+            <Show when={props.view.backend === "show-asio"}>
             <label class="audioOutputField" data-audio-output-field="buffer">
               <span>Buffer</span>
               <select
@@ -453,8 +467,16 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
                 </For>
               </select>
             </label>
+            </Show>
           </div>
 
+          <Show when={props.view.backend === "normal-wasapi"}>
+            <p class="audioOutputNormalNotice" role="note" data-audio-output-normal-notice>
+              Normal WASAPI uses the Windows default PROGRAM output. To send Timeline media clips, Guide, and Click to a specific WDM device, open Timeline tools, then Timeline authoring monitor, and select Explicit Device.
+            </p>
+          </Show>
+
+          <Show when={props.view.backend === "show-asio"}>
           <div class="audioOutputCueRouting" aria-label="PROGRAM and CUE routing">
             <label class="audioOutputField" data-audio-output-field="cue-route">
               <span>CUE route</span>
@@ -535,9 +557,11 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
               PROGRAM and CUE use separate device clocks. Timing can drift; no clock lock is claimed.
             </p>
           </Show>
+          </Show>
         </div>
       </details>
 
+      <Show when={props.view.backend === "show-asio"}>
       <details class="audioOutputDisclosure" data-audio-output-disclosure="preflight" open>
         <summary>Preflight and tests</summary>
         <div class="audioOutputDisclosureBody">
@@ -617,6 +641,7 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
           </fieldset>
         </div>
       </details>
+      </Show>
     </section>
   );
 }

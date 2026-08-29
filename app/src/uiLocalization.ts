@@ -1733,6 +1733,9 @@ const japaneseText: Record<string, string> = {
   "No driver enumerated": "ドライバが列挙されていません",
   "No solo": "ソロなし",
   "Normal WASAPI": "通常 WASAPI",
+  "Windows default PROGRAM output": "Windows既定のPROGRAM出力",
+  "Normal WASAPI uses the Windows default PROGRAM output. To send Timeline media clips, Guide, and Click to a specific WDM device, open Timeline tools, then Timeline authoring monitor, and select Explicit Device.":
+    "通常WASAPIはWindowsの既定PROGRAM出力を使います。Timelineのメディア音源・Guide・Clickを特定のWDMデバイスへ送るには、TimelineツールからTimeline制作モニターを開き、「出力デバイスを指定」を選択してください。",
   "Not connected: native test and solo controls are unavailable.": "未接続: ネイティブテストとソロ操作は利用できません。",
   "Not connected: native test controls are unavailable.": "未接続: ネイティブテスト操作は利用できません。",
   "Output configuration": "出力設定",
