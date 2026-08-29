@@ -391,6 +391,7 @@ pub fn default_capture_endpoint(backend_id: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 pub fn capture_ffmpeg_args(
     backend_id: &str,
     endpoint_name: &str,

@@ -9,9 +9,12 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{mpsc, Arc},
+    sync::mpsc,
     time::Duration,
 };
+
+#[cfg(test)]
+use std::sync::Arc;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
