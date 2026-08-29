@@ -4,15 +4,31 @@ Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-Product tranche: current source `1.2.0-alpha.38`; latest accepted camera native
-evidence is historical `1.2.0-alpha.37`.
+Product tranche: current source/build `1.2.0-alpha.38` at
+`e4ec22384675aace5ed3912ddffdcfecca190919`; the normal native/window gate is
+current alpha.38, while the latest accepted camera-specific native evidence is
+historical alpha.37.
 
 ## Current product boundary
 
 Alpha.38 changes Timeline CUE transport authority and does not alter the camera
-catalog, capture, or probe implementation. A fresh alpha.38 native camera gate
-has not run; the alpha.37 artifact below remains historical evidence and must
-not be relabeled as alpha.38 native or hardware acceptance.
+catalog, capture, or probe implementation. The alpha.38 normal native build and
+window gate is complete, but no camera-specific UI, profile, capture, or
+hardware acceptance has run. The alpha.37 camera artifact below remains
+historical evidence and must not be relabeled as alpha.38 camera or hardware
+acceptance.
+
+The current exact native executable is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+`61,114,368` bytes, Product/FileVersion `1.2.0-alpha.38`, SHA-256
+`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+`pnpm --dir app tauri build --no-bundle` used exact MSVC `14.44`, completed in
+`3m12s`, and recorded first-party warnings `0`. Old checkout-owned PID `50864`
+was stopped only after exact-path verification; Daslight PID `42752` was
+preserved. New exact PID `55624` is responsive with one maximized `Syndocal`
+window; Computer Use plus Alt+Space verified `Maximize` disabled and `Restore`
+enabled. Keep PID `55624` running and do not close Daslight without operator
+approval.
 
 Alpha.32 and earlier accepted a free-form camera endpoint and opened the
 Windows DirectShow path at a fixed `1280x720` / `30 fps`. That path could not
@@ -122,8 +138,8 @@ The final independent read-only rereview is GO for this source checkpoint with
 no P0/P1/P2. Windows Job Object containment is not installed, so Syndocal
 process exit while a deferred reaper is pending remains an explicit unverified
 OS boundary. Camera UI/profile and sustained-4K acceptance remain NO-GO until
-the unchecked gates below are observed on the current versioned executable;
-the general alpha.37 native build/window gate is separately complete below.
+the unchecked gates below are observed on the current alpha.38 versioned
+executable; the normal alpha.38 native build/window gate is complete above.
 
 The 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
 `14.44.35207` with the Community linker first in `where.exe` and passes the
@@ -163,6 +179,12 @@ render pacing is required before broadening that claim.
   with MSVC 14.44, first-party warnings 0.
 - [x] Historical proof records exactly one responsive, maximized window from this checkout's alpha.37
   release executable (PID `50864`; Computer Use system-menu proof).
+- [x] Current alpha.38 normal native build/window gate passes from source/build
+  HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` with exact MSVC 14.44;
+  the `61,114,368`-byte executable is Product/FileVersion `1.2.0-alpha.38`
+  with SHA-256
+  `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+  Exactly one responsive, maximized Syndocal window is PID `55624`.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.
 - [ ] Exact `1920x1080` / `60.0002 fps` profile probe succeeds.

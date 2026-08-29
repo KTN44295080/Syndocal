@@ -4,14 +4,14 @@ Updated: 2026-08-30
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.38`.
 Alpha.38 is the current source train. Its warning-free automated gates and
 independent review are recorded below; exact source checkpoint
-`bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed. Native artifact identity
-remains pending the required clean-source native build. The latest accepted native authority is the historical alpha.37
-build. The warning-free alpha.37 source checkpoint
+`bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source HEAD
+`e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact-linker
+alpha.38 native/window gate is complete and is the current native authority.
+The warning-free historical alpha.37 source checkpoint
 `1636aeb440c718c628a953b58e4f0c59d4874e35` and documentation checkpoint
 `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
 alpha.37 native build from clean pushed HEAD `5626a9636003462a23daf0f3de67af3cc5060e29`
-passed, and exactly one checkout-owned responsive/maximized process is the
-current native authority. The pushed alpha.36 source
+passed and is now historical. The pushed alpha.36 source
 checkpoint is `ffdb289da1a3980883807a83b8074f0247ab3ea9`; its authoritative resume
 record was pushed at build HEAD `81a7a9cccd93d40c3f40a697bc3aad6d3616aded`.
 Its exact-linker native build is now historical. Earlier pushed authorities include
@@ -54,8 +54,31 @@ after rotation, and every event must match the published transport and schedule
 generation. Independent Terra xHigh rereview is GO with no release-blocking
 P0/P1/P2. Non-blocking P2 coverage remains for one attachment-level real
 Play/Pause integration, full DirectChild-to-Root/Follow/timecode CUE admission,
-and separate audible-MIDI/drift/count-in Guide-rotation cases. A fresh alpha.38
-native build and audible operator confirmation are still required.
+and separate audible-MIDI/drift/count-in Guide-rotation cases. Audible operator
+confirmation is still required.
+
+The exact-linker alpha.38 native build ran from clean pushed HEAD
+`e4ec22384675aace5ed3912ddffdcfecca190919`. `pnpm --dir app tauri build
+--no-bundle` completed in `3m12s` with first-party warnings `0`. The resulting
+`61,114,368`-byte `target/release/syndocal.exe` reports Product/FileVersion
+`1.2.0-alpha.38` and SHA-256
+`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+The exact-path pre-build gate stopped only alpha.37 PID `50864`; Daslight PID
+`42752` was path-verified and preserved. Exactly one checkout-owned alpha.38
+PID `55624` is responsive with title `Syndocal`; Computer Use verified Restore
+enabled and Maximize disabled in the system menu, proving the exact window is
+maximized. This closes native build/window only, not audible, camera, DJ,
+Unity/GPU, installer/updater, or dedicated Show-ASIO acceptance.
+
+On the exact alpha.38 process, Computer Use opened the saved alpha9 reference
+and completed Click/Guide-enabled Play -> Pause -> Play -> Pause. Timeline
+playing/paused state tracked correctly; the authoring monitor remained running,
+resolved `Music (Elgato Virtual Audio)`, advanced output frames, and showed no
+CUE, backend, or local IPC fault. This closes the former authority-fault native
+regression, not audible acceptance. After Pause the output-device `<select>`
+displayed `3 - PX160 WAV...` while persisted settings and resolved output
+remained Music. This new UI truth mismatch is fail-closed and blocks endpoint
+selection/audible acceptance until it is repaired and reverified.
 
 ## 2026-08-30 historical alpha.37 CUE-anchor and strict-Spout source checkpoint
 

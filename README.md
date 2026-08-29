@@ -10,12 +10,15 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 Current product metadata is `1.2.0-alpha.38` on branch
 `codex/syndocal-v1.2`. Alpha.38 is the current source train; its exact
-source checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` is pushed.
-Native artifact identity is recorded only after the required clean-source
-native build completes. The latest accepted native authority remains the historical
-alpha.37 build from pushed source HEAD
-`5626a9636003462a23daf0f3de67af3cc5060e29`. Same-PC Unity/GPU, audible
-audio-device, DJ, and camera hardware acceptance remain open.
+source checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build
+source HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact
+MSVC 14.44 native build completed in `3m12s` with first-party warnings `0`.
+The `61,114,368`-byte `1.2.0-alpha.38` executable has SHA-256
+`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+Exactly one checkout-owned PID `55624` is responsive with title `Syndocal`;
+Computer Use verified Restore enabled and Maximize disabled, proving the exact
+window is maximized. Same-PC Unity/GPU, audible audio-device, DJ, and camera
+hardware acceptance remain open.
 
 Alpha.38 corrects the real-machine Timeline CUE fault observed when Play/Pause
 rotated Timeline transport authority without changing media source projection.
@@ -29,9 +32,14 @@ ambiguous authority still fails closed; no permissive retry or fallback was
 added. Exact-linker proof passes engine `927/0/2 ignored`, Timeline CUE `50/50`,
 full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline CUE `60/60`, with
 first-party warnings `0`; `check:release`, TypeScript, and the Vite production
-build pass at alpha.38. Independent Terra xHigh review is GO. Audible
-media/Click/Guide playback on the selected physical endpoint remains pending a
-fresh alpha.38 native build and operator confirmation.
+build pass at alpha.38. Independent Terra xHigh review is GO. The native/window
+gate is complete; audible media/Click/Guide playback on the selected physical
+endpoint remains pending operator confirmation. A real-machine
+Play/Pause/Play/Pause regression kept the authoring monitor running with
+resolved output `Music (Elgato Virtual Audio)` and no CUE/backend/IPC fault,
+but the output-device `<select>` later displayed `3 - PX160 WAV...` while the
+persisted and resolved device remained Music. That UI truth mismatch remains
+fail-closed and blocks endpoint-selection acceptance until repaired.
 
 Historical alpha.37 repaired two show-critical runtime boundaries. Timeline CUE audio now
 publishes the exact-anchor/future event batch before a fresh Legacy or ASIO
@@ -97,9 +105,10 @@ profiles above `1280x720` at no more than `60 fps`, and capture rates up to
 remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
 `30 fps`. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
-alpha.34 and alpha.36 native builds passed. The latest accepted, now-historical
-alpha.37 native build/maximized-window gate is complete; the alpha.38 native
-gate, Camera UI interaction, and hardware probes remain pending.
+alpha.34 and alpha.36 native builds passed. The now-historical alpha.37 native
+build/maximized-window gate passed, and the current alpha.38 normal
+native/window gate is complete. Camera-specific UI interaction and hardware
+probes remain pending.
 
 The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio

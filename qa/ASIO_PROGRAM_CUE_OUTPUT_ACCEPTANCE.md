@@ -363,16 +363,62 @@ device fallback.
 Exact MSVC 14.44 source proof passes full engine `927/0/2 ignored`, Timeline
 CUE `50/50`, full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline CUE
 `60/60`, with first-party warnings `0`; format/diff checks pass. Independent
-Terra xHigh review is GO. Attachment-level real Play/Pause, full
-DirectChild-to-Root/Follow/timecode admission, and individual audible-MIDI/
-drift/count-in rotation tests remain non-blocking P2 proof improvements. The
-selected physical endpoint and audible media/Click/Guide behavior remain
-unaccepted until the alpha.38 native rebuild and operator observation.
+Terra xHigh review is GO. The attachment-level native Play/Pause observation is
+recorded below; full DirectChild-to-Root/Follow/timecode admission and
+individual audible-MIDI/drift/count-in rotation tests remain non-blocking P2
+proof improvements. The selected physical endpoint and audible media/Click/Guide
+behavior remain unaccepted until audible confirmation on the current alpha.38
+native build.
 
 Open P1, deliberately outside this Timeline-audio tranche: the Video layer
 keeps its own legacy varispeed/seek model. Timeline-audio source/output clock
 proof must not be treated as Video synchronization proof until that independent
 path receives an explicit audit and acceptance coverage.
+
+## 2026-08-30 alpha.38 normal native checkpoint
+
+The current source/build HEAD is
+`e4ec22384675aace5ed3912ddffdcfecca190919`. The exact MSVC `14.44` native
+gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s` with first-party
+warnings `0`. The resulting exact executable
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+`61,114,368` bytes, reports Product/FileVersion `1.2.0-alpha.38`, and has
+SHA-256
+`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+Immediately before the build, exact-path verification stopped only old
+checkout-owned PID `50864`; Daslight PID `42752` was preserved. The new exact
+PID `55624` is responsive with one `Syndocal` window. Computer Use plus the
+Alt+Space system menu verified the window is maximized (`Maximize` disabled,
+`Restore` enabled). Keep PID `55624` running and do not close Daslight without
+operator approval.
+
+This checkpoint closes the normal native build/window gate only. It does not
+close the dedicated Show-ASIO build, audible `Music (Elgato Virtual Audio)`
+PROGRAM/CUE proof, or MOTU M4, split-device, M32/DL16, and other physical
+hardware rows below.
+
+## 2026-08-30 alpha.38 native authoring-monitor observation
+
+Computer Use opened the saved DSF reference project from the recent-projects
+menu:
+`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc`.
+Its settings JSON remained `route=explicit_device` with
+`device_name=Music (Elgato Virtual Audio)`. With Click, one-measure mode, and
+Guide enabled, the native app completed Play -> Pause -> Play -> Pause. The
+Timeline bottom state followed playing/paused; the Timeline authoring monitor
+remained `実行中`, `rev1`, and its observed frames progressed
+`9452160` (before start) -> `180000` (re-Play) -> `157440`/`1645920` (after
+Pause, while output-frame publication continued). The resolved status remained
+`制作モニター出力: Music (Elgato Virtual Audio)`. No Backend fault, Local IPC
+error, or Cue fault appeared. This is successful native UI/runtime regression
+evidence, not audible proof.
+
+After Pause, only the authoring-output `<select>` display drifted to
+`3 - PX160 WAV...`; the settings JSON and resolved output remained
+`Music (Elgato Virtual Audio)`. This is a new unresolved UI truth bug. The
+drift must remain fail closed: do not treat the displayed selection as the
+authoritative endpoint, and do not mark audible or endpoint-selection
+acceptance complete until the mismatch is repaired and reverified.
 
 ## DSF2026 machine profile
 
@@ -562,6 +608,12 @@ the device schema or silently reroute CUE.
 - [x] Exact Windows native gate and normal MIT
       `pnpm --dir app tauri build --no-bundle` pass. The alpha.31 build passed
       from clean pushed HEAD `602b96a` with exact MSVC 14.44.
+- [x] Current alpha.38 normal native build/window gate passes from source/build
+      HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` with exact MSVC 14.44;
+      the `61,114,368`-byte executable has Product/FileVersion `1.2.0-alpha.38`
+      and SHA-256
+      `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
+      Exactly one responsive, maximized Syndocal window is PID `55624`.
 - [ ] Inspect the normal executable, installer, and updater outputs to prove
       that none contains an ASIO SDK-linked artifact. Source packaging tests
       and the successful no-bundle build do not close this artifact row.
@@ -592,6 +644,11 @@ one selectable `Music (Elgato Virtual Audio)` endpoint with topology fingerprint
 That exact selection was persisted while Syndocal was stopped, and the app was
 relaunched successfully. Audible endpoint acceptance is not promoted.
 
+The alpha.38 native build/window gate is now the current normal-native
+authority: PID `55624` remains responsive and maximized. The native gate does
+not promote audible PROGRAM/CUE behavior, dedicated Show-ASIO, or any physical
+MOTU M4, split-device, or M32/DL16 row.
+
 ## Normal Timeline authoring monitor acceptance
 
 This is the ordinary authoring path and is separate from the show-ASIO physical
@@ -611,6 +668,15 @@ hard-coded choice.
 - [x] The alpha.32 native app is built/launched/maximized and the uniquely
       enumerated `Music (Elgato Virtual Audio)` endpoint remains persisted with
       its exact topology fingerprint.
+- [x] Current alpha.38 native UI/runtime observation on the saved alpha9
+      reference completes Click/Guide-enabled Play -> Pause -> Play -> Pause;
+      playing/paused state follows, the authoring monitor remains `実行中` at
+      `rev1`, resolved output remains `Music (Elgato Virtual Audio)`, and no
+      Backend fault, Local IPC error, or Cue fault appears.
+- [ ] The authoring-output `<select>` must be repaired and reverified: after
+      Pause its display drifted to `3 - PX160 WAV...` while settings JSON and
+      resolved output remained `Music (Elgato Virtual Audio)`. Until then this
+      UI truth mismatch is fail-closed and endpoint selection is not accepted.
 - [ ] Audibly verify both Timeline media and Guide/Click through that endpoint.
 
 ## Physical MOTU M4 acceptance
