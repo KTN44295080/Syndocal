@@ -9160,15 +9160,17 @@ export default function App() {
   const externalVideoTransportSummary = createMemo(() => {
     const report = externalVideoTransportReport();
     const status = externalVideoTransportStatus();
+    const captureFaults = status?.capture_faults ?? [];
+    const captureFaultText = captureFaults.length > 0 ? `, capture faults ${captureFaults.length}` : "";
     const ownershipPolicy = status && !status.ownership_allowed
       ? `, Blocked — ${status.ownership_error ?? externalVideoOwnershipReasonLabel(status.ownership_reason)}`
       : "";
     if (!report) {
-      return status ? `active ${status.active_count}, not synced${ownershipPolicy}` : "Routes not synced";
+      return status ? `active ${status.active_count}, not synced${captureFaultText}${ownershipPolicy}` : "Routes not synced";
     }
     const failed = report.start_failed.length + report.stop_failed.length;
     const failedText = failed > 0 ? `, failed ${failed}` : "";
-    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}${ownershipPolicy}`;
+    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}${captureFaultText}${ownershipPolicy}`;
   });
   const externalVideoIoPlanRows = createMemo(() => {
     const plans = externalVideoIoPlans();
@@ -9210,7 +9212,11 @@ export default function App() {
     if (report || !status) {
       return [];
     }
-    return status.active_routes.map((route) => ({
+    return status.active_routes.filter((route) =>
+      !(status.capture_faults ?? []).some((fault) =>
+        fault.route_id === route.route_id && fault.backend_id === route.backend_id
+      )
+    ).map((route) => ({
       id: `active-${route.direction}-${route.route_id}-${route.backend_id}-${route.endpoint_name}`,
       direction: route.direction === "Input" ? "IN" : "OUT",
       backend: route.backend_id.toUpperCase(),
@@ -9221,11 +9227,27 @@ export default function App() {
       detail: `${route.direction} ${route.route_id} / active transport route`,
     }));
   });
+  const externalVideoTransportCaptureFaultRows = createMemo(() => {
+    const faults = externalVideoTransportStatus()?.capture_faults ?? [];
+    return faults.map((fault) => ({
+      id: `capture-fault-${fault.route_id}-${fault.backend_id}`,
+      direction: "IN",
+      backend: fault.backend_id.toUpperCase(),
+      label: fault.label,
+      endpoint: `Route ${fault.route_id}`,
+      stateLabel: "Capture fault",
+      stateClass: "failed",
+      detail: fault.message,
+    }));
+  });
   const externalVideoTransportRows = createMemo(() => {
     const report = externalVideoTransportReport();
     if (!report) {
       return [];
     }
+    const captureFaults = externalVideoTransportStatus()?.capture_faults ?? [];
+    const hasCaptureFault = (route: ExternalVideoTransportSyncReport["started"][number]) =>
+      captureFaults.some((fault) => fault.route_id === route.route_id && fault.backend_id === route.backend_id);
     const rowForRoute = (
       stateLabel: string,
       stateClass: string,
@@ -9242,13 +9264,13 @@ export default function App() {
       detail: `${route.direction} ${route.route_id} / ${issue ?? stateLabel}`,
     });
     return [
-      ...report.started.map((route) => rowForRoute("Started", "started", route)),
-      ...report.kept.map((route) => rowForRoute("Kept", "kept", route)),
-      ...report.stopped.map((route) => rowForRoute("Stopped", "stopped", route)),
-      ...report.idle.map((route) => rowForRoute("Idle", "idle", route)),
-      ...report.blocked.map((blocked) => rowForRoute("Blocked", "blocked", blocked.route, blocked.issue)),
-      ...report.start_failed.map((failed) => rowForRoute("Start Failed", "failed", failed.route, failed.issue)),
-      ...report.stop_failed.map((failed) => rowForRoute("Stop Failed", "failed", failed.route, failed.issue)),
+      ...report.started.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Started", "started", route)),
+      ...report.kept.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Kept", "kept", route)),
+      ...report.stopped.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Stopped", "stopped", route)),
+      ...report.idle.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Idle", "idle", route)),
+      ...report.blocked.filter((blocked) => !hasCaptureFault(blocked.route)).map((blocked) => rowForRoute("Blocked", "blocked", blocked.route, blocked.issue)),
+      ...report.start_failed.filter((failed) => !hasCaptureFault(failed.route)).map((failed) => rowForRoute("Start Failed", "failed", failed.route, failed.issue)),
+      ...report.stop_failed.filter((failed) => !hasCaptureFault(failed.route)).map((failed) => rowForRoute("Stop Failed", "failed", failed.route, failed.issue)),
     ];
   });
   const externalVideoTransportEventRows = createMemo(() =>
@@ -20374,6 +20396,7 @@ export default function App() {
     refreshVideoOutputRenderPlans,
     refreshSnapshotAndVideoOutputRenderPlans,
     refreshVideoRuntimeStatus,
+    refreshExternalVideoTransportStatus,
     refreshExternalVideoIoPlans,
     syncExternalVideoTransports,
     renderDebugVideoOutputPreview,
@@ -22497,6 +22520,9 @@ export default function App() {
         void refreshLiveAudioInputStatus();
       }, 1000)
     : null;
+  const externalVideoTransportStatusTimer = isTauriRuntime()
+    ? window.setInterval(() => void refreshExternalVideoTransportStatus(true), 1000)
+    : null;
   onCleanup(() => {
     liveAudioStatusRequests.invalidate();
     liveAudioInputBackendsEpoch += 1;
@@ -22507,6 +22533,9 @@ export default function App() {
     clearLiveAudioInputTelemetryFreshness();
     if (videoOutputMetricsTimer !== null) {
       window.clearInterval(videoOutputMetricsTimer);
+    }
+    if (externalVideoTransportStatusTimer !== null) {
+      window.clearInterval(externalVideoTransportStatusTimer);
     }
   });
 
@@ -27221,6 +27250,7 @@ export default function App() {
         <Show when={workspaceTab() === "control" && controlMode() === "mixer"}>
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
+          invokeCommand={invoke}
           libraryOnly
           selectedMediaAssetId={selectedMediaLibraryAssetId()}
           onSelectMediaAsset={setSelectedMediaLibraryAssetId}
@@ -27256,6 +27286,7 @@ export default function App() {
             get checked() { return externalVideoIoPlans() !== null; },
             get planRows() { return externalVideoIoPlanRows(); },
             get activeTransportRows() { return externalVideoTransportActiveRows(); },
+            get captureFaultRows() { return externalVideoTransportCaptureFaultRows(); },
             get transportRows() { return externalVideoTransportRows(); },
             get transportEventRows() { return externalVideoTransportEventRows(); },
             planClass: externalVideoIoPlanClass,

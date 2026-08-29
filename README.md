@@ -2,16 +2,17 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.32**
+- 製品名: **Syndocal 1.2.0-alpha.33**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.32` on branch
+Current product metadata is `1.2.0-alpha.33` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.32 is the current source tranche for Timeline authoring
+native build. Alpha.32 remains the latest accepted native product checkpoint
+for Timeline authoring
 monitor output, arbitrary PROGRAM/CUE device assignment, canonical child-Timeline
 audio varispeed, and fail-closed Windows candidate extraction/verification. `FollowProgram`
 remains the existing Normal route; with `ExplicitDevice`, every Timeline media
@@ -22,7 +23,19 @@ and output selection. Endpoint name/topology and session/generation are
 revalidated; missing, ambiguous, stale, changed, or failed state stays silent
 and fail-closed without default/PROGRAM fallback.
 
-The current alpha.32 source gates passed with first-party warnings 0: the exact
+The current alpha.33 camera-capture source tranche replaces the old free-form DirectShow
+camera route, which was fixed at `1280x720` / `30 fps`, with an explicit
+current-generation device/profile catalog, opaque endpoint identities, and an
+exact one-frame probe before Add. Its admission envelope is at most
+`4096x2160`; profiles above `1920x1080` are admitted at no more than `30 fps`,
+profiles above `1280x720` at no more than `60 fps`, and capture rates up to
+`120 fps` only when the device advertises that profile. Output presentation
+remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
+`30 fps`. The acceptance authority is
+[qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); alpha.33 native
+build, UI, and hardware probes remain pending.
+
+The accepted alpha.32 source gates passed with first-party warnings 0: the exact
 MSVC 14.44 Community linker was pinned and first in `where.exe`; Timeline audio
 passed `31/31`, ASIO media playback passed `80/80`, and runtime-only protocol
 nonserialization passed `1/1`. Windows candidate metadata/extractor/materialization/
@@ -50,9 +63,23 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.32 product and
-installer naming below; that naming does not assert an alpha.32 installer
+acceptance. The release metadata checker expects alpha.33 product and
+installer naming below; that naming does not assert an alpha.33 installer
 exists.
+
+The current alpha.33 source gate passed capture `64 passed / 0 failed / 2
+ignored` and control-plane `64 passed / 0 failed / 0 ignored` under the exact
+MSVC 14.44 linker pin, with first-party warnings `0`. Independent review found
+P0 `0`. The bounded listing/memory, child-process cleanup, and automatic stale
+Active-row replacement P1s are closed in source; sustained-4K performance
+remains an explicit open boundary. On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
+`30 fps`, `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`, and no
+`120 fps` profile. Direct FFmpeg preflight completed 150 RGBA frames at 4K30
+and 300 RGBA frames at 1080p60 with exit `0`; the exact Syndocal profile probe
+still proves one frame only. Sustained 4K
+is unverified because the current RGBA `Vec` clone at `60 Hz` may approach
+`1.98 GiB/s` of copy traffic. These source results do not claim native, UI, or
+hardware acceptance.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
 Deck 1 playing `More One Night × 動く、動く (Agate Trance&Makina bootleg)`;
@@ -176,7 +203,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.32_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.32_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.33_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.33_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

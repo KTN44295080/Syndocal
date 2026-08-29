@@ -1923,9 +1923,17 @@ export interface ExternalVideoTransportSyncReport {
   active_count: number;
 }
 
+export interface ExternalVideoCaptureFaultStatus {
+  route_id: number;
+  backend_id: string;
+  label: string;
+  message: string;
+}
+
 export interface ExternalVideoTransportStatus {
   active_routes: ExternalVideoTransportRoute[];
   active_count: number;
+  capture_faults: ExternalVideoCaptureFaultStatus[];
   ownership_allowed: boolean;
   ownership_state: OutputOwnershipState;
   ownership_reason: OutputOwnershipReason;

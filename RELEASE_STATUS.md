@@ -1,9 +1,46 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.32`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, and synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.33`. The pushed source includes canonical Timeline-audio varispeed checkpoint `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`, Windows candidate-gate checkpoint `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`, and synchronized alpha.32 identity `5d40874c629f26d6e011252622b2886d39d8d40b`. The normal alpha.32 native build/window gate passed from that clean pushed identity; the current alpha.33 camera-capture source tranche is documented below and has no native/UI acceptance yet. The previously accepted alpha.31 native artifact remains historical evidence only. Machine-local selection of the uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but audible real-device, physical-I/O, real installer/updater, dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open. Historical alpha.31 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.32 source/native integration (hardware pending)
+## 2026-08-29 current alpha.33 camera-capture source tranche (native pending)
+
+The product identity is `1.2.0-alpha.33`; this is a source checkpoint and not
+yet a versioned native acceptance. The old camera route accepted a
+free-form DirectShow endpoint at fixed `1280x720` / `30 fps`. The new source
+path uses an explicit current-generation DirectShow device/profile catalog,
+persists only an opaque endpoint identity, and requires an exact one-frame
+probe before Add. Its admission envelope is maximum `4096x2160`; profiles above
+`1920x1080` are admitted at no more than `30 fps`, profiles above `1280x720` at
+no more than `60 fps`, and capture rates up to `120 fps` only when the device
+advertises that profile. Output presentation remains capped at `60 Hz`, while
+screen capture is unchanged at `1280x720` / `30 fps`. The acceptance authority
+is [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md).
+
+On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
+`30 fps`; `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`; and no
+`120 fps` profile. The source gate passed capture `64 passed / 0 failed / 2
+ignored` and control-plane `64 passed / 0 failed / 0 ignored` under the exact
+MSVC `14.44.35207` linker pin, with first-party warnings `0`.
+
+Independent review found P0 `0`. Source fixes close the bounded listing/memory
+limit, complete child-process cleanup after post-spawn failures, and automatic
+stale Active-row replacement after capture fault. Sustained-4K performance
+remains open. A `4096x2160` RGBA frame is about
+`33.75 MiB`; cloning it at `60 Hz` may approach `1.98 GiB/s` of copy traffic.
+Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
+both exit `0`; the Syndocal profile probe still proves one frame only, so
+sustained 4K remains unverified and
+no 4K60 or broad sustained-4K claim is made. Native alpha.33 build, UI, and
+hardware probes remain pending.
+
+The final independent source rereview is GO with P0/P1 `0`. Full app regression
+passed `1196/0/7` without default features and `1232/0/12` with the default
+libav/Spout feature set; frontend production build, localization `3631/3631`,
+typed IPC inventory `440`, `check:release`, format, and diff gates pass with
+first-party warnings `0`.
+
+## 2026-08-29 historical alpha.32 source/native integration (hardware pending)
 
 Child Timeline PROGRAM/CUE audio now publishes one bounded canonical millirate
 for source position, Rodio speed, drift, and inverse Sink seek. Nested

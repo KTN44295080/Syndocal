@@ -41,6 +41,7 @@ interface ExternalVideoIoStatusPanelProps {
   checked: boolean;
   planRows: ExternalVideoStatusRow[];
   activeTransportRows: ExternalVideoStatusRow[];
+  captureFaultRows: ExternalVideoStatusRow[];
   transportRows: ExternalVideoStatusRow[];
   transportEventRows: ExternalVideoStatusRow[];
   planClass: (stateClass: string) => string;
@@ -138,6 +139,24 @@ export function ExternalVideoIoStatusPanel(props: ExternalVideoIoStatusPanelProp
                 {route.backend} / {route.label}
               </small>
               <small>{route.endpoint}</small>
+            </span>
+          )}
+        </For>
+        <For each={props.captureFaultRows}>
+          {(fault) => (
+            <span
+              class={props.transportClass(fault.stateClass)}
+              title={`${fault.detail} / ${fault.endpoint}`}
+              data-video-capture-fault-row
+            >
+              <strong>
+                {fault.stateLabel} {fault.direction}
+              </strong>
+              <small>
+                {fault.backend} / {fault.label}
+              </small>
+              <small>{fault.detail}</small>
+              <small>Action: Check the camera or capture device connection, then disable and re-enable this source.</small>
             </span>
           )}
         </For>

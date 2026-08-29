@@ -33,10 +33,12 @@ import { MixerDrawerBar, loadMixerDrawerOpen, saveMixerDrawerOpen, type MixerDra
 import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
 import { VideoEffectCatalogSetupPanel } from "./VideoEffectCatalogSetupPanel";
 import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 
 interface VideoControlPanelProps {
   mixer: boolean;
   libraryOnly?: boolean;
+  invokeCommand?: FrontendTauriInvoke;
   selectedMediaAssetId?: MediaAssetId | null;
   onSelectMediaAsset?: (assetId: MediaAssetId) => void;
   layerCount: number;
@@ -247,7 +249,10 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           <details class="videoMixerSourceDisclosure" data-edit-video-import-disclosure>
             <summary aria-label="Import Media">Import Media</summary>
             <div class="videoMixerSourceCreateSurface" data-edit-video-import-surface>
-              <VideoSourceCreatePanel {...props.sourceCreate} />
+              <VideoSourceCreatePanel
+                {...props.sourceCreate}
+                invokeCommand={props.invokeCommand ?? props.sourceCreate.invokeCommand}
+              />
             </div>
           </details>
         </Show>
@@ -283,7 +288,10 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
               <details class="videoMixerSourceDisclosure" data-vj-media-import-disclosure>
                 <summary aria-label="Import Media">Import Media</summary>
                 <div class="videoMixerSourceCreateSurface" data-vj-media-source-surface="mixer">
-                  <VideoSourceCreatePanel {...props.sourceCreate} />
+                  <VideoSourceCreatePanel
+                    {...props.sourceCreate}
+                    invokeCommand={props.invokeCommand ?? props.sourceCreate.invokeCommand}
+                  />
                 </div>
               </details>
             </Show>
@@ -580,7 +588,10 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       </section>
       <Show when={!props.mixer && sourceCreateVisible()}>
         <div class="videoMixerSetupTools" data-vj-media-source-surface="normal">
-          <VideoSourceCreatePanel {...props.sourceCreate} />
+          <VideoSourceCreatePanel
+            {...props.sourceCreate}
+            invokeCommand={props.invokeCommand ?? props.sourceCreate.invokeCommand}
+          />
         </div>
       </Show>
       <div class="videoMixerAutomationTools">

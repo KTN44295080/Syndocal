@@ -1520,6 +1520,36 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setMessage(`Video backends: ${status.backends.filter((backend) => backend.state === "Available").length}/${status.backends.length} available.`);
     } catch (error) { options.setMessage(String(error)); }
   };
+  let externalVideoTransportStatusRefreshInFlight = false;
+  const clearExternalVideoTransportStatus = () => {
+    options.setExternalVideoTransportStatus(null);
+    options.setExternalVideoTransportReport(null);
+  };
+  const refreshExternalVideoTransportStatus = async (silent = false) => {
+    if (externalVideoTransportStatusRefreshInFlight) return null;
+    externalVideoTransportStatusRefreshInFlight = true;
+    try {
+      const status = await options.invoke<ExternalVideoTransportStatus>("get_external_video_transport_status");
+      options.setExternalVideoTransportStatus(status);
+      // A fresh status snapshot supersedes a prior Check I/O report. This
+      // prevents a stale Kept/Active row from surviving a capture fault.
+      options.setExternalVideoTransportReport(null);
+      if (!silent) {
+        options.setMessage(
+          `External video transport: ${status.active_count} active route(s), ${status.capture_faults.length} capture fault(s).`,
+        );
+      }
+      return status;
+    } catch (error) {
+      // A failed status read is not permission to keep presenting the last
+      // known Active route; leave the transport surface visibly unchecked.
+      clearExternalVideoTransportStatus();
+      if (!silent) options.setMessage(String(error));
+      return null;
+    } finally {
+      externalVideoTransportStatusRefreshInFlight = false;
+    }
+  };
   const refreshExternalVideoIoPlans = async () => {
     try {
       const [plans, status, transportStatus] = await Promise.all([
@@ -1534,7 +1564,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setMessage(
         `External video I/O: ${plans.inputs.length} input(s), ${plans.outputs.length} output(s), ${transportStatus.active_count} active route(s), ${available}/${status.backends.length} backend(s) available.`,
       );
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      clearExternalVideoTransportStatus();
+      options.setMessage(String(error));
+    }
   };
   const syncExternalVideoTransports = async () => {
     options.setMessage(
@@ -1638,7 +1671,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
     renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
-    refreshVideoRuntimeStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
+    refreshVideoRuntimeStatus, refreshExternalVideoTransportStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
     renderDebugVideoOutputPreview, setVideoLayerState, setVideoLayerTransform, setVideoLayerColor,
     setVideoLayerFx, addVideoCuePoint, removeVideoCuePoint, jumpVideoCuePoint,
     setVideoLayerBlendMode, setVideoMasterOpacity, setVideoBlackout,

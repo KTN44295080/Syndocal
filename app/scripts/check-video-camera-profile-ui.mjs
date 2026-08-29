@@ -1,0 +1,134 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (relativePath) => readFile(path.join(appRoot, relativePath), "utf8");
+
+const helperSource = await read("src/videoCameraProfiles.ts");
+const helperOutput = ts.transpileModule(helperSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  fileName: "videoCameraProfiles.ts",
+  reportDiagnostics: true,
+});
+const diagnostics = helperOutput.diagnostics ?? [];
+assert.equal(
+  diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error).length,
+  0,
+  diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")).join("\n"),
+);
+const camera = await import(
+  `data:text/javascript;base64,${Buffer.from(helperOutput.outputText, "utf8").toString("base64")}`,
+);
+
+const profile = (overrides = {}) => ({
+  device_identity: "device:camera-a",
+  device_name: "Camera A",
+  profile_identity: "profile:dci4k30",
+  width: 4096,
+  height: 2160,
+  frame_rate_numerator: 30,
+  frame_rate_denominator: 1,
+  frame_rate_label: "30fps",
+  pixel_format: "yuv420p",
+  codec: "mjpeg",
+  endpoint_name: "syndocal-camera-v1:dW5pcXVlLWVuZHBvaW50",
+  ...overrides,
+});
+
+const dci4k = profile();
+const uhd120 = profile({
+  profile_identity: "profile:uhd120",
+  width: 1280,
+  height: 720,
+  frame_rate_numerator: 120,
+  frame_rate_label: "120fps",
+  endpoint_name: "syndocal-camera-v1:dW5pcXVlLXVuaXF1ZQ",
+});
+assert.deepEqual(camera.parseVideoCameraProfiles([dci4k, uhd120]), [dci4k, uhd120]);
+assert.equal(camera.cameraProfileDisplayLabel(dci4k), "4096x2160 · 30fps · yuv420p · mjpeg");
+assert.match(camera.cameraProfileDisplayLabel(uhd120), /1280x720 · 120fps/);
+assert.deepEqual(camera.cameraDeviceOptions([dci4k, uhd120]), [{
+  device_identity: "device:camera-a",
+  device_name: "Camera A",
+  profile_count: 2,
+}]);
+
+// A catalog is backend-authoritative: malformed entries, missing required
+// fields, and duplicate opaque endpoints are all rejected instead of being
+// replaced by a guessed/default camera.
+assert.throws(() => camera.parseVideoCameraProfiles({ profiles: [dci4k] }), /not an array/);
+assert.throws(() => camera.parseVideoCameraProfiles([{ ...dci4k, codec: undefined }]), /entry 1 is invalid/);
+assert.throws(
+  () => camera.parseVideoCameraProfiles([dci4k, { ...uhd120, endpoint_name: dci4k.endpoint_name }]),
+  /duplicate endpoint/,
+);
+
+const probe = {
+  success: true,
+  endpoint_name: dci4k.endpoint_name,
+  actual_width: 4096,
+  actual_height: 2160,
+  frame_rate_numerator: 30,
+  frame_rate_denominator: 1,
+  frame_rate_label: "30fps",
+  pixel_format: "yuv420p",
+  codec: "mjpeg",
+};
+assert.deepEqual(camera.parseVideoCameraProbe(probe, dci4k.endpoint_name), probe);
+assert.throws(() => camera.parseVideoCameraProbe({ ...probe, endpoint_name: "other" }, dci4k.endpoint_name), /different endpoint/);
+assert.throws(() => camera.parseVideoCameraProbe({ ...probe, success: false }, dci4k.endpoint_name), /did not succeed/);
+
+const successfulState = {
+  status: "success",
+  endpoint_name: dci4k.endpoint_name,
+  profile_identity: dci4k.profile_identity,
+  result: probe,
+  message: "ok",
+};
+assert.equal(camera.cameraProbeAllowsAdd("Camera", dci4k.endpoint_name, dci4k, successfulState), true);
+assert.equal(camera.cameraProbeAllowsAdd("Camera", "different", dci4k, successfulState), false);
+assert.equal(camera.cameraProbeAllowsAdd("Camera", dci4k.endpoint_name, uhd120, successfulState), false);
+const staleState = camera.invalidatedCameraProbeState("Camera profile changed; test again.", dci4k);
+assert.equal(staleState.status, "stale", "profile/device/catalog changes explicitly invalidate the probe");
+assert.equal(camera.cameraProbeAllowsAdd("Camera", dci4k.endpoint_name, dci4k, staleState), false);
+assert.equal(camera.cameraProbeAllowsAdd("File", "", undefined, staleState), true, "non-camera paths remain unchanged");
+
+const panel = await read("src/components/VideoSourceCreatePanel.tsx");
+const picker = await read("src/components/VideoCameraProfilePicker.tsx");
+const control = await read("src/components/VideoControlPanel.tsx");
+const invokeTuple = await read("src/tauriInvokeCommands.ts");
+const manifest = JSON.parse(await read("src/tauri-invoke-manifest.json"));
+
+assert.match(panel, /VideoCameraProfilePicker/);
+assert.match(panel, /disabled=\{props\.sourceKind === "Camera" && !cameraAddAllowed\(\)\}/);
+assert.match(picker, /Refresh cameras/);
+assert.match(picker, /data-video-camera-device/);
+assert.match(picker, /data-video-camera-profile/);
+assert.match(picker, /Test selected profile/);
+assert.match(picker, /list_video_camera_profiles/);
+assert.match(picker, /probe_video_camera_profile/);
+assert.match(picker, /\{ endpointName \}/);
+assert.match(picker, /props\.onSetPath\(profile\.endpoint_name\)/);
+assert.match(picker, /cameraProbeAllowsAdd/);
+assert.match(picker, /Camera catalog refresh invalidated the previous probe/);
+assert.match(picker, /Camera device changed; test the selected profile/);
+assert.match(picker, /Camera profile changed; test the selected profile/);
+assert.match(panel, /Screen capture uses a separate truthful 1280x720 \/ 30fps path/);
+assert.doesNotMatch(picker, /Camera device name \(Windows\)/, "camera must not expose the old free-text fallback");
+assert.doesNotMatch(picker, /value=\{props\.path\}/, "camera surface must not expose a free-text path input");
+assert.match(picker, /Select a camera device/);
+assert.match(picker, /Select a camera profile/);
+assert.match(control, /invokeCommand=\{props\.invokeCommand \?\? props\.sourceCreate\.invokeCommand\}/);
+
+const tupleCommands = [...invokeTuple.matchAll(/^\s+"([a-z0-9_]+)",$/gm)].map((match) => match[1]);
+assert.deepEqual(tupleCommands, [...tupleCommands].sort(), "typed invoke list remains sorted");
+assert.deepEqual(manifest, [...manifest].sort(), "invoke manifest remains sorted");
+for (const command of ["list_video_camera_profiles", "probe_video_camera_profile"]) {
+  assert.ok(tupleCommands.includes(command), `typed invoke list admits ${command}`);
+  assert.ok(manifest.includes(command), `invoke manifest admits ${command}`);
+}
+
+console.log("video camera profile UI contract passed");

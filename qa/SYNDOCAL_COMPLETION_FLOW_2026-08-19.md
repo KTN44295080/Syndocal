@@ -2863,13 +2863,14 @@ boundaries before native and venue acceptance is a pre-show risk. The first
 safe resume action is the real endpoint audition; installer/updater and
 dedicated show-ASIO builds remain separate.
 
-## 63. 2026-08-29 CURRENT alpha.32 source/native integration checkpoint (hardware pending)
+## 63. 2026-08-29 HISTORICAL alpha.32 source/native integration checkpoint (hardware pending)
 
-Section 62 is preserved as historical alpha.31 native evidence. Current product
-metadata advances to `1.2.0-alpha.32` on `codex/syndocal-v1.2`; no alpha.31
-artifact identity is relabelled. The source integration includes two pushed,
-reviewed pre-version checkpoints; the alpha.32 product identity itself begins
-with the subsequent synchronized version checkpoint:
+Section 62 is preserved as historical alpha.31 native evidence. At this
+historical checkpoint, product metadata advanced to `1.2.0-alpha.32` on
+`codex/syndocal-v1.2`; no alpha.31 artifact identity is relabelled. The source
+integration includes two pushed, reviewed pre-version checkpoints; the alpha.32
+product identity itself begins with the subsequent synchronized version
+checkpoint:
 
 - `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` makes Child Timeline PROGRAM/CUE
   audio use one canonical 250..=4000 millirate for source position, Rodio
@@ -2911,3 +2912,40 @@ window and was stopped without filesystem changes, so no new exact byte count
 is claimed. The latest completed exact inventory remains `428,244,808,551`
 logical bytes for `target`. The reviewed recurring-cleanup harness is not
 approved for Apply, so no deletion ran and reclaimed bytes remain 0.
+
+## 64. 2026-08-29 CURRENT alpha.33 camera-capture source tranche (native pending)
+
+The product identity is `1.2.0-alpha.33`; this is a source checkpoint and not
+yet a versioned native acceptance. The old camera route
+accepted a free-form DirectShow endpoint at fixed `1280x720` / `30 fps`. The
+new source path uses an explicit current-generation DirectShow device/profile
+catalog, persists only an opaque endpoint identity, and requires an exact
+one-frame probe before Add. Its admission envelope is maximum `4096x2160`;
+profiles above `1920x1080` are admitted at no more than `30 fps`, profiles above
+`1280x720` at no more than `60 fps`, and capture rates up to `120 fps` only when
+the device advertises that profile. Output presentation remains capped at
+`60 Hz`; screen capture is unchanged at `1280x720` / `30 fps`. The acceptance
+authority is [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md).
+
+On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
+`30 fps`; `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`; and no
+`120 fps` profile. The exact supervisor source gate passed capture `64 passed /
+0 failed / 2 ignored` and control-plane `64 passed / 0 failed / 0 ignored`
+under the exact MSVC `14.44.35207` linker pin, with first-party warnings `0`.
+
+Independent review found P0 `0`. Source fixes close the bounded listing/memory
+limit, complete child-process cleanup after post-spawn failures, and automatic
+stale Active-row replacement after capture fault. Sustained-4K performance
+remains open. A `4096x2160` RGBA frame is about
+`33.75 MiB`; cloning it at `60 Hz` may approach `1.98 GiB/s` of copy traffic.
+Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
+both exit `0`; the Syndocal profile probe still proves one frame only, so
+sustained 4K remains unverified and
+no 4K60 or broad sustained-4K claim is made. Native alpha.33 build, UI, and
+hardware probes remain pending.
+
+Final independent source rereview is GO with P0/P1 `0`. Full app regression
+passed `1196/0/7` without default features and `1232/0/12` with default
+libav/Spout features. Frontend production build, localization `3631/3631`,
+typed IPC inventory `440`, `check:release`, format, and diff gates pass with
+first-party warnings `0`.

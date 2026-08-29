@@ -145,6 +145,7 @@ mod asio_timeline_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod audio_output_router;
 mod authored_control_plane;
+mod capture_catalog;
 mod capture_transport;
 mod control_plane;
 mod control_plane_query;
@@ -354,6 +355,7 @@ mod flat_invoke_args_tests {
     }
 }
 
+use capture_catalog::{list_video_camera_profiles, probe_video_camera_profile};
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
     poll_control_plane_observation_events, query_control_plane_output_ownership,
@@ -14415,7 +14417,10 @@ impl TimelineCueAudioRuntime {
                 .lock()
                 .map_err(|_| "Timeline cue audio lifecycle lock was poisoned".to_string())?;
             state.normal_admission_open = false;
-            state.active_asio_cue_delivery = None;
+            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+            {
+                state.active_asio_cue_delivery = None;
+            }
             let attachment = state.attachment.take();
             clear_asio_retry_barrier(&mut state);
             state.applied = None;
@@ -21983,10 +21988,19 @@ struct ExternalVideoTransportSyncResponse {
 struct ExternalVideoTransportStatusResponse {
     active_routes: Vec<video::ExternalVideoTransportRoute>,
     active_count: usize,
+    capture_faults: Vec<ExternalVideoCaptureFaultStatus>,
     ownership_allowed: bool,
     ownership_state: protocol::OutputOwnershipState,
     ownership_reason: protocol::OutputOwnershipReason,
     ownership_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ExternalVideoCaptureFaultStatus {
+    route_id: VideoLayerId,
+    backend_id: String,
+    label: String,
+    message: String,
 }
 
 const EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT: usize = 64;
@@ -30428,6 +30442,7 @@ fn start_remote_control_after_project_preflight(
     let remote_video_runtime_status = video::video_runtime_status();
     let io_plans_video_runtime_status = remote_video_runtime_status.clone();
     let transport_status = Arc::clone(&state.external_video_transport);
+    let capture_transport_status = Arc::clone(&state.capture_transport);
     let transport_status_engine = state.engine.clone();
     let dj_link_engine = state.engine.clone();
     let dj_link_project_coordinator = Arc::clone(&state.project_coordinator);
@@ -30803,6 +30818,7 @@ fn start_remote_control_after_project_preflight(
             move || {
                 match external_video_transport_status_nonblocking_for(
                     transport_status.as_ref(),
+                    capture_transport_status.as_ref(),
                     &transport_status_engine,
                 ) {
                     Ok(status) => serde_json::to_value(status).unwrap_or_else(|_| {
@@ -40220,6 +40236,18 @@ fn normalize_video_input_source_name(
     kind: &VideoSourceKind,
     name: String,
 ) -> Result<String, String> {
+    if kind == &VideoSourceKind::Camera {
+        if name.is_empty() {
+            return Err(
+                "Camera input requires a selected canonical DirectShow camera profile; default or empty camera names are not allowed"
+                    .to_string(),
+            );
+        }
+        capture_catalog::canonical_camera_selection(&name).map_err(|error| {
+            format!("Camera input requires a canonical DirectShow camera profile: {error}")
+        })?;
+        return Ok(name);
+    }
     let name = name.trim();
     if kind == &VideoSourceKind::ScreenCapture && name.is_empty() {
         return Ok(capture_transport::default_capture_endpoint("screen_capture").to_string());
@@ -68470,21 +68498,31 @@ fn get_external_video_io_plans(state: State<'_, AppState>) -> video::ExternalVid
 fn get_external_video_transport_status(
     state: State<'_, AppState>,
 ) -> Result<ExternalVideoTransportStatusResponse, String> {
-    external_video_transport_status_for(state.external_video_transport.as_ref(), &state.engine)
+    external_video_transport_status_for(
+        state.external_video_transport.as_ref(),
+        state.capture_transport.as_ref(),
+        &state.engine,
+    )
 }
 
 fn external_video_transport_status_for(
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
     engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportStatusResponse, String> {
     let status = transport
         .lock()
         .map_err(|_| "External video transport runtime lock was poisoned".to_string())?
         .status();
+    let capture_faults =
+        capture_transport_faults_for_active_routes(&status.active_routes, capture_transport)?;
+    let healthy_active_count =
+        healthy_external_video_active_count(status.active_count, &capture_faults);
     let ownership = engine.output_ownership_status();
     Ok(ExternalVideoTransportStatusResponse {
         active_routes: status.active_routes,
-        active_count: status.active_count,
+        active_count: healthy_active_count,
+        capture_faults,
         ownership_allowed: ownership.video_allowed,
         ownership_state: ownership.state,
         ownership_reason: ownership.video_reason,
@@ -68494,6 +68532,7 @@ fn external_video_transport_status_for(
 
 fn external_video_transport_status_nonblocking_for(
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
     engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportStatusResponse, String> {
     let status = match transport.try_lock() {
@@ -68505,17 +68544,98 @@ fn external_video_transport_status_nonblocking_for(
             return Err("External video transport runtime lock was poisoned".to_string())
         }
     };
+    let capture_faults = capture_transport_faults_for_active_routes_nonblocking(
+        &status.active_routes,
+        capture_transport,
+    )?;
+    let healthy_active_count =
+        healthy_external_video_active_count(status.active_count, &capture_faults);
     let ownership = engine
         .try_output_ownership_status()
         .ok_or_else(|| "Output ownership status is busy; retry".to_string())?;
     Ok(ExternalVideoTransportStatusResponse {
         active_routes: status.active_routes,
-        active_count: status.active_count,
+        active_count: healthy_active_count,
+        capture_faults,
         ownership_allowed: ownership.video_allowed,
         ownership_state: ownership.state,
         ownership_reason: ownership.video_reason,
         ownership_error: ownership.error,
     })
+}
+
+fn healthy_external_video_active_count(
+    active_count: usize,
+    capture_faults: &[ExternalVideoCaptureFaultStatus],
+) -> usize {
+    let faulted_route_count = capture_faults
+        .iter()
+        .map(|fault| fault.route_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    active_count.saturating_sub(faulted_route_count)
+}
+
+fn capture_transport_faults_for_active_routes(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
+    let capture = capture_transport
+        .lock()
+        .map_err(|_| "Capture transport state lock was poisoned".to_string())?;
+    Ok(capture_transport_faults_for_active_routes_locked(
+        active_routes,
+        &capture,
+    ))
+}
+
+fn capture_transport_faults_for_active_routes_nonblocking(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
+    let capture = match capture_transport.try_lock() {
+        Ok(capture) => capture,
+        Err(TryLockError::WouldBlock) => {
+            return Err("Capture transport status is busy; retry".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("Capture transport state lock was poisoned".to_string())
+        }
+    };
+    Ok(capture_transport_faults_for_active_routes_locked(
+        active_routes,
+        &capture,
+    ))
+}
+
+fn capture_transport_faults_for_active_routes_locked(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    capture: &capture_transport::CaptureTransportState,
+) -> Vec<ExternalVideoCaptureFaultStatus> {
+    let mut faults = Vec::new();
+    for route in active_routes {
+        if route.direction != video::ExternalVideoTransportDirection::Input
+            || !matches!(route.backend_id.as_str(), "camera" | "screen_capture")
+        {
+            continue;
+        }
+        let message = match capture.current_route_fault(route.route_id) {
+            Ok(Some(fault)) => format!(
+                "{fault}. Disable and re-enable the source after checking the camera or capture device connection."
+            ),
+            Ok(None) => continue,
+            Err(error) => format!(
+                "Capture route fault state could not be read: {error}. Disable and re-enable the source after checking the camera or capture device connection."
+            ),
+        };
+        faults.push(ExternalVideoCaptureFaultStatus {
+            route_id: route.route_id,
+            backend_id: route.backend_id.clone(),
+            label: route.label.clone(),
+            message,
+        });
+    }
+    faults
 }
 
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -108683,16 +108803,33 @@ f 1 2 3
     }
 
     #[test]
-    fn capture_input_names_trim_and_screen_capture_has_a_platform_default() {
+    fn camera_input_names_require_a_canonical_profile_and_screen_capture_has_a_platform_default() {
+        let camera_endpoint = capture_catalog::canonical_camera_endpoint(
+            &capture_catalog::CanonicalCameraSelection {
+                device_alternative_name: "@device_pnp_\\\\?\\usb#camera-a".to_string(),
+                input_format: capture_catalog::CameraInputFormat::Vcodec("mjpeg".to_string()),
+                width: 1280,
+                height: 720,
+                frame_rate_numerator: 120,
+                frame_rate_denominator: 1,
+            },
+        )
+        .unwrap();
         assert_eq!(
-            normalize_video_input_source_name(&VideoSourceKind::Camera, "  Camera A  ".to_string())
+            normalize_video_input_source_name(&VideoSourceKind::Camera, camera_endpoint.clone())
                 .unwrap(),
-            "Camera A"
+            camera_endpoint
         );
+        assert!(normalize_video_input_source_name(
+            &VideoSourceKind::Camera,
+            "Camera A".to_string()
+        )
+        .unwrap_err()
+        .contains("canonical DirectShow"));
         assert!(
-            normalize_video_input_source_name(&VideoSourceKind::Camera, "  ".to_string())
+            normalize_video_input_source_name(&VideoSourceKind::Camera, "".to_string())
                 .unwrap_err()
-                .contains("required")
+                .contains("default or empty")
         );
         assert_eq!(
             normalize_video_input_source_name(&VideoSourceKind::ScreenCapture, "  ".to_string())
@@ -108707,6 +108844,76 @@ f 1 2 3
             video_input_backend(&VideoSourceKind::ScreenCapture),
             Some(("screen_capture", "Screen capture input"))
         );
+    }
+
+    #[test]
+    fn capture_fault_status_serializes_without_failing_transport_status() {
+        let encoded = serde_json::to_value(ExternalVideoCaptureFaultStatus {
+            route_id: 77,
+            backend_id: "camera".to_string(),
+            label: "Studio camera".to_string(),
+            message: "camera disconnected; re-enable the source".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "route_id": 77,
+                "backend_id": "camera",
+                "label": "Studio camera",
+                "message": "camera disconnected; re-enable the source",
+            })
+        );
+    }
+
+    #[test]
+    fn transport_status_returns_post_ready_capture_faults_structurally() {
+        let route = video::ExternalVideoTransportRoute {
+            route_id: 77,
+            direction: video::ExternalVideoTransportDirection::Input,
+            backend_id: "camera".to_string(),
+            label: "Studio camera".to_string(),
+            endpoint_name: "opaque-camera-selection".to_string(),
+        };
+        let capture = Mutex::new(
+            capture_transport::CaptureTransportState::with_post_ready_fault_for_test(
+                Arc::new(Mutex::new(HashMap::new())),
+                route.route_id,
+                "camera disconnected",
+            ),
+        );
+        let faults = capture_transport_faults_for_active_routes(&[route], &capture).unwrap();
+        assert_eq!(faults.len(), 1);
+        assert_eq!(faults[0].route_id, 77);
+        assert_eq!(faults[0].backend_id, "camera");
+        assert_eq!(faults[0].label, "Studio camera");
+        assert!(faults[0].message.contains("camera disconnected"));
+    }
+
+    #[test]
+    fn transport_status_active_count_excludes_unique_faulted_capture_routes() {
+        let faults = vec![
+            ExternalVideoCaptureFaultStatus {
+                route_id: 77,
+                backend_id: "camera".to_string(),
+                label: "Studio camera".to_string(),
+                message: "disconnected".to_string(),
+            },
+            ExternalVideoCaptureFaultStatus {
+                route_id: 77,
+                backend_id: "camera".to_string(),
+                label: "Studio camera".to_string(),
+                message: "still disconnected".to_string(),
+            },
+            ExternalVideoCaptureFaultStatus {
+                route_id: 78,
+                backend_id: "screen_capture".to_string(),
+                label: "Presentation screen".to_string(),
+                message: "stopped".to_string(),
+            },
+        ];
+        assert_eq!(healthy_external_video_active_count(4, &faults), 2);
+        assert_eq!(healthy_external_video_active_count(1, &faults), 0);
     }
 
     #[test]
@@ -134125,6 +134332,8 @@ fn main() {
             discover_usb_rdm_devices,
             discover_art_rdm_devices,
             start_art_rdm_full_discovery,
+            list_video_camera_profiles,
+            probe_video_camera_profile,
             list_video_display_monitors,
             create_scene_authoritative_v1,
             create_cue_list,

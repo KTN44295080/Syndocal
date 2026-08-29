@@ -2535,6 +2535,25 @@ const japaneseText: Record<string, string> = {
   "Hue and brightness pad": "色相・明るさパッド",
   "Nearest wheel slot": "最近傍ホイールスロット",
   "I/O Plans": "I/Oプラン",
+  "Camera device": "カメラデバイス",
+  "Camera profile": "カメラプロファイル",
+  "Camera profile refresh failed:": "カメラプロファイルの更新に失敗:",
+  "Camera profile test failed:": "カメラプロファイルのテストに失敗:",
+  "Camera profiles are not loaded. Choose Refresh cameras.": "カメラプロファイルが読み込まれていません。「カメラを更新」を選択してください。",
+  "Loading camera profiles…": "カメラプロファイルを読み込み中…",
+  "No camera profiles were enumerated. Refresh cameras to try again.": "カメラプロファイルが列挙されませんでした。「カメラを更新」を再試行してください。",
+  "Profile test passed": "プロファイルテスト成功",
+  "profile(s) enumerated": "プロファイルを列挙",
+  "profile(s))": "プロファイル）",
+  "Screen capture uses a separate truthful 1280x720 / 30fps path. Leave Display source blank for the primary desktop.":
+    "スクリーンキャプチャは正確な1280x720 / 30fpsの別経路です。メインデスクトップではDisplayソースを空欄にしてください。",
+  "Select a camera device": "カメラデバイスを選択",
+  "Select a camera profile": "カメラプロファイルを選択",
+  "Selected capture": "選択中のキャプチャ",
+  "Test selected profile before adding a camera layer.": "カメラレイヤーを追加する前に、選択したプロファイルをテストしてください。",
+  "Capture fault": "キャプチャ異常",
+  "Action: Check the camera or capture device connection, then disable and re-enable this source.":
+    "操作: カメラまたはキャプチャデバイスの接続を確認してから、このソースを無効化し、再度有効化してください。",
   "IFCB timing overrides": "IFCBタイミング上書き",
   "Import Luma Mask": "輝度マスクを読み込み",
   "Import media to populate the clip grid.": "メディアを読み込むとクリップグリッドへ追加されます。",
@@ -3458,6 +3477,28 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^active (\d+), not synced(?:, capture faults (\d+))?(?:, Blocked — (.+))?$/,
+    (active, faults, blocked) =>
+      "アクティブ " + active + "、未同期" + (faults ? "、キャプチャ異常 " + faults + "件" : "") +
+      (blocked ? "、ブロック — " + (japaneseText[blocked] ?? blocked) : ""),
+  ],
+  [
+    /^active (\d+), \+(\d+), =(\d+), -(\d+), blocked (\d+), idle (\d+)(?:, failed (\d+))?(?:, capture faults (\d+))?(?:, Blocked — (.+))?$/,
+    (active, started, kept, stopped, blockedCount, idle, failed, faults, ownership) =>
+      "アクティブ " + active + "、+" + started + "、=" + kept + "、-" + stopped + "、ブロック " + blockedCount +
+      "、アイドル " + idle + (failed ? "、失敗 " + failed + "件" : "") +
+      (faults ? "、キャプチャ異常 " + faults + "件" : "") +
+      (ownership ? "、ブロック — " + (japaneseText[ownership] ?? ownership) : ""),
+  ],
+  [
+    /^External video transport: (\d+) active route\(s\), (\d+) capture fault\(s\)\.$/,
+    (active, faults) => `外部映像トランスポート: アクティブルート ${active}件、キャプチャ異常 ${faults}件。`,
+  ],
+  [
+    /^active (\d+), not synced, capture faults (\d+)$/,
+    (active, faults) => `アクティブ ${active}、未同期、キャプチャ異常 ${faults}件`,
+  ],
   [
     /^Audio input backend (wasapi_shared|asio) is absent from the current catalogue; devices and Start are locked\.$/,
     (backend) => `音声入力バックエンド ${backend} は現在のカタログにありません。デバイスと開始はロックされています。`,

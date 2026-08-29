@@ -52,9 +52,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 498;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 500;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "2681e917116f34b5113e73f8dfd7c76204180798256f04ff4674a88ad2360242";
+    "5b09a3996b4d0dc4961b1092574a3e2d4634f409bccbbaa2938ebb63cbe42844";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -308,6 +308,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "list_project_backups"
             | "list_serial_ports"
             | "list_verified_fixture_profiles"
+            | "list_video_camera_profiles"
             | "list_video_display_monitors"
             | "live_audio_input_backends"
             | "live_audio_input_levels"
@@ -316,6 +317,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "poll_control_plane_observation_events"
             | "poll_project_authority_bundle"
             | "preview_custom_fixture_profile"
+            | "probe_video_camera_profile"
             | "query_control_plane_output_ownership"
             | "query_control_plane_project_authority"
             | "query_control_plane_runtime_generations"
@@ -1553,6 +1555,16 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
+        "list_video_camera_profiles" => (
+            "syndocal.query.video.camera_profiles.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "probe_video_camera_profile" => (
+            "syndocal.query.video.camera_profile_probe.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
         "get_video_output_window_observation_v1" => (
             "syndocal.query.video.output_window_observation.v1",
             OperationClass::RuntimeObservation,
@@ -2062,7 +2074,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 498);
+        assert_eq!(names.len(), 500);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
             130
@@ -2071,7 +2083,7 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 92);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 94);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 158);
@@ -2090,7 +2102,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 14] = [
+        const R0_ALLOWLIST: [&str; 16] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2100,13 +2112,15 @@ mod tests {
             "syndocal.query.project.authority.v1",
             "syndocal.query.runtime.generations.v1",
             "syndocal.query.video.display_monitors.v1",
+            "syndocal.query.video.camera_profiles.v1",
+            "syndocal.query.video.camera_profile_probe.v1",
             "syndocal.query.video.output_window_observation.v1",
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 498);
+        assert_eq!(names.len(), 500);
         const ENGINE_COMMAND_COUNT: usize = 269;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
@@ -2129,16 +2143,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 438;
+        const FRONTEND_INVOKE_COUNT: usize = 440;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            498 + ENGINE_COMMAND_COUNT
+            500 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1527);
+        assert_eq!(registry.operations.len(), 1531);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2450,21 +2464,21 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 498;
+        const TAURI_COUNT: usize = 500;
         const ENGINE_COUNT: usize = 269;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 438;
+        const FRONTEND_COUNT: usize = 440;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1527);
-        assert_eq!(SOURCE_TOTAL, 1560);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1531);
+        assert_eq!(SOURCE_TOTAL, 1564);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 35);
+        assert_eq!(canonical.canonical_operations.len(), 37);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2777,7 +2791,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 35);
+        assert_eq!(direct.len(), 37);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3444,11 +3458,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1527);
+        assert_eq!(legacy.operations.len(), 1531);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1527);
+        assert_eq!(operations.len(), 1531);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

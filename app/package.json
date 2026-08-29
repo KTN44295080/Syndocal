@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.32",
+  "version": "1.2.0-alpha.33",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -54,6 +54,7 @@
     "check:video-output-routing-runtime": "node scripts/check-video-output-routing-runtime.mjs",
     "check:video-output-window-runtime": "node scripts/check-video-output-window-runtime.mjs",
     "check:video-output-window-observation": "node scripts/check-video-output-window-observation.mjs",
+    "check:camera-input": "node scripts/check-video-camera-profile-ui.mjs && node scripts/check-video-transport-status-polling.mjs",
     "check:timeline-external-dnd": "node scripts/check-timeline-external-dnd.mjs",
     "check:video-setup-viewport": "node scripts/check-viewport-containment.mjs --setup-video-only",
     "check:dj-link": "node scripts/check-dj-track-mapping-policy.mjs && node scripts/check-dj-link-runtime.mjs",
@@ -80,7 +81,7 @@
     "check:asio-packaging": "node scripts/check-asio-packaging.mjs",
     "check:asio-v3-contract": "node scripts/test-asio-v3-contract.mjs",
     "check:windows-release-artifacts": "node scripts/check-windows-release-artifacts.mjs",
-    "check:release": "node scripts/check-release-metadata.mjs && pnpm run check:asio-packaging && pnpm run check:asio-v3-contract && pnpm run check:timeline-cue-audio && pnpm run check:timeline-audio-output-bus && pnpm run check:project-open-bootstrap && pnpm run check:video-output-routing-runtime && pnpm run check:video-output-window-observation",
+    "check:release": "node scripts/check-release-metadata.mjs && pnpm run check:asio-packaging && pnpm run check:asio-v3-contract && pnpm run check:timeline-cue-audio && pnpm run check:timeline-audio-output-bus && pnpm run check:project-open-bootstrap && pnpm run check:video-output-routing-runtime && pnpm run check:video-output-window-observation && pnpm run check:camera-input",
     "check:release:candidate": "pnpm run check:release && node scripts/check-release-metadata.mjs --release-candidate --manifest qa/release/release-evidence.json && node scripts/check-windows-release-artifacts.mjs --require-candidate-extraction",
     "check:release:self-test": "node scripts/test-check-release-metadata.mjs && pnpm run check:asio-packaging && pnpm run check:video-output-routing-runtime && node scripts/check-windows-release-artifacts.mjs --self-test && pnpm run check:strict-json",
     "check:strict-json": "node scripts/strict-json.mjs --self-test",
