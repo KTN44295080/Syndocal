@@ -12,6 +12,32 @@ local Spout senders. The replacement must retain the existing output-control
 lease, safety, publication, acknowledgement, and rollback boundaries; it must
 not fall back to a generic unreviewed output mutation.
 
+## 2026-08-30 alpha.39 SOURCE checkpoint
+
+The current source-only product checkpoint is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`, at pushed source commit
+`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+`origin/codex/syndocal-v1.2`. The Timeline authoring-output selector now admits only one exact
+selectable occurrence; duplicate, missing, or ambiguous identities fail closed.
+Status-only polling may reapply the exact desired option without
+list/configuration/routing mutation. Browser Phase A/B passed after the strict
+external-video status-poll fixture was added; TypeScript, runtime, video-poll,
+`git diff --check`, and `pnpm --dir app run check:release` pass. Independent
+Terra select review is GO with P0/P1 `0`; the checker review is GO with P0/P1/P2
+`0`. First-party warnings are `0` only for the evidenced non-native checks; no
+alpha.39 native-build warning result is claimed. The source checkpoint is
+committed and pushed; this documentation follow-up remains uncommitted and has
+no separate commit claim.
+
+This source change does not alter the strict Art-Net route, fixed Spout pair,
+camera behavior, or their activation/retirement contracts. No alpha.39 native
+build, native UI, audible, Unity/GPU, Art-Net, Spout, DJ, camera, or hardware
+acceptance has run. The next safe action now starts with the exact MSVC `14.44`
+native build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI
+reverify -> operator audible confirmation. The historical alpha.38 artifact, PID/window, and
+`PX160` display drift remain immutable evidence and must not be relabeled as
+alpha.39.
+
 ## Lighting contract
 
 - Transport: Art-Net ArtDmx (`OpCode 0x5000`).
@@ -111,7 +137,8 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The alpha.35 source, carried unchanged by the current alpha.38 source/native train, adds three independent
+The alpha.35 source, carried unchanged by the current alpha.39 source-only
+checkpoint, adds three independent
 Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
 strict mode rejects new U0 HTP/LTP input without inserting it; and the final
@@ -123,8 +150,8 @@ ACK/non-strict-U0 regression tests remain P2 proof debt and are not confused
 with physical acceptance. The subsequent exact-linker full engine gate passed
 `924 passed / 0 failed / 2 ignored`, first-party warnings `0`.
 
-The current alpha.38 normal native build/window gate is complete from
-source/build HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`. With exact MSVC
+The alpha.38 normal native build/window gate is historical, from source/build
+HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`. With exact MSVC
 `14.44`, `pnpm --dir app tauri build --no-bundle` completed in `3m12s` with
 first-party warnings `0`. The exact executable
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
@@ -135,9 +162,10 @@ Daslight PID `42752` was preserved. The new exact PID `55624` is responsive
 with one maximized `Syndocal` window; Computer Use plus Alt+Space verified
 `Maximize` disabled and `Restore` enabled.
 
-This is normal native/window evidence only. It does not prove the red Mega PAR
-frame, Art-Net wire behavior, either Spout sender, Unity/GPU output, or any
-other physical same-PC acceptance row.
+This is historical alpha.38 normal native/window evidence only. It does not
+prove the red Mega PAR frame, Art-Net wire behavior, either Spout sender,
+Unity/GPU output, or any other physical same-PC acceptance row, and it is not
+alpha.39 native evidence.
 
 The historical committed alpha.34 Spout integration has additionally passed the
 same exact linker gate for Syndocal show-Spout tests `20 passed / 0 failed`,
@@ -161,11 +189,12 @@ two separate test-maintenance defects: the new command variants were missing
 from the expected command-inventory count, and an older child-Timeline test
 installed an unreferenced Cue 3 state without creating Cue 3. The inventory was
 updated with explicit variant assertions and the dead fixture was removed;
-focused proofs and the complete matrix then passed. The current alpha.38 normal
-native build/window gate is complete as recorded above; Unity/GPU physical
-checks remain open.
+focused proofs and the complete matrix then passed. The alpha.38 normal
+native build/window gate is historical as recorded above; Unity/GPU physical
+checks remain open and alpha.39 has no native evidence.
 
-The alpha.35 hardening, carried unchanged by the current alpha.38 source/native train, closes the remaining
+The alpha.35 hardening, carried unchanged by the current alpha.39 source-only
+checkpoint, closes the remaining
 first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
 recheck its exact SDK name after lazy registration, and join the two-ACK plus
@@ -200,11 +229,13 @@ Direct pending-publish-reservation and non-synthetic post-join-cleanup-error
 tests remain P2 proof debt; they are not relabeled as Unity/GPU or physical
 sender acceptance.
 
-Alpha.38 changes Timeline CUE transport/Guide authority only; it does not change
+Historical alpha.38 changes Timeline CUE transport/Guide authority only; it does not change
 the strict Art-Net route, fixed Spout pair, or their activation/retirement
 contracts. The latest direct Spout matrix therefore remains the historical
-alpha.37 evidence above. The alpha.38 normal native/window gate is complete, but
-the Art-Net, Spout, and Unity/GPU physical rows remain explicitly unaccepted.
+alpha.37 evidence above. The alpha.38 normal native/window gate is historical,
+and the current alpha.39 source-only checkpoint does not change the strict
+Art-Net or fixed Spout path. The Art-Net, Spout, and Unity/GPU physical rows
+remain explicitly unaccepted.
 
 The non-overwriting authoring tool was independently rereviewed after its
 post-write cleanup was changed to fail closed: a failed post-write validation
@@ -242,6 +273,10 @@ keeps the final Unity/GPU physical row explicitly open:
       unchecked below.
 - [x] The reference show is saved to a new SDC containing the Art-Net route and
       the two fixed Spout outputs; the existing alpha9 file is not overwritten.
+- [x] Alpha.39 source-only authoring-output selector admission is exact and
+      fail-closed for duplicate, missing, or ambiguous identities; status-only
+      polling does not mutate list/configuration/routing state. Browser Phase
+      A/B passed after the strict external-video status-poll fixture was added.
 - [x] Alpha.37 focused and full deterministic source gates pass with zero
       first-party warnings.
 - [x] Historical native checkpoint: a warning-free alpha.36 release was built from clean
@@ -255,11 +290,13 @@ keeps the final Unity/GPU physical row explicitly open:
       has SHA-256 `7AC54394E41751126911E6DC338536B93E484A20934B4CA9A001EB8B9F3E209E`;
       exactly one checkout-owned PID `50864` is responsive with title
       `Syndocal`, and Computer Use verified the exact window is maximized.
-- [x] The current alpha.38 normal native release was built from source/build
+- [x] The historical alpha.38 normal native release was built from source/build
       HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` with exact MSVC 14.44.
       The `61,114,368`-byte executable has Product/FileVersion
       `1.2.0-alpha.38` and SHA-256
       `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`;
       exactly one checkout-owned PID `55624` is responsive and maximized.
+- [ ] Alpha.39 exact-MSVC native build, launch/maximize, alpha9 Music
+      Play/Pause/status-only UI reverify, and operator audible confirmation.
 - [ ] Unity physical acceptance proves the red Mega PAR frame, both exact Spout
       sender names, 1920×1080 frames, and continuous black while stopped.

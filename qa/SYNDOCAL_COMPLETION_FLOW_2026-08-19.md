@@ -354,18 +354,38 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.38` on
-`codex/syndocal-v1.2`. Alpha.38 is the active source tranche and repairs the
-Timeline CUE transport-authority/Guide-retirement boundary found during
-real-machine authoring. The complete current source, native, show-output,
-audio, DJ, and remaining physical acceptance state is recorded in
+alpha checkpoints; current product metadata is `1.2.0-alpha.39` on
+`codex/syndocal-v1.2`. Alpha.39 is the current SOURCE-only checkpoint at
+pushed source commit `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+`origin/codex/syndocal-v1.2`. It
+repairs the Timeline authoring-output selector's exact UI truth: only one exact
+selectable occurrence is admitted, duplicate/missing/ambiguous identities fail
+closed, and status-only polling may reapply the exact desired option without
+list/configuration/routing mutation. Browser Phase A/B passed after the strict
+external-video status-poll fixture was added; TypeScript, runtime, video-poll,
+`git diff --check`, and `pnpm --dir app run check:release` pass. Independent
+Terra select review is GO with P0/P1 `0`; the checker review is GO with P0/P1/P2
+`0`. First-party warnings are `0` only for the evidenced non-native checks;
+no alpha.39 native-build warning result is claimed. The source checkpoint is
+committed and pushed; this documentation follow-up remains uncommitted and
+has no separate commit claim. The complete current
+source, native, show-output, audio, DJ, and remaining physical acceptance state
+is recorded in
 `qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
 
-Alpha.38 native artifact identity, launch/maximized-window proof, audible
-media/Click/Guide confirmation, Unity/GPU, camera, DJ reconnect/pedal, and
-physical output acceptance remain unverified until their explicit gates run.
-Alpha.37 and earlier native artifacts are historical evidence only and must not
-be relabeled as alpha.38 acceptance.
+No alpha.39 native build, native UI, or audible verification has run. The latest
+native authority remains historical alpha.38: its pushed source/build HEAD was
+`e4ec22384675aace5ed3912ddffdcfecca190919`, and its exact executable was
+`1.2.0-alpha.38`, `61,114,368` bytes, SHA-256
+`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`, with
+responsive maximized PID `55624`. The alpha.38 authoring-output `<select>`
+displayed `3 - PX160 WAV...` after Pause while settings/resolved output stayed
+`Music (Elgato Virtual Audio)`; preserve this as immutable historical evidence
+and do not relabel its binary as alpha.39. Audible/device selection, dedicated
+Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
+remain open. The next safe action now starts with the exact MSVC `14.44` native
+build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI reverify ->
+operator audible confirmation.
 
 The immediately preceding alpha.25 source/native checkpoint remains immutable
 historical evidence: source/native evidence was

@@ -4,21 +4,51 @@ Status date: 2026-08-30
 
 Branch: `codex/syndocal-v1.2`
 
-Product tranche: current source/build `1.2.0-alpha.38` at
+## 2026-08-30 alpha.39 SOURCE checkpoint
+
+The current source-only product checkpoint is `1.2.0-alpha.39` on branch
+`codex/syndocal-v1.2`, at pushed source commit
+`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+`origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+authoring-output selector's
+exact UI truth: only one exact selectable occurrence is admitted, while
+duplicate, missing, or ambiguous identities fail closed; status-only polling
+may reapply the exact desired option without list/configuration/routing
+mutation. Browser Phase A/B passed after the strict external-video status-poll
+fixture was added; TypeScript, runtime, video-poll, `git diff --check`, and
+`pnpm --dir app run check:release` pass. Independent Terra select review is GO
+with P0/P1 `0`; the checker review is GO with P0/P1/P2 `0`. First-party
+warnings are `0` only for the evidenced non-native checks; no alpha.39
+native-build warning result is claimed. The source checkpoint is committed and
+pushed; this documentation follow-up remains uncommitted and has no separate
+commit claim.
+
+Camera and strict Art-Net behavior are unchanged by this source-only tranche.
+No alpha.39 native build, camera UI/profile, capture, audible, Unity/GPU,
+Art-Net, Spout, DJ, or other hardware acceptance has run. The next safe action
+now starts with the exact MSVC `14.44` native build -> launch/maximize ->
+alpha9 Music Play/Pause/status-only UI reverify -> operator audible
+confirmation. The alpha.38
+artifact/PID/window and observed `PX160` drift remain immutable historical
+evidence and must not be relabeled as alpha.39.
+
+Product tranche: current source-only `1.2.0-alpha.39` at pushed source commit
+`8139df4c9f623076343084565f108a3f31e615f4`; the historical alpha.38 source/build
+authority remains
 `e4ec22384675aace5ed3912ddffdcfecca190919`; the normal native/window gate is
-current alpha.38, while the latest accepted camera-specific native evidence is
-historical alpha.37.
+historical alpha.38, while the latest accepted camera-specific native evidence
+is historical alpha.37. No alpha.39 native or camera evidence is claimed.
 
 ## Current product boundary
 
-Alpha.38 changes Timeline CUE transport authority and does not alter the camera
-catalog, capture, or probe implementation. The alpha.38 normal native build and
-window gate is complete, but no camera-specific UI, profile, capture, or
-hardware acceptance has run. The alpha.37 camera artifact below remains
-historical evidence and must not be relabeled as alpha.38 camera or hardware
-acceptance.
+Historical alpha.38 changes Timeline CUE transport authority and does not alter
+the camera catalog, capture, or probe implementation. Its normal native build
+and window gate is historical evidence only; no alpha.39 camera-specific UI,
+profile, capture, or hardware acceptance has run. The alpha.37 camera artifact
+below remains historical evidence and must not be relabeled as alpha.38 or
+alpha.39 camera or hardware acceptance.
 
-The current exact native executable is
+The historical alpha.38 exact native executable is
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
 `61,114,368` bytes, Product/FileVersion `1.2.0-alpha.38`, SHA-256
 `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
@@ -27,8 +57,8 @@ The current exact native executable is
 was stopped only after exact-path verification; Daslight PID `42752` was
 preserved. New exact PID `55624` is responsive with one maximized `Syndocal`
 window; Computer Use plus Alt+Space verified `Maximize` disabled and `Restore`
-enabled. Keep PID `55624` running and do not close Daslight without operator
-approval.
+enabled. Preserve PID `55624` only as historical evidence; do not treat that
+alpha.38 process as alpha.39. Do not close Daslight without operator approval.
 
 Alpha.32 and earlier accepted a free-form camera endpoint and opened the
 Windows DirectShow path at a fixed `1280x720` / `30 fps`. That path could not
@@ -138,8 +168,9 @@ The final independent read-only rereview is GO for this source checkpoint with
 no P0/P1/P2. Windows Job Object containment is not installed, so Syndocal
 process exit while a deferred reaper is pending remains an explicit unverified
 OS boundary. Camera UI/profile and sustained-4K acceptance remain NO-GO until
-the unchecked gates below are observed on the current alpha.38 versioned
-executable; the normal alpha.38 native build/window gate is complete above.
+the unchecked gates below are observed on a versioned alpha.39 executable; no
+alpha.39 native build/window gate exists. The historical alpha.38 native
+build/window gate is recorded above.
 
 The 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
 `14.44.35207` with the Community linker first in `where.exe` and passes the
@@ -179,12 +210,14 @@ render pacing is required before broadening that claim.
   with MSVC 14.44, first-party warnings 0.
 - [x] Historical proof records exactly one responsive, maximized window from this checkout's alpha.37
   release executable (PID `50864`; Computer Use system-menu proof).
-- [x] Current alpha.38 normal native build/window gate passes from source/build
+- [x] Historical alpha.38 normal native build/window gate passed from source/build
   HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` with exact MSVC 14.44;
   the `61,114,368`-byte executable is Product/FileVersion `1.2.0-alpha.38`
   with SHA-256
   `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
   Exactly one responsive, maximized Syndocal window is PID `55624`.
+- [ ] Alpha.39 exact-MSVC native build, launch/maximize, alpha9 Music
+  Play/Pause/status-only UI reverify, and operator audible confirmation.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.
 - [ ] Exact `1920x1080` / `60.0002 fps` profile probe succeeds.

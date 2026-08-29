@@ -1,12 +1,35 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.38`.
-Alpha.38 is the current source train. Its warning-free automated gates and
-independent review are recorded below; exact source checkpoint
-`bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source HEAD
-`e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact-linker
-alpha.38 native/window gate is complete and is the current native authority.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.39`.
+
+## 2026-08-30 current alpha.39 SOURCE checkpoint
+
+Alpha.39 is the current SOURCE checkpoint at pushed source commit
+`8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+`origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+authoring-output selector's
+exact UI truth: only one exact selectable occurrence may be admitted, while
+duplicate, missing, or ambiguous identities fail closed; status-only polling
+may reapply the exact desired option without list/configuration/routing
+mutation. Browser Phase A/B passed after the strict external-video status-poll
+fixture was added; TypeScript, runtime, video-poll, `git diff --check`, and
+`pnpm --dir app run check:release` pass. Independent Terra select review is GO
+with P0/P1 `0`, and the checker review is GO with P0/P1/P2 `0`. First-party
+warnings are `0` only for the evidenced non-native checks above; no alpha.39
+native-build warning result is claimed. The source checkpoint is committed and
+pushed; this documentation follow-up remains uncommitted and has no separate
+commit claim. No alpha.39 native build, native UI, or audible verification has
+run. The next safe action now starts with the exact MSVC `14.44` native build,
+then launch/maximize, alpha9 Music Play/Pause and status-only UI reverify, and
+operator audible confirmation.
+
+The latest native authority remains historical alpha.38. Its warning-free
+automated gates and independent review are recorded below; exact source
+checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source
+HEAD `e4ec22384675aace5ed3912ddffdcfecca190919` are pushed. The exact-linker
+alpha.38 native/window gate is complete, but its binary must not be relabeled
+as alpha.39.
 The warning-free historical alpha.37 source checkpoint
 `1636aeb440c718c628a953b58e4f0c59d4874e35` and documentation checkpoint
 `5626a9636003462a23daf0f3de67af3cc5060e29` are pushed. The exact-linker
@@ -24,10 +47,13 @@ and same-PC Art-Net/camera/fixed-Spout baseline
 uniquely enumerated `Music (Elgato Virtual Audio)` endpoint is prepared, but
 audible real-device, Unity/GPU, camera hardware, real installer/updater,
 dedicated show-ASIO, DJ acceptance, and show-completion evidence remain open.
-Historical alpha.37, alpha.36, and earlier native/DJ evidence remains immutable below;
+Historical alpha.38, alpha.37, alpha.36, and earlier native/DJ evidence remains
+immutable below; the alpha.38 observed authoring-output `<select>` drift to
+`3 - PX160 WAV...` while persisted/resolved output remained
+`Music (Elgato Virtual Audio)` is retained as historical fail-closed evidence;
 HW-4 remains exactly `0/12`.
 
-## 2026-08-30 current alpha.38 Timeline CUE transport-authority repair
+## 2026-08-30 historical alpha.38 Timeline CUE transport-authority repair
 
 The alpha.37 real-machine authoring run exposed a show-critical false Fault:
 Play/Pause rotated the canonical Timeline transport epoch/generation while the

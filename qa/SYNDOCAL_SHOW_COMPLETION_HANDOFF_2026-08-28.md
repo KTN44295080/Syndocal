@@ -6,46 +6,49 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## Source authority
 
-- Current source/build train is `1.2.0-alpha.38` on branch
-  `codex/syndocal-v1.2`, with source/build HEAD
-  `e4ec22384675aace5ed3912ddffdcfecca190919`. The exact MSVC `14.44`
-  native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s` with
-  first-party warnings `0`. The resulting exact executable
+- Current source-only checkpoint is `1.2.0-alpha.39` on branch
+  `codex/syndocal-v1.2`, at pushed source commit
+  `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+  `origin/codex/syndocal-v1.2`. This tranche repairs the Timeline
+  authoring-output selector's
+  exact UI truth: exactly one selectable occurrence is admitted, while
+  duplicate, missing, or ambiguous identities fail closed; status-only polling
+  may reapply the exact desired option without list/configuration/routing
+  mutation. Browser Phase A/B passed after the strict external-video
+  status-poll fixture was added; TypeScript, runtime, video-poll,
+  `git diff --check`, and `pnpm --dir app run check:release` pass. Independent
+  Terra select review is GO with P0/P1 `0`, and the checker review is GO with
+  P0/P1/P2 `0`. First-party warnings are `0` only for the evidenced non-native
+  checks; no alpha.39 native-build warning result is claimed. The source
+  checkpoint is committed and pushed; this documentation follow-up remains
+  uncommitted and has no separate commit claim.
+
+  No alpha.39 native build, native UI, or audible verification has run. The
+  current open boundary includes audible/device selection, dedicated
+  Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware
+  acceptance. The next safe action now starts with the exact MSVC `14.44`
+  native build -> launch/maximize -> alpha9 Music Play/Pause/status-only UI
+  reverify -> operator audible confirmation.
+
+- Historical alpha.38 native authority remains immutable. The exact MSVC
+  `14.44` native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s`
+  with first-party warnings `0`. The resulting exact executable
   `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
   `61,114,368` bytes, reports Product/FileVersion `1.2.0-alpha.38`, and has
   SHA-256 `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
-  Immediately before the build, exact-path verification stopped only the old
-  checkout-owned PID `50864`; Daslight PID `42752` was path-verified and
-  preserved. The new exact PID `55624` is responsive with one `Syndocal`
-  window. Computer Use plus the Alt+Space system menu verified that the window
-  is maximized (`Maximize` disabled, `Restore` enabled). Keep PID `55624`
-  running; do not close Daslight without operator approval.
-
-  This closes the normal native build/window gate only. It does not close the
-  dedicated Show-ASIO build, audible `Music (Elgato Virtual Audio)` PROGRAM/CUE
-  confirmation, Unity/GPU, Art-Net, Spout, DJ, camera, or other hardware
-  acceptance. The old CUE path compared
-  Click/Guide Timeline transport authority to the independent media source
-  projection and faulted after a real Play/Pause rotation. The new path
-  publishes and checks transport epoch/generation independently, retires old
-  Guide queues on transport/schedule/source/count-in rotations, returns an ended
-  DirectChild scheduler source to Root, and hides a retired endpoint after
-  Fault. Invalid, stale, mixed, future, missing, or ambiguous authority remains
-  visible and fail-closed; no permissive fallback or stale-ignore path exists.
-  Exact MSVC `14.44.35207` proof passes full engine `927/0/2 ignored`, Timeline
-  CUE `50/50`, full no-default Syndocal `1212/0/7 ignored`, and ASIO Timeline
-  CUE `60/60`, with first-party warnings `0`; format/diff, `check:release`,
-  TypeScript, and the Vite production build pass.
-  Independent Terra xHigh review is GO with no release-blocking P0/P1/P2.
-  Native UI/runtime observation on the saved alpha9 reference completed
-  Click/Guide-enabled Play -> Pause -> Play -> Pause without a CUE fault; the
-  Timeline state followed playing/paused and the authoring monitor stayed
-  `実行中`, `rev1`, with resolved output `Music (Elgato Virtual Audio)`. Audible
-  confirmation remains required. A new UI truth bug remains fail-closed: after
-  Pause, the authoring-output `<select>` displayed `3 - PX160 WAV...` while the
-  settings JSON and resolved output remained Music. Non-blocking P2 proof
-  improvements remain for full DirectChild-to-Root/Follow/timecode admission
-  and individual audible-MIDI/drift/count-in rotations.
+  Its pushed source/build HEAD was
+  `e4ec22384675aace5ed3912ddffdcfecca190919`. Immediately before the build,
+  exact-path verification stopped only old checkout-owned PID `50864`;
+  Daslight PID `42752` was path-verified and preserved. Exact PID `55624` is
+  responsive with one `Syndocal` window, and Computer Use plus Alt+Space
+  verified that it is maximized (`Maximize` disabled, `Restore` enabled).
+  This proves alpha.38 native build/window only; its binary must not be
+  relabeled as alpha.39. The alpha.38 authoring run completed
+  Click/Guide-enabled Play -> Pause -> Play -> Pause without a CUE fault, but
+  after Pause the authoring-output `<select>` displayed `3 - PX160 WAV...`
+  while settings JSON and resolved output remained `Music (Elgato Virtual
+  Audio)`. Preserve that drift as historical fail-closed evidence; alpha.39
+  native/UI reverification remains pending.
 
 - The first alpha.38 native resume action was exercised on PID `55624` with the
   saved reference
@@ -148,11 +151,16 @@ This is the concise authoritative resume note for the final show-critical tranch
   unready accessibility window-opened handler; maximized visual proof remains
   open.
 
-- Current product metadata is `1.2.0-alpha.38`; source/build HEAD is
+- Historical alpha.38 product metadata is `1.2.0-alpha.38`; source/build HEAD is
   `e4ec22384675aace5ed3912ddffdcfecca190919`. The normal native artifact and
   responsive/maximized window identity are recorded above. Alpha.37 and earlier
-  processes are historical execution evidence; current native authority is the
-  exact alpha.38 PID `55624`.
+  processes are historical execution evidence; the exact alpha.38 PID `55624`
+  is historical native authority only. The current authority is the alpha.39
+  source-only checkpoint at pushed source commit
+  `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+  `origin/codex/syndocal-v1.2`. The documentation follow-up remains
+  uncommitted and has no separate commit claim; no alpha.39 native artifact or
+  window exists.
   The show boundary is same-PC
   only: exact Art-Net `127.0.0.1:6454` plus local Spout; remote Art-Net and NDI
   are outside this acceptance scope. Alpha.35 rejects pre-existing U0 input
@@ -684,56 +692,60 @@ integrated source checkpoint above is authoritative for current source status.
 
 ## Required remaining acceptance
 
-1. Keep the current exact alpha.38 PID `55624` running and maximized; do not
-   close Daslight PID `42752` without operator approval. The first safe DSF
-   resume action is complete: Computer Use opened the saved alpha9 reference
-   `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc`
-   from the recent-projects menu. Settings JSON remained
-   `route=explicit_device` and `device_name=Music (Elgato Virtual Audio)`.
-   With Click, one-measure mode, and Guide enabled, Play -> Pause -> Play ->
-   Pause tracked the Timeline playing/paused state without a CUE fault; the
-   authoring monitor stayed `実行中`, `rev1`, with frames `9452160` (before
-   start) -> `180000` (re-Play) -> `157440`/`1645920` (after Pause while
-   output-frame publication continued). Resolved output remained
-   `制作モニター出力: Music (Elgato Virtual Audio)` and no Backend fault,
-   Local IPC error, or Cue fault appeared. This is UI/runtime evidence only,
-   not audible proof.
-   After Pause, the authoring-output `<select>` displayed
-   `3 - PX160 WAV...` while settings JSON and resolved output remained Music.
-   This new UI truth mismatch is fail-closed; repair and reverify it before
-   treating endpoint selection or audible acceptance as complete.
-2. On the current alpha.38 native, audibly verify that Timeline media-library
-   clips plus Guide/Click share the still-enumerated `Music (Elgato Virtual
-   Audio)` endpoint in Normal mode. Also verify ASIO Start retires the authoring
-   route and stale/missing/ambiguous devices remain silent.
-3. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
-4. Build and verify the exact local-only show-ASIO artifact from the next clean pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source hashes, real loader Start/Stop/Fault smoke, and one responsive maximized Syndocal window.
-5. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
-6. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
-7. For this show, verify the strict same-PC Art-Net route at `127.0.0.1:6454`, wire U0, 512 bytes, including the ch1/ch5 red-frame proof and ch500 zero. Generic serial DMX remains a product capability but is not part of this show route. Close Daslight/Easy View manually before Unity because the receiver port cannot be shared.
-8. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
-9. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
+1. From pushed source commit
+   `8139df4c9f623076343084565f108a3f31e615f4`, run the exact MSVC `14.44`
+   native build. The documentation follow-up remains uncommitted and has no
+   separate commit claim.
+2. Launch the resulting alpha.39 executable, verify exactly one responsive
+   Syndocal window, and maximize the intended window before UI operations.
+3. Reopen the alpha9 reference and reverify Music Play/Pause plus the repaired
+   status-only authoring-output UI truth; the historical alpha.38 drift to
+   `3 - PX160 WAV...` must not recur while the exact Music endpoint remains
+   authoritative.
+4. Ask the operator to audibly confirm Timeline media and Guide/Click through
+   the selected `Music (Elgato Virtual Audio)` endpoint in Normal mode, then
+   verify ASIO Start retires the authoring route and stale/missing/ambiguous
+   devices remain silent.
+5. Build and inspect the normal NSIS/MSI/updater artifacts so the complete default-distribution ASIO-free gate is measured, not inferred only from source packaging tests.
+6. Build and verify the exact local-only show-ASIO artifact from the clean
+   pushed source checkpoint: exact 18 exports, v3 S/E/B manifest and source
+   hashes, real loader Start/Stop/Fault smoke, and one responsive maximized
+   Syndocal window.
+7. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
+8. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
+9. For this show, verify the strict same-PC Art-Net route at `127.0.0.1:6454`, wire U0, 512 bytes, including the ch1/ch5 red-frame proof and ch500 zero. Generic serial DMX remains a product capability but is not part of this show route. Close Daslight/Easy View manually before Unity because the receiver port cannot be shared.
+10. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
+11. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
 
 ## First safe resume actions
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
-- Keep the current exact alpha.38 PID `55624` running and maximized; preserve
-  Daslight PID `42752` unless the operator explicitly authorizes closing it.
-  The DJ-Link PC may remain stopped until the final integration gate.
+- The exact alpha.38 PID `55624` and its maximized window are historical
+  evidence only; preserve the artifact identity and the `PX160` display drift
+  record, but never treat that process as alpha.39. Preserve Daslight PID
+  `42752` unless the operator explicitly authorizes closing it. The DJ-Link PC
+  may remain stopped until the final integration gate.
 - Alpha.35-alpha.37 source/full-regression, independent review, and native build
-  gates are historical. Alpha.38 automated source gates, independent review, and
-  the normal native build/window gate are complete at source/build HEAD
-  `e4ec22384675aace5ed3912ddffdcfecca190919`. Keep Unity/GPU, Art-Net, Spout,
-  camera, DJ, hardware, audible, and dedicated Show-ASIO acceptance explicitly
-  pending until observed and recorded against their acceptance documents.
-- First safe resume action completed: the saved alpha9 reference was opened,
-  Click/Guide-enabled Play -> Pause -> Play -> Pause tracked Timeline state
-  without a CUE fault, and the authoring monitor stayed `実行中`, `rev1`.
-  This is native UI/runtime evidence only; audible confirmation remains open.
+  gates are historical. Alpha.38 native/build/window evidence is also
+  historical at source/build HEAD `e4ec22384675aace5ed3912ddffdcfecca190919`.
+  Alpha.39 automated source gates and independent reviews are complete at
+  pushed source commit `8139df4c9f623076343084565f108a3f31e615f4`; `HEAD` equals
+  `origin/codex/syndocal-v1.2`. The documentation follow-up remains uncommitted
+  and has no separate commit claim. No alpha.39 native build/UI/audible
+  evidence exists. Keep Unity/GPU Art-Net, Spout, camera, DJ, hardware,
+  audible, and dedicated Show-ASIO acceptance explicitly pending until observed
+  and recorded against their acceptance documents.
+- Historical alpha.38 first safe resume action was completed: the saved alpha9
+  reference was opened, Click/Guide-enabled Play -> Pause -> Play -> Pause
+  tracked Timeline state without a CUE fault, and the authoring monitor stayed
+  `実行中`, `rev1`. This is historical alpha.38 native UI/runtime evidence
+  only, not alpha.39 native evidence; audible confirmation remains open.
   After Pause, the authoring-output `<select>` drifted to `3 - PX160 WAV...`
-  while settings JSON and resolved output remained Music. Keep this new UI truth
-  mismatch fail-closed and repair/reverify it before endpoint acceptance; next
-  safe action is to ask the operator for audible PROGRAM/CUE confirmation before
-  the separate dedicated Show-ASIO build. Do not reuse or relabel historical
-  alpha.31/alpha.32/alpha.35/alpha.36/alpha.37 artifacts.
+  while settings JSON and resolved output remained Music. Keep this only as the
+  historical alpha.38 fail-closed record; do not treat the alpha.38 process or
+  this mismatch as current alpha.39 acceptance. The next safe action now starts
+  with the exact MSVC `14.44` native build ->
+  launch/maximize -> alpha9 Music Play/Pause/status-only UI reverify -> operator
+  audible confirmation. Do not reuse or relabel historical alpha.31/
+  alpha.32/alpha.35/alpha.36/alpha.37/alpha.38 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.
