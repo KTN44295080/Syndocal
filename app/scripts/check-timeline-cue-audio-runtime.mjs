@@ -95,6 +95,10 @@ for (const field of ["asset", "playback_rate_milli", "sample_frame", "epoch", "t
   assert.match(types, new RegExp(`\\b${field}\\b`), `Timeline Guide retains protocol ${field}`);
 }
 assert.match(editor, /data-timeline-cue-audio-editor/, "Cue Audio has a stable production selector");
+assert.match(editor, /data-timeline-authoring-monitor/, "Timeline authoring monitor has a stable production selector");
+assert.match(editor, /every Timeline media clip plus Guide and Click/, "explicit authoring output covers media, Guide, and Click");
+assert.match(editor, /Show ASIO uses its separate PROGRAM\/CUE routes and ignores this selection/, "Show ASIO remains independent from the authoring monitor selection");
+assert.match(editor, /missing, ambiguous, or stale device stays silent/, "unverifiable authoring devices fail closed to silence");
 assert.match(editor, /matching outputs; ambiguous/, "duplicate endpoint names remain visibly ambiguous instead of deduped");
 assert.doesNotMatch(editor, /Guide monitor bus|type="checkbox"/, "no local Guide monitor enable survives");
 assert.match(editor, /missing_device|topology_changed|fault/, "missing-device, topology mismatch, and fault states stay visible in Cue Audio");

@@ -110,17 +110,18 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
         onSetFollow={props.onSetFollow}
         onAbortFollow={props.onAbortFollow}
       />
-      <details class="timelineCueAudioEditor" data-timeline-cue-audio-editor>
+      <details class="timelineCueAudioEditor" data-timeline-cue-audio-editor data-timeline-authoring-monitor>
         <summary>
-          <span>Cue Audio</span>
+          <span>Timeline authoring monitor</span>
           <output classList={{ fault: props.cueAudioStatus.lifecycle === "fault" || Boolean(props.cueAudioStatus.lastError) }} role="status">
             {cueAudioLifecycleText(props.cueAudioStatus)}
           </output>
         </summary>
         <div class="timelineCueAudioEditorBody">
-          <p class="timelineCueAudioAuthority" role="status">Click and Guide are enabled from the top bar.</p>
+          <p class="timelineCueAudioAuthority" role="status">In Normal mode, Follow Program uses the normal Program output. Explicit Device sends every Timeline media clip plus Guide and Click to the selected WDM endpoint. Show ASIO uses its separate PROGRAM/CUE routes and ignores this selection.</p>
+          <p class="timelineCueAudioPolicy" role="note">A missing, ambiguous, or stale device stays silent until you refresh and select an exact output.</p>
           <label>
-            <span>Route</span>
+            <span>Monitor route</span>
             <select
               value={explicitRouteVisible() ? "explicit_device" : "follow_program"}
               disabled={props.cueAudioMutationBusy}
@@ -140,7 +141,7 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
           </label>
           <Show when={explicitRouteVisible()}>
             <label>
-              <span>Output device</span>
+              <span>Authoring output device</span>
               <select
                 data-timeline-cue-audio-output
                 value={selectedOutputName()}
@@ -206,7 +207,7 @@ export function TimelinePerformanceEditor(props: TimelinePerformanceEditorProps)
             </Show>
           </output>
           <Show when={props.cueAudioStatus.resolvedDeviceName}>
-            {(name) => <output class="timelineCueAudioResolved">Output: <span data-no-localize>{name()}</span></output>}
+            {(name) => <output class="timelineCueAudioResolved">Authoring output: <span data-no-localize>{name()}</span></output>}
           </Show>
           <Show when={props.cueAudioStatus.requestedTopologyFingerprint !== props.cueAudioStatus.observedTopologyFingerprint && props.cueAudioStatus.desiredSettings.route === "explicit_device"}>
             <p class="inlineError" role="alert">Output topology changed. Reselect the device.</p>

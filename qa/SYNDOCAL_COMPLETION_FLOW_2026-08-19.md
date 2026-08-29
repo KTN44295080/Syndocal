@@ -2722,7 +2722,7 @@ checkpoint. Product metadata is synchronized at `1.2.0-alpha.28`. The active
 alpha.28 implementation changes remain uncommitted; this documentation
 checkpoint makes no commit or push claim. Earlier sections retain their
 recorded evidence and are not relabelled; this section is historical alpha.28
-status and is superseded by the current alpha.30 section below.
+status and is superseded by the then-current alpha.30 section below.
 
 Verified source evidence recorded at that historical checkpoint:
 
@@ -2777,15 +2777,15 @@ dual-clock limitation, route every CUE source to exactly one selected endpoint,
 keep the ASIO CUE lanes silent, forbid automatic fallback, and fence CUE on
 PROGRAM stop/fault or endpoint loss. The hybrid implementation and its
 physical acceptance were pending at alpha.29; that wording is historical and
-is not the current alpha.30 status. The next safe action at that checkpoint was
+is not the alpha.30 status recorded in section 61. The next safe action at that checkpoint was
 the separately owned hybrid profile/runtime/UI tranche followed by independent
 review and exact native gates.
 
-## 61. 2026-08-29 CURRENT alpha.30 hybrid PROGRAM/CUE source checkpoint (unaccepted)
+## 61. 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
-The current product metadata is `1.2.0-alpha.30` on branch
-`codex/syndocal-v1.2`. The alpha.30 source/UI tranche is present in the dirty
-worktree and has no accepted alpha.30 source commit. It adds arbitrary
+At that checkpoint, product metadata was `1.2.0-alpha.30` on branch
+`codex/syndocal-v1.2`. The alpha.30 source/UI tranche was present in the dirty
+worktree and had no accepted alpha.30 source commit. It added arbitrary
 PROGRAM/CUE device assignment in two explicit modes: `CueDelivery::SameAsio`
 keeps PROGRAM and CUE on one selected ASIO stream and shared clock, while
 `CueDelivery::ExplicitWdm` keeps PROGRAM on ASIO and sends CUE to the explicitly
@@ -2807,5 +2807,53 @@ audition, physical output routing, or show completion has been verified.
 The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` is
 deferred until after show acceptance. Moving ASIO/CUE ownership and lifecycle
 boundaries before the show is a pre-show risk, so this checkpoint records no
-module split or extraction completion. This section is the current boundary;
-the alpha.28/29 “pending/not implemented” statements above remain historical.
+module split or extraction completion. This section is historical and is
+superseded by the current alpha.31 checkpoint below; the alpha.28/29
+“pending/not implemented” statements above remain historical.
+
+## 62. 2026-08-29 CURRENT alpha.31 Timeline authoring-monitor source checkpoint (unaccepted)
+
+The current product metadata is `1.2.0-alpha.31` on branch
+`codex/syndocal-v1.2`. The dirty alpha.31 source/UI tranche is based on
+`2f8458ec7de176e147244d707d84a62dbbf1eb33`, the last pushed alpha.30
+documentation/source base; alpha.31 itself has no accepted commit or push at
+this checkpoint.
+
+The Normal route now has a dedicated Timeline authoring monitor. Existing
+`FollowProgram` behavior remains available. With operator-selected
+`ExplicitDevice`, every Timeline media-library clip, whether its logical bus is
+PROGRAM or CUE, and generated Guide/Click material use one exact selected WDM
+endpoint. Endpoint selection is arbitrary and machine-local; exact name,
+topology fingerprint, attachment revision, and settings revision are checked
+before publication and preparation. Missing, ambiguous, stale, changed, or
+failed endpoint/session state is visible and silent; there is no OS-default,
+PROGRAM, or Show-ASIO fallback.
+
+Show ASIO remains a separate owner and clock-domain path. Entering it retires
+all Normal-authoring Timeline sinks and in-flight preparation, including when
+no Normal PROGRAM stream is open. Returning to authoring requires an explicit
+Normal route and output selection. This is an owner/generation boundary, not a
+second implicit playback path.
+
+Verified source evidence for this checkpoint is:
+
+- The exact MSVC 14.44 Community linker was pinned and resolved first in
+  `where.exe`; first-party warnings were `0` in the recorded gates.
+- ASIO-enabled full Syndocal suite: `1456 discovered / 1444 passed / 0 failed /
+  12 ignored`.
+- Focused ASIO media-audio suite: `72/72`.
+- TypeScript, Vite, release metadata/checking, audio-output control/panel,
+  Timeline-audio, command-routing, and localization checkers passed.
+
+The alpha.31 native release build/launch/window gate and real
+`Music (Wave Link)` audition remain unverified. Physical WDM/ASIO output,
+serial DMX, DJ Link, reconnect, venue routing, and show completion remain
+external gates. Ox was unavailable for this tranche; under the documented
+narrow exception, an independent Terra xHigh source review returned GO with no
+P0/P1.
+
+The oversized audio-runtime extraction from `app/src-tauri/src/main.rs` stays
+deferred until after show acceptance because moving ownership/lifecycle
+boundaries before native and venue acceptance is a pre-show risk. The first
+safe resume action is to commit/push this reviewed source checkpoint, then run
+the native build/window gate and real endpoint audition.

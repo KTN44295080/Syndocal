@@ -425,6 +425,8 @@ fn explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink() {
     mixer.add(cue_source);
     {
         let mut state = runtime.state.lock().unwrap();
+        state.resolved_device_name = Some("Race Headphones".to_owned());
+        state.observed_topology_fingerprint = Some("race-topology".to_owned());
         state.attachment = Some(TimelineCueAudioAttachment {
             control,
             output: TimelineCueAudioAttachmentOutput::Legacy {
@@ -597,6 +599,219 @@ fn published_explicit_wdm_cue_test_runtime() -> Arc<TimelineCueAudioRuntime> {
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn external_wdm_timeline_owner_separates_normal_authoring_from_asio_cue() {
+    let asio_cue = published_explicit_wdm_cue_test_runtime();
+    let asio_snapshot = asio_cue
+        .explicit_wdm_output_snapshot()
+        .expect("published Explicit WDM CUE output must be observable");
+    assert_eq!(asio_snapshot.owner, ExplicitWdmTimelineOwner::AsioCue);
+    assert_eq!(asio_snapshot.output_clock_epoch, 23);
+    assert!(matches!(
+        asio_cue.external_wdm_timeline_route_fence(),
+        Some(ExternalWdmTimelineRouteFence {
+            owner: Some(ExplicitWdmTimelineOwner::AsioCue),
+            generation: 23,
+        })
+    ));
+
+    let normal_authoring = published_explicit_wdm_cue_test_runtime();
+    {
+        let mut state = normal_authoring.state.lock().unwrap();
+        state.active_asio_cue_delivery = None;
+        state.normal_admission_open = true;
+        let settings = timeline_cue_audio::MachineTimelineCueAudioSettingsV1 {
+            route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
+            device_name: Some("Test Headphones".to_owned()),
+            topology_fingerprint: Some("test-topology".to_owned()),
+            ..timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()
+        };
+        state.desired = settings.clone();
+        state.applied = Some(settings);
+        state.blocked_settings_revision = None;
+        state.resolved_device_name = Some("Test Headphones".to_owned());
+        state.observed_topology_fingerprint = Some("test-topology".to_owned());
+        state.lifecycle = TimelineCueAudioLifecycle::Running;
+    }
+
+    let normal_snapshot = match normal_authoring
+        .normal_authoring_route_snapshot_blocking()
+        .expect("Normal authoring route must be observable")
+    {
+        NormalAuthoringRouteSnapshot::ExplicitWdm(Some(snapshot)) => snapshot,
+        NormalAuthoringRouteSnapshot::FollowProgram => {
+            panic!("explicit Normal authoring route must not follow Program")
+        }
+        NormalAuthoringRouteSnapshot::ExplicitWdm(None) => {
+            panic!("exact Normal authoring WDM output must be observable")
+        }
+    };
+    assert_eq!(
+        normal_snapshot.owner,
+        ExplicitWdmTimelineOwner::NormalAuthoring
+    );
+    assert_eq!(normal_snapshot.output_clock_epoch, 23);
+    assert!(matches!(
+        normal_authoring.external_wdm_timeline_route_fence(),
+        Some(ExternalWdmTimelineRouteFence {
+            owner: Some(ExplicitWdmTimelineOwner::NormalAuthoring),
+            generation: 23,
+        })
+    ));
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn normal_authoring_monitor_routes_program_and_cue_media_to_one_explicit_wdm_owner() {
+    let suffix = current_unix_ms();
+    let program_path =
+        std::env::temp_dir().join(format!("syndocal-authoring-monitor-program-{suffix}.wav"));
+    let cue_path =
+        std::env::temp_dir().join(format!("syndocal-authoring-monitor-cue-{suffix}.wav"));
+    write_timeline_audio_test_wav(&program_path);
+    write_timeline_audio_test_wav(&cue_path);
+
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    for (id, label, order) in [(44, "Program", 0), (45, "Cue", 1)] {
+        engine
+            .add_timeline_layer(protocol::TimelineLayerSummary {
+                id,
+                label: label.to_owned(),
+                order,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            })
+            .unwrap();
+    }
+    for (id, layer_id, path, output_bus) in [
+        (
+            711,
+            44,
+            &program_path,
+            protocol::TimelineAudioOutputBus::Program,
+        ),
+        (712, 45, &cue_path, protocol::TimelineAudioOutputBus::Cue),
+    ] {
+        engine
+            .add_timeline_audio_clip(TimelineAudioClipSummary {
+                id,
+                layer_id,
+                media_asset_id: None,
+                path: path.to_string_lossy().into_owned(),
+                start_ms: 0,
+                offset_ms: 0,
+                duration_ms: 2_000,
+                gain: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                output_bus,
+            })
+            .unwrap();
+    }
+    let transport = engine.snapshot().timeline;
+    engine
+        .set_timeline_playing_published(
+            transport.transport_epoch,
+            transport.transport_generation,
+            true,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+    let timeline = engine.video_audio_runtime_snapshot().timeline_audio;
+
+    let timeline_cue_audio = published_explicit_wdm_cue_test_runtime();
+    {
+        let mut state = timeline_cue_audio.state.lock().unwrap();
+        state.active_asio_cue_delivery = None;
+        state.normal_admission_open = true;
+        let settings = timeline_cue_audio::MachineTimelineCueAudioSettingsV1 {
+            route: timeline_cue_audio::TimelineCueAudioRoute::ExplicitDevice,
+            device_name: Some("Test Headphones".to_owned()),
+            topology_fingerprint: Some("test-topology".to_owned()),
+            ..timeline_cue_audio::MachineTimelineCueAudioSettingsV1::default()
+        };
+        state.desired = settings.clone();
+        state.applied = Some(settings);
+        state.blocked_settings_revision = None;
+        state.last_topology_probe_at = Instant::now();
+        state.lifecycle = TimelineCueAudioLifecycle::Running;
+    }
+    let router = audio_output_router::RouterSlot::test_slot();
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    // Media-only Timelines still require the exact authoring WDM attachment;
+    // Guide and Click are optional and both are disabled in this fixture.
+    timeline_cue_audio.sync_normal(&timeline, &audio);
+    assert!(timeline_cue_audio
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .is_some());
+    let authoring_fence = timeline_cue_audio
+        .external_wdm_timeline_route_fence()
+        .expect("the exact authoring monitor publishes its route fence");
+    audio
+        .lock()
+        .unwrap()
+        .observe_external_wdm_timeline_route(Some(authoring_fence));
+    sync_timeline_audio_without_blocking_playback_lock(
+        &engine,
+        &audio,
+        Some(router),
+        None,
+        Some(Arc::clone(&timeline_cue_audio)),
+        &timeline,
+        &Arc::new(Mutex::new(TimelineAudioPrepareCommitState::default())),
+        || {},
+        || {},
+    )
+    .unwrap();
+
+    let playback = audio.lock().unwrap();
+    assert!(playback.normal_output.is_none());
+    assert_eq!(playback.timeline_sinks.len(), 2);
+    assert_eq!(playback.timeline_sources.len(), 2);
+    assert!(playback
+        .timeline_sources
+        .values()
+        .any(|source| { source.output_bus == protocol::TimelineAudioOutputBus::Program }));
+    assert!(playback
+        .timeline_sources
+        .values()
+        .any(|source| source.output_bus == protocol::TimelineAudioOutputBus::Cue));
+    assert_eq!(
+        playback.external_wdm_timeline_owner,
+        Some(ExplicitWdmTimelineOwner::NormalAuthoring)
+    );
+    assert_eq!(
+        playback.hybrid_cue_output_generation,
+        authoring_fence.generation
+    );
+    drop(playback);
+
+    timeline_cue_audio
+        .close_normal_routes_for_asio_start()
+        .unwrap();
+    retire_active_normal_program_output(&audio, "authoring monitor ASIO Start proof", true)
+        .unwrap();
+    let playback = audio.lock().unwrap();
+    assert!(playback.timeline_sinks.is_empty());
+    assert!(playback.timeline_sources.is_empty());
+    assert_eq!(playback.external_wdm_timeline_owner, None);
+    assert_eq!(playback.hybrid_cue_output_generation, 0);
+    drop(playback);
+
+    let _ = fs::remove_file(program_path);
+    let _ = fs::remove_file(cue_path);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 fn poison_timeline_cue_audio_state(runtime: &Arc<TimelineCueAudioRuntime>) {
     let runtime = Arc::clone(runtime);
     let result = std::panic::catch_unwind(move || {
@@ -639,6 +854,247 @@ fn add_test_timeline_audio_sink(playback: &mut MediaAudioPlayback, key: u64) {
     playback
         .timeline_sinks
         .insert(TimelineAudioSinkKey::Root(key), sink);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn faulted_timeline_cue_state_retires_stale_media_timeline_sinks() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    {
+        let mut playback = audio.lock().unwrap();
+        playback.hybrid_cue_output_generation = 23;
+        playback.external_wdm_timeline_owner = Some(ExplicitWdmTimelineOwner::AsioCue);
+        add_test_timeline_audio_sink(&mut playback, 996);
+    }
+    runtime.state.lock().unwrap().lifecycle = TimelineCueAudioLifecycle::Fault;
+    assert_eq!(runtime.external_wdm_timeline_route_fence(), None);
+
+    let fence = runtime.external_wdm_timeline_route_fence();
+    audio
+        .lock()
+        .unwrap()
+        .observe_external_wdm_timeline_route(fence);
+    let playback = audio.lock().unwrap();
+    assert!(playback.timeline_sinks.is_empty());
+    assert_eq!(playback.hybrid_cue_output_generation, 0);
+    assert_eq!(playback.external_wdm_timeline_owner, None);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn poisoned_timeline_cue_state_retires_stale_media_timeline_sinks() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    {
+        let mut playback = audio.lock().unwrap();
+        playback.hybrid_cue_output_generation = 23;
+        playback.external_wdm_timeline_owner = Some(ExplicitWdmTimelineOwner::AsioCue);
+        add_test_timeline_audio_sink(&mut playback, 997);
+    }
+    poison_timeline_cue_audio_state(&runtime);
+    assert_eq!(runtime.external_wdm_timeline_route_fence(), None);
+
+    audio
+        .lock()
+        .unwrap()
+        .observe_external_wdm_timeline_route(None);
+    let playback = audio.lock().unwrap();
+    assert!(playback.timeline_sinks.is_empty());
+    assert_eq!(playback.hybrid_cue_output_generation, 0);
+    assert_eq!(playback.external_wdm_timeline_owner, None);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn external_wdm_commit_rejects_an_old_playback_fence_after_observer_delay() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let stale_fence = runtime
+        .external_wdm_timeline_route_fence()
+        .expect("published Explicit WDM route must have a fence");
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    {
+        let mut playback = audio.lock().unwrap();
+        playback.observe_external_wdm_timeline_route(Some(stale_fence));
+        add_test_timeline_audio_sink(&mut playback, 998);
+        playback.timeline_sources.insert(
+            TimelineAudioSinkKey::Root(998),
+            TimelineAudioSourceConfig {
+                path: PathBuf::from("cue.wav"),
+                gain: 1.0,
+                offset_ms: 0,
+                output_bus: protocol::TimelineAudioOutputBus::Cue,
+            },
+        );
+    }
+
+    // Model the observer being delayed while the runtime rotates its exact
+    // output epoch. The old playback owner/plan must not be admitted through
+    // the commit fence during that interval.
+    runtime
+        .state
+        .lock()
+        .unwrap()
+        .attachment
+        .as_mut()
+        .unwrap()
+        .output_clock_epoch = 24;
+    let error = runtime
+        .lock_external_wdm_timeline_commit(stale_fence)
+        .expect_err("a stale observer fence must reject Timeline sink commit");
+    assert!(error.contains("changed before sink commit"));
+    {
+        let playback = audio.lock().unwrap();
+        assert_eq!(
+            playback.hybrid_cue_output_generation,
+            stale_fence.generation
+        );
+        assert_eq!(playback.external_wdm_timeline_owner, stale_fence.owner);
+        assert_eq!(playback.timeline_sinks.len(), 1);
+    }
+
+    // Once the observer catches up, the generation transition retires the
+    // old CUE sink and leaves the playback state fail-closed until republish.
+    let current_fence = runtime
+        .external_wdm_timeline_route_fence()
+        .expect("the rotated Running route remains observable");
+    audio
+        .lock()
+        .unwrap()
+        .observe_external_wdm_timeline_route(Some(current_fence));
+    assert!(audio.lock().unwrap().timeline_sinks.is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn settings_writer_linearizes_before_an_waiting_external_wdm_media_commit() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let stale_fence = runtime
+        .external_wdm_timeline_route_fence()
+        .expect("published Explicit WDM route must have a fence");
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+
+    // Freeze the lifecycle state so the real settings writer can acquire the
+    // route gate and block on state. A final media commit started afterward
+    // must wait for that writer and then reject the retired fence.
+    let state = runtime.state.lock().unwrap();
+    let mut next_settings = state.desired.clone();
+    next_settings.click_gain = 0.75;
+    let writer_runtime = Arc::clone(&runtime);
+    let writer = std::thread::spawn(move || writer_runtime.publish_settings(next_settings));
+
+    let wait_started = Instant::now();
+    loop {
+        match runtime.external_wdm_timeline_route_gate.try_lock() {
+            Err(TryLockError::WouldBlock) => break,
+            Err(TryLockError::Poisoned(_)) => panic!("route gate was poisoned"),
+            Ok(route_gate) => drop(route_gate),
+        }
+        assert!(
+            wait_started.elapsed() < Duration::from_secs(1),
+            "settings writer did not acquire the route gate"
+        );
+        std::thread::yield_now();
+    }
+
+    let commit_runtime = Arc::clone(&runtime);
+    let commit_audio = Arc::clone(&audio);
+    let commit = std::thread::spawn(move || {
+        let guard = commit_runtime.lock_external_wdm_timeline_commit(stale_fence)?;
+        add_test_timeline_audio_sink(&mut commit_audio.lock().unwrap(), 1_001);
+        drop(guard);
+        Ok::<(), String>(())
+    });
+
+    drop(state);
+    assert!(writer.join().unwrap().is_ok());
+    let error = commit
+        .join()
+        .unwrap()
+        .expect_err("commit must observe the settings writer's retired route");
+    assert!(error.contains("changed before sink commit"));
+    assert!(audio.lock().unwrap().timeline_sinks.is_empty());
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn worker_tick_route_gate_contention_drains_then_republishes_the_exact_fence() {
+    let runtime = published_explicit_wdm_cue_test_runtime();
+    let published = runtime
+        .external_wdm_timeline_route_fence()
+        .expect("published Explicit WDM route must have a fence");
+    let audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
+    {
+        let mut playback = audio.lock().unwrap();
+        playback.observe_external_wdm_timeline_route(Some(published));
+        add_test_timeline_audio_sink(&mut playback, 1_002);
+    }
+
+    let route_gate = runtime.external_wdm_timeline_route_gate.lock().unwrap();
+    runtime.observe_external_wdm_timeline_route_on_worker_tick(&audio);
+    {
+        let playback = audio.lock().unwrap();
+        assert!(playback.timeline_sinks.is_empty());
+        assert_eq!(playback.external_wdm_timeline_owner, None);
+        assert_eq!(playback.hybrid_cue_output_generation, 0);
+    }
+    drop(route_gate);
+
+    runtime.observe_external_wdm_timeline_route_on_worker_tick(&audio);
+    let playback = audio.lock().unwrap();
+    assert!(playback.timeline_sinks.is_empty());
+    assert_eq!(playback.external_wdm_timeline_owner, published.owner);
+    assert_eq!(playback.hybrid_cue_output_generation, published.generation);
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+#[test]
+fn normal_program_replacement_preserves_only_the_independent_authoring_timeline() {
+    let mut authoring = MediaAudioPlayback {
+        hybrid_cue_output_generation: 23,
+        external_wdm_timeline_owner: Some(ExplicitWdmTimelineOwner::NormalAuthoring),
+        ..MediaAudioPlayback::default()
+    };
+    add_test_timeline_audio_sink(&mut authoring, 999);
+    authoring.timeline_sources.insert(
+        TimelineAudioSinkKey::Root(999),
+        TimelineAudioSourceConfig {
+            path: PathBuf::from("authoring.wav"),
+            gain: 1.0,
+            offset_ms: 0,
+            output_bus: protocol::TimelineAudioOutputBus::Program,
+        },
+    );
+    let (output, detached) = take_active_normal_program_output(&mut authoring, false).unwrap();
+    assert!(output.is_none());
+    assert!(detached.is_empty());
+    assert_eq!(authoring.timeline_sinks.len(), 1);
+    assert_eq!(authoring.timeline_sources.len(), 1);
+    assert_eq!(
+        authoring.external_wdm_timeline_owner,
+        Some(ExplicitWdmTimelineOwner::NormalAuthoring)
+    );
+    assert_eq!(authoring.hybrid_cue_output_generation, 23);
+
+    let (output, detached) = take_active_normal_program_output(&mut authoring, true).unwrap();
+    assert!(output.is_none());
+    assert_eq!(detached.len(), 1);
+    assert!(authoring.timeline_sinks.is_empty());
+    assert!(authoring.timeline_sources.is_empty());
+    assert_eq!(authoring.external_wdm_timeline_owner, None);
+    assert_eq!(authoring.hybrid_cue_output_generation, 0);
+    for sink in detached {
+        sink.stop();
+    }
+
+    let mut program_only = MediaAudioPlayback::default();
+    add_test_timeline_audio_sink(&mut program_only, 1_000);
+    let (_, detached) = take_active_normal_program_output(&mut program_only, false).unwrap();
+    assert_eq!(detached.len(), 1);
+    assert!(program_only.timeline_sinks.is_empty());
+    for sink in detached {
+        sink.stop();
+    }
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -1814,16 +2270,22 @@ fn running_cue_prepare_worker_cannot_delay_program_stop_close() {
 #[test]
 fn explicit_wdm_timeline_commit_fence_rejects_after_stop_and_drains_before_stop() {
     let retired_before_commit = published_explicit_wdm_cue_test_runtime();
+    let retired_fence = retired_before_commit
+        .external_wdm_timeline_route_fence()
+        .expect("the current WDM route publishes a Timeline commit fence");
     assert!(retired_before_commit.close_routes_for_asio_stop().is_none());
     let error = retired_before_commit
-        .lock_explicit_wdm_timeline_commit(23)
+        .lock_explicit_wdm_timeline_commit(retired_fence)
         .expect_err("a Stop-first WDM epoch must not admit Timeline sink commit");
-    assert!(error.contains("changed before Timeline sink commit"));
+    assert!(error.contains("changed before sink commit"));
 
     let commit_before_stop = published_explicit_wdm_cue_test_runtime();
     let media_audio = Arc::new(Mutex::new(MediaAudioPlayback::default()));
     let commit_fence = commit_before_stop
-        .lock_explicit_wdm_timeline_commit(23)
+        .external_wdm_timeline_route_fence()
+        .expect("the current WDM route publishes a Timeline commit fence");
+    let commit_guard = commit_before_stop
+        .lock_explicit_wdm_timeline_commit(commit_fence)
         .expect("the current WDM epoch admits the final commit fence");
     let (stop_started_sender, stop_started_receiver) = mpsc::sync_channel(1);
     let stop_runtime = Arc::clone(&commit_before_stop);
@@ -1842,7 +2304,7 @@ fn explicit_wdm_timeline_commit_fence_rejects_after_stop_and_drains_before_stop(
     // cannot retire the route until the sink becomes visible to playback.
     add_test_timeline_audio_sink(&mut media_audio.lock().unwrap(), 994);
     assert_eq!(media_audio.lock().unwrap().timeline_sinks.len(), 1);
-    drop(commit_fence);
+    drop(commit_guard);
     stop_worker.join().unwrap();
 
     assert!(media_audio.lock().unwrap().timeline_sinks.is_empty());
@@ -1856,7 +2318,7 @@ fn explicit_wdm_timeline_commit_fence_rejects_after_stop_and_drains_before_stop(
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 #[test]
-fn transient_cue_state_contention_never_synthesizes_a_generation_or_retires_routes() {
+fn transient_cue_state_contention_fails_closed_and_retires_stale_routes() {
     let _router_test_guard = crate::tests::TIMELINE_CUE_ASIO_ROUTER_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1875,15 +2337,15 @@ fn transient_cue_state_contention_never_synthesizes_a_generation_or_retires_rout
         runtime.asio_cue_route_snapshot(),
         AsioCueRouteSnapshot::Busy
     ));
-    assert_eq!(runtime.cue_delivery_generation(), None);
-    if let Some(generation) = runtime.cue_delivery_generation() {
-        audio
-            .lock()
-            .unwrap()
-            .observe_hybrid_cue_output_generation(generation);
-    }
-    assert_eq!(audio.lock().unwrap().hybrid_cue_output_generation, 23);
-    assert_eq!(audio.lock().unwrap().timeline_sinks.len(), 1);
+    assert_eq!(runtime.external_wdm_timeline_route_fence(), None);
+    // A busy lifecycle observer is not proof that the old external route is
+    // still owned. The playback boundary must retire it immediately.
+    audio
+        .lock()
+        .unwrap()
+        .observe_external_wdm_timeline_route(None);
+    assert_eq!(audio.lock().unwrap().hybrid_cue_output_generation, 0);
+    assert!(audio.lock().unwrap().timeline_sinks.is_empty());
 
     runtime.sync_with_output_router(&timeline, &audio, Some(&slot), Some(&asio_output_runtime));
     assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
@@ -1893,7 +2355,13 @@ fn transient_cue_state_contention_never_synthesizes_a_generation_or_retires_rout
     assert_eq!(state.attachment.as_ref().unwrap().output_clock_epoch, 23);
     drop(state);
 
-    assert_eq!(runtime.cue_delivery_generation(), Some(0));
+    assert!(matches!(
+        runtime.external_wdm_timeline_route_fence(),
+        Some(ExternalWdmTimelineRouteFence {
+            owner: None,
+            generation: 0,
+        })
+    ));
     assert!(runtime.state.lock().unwrap().attachment.is_some());
 }
 
@@ -1921,7 +2389,7 @@ fn blocking_cue_observers_wait_for_contention_then_preserve_the_published_epoch(
     let observed = result_receiver.recv().unwrap().unwrap();
     assert!(matches!(
         observed,
-        AsioCueRouteSnapshot::ExplicitWdm(Some(ExplicitWdmCueOutputSnapshot {
+        AsioCueRouteSnapshot::ExplicitWdm(Some(ExplicitWdmTimelineOutputSnapshot {
             output_clock_epoch: 23,
             ..
         }))
@@ -3270,6 +3738,8 @@ fn cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settle
         authority,
         device_generation: playback.audio_device_generation,
         hybrid_cue_output_generation: playback.hybrid_cue_output_generation,
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
+        external_wdm_timeline_owner: playback.external_wdm_timeline_owner,
         requested_device_name: playback.requested_device_name.clone(),
         mixer: None,
         prepares: Vec::new(),

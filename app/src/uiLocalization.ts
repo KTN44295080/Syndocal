@@ -584,6 +584,13 @@ const japaneseText: Record<string, string> = {
   Last: "最後",
   "Last:": "最後:",
   "Cue Audio": "キュー音声",
+  "Timeline authoring monitor": "Timeline制作モニター",
+  "In Normal mode, Follow Program uses the normal Program output. Explicit Device sends every Timeline media clip plus Guide and Click to the selected WDM endpoint. Show ASIO uses its separate PROGRAM/CUE routes and ignores this selection.":
+    "Normalモードでは「プログラムに追従」が通常のProgram出力を使います。「出力デバイスを指定」では、すべてのタイムライン音声クリップとGuide・Clickを選択したWDMエンドポイントへ送ります。Show ASIOでは専用のPROGRAM/CUE経路を使い、この選択は無視されます。",
+  "A missing, ambiguous, or stale device stays silent until you refresh and select an exact output.":
+    "デバイスが見つからない、重複している、または古い場合は、出力を更新して正確な出力を選択するまで無音のままです。",
+  "Monitor route": "モニター経路",
+  "Authoring output device": "制作モニター出力デバイス",
   "Click and Guide are enabled from the top bar.": "クリックとガイドは上部バーで有効にします。",
   "Follow Program": "プログラムに追従",
   "Explicit Device": "出力デバイスを指定",
@@ -607,6 +614,7 @@ const japaneseText: Record<string, string> = {
   Interlude: "間奏",
   "Output topology changed. Reselect the device.": "出力トポロジーが変わりました。デバイスを再選択してください。",
   "Output:": "出力:",
+  "Authoring output:": "制作モニター出力:",
   "(missing)": "（見つかりません）",
   LIVE: "LIVE",
   BLIND: "BLIND",

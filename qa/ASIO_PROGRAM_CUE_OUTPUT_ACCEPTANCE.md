@@ -143,6 +143,26 @@ or another device. Normal MIT/WASAPI behavior remains unchanged when show-ASIO
 is not selected. This is one routing coordinator with two explicit clock-domain
 modes, not an implicit fallback path.
 
+## Timeline authoring monitor (Normal route)
+
+The authoring monitor is a separate Normal-route capability; it is not the
+show-ASIO split-device CUE acceptance row. `FollowProgram` keeps the existing
+Normal behavior. With the operator-selected `ExplicitDevice` route, every
+Timeline media-library clip, whether its logical bus is PROGRAM or CUE, and
+generated Guide/Click material are sent to one exact WDM endpoint. The endpoint
+is selected from the current device catalog and may be any supported output,
+including a machine-local endpoint such as `Music (Wave Link)`; the product
+does not silently choose that name.
+
+The saved selection is machine-local and is accepted only when its exact name,
+topology fingerprint, attachment revision, and settings revision still match.
+Missing, ambiguous, stale, changed, or failed endpoint state is visible and
+silent rather than falling back to the OS default, PROGRAM, or Show-ASIO
+device. Entering Show ASIO retires every Normal-authoring Timeline sink and
+pending preparation, including when no Normal PROGRAM stream is open. This
+owner/generation fence prevents authoring audio from surviving or leaking into
+the show route.
+
 Every Timeline and preview source constructor is admitted through one
 application `AudioOutputRouter`. While v3 is Starting, Active, or Fault, direct
 Rodio `OutputStream`/default-device/explicit-device construction is unreachable
@@ -370,6 +390,17 @@ the device schema or silently reroute CUE.
 - [x] Explicit split-device mode routes every logical CUE source to one exact
       WDM endpoint while PROGRAM remains ASIO; the persisted endpoint name and
       topology are strict, and missing/ambiguous/stale state never falls back.
+- [x] Normal-route `FollowProgram` behavior remains available for authoring.
+- [x] Normal-route `ExplicitDevice` sends every Timeline media clip (logical
+      PROGRAM or CUE) plus generated Guide/Click to one exact operator-selected
+      WDM endpoint; it does not open a normal/default PROGRAM stream for this
+      route.
+- [x] Normal authoring endpoint name/topology and attachment/settings revisions
+      are revalidated before publication and preparation; missing, ambiguous,
+      stale, changed, or failed state remains visible and silent.
+- [x] Entering Show ASIO retires all Normal-authoring Timeline sinks and
+      pending preparations, including when no Normal PROGRAM stream is open;
+      no authoring sink survives or leaks into the show route.
 - [x] A CUE-only WDM failure remains visible and silent without faulting the
       PROGRAM/Follow settlement, while ASIO PROGRAM Stop/Fault retires every
       WDM CUE source and stream before Locked.
@@ -441,15 +472,35 @@ the device schema or silently reroute CUE.
       loader Start/Stop/Fault smoke, and exactly one responsive maximized
       Syndocal window. The normal native build is not evidence for this gate.
 
-Alpha.30 software evidence on 2026-08-29 used the exact pinned MSVC 14.44
+Alpha.31 software evidence on 2026-08-29 used the exact pinned MSVC 14.44
 Community linker with `where.exe link.exe` resolving that linker first. The
-focused ASIO media-audio gate passed `64/64`; the complete ASIO-enabled Syndocal
-suite passed `1435 / 0 failed / 12 ignored`, with first-party warnings 0.
-TypeScript, Vite, audio-control `74` static plus `57` runtime assertions,
-audio-panel `53`, command routing, localization `3615/3615`, and release checking
-also passed. Independent Terra xHigh review returned GO with no P0/P1. These
-results close the three split-device software rows above; they do not close the
-native or physical rows below.
+focused ASIO media-audio gate passed `72/72`; the complete ASIO-enabled Syndocal
+suite passed `1456 discovered / 1444 passed / 0 failed / 12 ignored`, with first-party
+warnings 0. TypeScript, Vite, audio-control `74` static plus `57` runtime
+assertions, audio-panel `53`, Timeline-audio, command routing, localization,
+and release checking also passed. Ox was unavailable for this tranche; under
+the documented narrow exception, an independent Terra xHigh source review
+returned GO with no P0/P1. These results close the authoring-monitor software rows above; they do
+not close the native or physical rows below.
+
+## Normal Timeline authoring monitor acceptance
+
+This is the ordinary authoring path and is separate from the show-ASIO physical
+PROGRAM/CUE rows. The endpoint selector is operator-driven and can use any
+supported output device. `Music (Wave Link)` is only a test target, not a
+hard-coded choice.
+
+- [x] In Normal + `FollowProgram`, the existing output behavior remains intact.
+- [x] In Normal + `ExplicitDevice`, every Timeline media clip (logical PROGRAM
+      or CUE) and generated Guide/Click is routed to one exact WDM endpoint.
+- [x] Exact endpoint name/topology plus attachment/settings revisions are
+      revalidated; missing, ambiguous, stale, changed, or failed state stays
+      visible and silent without fallback.
+- [x] Entering Show ASIO retires every Normal-authoring Timeline sink and
+      pending preparation, including with no Normal PROGRAM stream open.
+- [ ] Build and launch the alpha.31 native app, select the displayed
+      `Music (Wave Link)` endpoint, and audibly verify both Timeline media and
+      Guide/Click through that endpoint.
 
 ## Physical MOTU M4 acceptance
 

@@ -2,34 +2,41 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.30**
+- 製品名: **Syndocal 1.2.0-alpha.31**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.30` on branch
+Current product metadata is `1.2.0-alpha.31` on branch
 `codex/syndocal-v1.2`. Alpha.27 completed the show-control, stage-layout,
 machine-local USB-DMX, and reference-audio authoring checkpoint with a verified
-native build. Alpha.30 is the current source/UI tranche for arbitrary
-PROGRAM/CUE output-device assignment: the source carries both same-ASIO
-shared-clock delivery and an explicit WDM CUE route while PROGRAM remains on
-ASIO, with exact endpoint/topology and session/generation validation represented
-  in the fail-closed paths. Timeline CUE clips, generated Click/Guide, and the
-  explicit CUE test path use that logical route. The final source gate passed
-  `1435 passed / 0 failed / 12 ignored` with first-party warnings 0; the focused
-  media-audio gate passed `64/64`, TypeScript, the frontend contract checkers,
-  Vite, release metadata/packaging, and localization `3615/3615` also passed.
-  Independent Terra xHigh source review returned GO with no P0/P1. No alpha.30
-  native build or launch, real-device audition, physical I/O, or show acceptance
-  is recorded.
+native build. Alpha.31 is the current source/UI tranche for Timeline authoring
+monitor output and arbitrary PROGRAM/CUE device assignment. `FollowProgram`
+remains the existing Normal route; with `ExplicitDevice`, every Timeline media
+clip (logical PROGRAM or CUE) plus generated Guide/Click material is sent to
+one operator-selected WDM endpoint. Show ASIO remains separate: entering it
+retires the authoring sinks, and returning requires an explicit Normal route
+and output selection. Endpoint name/topology and session/generation are
+revalidated; missing, ambiguous, stale, changed, or failed state stays silent
+and fail-closed without default/PROGRAM fallback.
+
+The current source gates passed with first-party warnings 0: the exact MSVC
+14.44 Community linker was pinned and first in `where.exe`; the ASIO-enabled
+full suite finished `1456 discovered / 1444 passed / 0 failed / 12 ignored`,
+and the focused media-audio gate passed `72/72`. TypeScript, Vite, release
+metadata/packaging, audio-output control/panel, Timeline-audio, command
+routing, and localization checkers also passed. No alpha.31 native build or
+launch, real `Music (Wave Link)` audition, physical I/O, or show acceptance
+is recorded. Ox was unavailable for this tranche; under the documented narrow
+exception, an independent Terra xHigh source review returned GO with no P0/P1.
 The oversized `app/src-tauri/src/main.rs` audio-runtime extraction is deferred
 until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The running alpha.25 DJ session is preserved as an operational baseline only;
-it is not alpha.30 acceptance. No alpha.30 artifact hash, size, source HEAD, or
-PID is accepted yet. The release metadata checker expects alpha.30 product and
-installer naming below; that naming does not assert an alpha.30 installer
+it is not alpha.31 acceptance. No alpha.31 artifact hash, size, source HEAD, or
+PID is accepted yet. The release metadata checker expects alpha.31 product and
+installer naming below; that naming does not assert an alpha.31 installer
 exists.
 
 The preserved running alpha.25 DJ session was observed on 2026-08-28 with
@@ -154,7 +161,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.30_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.30_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.31_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.31_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

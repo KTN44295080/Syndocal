@@ -1,12 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-29
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.30`. The current alpha.30 worktree contains the hybrid ASIO PROGRAM + explicit WDM CUE source/UI tranche and final software-gate evidence, but it has no accepted alpha.30 native artifact, launch, real-device audition, physical-I/O, or show-completion evidence. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.30 evidence. Historical alpha.25 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.31`. The current alpha.31 worktree contains the Timeline authoring-monitor source/UI tranche on top of the historical hybrid ASIO PROGRAM + explicit WDM CUE route. Its software evidence is recorded below, but it has no accepted alpha.31 native artifact, launch, real-device audition, physical-I/O, or show-completion evidence. The running alpha.25 DJ session is preserved as an operational baseline only and is not alpha.31 evidence. Historical alpha.30 and earlier native/DJ evidence remains immutable below; HW-4 remains exactly `0/12`.
 
-## 2026-08-29 current alpha.30 hybrid PROGRAM/CUE source checkpoint
+## 2026-08-29 historical alpha.30 hybrid PROGRAM/CUE source checkpoint
 
-Alpha.30 is the current source/UI tranche for arbitrary PROGRAM/CUE device
-assignment. `CueDelivery::SameAsio` keeps PROGRAM and CUE on the selected ASIO
+At this historical checkpoint, Alpha.30 was the source/UI tranche for arbitrary
+PROGRAM/CUE device assignment. `CueDelivery::SameAsio` keeps PROGRAM and CUE on the selected ASIO
 stream and shared clock; `CueDelivery::ExplicitWdm` keeps PROGRAM on ASIO while
 the explicitly named, topology-fenced WDM endpoint owns CUE. The current source
 also wires Timeline CUE clips, generated Click/Guide, and the explicit CUE test
@@ -32,6 +32,38 @@ physical output routing, or show completion has been verified. The oversized
 audio-runtime extraction from `main.rs` is deliberately deferred until after
 show acceptance because changing ownership and lifecycle boundaries before the
 show is a pre-show risk; no extraction is claimed here.
+
+## 2026-08-29 current alpha.31 Timeline authoring-monitor source checkpoint
+
+Alpha.31 is the current dirty source/UI tranche for ordinary Timeline
+authoring. `FollowProgram` remains the existing Normal-route behavior. When the
+operator selects `ExplicitDevice`, every Timeline media clip (regardless of
+its logical PROGRAM/CUE bus) and generated Guide/Click material is routed to
+one operator-selected WDM endpoint. The selection is arbitrary and machine
+local; its exact endpoint name and topology are revalidated before publication
+and preparation. Missing, ambiguous, stale, changed, or failed endpoint state
+remains visible and silent rather than falling back to a default or PROGRAM
+device.
+
+Show ASIO remains a separate owner and clock-domain path. Entering it retires
+all Normal-authoring Timeline sinks, including the case where no normal
+PROGRAM stream is open; returning to authoring requires the explicit Normal
+route and output selection. This keeps the authoring monitor from leaking into
+the show PROGRAM/CUE route.
+
+The source gates passed with first-party warnings 0: the exact MSVC 14.44
+Community linker was pinned and first in `where.exe`; the ASIO-enabled full
+Syndocal suite finished `1456 discovered / 1444 passed / 0 failed / 12
+ignored`, and the focused media-audio gate finished `72/72`. TypeScript,
+Vite, release metadata/checking, audio-output control/panel, Timeline-audio,
+command-routing, and localization checkers also passed. The exact alpha.31
+native build/launch/window gate and real `Music (Wave Link)` audition remain
+unverified. Ox was unavailable for this tranche; under the documented narrow
+exception, an independent Terra xHigh source review returned GO with no P0/P1.
+
+The oversized audio-runtime extraction from `main.rs` remains intentionally
+deferred until after show acceptance because changing ownership/lifecycle
+boundaries before native and venue acceptance is a pre-show risk.
 
 ## 2026-08-28 historical alpha.26 source-only App structural split checkpoint
 
