@@ -82,18 +82,30 @@ The current implementation/source-review gate has established:
 - product command registration, typed frontend invocation inventory, and
   control-plane taxonomy agree.
 
-The supervising exact-linker focused run used MSVC `14.44.35207`, with the
+The final supervising exact-linker runs used MSVC `14.44.35207`, with the
 Community linker first in `where.exe`, and passed:
 
-- capture tests: `64 passed`, `0 failed`, `2 ignored`;
+- capture-filtered tests: `71 passed`, `0 failed`, `2 ignored`;
+- process-lifecycle tests: `3 passed`, `0 failed`, `0 ignored`;
 - control-plane tests: `64 passed`, `0 failed`, `0 ignored`;
-- full no-default-feature app suite: `1196 passed`, `0 failed`, `7 ignored`;
-- full default-feature app suite: `1232 passed`, `0 failed`, `12 ignored`;
+- full no-default-feature app suite, serialized: `1203 passed`, `0 failed`,
+  `7 ignored`;
+- full default-feature app suite, serialized: `1239 passed`, `0 failed`,
+  `12 ignored`;
 - first-party warnings: `0`.
 
-Independent static review found no P0. Its implementation P1 findings for a
-bounded FFmpeg listing-output limit and complete child-process cleanup after
-every post-spawn failure are closed in source. The status response now reports
+The first parallel no-default run reported two unrelated coordination-test
+timeouts after `1201` passes. Both failed tests passed individually with one
+test thread, and the complete no-default and default suites then passed with
+`--test-threads=1`; no source change was made to conceal the parallel result.
+
+Independent static review found no P0/P1/P2. Its earlier findings for a bounded
+FFmpeg listing-output limit and complete child-process cleanup after every
+post-spawn failure are closed in source. A child not reaped inside the bounded
+caller deadline transfers to a detached reaper; reaper spawn/send failures
+retain the Child in an in-process quarantine and retry outside the quarantine
+lock. Deterministic tests prove real terminal status, spawn failure, send
+failure, quarantine, retry, and reap. The status response now reports
 structured per-route capture faults and counts only healthy routes as active.
 The 1 Hz frontend status poll removes the same faulted route from Active and
 renders a specific actionable fault row; its focused checker, type check, and
@@ -101,7 +113,9 @@ localization gate pass. The sustained-4K performance boundary remains
 deliberately open.
 
 The final independent read-only rereview is GO for this source checkpoint with
-no P0/P1. It remains NO-GO for native/UI/sustained-4K acceptance until the
+no P0/P1/P2. Windows Job Object containment is not installed, so Syndocal
+process exit while a deferred reaper is pending remains an explicit unverified
+OS boundary. The tranche remains NO-GO for native/UI/sustained-4K acceptance until the
 unchecked gates below are observed on the versioned executable.
 
 ## Performance claim boundary

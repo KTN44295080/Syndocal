@@ -146,6 +146,7 @@ mod asio_timeline_transport;
 mod audio_output_router;
 mod authored_control_plane;
 mod capture_catalog;
+mod capture_process_lifecycle;
 mod capture_transport;
 mod control_plane;
 mod control_plane_query;

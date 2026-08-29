@@ -53,12 +53,18 @@ to `120 fps` only when advertised. Output presentation remains capped at
 
 On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
 `30 fps`; `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`; and no
-`120 fps` profile. The exact supervisor source gates passed capture `64 passed /
-0 failed / 2 ignored` and control-plane `64 passed / 0 failed / 0 ignored`
-under MSVC `14.44.35207`, with first-party warnings `0`. Independent review
-found P0 `0`; source fixes close bounded listing memory, post-spawn child
-cleanup, and automatic stale Active-row replacement. Sustained-4K performance
-remains open.
+`120 fps` profile. The final exact supervisor source gates passed
+capture-filtered `71 / 0 / 2`, process-lifecycle `3 / 0 / 0`, control-plane
+`64 / 0 / 0`, full no-default `1203 / 0 / 7`, and full default
+`1239 / 0 / 12` under MSVC `14.44.35207`, with first-party warnings `0`.
+The first parallel no-default run exposed two unrelated coordination-test
+timeouts (`1201 / 2 / 7`); both passed individually and the full serialized
+suite passed without a source change for those tests. Independent Terra xHigh
+rereview returned GO with P0/P1/P2 `0`; source fixes close bounded listing
+memory, post-spawn child cleanup, deferred reaper/quarantine ownership, and
+automatic stale Active-row replacement. App exit before a deferred reaper
+finishes remains an explicit unverified non-Job-Object OS boundary. Sustained-4K
+performance remains open.
 
 Direct FFmpeg preflight completed 150 RGBA frames at 4K30 and 300 at 1080p60,
 both exit `0`. The exact Syndocal profile probe still proves one frame only.
@@ -67,8 +73,8 @@ the current RGBA `Vec` clone at `60 Hz` may approach `1.98 GiB/s` of copy
 traffic. Native alpha.33 build, UI, and hardware probes remain pending; no
 native or hardware completion is claimed here.
 
-Final independent source rereview is GO with P0/P1 `0`. Full app regression
-passed `1196/0/7` without default features and `1232/0/12` with default
+Final independent source rereview is GO with P0/P1/P2 `0`. Full app regression
+passed `1203/0/7` without default features and `1239/0/12` with default
 libav/Spout features. Frontend production build, localization `3631/3631`,
 typed IPC inventory `440`, `check:release`, format, and diff gates pass with
 first-party warnings `0`.

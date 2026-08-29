@@ -100,6 +100,7 @@ const panel = await read("src/components/VideoSourceCreatePanel.tsx");
 const picker = await read("src/components/VideoCameraProfilePicker.tsx");
 const control = await read("src/components/VideoControlPanel.tsx");
 const invokeTuple = await read("src/tauriInvokeCommands.ts");
+const localization = await read("src/uiLocalization.ts");
 const manifest = JSON.parse(await read("src/tauri-invoke-manifest.json"));
 
 assert.match(panel, /VideoCameraProfilePicker/);
@@ -121,6 +122,11 @@ assert.doesNotMatch(picker, /Camera device name \(Windows\)/, "camera must not e
 assert.doesNotMatch(picker, /value=\{props\.path\}/, "camera surface must not expose a free-text path input");
 assert.match(picker, /Select a camera device/);
 assert.match(picker, /Select a camera profile/);
+assert.match(
+  picker,
+  /Camera profile refresh failed: \{error\(\)\}/,
+  "camera refresh errors must keep the localized prefix and dynamic error detail",
+);
 assert.match(control, /invokeCommand=\{props\.invokeCommand \?\? props\.sourceCreate\.invokeCommand\}/);
 
 const tupleCommands = [...invokeTuple.matchAll(/^\s+"([a-z0-9_]+)",$/gm)].map((match) => match[1]);
@@ -129,6 +135,73 @@ assert.deepEqual(manifest, [...manifest].sort(), "invoke manifest remains sorted
 for (const command of ["list_video_camera_profiles", "probe_video_camera_profile"]) {
   assert.ok(tupleCommands.includes(command), `typed invoke list admits ${command}`);
   assert.ok(manifest.includes(command), `invoke manifest admits ${command}`);
+}
+
+for (const text of [
+  "Refreshing cameras…",
+  "Refresh cameras",
+  "Testing selected camera profile…",
+  "Testing selected profile…",
+  "Test selected profile",
+  "Camera profile discovery is unavailable until the native IPC bridge is connected.",
+  "Camera profile testing is unavailable until the native IPC bridge is connected.",
+  "Camera profile probe passed for the current endpoint.",
+  "Camera catalog refresh invalidated the previous probe; select and test a profile.",
+  "Camera device changed; test the selected profile before adding a layer.",
+  "Camera profile changed; test the selected profile before adding a layer.",
+  "Select a camera device and profile before testing.",
+  "Capture rate is above 60fps; output presentation is capped at 60fps.",
+]) {
+  assert.ok(localization.includes("\"" + text + "\""), "Japanese localization must cover " + text);
+}
+const escapeRegex = (value) => value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+const assertExactJapaneseMapping = (english, japanese) => {
+  const mapping = new RegExp(
+    escapeRegex(JSON.stringify(english)) + "\\s*:\\s*" + escapeRegex(JSON.stringify(japanese)),
+  );
+  assert.match(localization, mapping, "Japanese localization must map " + english + " exactly");
+};
+for (const [english, japanese] of [
+  ["Refreshing cameras…", "カメラを更新中…"],
+  ["Refresh cameras", "カメラを更新"],
+  ["Testing selected camera profile…", "選択したカメラプロファイルをテスト中…"],
+  ["Testing selected profile…", "選択したプロファイルをテスト中…"],
+  ["Test selected profile", "選択したプロファイルをテスト"],
+  [
+    "Camera profile discovery is unavailable until the native IPC bridge is connected.",
+    "ネイティブIPCブリッジに接続するまでカメラプロファイル検出は利用できません。",
+  ],
+  [
+    "Camera profile testing is unavailable until the native IPC bridge is connected.",
+    "ネイティブIPCブリッジに接続するまでカメラプロファイルのテストは利用できません。",
+  ],
+  [
+    "Camera profile probe passed for the current endpoint.",
+    "現在のエンドポイントでカメラプロファイルのプローブに成功しました。",
+  ],
+  [
+    "Camera catalog refresh invalidated the previous probe; select and test a profile.",
+    "カメラカタログの更新により前回のプローブは無効になりました。プロファイルを選択してテストしてください。",
+  ],
+  [
+    "Camera device changed; test the selected profile before adding a layer.",
+    "カメラデバイスが変更されました。レイヤーを追加する前に選択したプロファイルをテストしてください。",
+  ],
+  [
+    "Camera profile changed; test the selected profile before adding a layer.",
+    "カメラプロファイルが変更されました。レイヤーを追加する前に選択したプロファイルをテストしてください。",
+  ],
+  [
+    "Select a camera device and profile before testing.",
+    "テストする前にカメラデバイスとプロファイルを選択してください。",
+  ],
+  [
+    "Capture rate is above 60fps; output presentation is capped at 60fps.",
+    "キャプチャレートが60fpsを超えています。出力表示は60fpsに制限されます。",
+  ],
+  ["Camera profile refresh failed:", "カメラプロファイルの更新に失敗:"],
+]) {
+  assertExactJapaneseMapping(english, japanese);
 }
 
 console.log("video camera profile UI contract passed");

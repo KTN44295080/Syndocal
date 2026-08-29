@@ -14,14 +14,23 @@ use std::{
 };
 
 #[cfg(test)]
-use std::sync::Arc;
+use std::io::Write;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::capture_process_lifecycle::{terminate_process_or_defer, ProcessTermination};
+
 const CAMERA_ENDPOINT_PREFIX: &str = "syndocal-camera-v1:";
 const FFMPEG_CAMERA_COMMAND_TIMEOUT: Duration = Duration::from_secs(7);
+// A process can close both inherited pipes just before its exit status becomes
+// observable.  Give that normal exit race a small, finite reap window before
+// treating it as a stuck FFmpeg process.  This is deliberately much shorter
+// than the command timeout and never replaces the kill/wait cleanup path.
+const FFMPEG_PROCESS_EXIT_GRACE: Duration = Duration::from_millis(250);
+const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const PROCESS_TERMINATION_REAP_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_FFMPEG_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_CAMERA_WIDTH: u32 = 4096;
 const MAX_CAMERA_HEIGHT: u32 = 2160;
@@ -251,30 +260,46 @@ pub fn probe_video_camera_profile(
     }
     let plan = crate::capture_transport::capture_ffmpeg_plan("camera", &endpoint_name)
         .map_err(|error| error.message)?;
-    let mut process = Command::new(&ffmpeg)
-        .args(&plan.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "Failed to open the selected DirectShow camera profile '{}': {error}",
-                device.display_name
-            )
-        })?;
-    let stdout = match process.stdout.take() {
+    let mut process = Some(
+        Command::new(&ffmpeg)
+            .args(&plan.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                format!(
+                    "Failed to open the selected DirectShow camera profile '{}': {error}",
+                    device.display_name
+                )
+            })?,
+    );
+    let stdout = match process.as_mut().and_then(|process| process.stdout.take()) {
         Some(stdout) => stdout,
         None => {
-            terminate_process(&mut process);
-            return Err("FFmpeg camera probe did not provide a raw-video stdout pipe".to_string());
+            let error = "FFmpeg camera probe did not provide a raw-video stdout pipe".to_string();
+            return Err(append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    "DirectShow camera profile probe",
+                )
+                .into_result(),
+            ));
         }
     };
     let frame_bytes = match checked_frame_bytes(plan.frame.width, plan.frame.height) {
         Ok(frame_bytes) => frame_bytes,
         Err(error) => {
-            terminate_process(&mut process);
-            return Err(error);
+            drop(stdout);
+            return Err(append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    "DirectShow camera profile probe",
+                )
+                .into_result(),
+            ));
         }
     };
     let (frame_tx, frame_rx) = mpsc::sync_channel(1);
@@ -294,15 +319,31 @@ pub fn probe_video_camera_profile(
             let _ = frame_tx.send(result);
         })
         .map_err(|error| {
-            terminate_process(&mut process);
-            format!("Failed to start the bounded camera probe frame reader: {error}")
+            let error = format!("Failed to start the bounded camera probe frame reader: {error}");
+            append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    "DirectShow camera profile probe",
+                )
+                .into_result(),
+            )
         })?;
-    let read_result = await_probe_frame(&frame_rx, Duration::from_secs(7), || {
-        terminate_process(&mut process);
-    });
-    terminate_process(&mut process);
-    let _ = reader.join();
-    read_result?;
+    let read_result = await_probe_frame(&frame_rx, Duration::from_secs(7));
+    let cleanup = terminate_capture_process(
+        process.take().expect("spawned process must remain owned"),
+        "DirectShow camera profile probe",
+    );
+    finish_reader_after_process_termination(reader, &cleanup);
+    let cleanup_result = cleanup.into_result();
+    match (read_result, cleanup_result) {
+        (Ok(_), Ok(())) => {}
+        (Ok(_), Err(cleanup_error)) => return Err(cleanup_error),
+        (Err(error), Ok(())) => return Err(error),
+        (Err(error), Err(cleanup_error)) => {
+            return Err(format!("{error}; process cleanup failed: {cleanup_error}"))
+        }
+    }
 
     Ok(VideoCameraProfileProbeResult {
         success: true,
@@ -372,16 +413,13 @@ fn list_dshow_device_profiles(
 fn await_probe_frame<T>(
     receiver: &mpsc::Receiver<Result<T, String>>,
     timeout: Duration,
-    cleanup: impl FnOnce(),
 ) -> Result<T, String> {
     match receiver.recv_timeout(timeout) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            cleanup();
             Err("Timed out waiting for one complete DirectShow camera probe frame".to_string())
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            cleanup();
             Err("DirectShow camera probe frame reader stopped unexpectedly".to_string())
         }
     }
@@ -583,64 +621,163 @@ fn bounded_process_output(
     label: &str,
     timeout: Duration,
 ) -> Result<BoundedProcessOutput, String> {
-    let mut process = command
-        .spawn()
-        .map_err(|error| format!("Failed to start {label}: {error}"))?;
-    let stdout = match process.stdout.take() {
+    let mut process = Some(
+        command
+            .spawn()
+            .map_err(|error| format!("Failed to start {label}: {error}"))?,
+    );
+    let stdout = match process.as_mut().and_then(|process| process.stdout.take()) {
         Some(stdout) => stdout,
         None => {
-            terminate_process(&mut process);
-            return Err(format!("{label} did not provide a stdout pipe"));
+            let error = format!("{label} did not provide a stdout pipe");
+            return Err(append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    label,
+                )
+                .into_result(),
+            ));
         }
     };
-    let stderr = match process.stderr.take() {
+    let stderr = match process.as_mut().and_then(|process| process.stderr.take()) {
         Some(stderr) => stderr,
         None => {
-            terminate_process(&mut process);
-            return Err(format!("{label} did not provide a stderr pipe"));
+            let error = format!("{label} did not provide a stderr pipe");
+            drop(stdout);
+            return Err(append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    label,
+                )
+                .into_result(),
+            ));
         }
     };
     let (output_tx, output_rx) = mpsc::sync_channel(2);
     let stdout_reader = match spawn_process_output_reader(stdout, true, output_tx.clone(), label) {
         Ok(reader) => reader,
         Err(error) => {
-            terminate_process(&mut process);
-            return Err(error);
+            return Err(append_process_cleanup_error(
+                error,
+                terminate_capture_process(
+                    process.take().expect("spawned process must remain owned"),
+                    label,
+                )
+                .into_result(),
+            ));
         }
     };
     let stderr_reader = match spawn_process_output_reader(stderr, false, output_tx, label) {
         Ok(reader) => reader,
         Err(error) => {
-            terminate_process(&mut process);
-            let _ = stdout_reader.join();
-            return Err(error);
+            let cleanup = terminate_capture_process(
+                process.take().expect("spawned process must remain owned"),
+                label,
+            );
+            finish_reader_after_process_termination(stdout_reader, &cleanup);
+            return Err(append_process_cleanup_error(error, cleanup.into_result()));
         }
     };
-    let output = collect_bounded_process_output(&output_rx, timeout, || {
-        terminate_process(&mut process);
-    });
-    let status = process
+    let output = collect_bounded_process_output(&output_rx, timeout);
+    let status = match process
+        .as_mut()
+        .expect("spawned process must remain owned")
         .try_wait()
-        .map_err(|error| format!("Unable to inspect {label} completion: {error}"));
-    if output.is_err() || !matches!(&status, Ok(Some(_))) {
-        terminate_process(&mut process);
-    }
-    let _ = stdout_reader.join();
-    let _ = stderr_reader.join();
-    let (stdout, stderr) = output?;
-    let status = match status? {
-        Some(status) => status,
-        None => {
-            return Err(format!(
-                "{label} remained running after its stdout/stderr closed and was terminated"
-            ))
-        }
+        .map_err(|error| format!("Unable to inspect {label} completion: {error}"))
+    {
+        Ok(Some(status)) => Ok(Some(status)),
+        Ok(None) if output.is_ok() => wait_for_process_exit(
+            process.as_mut().expect("spawned process must remain owned"),
+            FFMPEG_PROCESS_EXIT_GRACE,
+            label,
+        ),
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
     };
-    Ok(BoundedProcessOutput {
-        success: status.success(),
-        stdout,
-        stderr,
-    })
+    let cleanup = if output.is_err() || !matches!(&status, Ok(Some(_))) {
+        Some(terminate_capture_process(
+            process.take().expect("spawned process must remain owned"),
+            label,
+        ))
+    } else {
+        None
+    };
+    if let Some(cleanup) = &cleanup {
+        finish_reader_after_process_termination(stdout_reader, cleanup);
+        finish_reader_after_process_termination(stderr_reader, cleanup);
+    } else {
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+    }
+    let cleanup_result = cleanup
+        .map(ProcessTermination::into_result)
+        .unwrap_or(Ok(()));
+    let output = match output {
+        Ok(output) => Ok(output),
+        Err(error) => Err(error),
+    };
+    let status = match status {
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => Err(format!(
+            "{label} remained running after its stdout/stderr closed and was terminated"
+        )),
+        Err(error) => Err(error),
+    };
+    match (output, status, cleanup_result) {
+        (Ok((stdout, stderr)), Ok(status), Ok(())) => Ok(BoundedProcessOutput {
+            success: status.success(),
+            stdout,
+            stderr,
+        }),
+        (output, status, cleanup) => {
+            let mut errors = Vec::new();
+            if let Err(error) = output {
+                errors.push(error);
+            }
+            if let Err(error) = status {
+                errors.push(error);
+            }
+            if let Err(error) = cleanup {
+                errors.push(format!("process cleanup failed: {error}"));
+            }
+            Err(errors.join("; "))
+        }
+    }
+}
+
+fn poll_for_process_exit<T>(
+    mut try_wait: impl FnMut() -> Result<Option<T>, String>,
+    grace: Duration,
+) -> Result<Option<T>, String> {
+    let started = std::time::Instant::now();
+    loop {
+        match try_wait()? {
+            Some(status) => return Ok(Some(status)),
+            None => {
+                let Some(remaining) = grace.checked_sub(started.elapsed()) else {
+                    return Ok(None);
+                };
+                std::thread::sleep(remaining.min(PROCESS_EXIT_POLL_INTERVAL));
+            }
+        }
+    }
+}
+
+fn wait_for_process_exit(
+    process: &mut std::process::Child,
+    grace: Duration,
+    label: &str,
+) -> Result<Option<std::process::ExitStatus>, String> {
+    poll_for_process_exit(
+        || {
+            process
+                .try_wait()
+                .map_err(|error| format!("Unable to inspect {label} completion: {error}"))
+        },
+        grace,
+    )
 }
 
 fn spawn_process_output_reader<R>(
@@ -693,44 +830,27 @@ fn read_bounded_process_output<R: Read>(stream: R) -> Result<Vec<u8>, String> {
 fn collect_bounded_process_output(
     receiver: &mpsc::Receiver<ProcessOutputPart>,
     timeout: Duration,
-    cleanup: impl FnOnce(),
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let started = std::time::Instant::now();
-    let mut cleanup = Some(cleanup);
     let mut stdout = None;
     let mut stderr = None;
     while stdout.is_none() || stderr.is_none() {
-        let remaining = timeout.checked_sub(started.elapsed()).ok_or_else(|| {
-            if let Some(cleanup) = cleanup.take() {
-                cleanup();
-            }
-            "Timed out waiting for FFmpeg stdout/stderr to close".to_string()
-        })?;
+        let remaining = timeout
+            .checked_sub(started.elapsed())
+            .ok_or_else(|| "Timed out waiting for FFmpeg stdout/stderr to close".to_string())?;
         match receiver.recv_timeout(remaining) {
             Ok(ProcessOutputPart::Stdout(Ok(bytes))) if stdout.is_none() => stdout = Some(bytes),
             Ok(ProcessOutputPart::Stderr(Ok(bytes))) if stderr.is_none() => stderr = Some(bytes),
             Ok(ProcessOutputPart::Stdout(Err(error)) | ProcessOutputPart::Stderr(Err(error))) => {
-                if let Some(cleanup) = cleanup.take() {
-                    cleanup();
-                }
                 return Err(error);
             }
             Ok(ProcessOutputPart::Stdout(Ok(_)) | ProcessOutputPart::Stderr(Ok(_))) => {
-                if let Some(cleanup) = cleanup.take() {
-                    cleanup();
-                }
                 return Err("FFmpeg output reader completed the same stream twice".to_string());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(cleanup) = cleanup.take() {
-                    cleanup();
-                }
                 return Err("Timed out waiting for FFmpeg stdout/stderr to close".to_string());
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if let Some(cleanup) = cleanup.take() {
-                    cleanup();
-                }
                 return Err("FFmpeg output readers stopped unexpectedly".to_string());
             }
         }
@@ -741,9 +861,29 @@ fn collect_bounded_process_output(
     ))
 }
 
-fn terminate_process(process: &mut std::process::Child) {
-    let _ = process.kill();
-    let _ = process.wait();
+fn terminate_capture_process(process: std::process::Child, label: &str) -> ProcessTermination {
+    terminate_process_or_defer(process, label, PROCESS_TERMINATION_REAP_TIMEOUT)
+}
+
+fn finish_reader_after_process_termination(
+    reader: std::thread::JoinHandle<()>,
+    termination: &ProcessTermination,
+) {
+    if termination.is_reaped() {
+        let _ = reader.join();
+    } else {
+        // The reaper owns the still-live child and will eventually close this
+        // pipe. Joining here can deadlock the caller on a reader blocked in a
+        // driver/pipe read, so deliberately detach it instead.
+        drop(reader);
+    }
+}
+
+fn append_process_cleanup_error(error: String, cleanup: Result<(), String>) -> String {
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup_error) => format!("{error}; process cleanup failed: {cleanup_error}"),
+    }
 }
 
 fn combined_process_output(stdout: &[u8], stderr: &[u8]) -> String {
@@ -1357,34 +1497,22 @@ mod tests {
     }
 
     #[test]
-    fn probe_frame_timeout_runs_cleanup_and_fails_closed() {
+    fn probe_frame_timeout_fails_closed_before_the_caller_owned_cleanup() {
         let (_sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
-        let cleaned_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cleanup_observer = Arc::clone(&cleaned_up);
-        let error = await_probe_frame(&receiver, Duration::from_millis(1), move || {
-            cleanup_observer.store(true, std::sync::atomic::Ordering::Release);
-        })
-        .unwrap_err();
-        assert!(cleaned_up.load(std::sync::atomic::Ordering::Acquire));
+        let error = await_probe_frame(&receiver, Duration::from_millis(1)).unwrap_err();
         assert!(error.contains("Timed out"));
     }
 
     #[test]
-    fn ffmpeg_listing_timeout_runs_cleanup_and_fails_closed() {
+    fn ffmpeg_listing_timeout_fails_closed_before_the_caller_owned_cleanup() {
         let (_sender, receiver) = mpsc::sync_channel::<ProcessOutputPart>(2);
-        let cleaned_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cleanup_observer = Arc::clone(&cleaned_up);
         let error =
-            collect_bounded_process_output(&receiver, Duration::from_millis(1), move || {
-                cleanup_observer.store(true, std::sync::atomic::Ordering::Release);
-            })
-            .unwrap_err();
-        assert!(cleaned_up.load(std::sync::atomic::Ordering::Acquire));
+            collect_bounded_process_output(&receiver, Duration::from_millis(1)).unwrap_err();
         assert!(error.contains("Timed out"));
     }
 
     #[test]
-    fn ffmpeg_listing_output_overflow_runs_cleanup_and_fails_closed() {
+    fn ffmpeg_listing_output_overflow_fails_closed_before_the_caller_owned_cleanup() {
         let overflow = read_bounded_process_output(std::io::Cursor::new(vec![
             0_u8;
             MAX_FFMPEG_COMMAND_OUTPUT_BYTES
@@ -1396,26 +1524,101 @@ mod tests {
         sender
             .send(ProcessOutputPart::Stdout(Err(overflow)))
             .unwrap();
-        let cleaned_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cleanup_observer = Arc::clone(&cleaned_up);
-        let error = collect_bounded_process_output(&receiver, Duration::from_secs(1), move || {
-            cleanup_observer.store(true, std::sync::atomic::Ordering::Release);
-        })
-        .unwrap_err();
-        assert!(cleaned_up.load(std::sync::atomic::Ordering::Acquire));
+        let error = collect_bounded_process_output(&receiver, Duration::from_secs(1)).unwrap_err();
         assert!(error.contains("exceeded"));
+    }
+
+    #[test]
+    fn ffmpeg_listing_reports_cleanup_failure_alongside_the_primary_error() {
+        let (sender, receiver) = mpsc::sync_channel::<ProcessOutputPart>(2);
+        sender
+            .send(ProcessOutputPart::Stdout(Err("reader failed".to_string())))
+            .unwrap();
+        let error = collect_bounded_process_output(&receiver, Duration::from_secs(1)).unwrap_err();
+        let error = append_process_cleanup_error(error, Err("kill/reap failed".to_string()));
+        assert!(error.contains("reader failed"));
+        assert!(error.contains("process cleanup failed: kill/reap failed"));
+    }
+
+    #[test]
+    fn deferred_cleanup_does_not_join_a_reader_that_would_block() {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(1);
+        let reader = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reader must block before cleanup");
+        let deferred = crate::capture_process_lifecycle::deferred_termination_for_test(
+            "kill/reap deadline expired",
+        );
+        let started = std::time::Instant::now();
+        finish_reader_after_process_termination(reader, &deferred);
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "deferred cleanup must detach instead of joining the blocked reader"
+        );
+        release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn process_exit_grace_is_bounded_when_a_child_stays_running() {
+        let started = std::time::Instant::now();
+        let status =
+            poll_for_process_exit(|| Ok::<Option<()>, String>(None), Duration::from_millis(15))
+                .unwrap();
+        assert!(status.is_none());
+        assert!(started.elapsed() < Duration::from_millis(150));
+    }
+
+    #[test]
+    fn process_exit_grace_reaps_a_child_after_an_initial_running_poll_and_release() {
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command =
+                Command::new(std::env::var_os("COMSPEC").expect("COMSPEC must be available"));
+            command.args(["/d", "/s", "/c", "set /p _= & exit /b 0"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "IFS= read -r _"]);
+            command
+        };
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut process = command.spawn().expect("short-lived test child must start");
+        let mut stdin = process.stdin.take().expect("test child must provide stdin");
+        assert!(process
+            .try_wait()
+            .expect("initial child status must be observable")
+            .is_none());
+        stdin
+            .write_all(b"\n")
+            .expect("test child release must be writable");
+        drop(stdin);
+        let status = wait_for_process_exit(
+            &mut process,
+            FFMPEG_PROCESS_EXIT_GRACE,
+            "process-exit-grace test",
+        )
+        .expect("test child status must be observable")
+        .expect("test child must exit within the grace window");
+        assert!(status.success());
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn post_spawn_catalog_cleanup_kills_and_reaps_the_child() {
         let command_shell = std::env::var_os("COMSPEC").expect("COMSPEC must be available");
-        let mut process = Command::new(command_shell)
+        let process = Command::new(command_shell)
             .args(["/d", "/s", "/c", "for /L %i in (1,1,2147483647) do @rem"])
             .spawn()
             .unwrap();
-        terminate_process(&mut process);
-        assert!(process.try_wait().unwrap().is_some());
+        let termination = terminate_capture_process(process, "test process termination");
+        assert!(termination.is_reaped());
     }
 
     #[test]

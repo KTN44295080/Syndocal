@@ -67,12 +67,17 @@ acceptance. The release metadata checker expects alpha.33 product and
 installer naming below; that naming does not assert an alpha.33 installer
 exists.
 
-The current alpha.33 source gate passed capture `64 passed / 0 failed / 2
-ignored` and control-plane `64 passed / 0 failed / 0 ignored` under the exact
-MSVC 14.44 linker pin, with first-party warnings `0`. Independent review found
-P0 `0`. The bounded listing/memory, child-process cleanup, and automatic stale
-Active-row replacement P1s are closed in source; sustained-4K performance
-remains an explicit open boundary. On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
+The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
+2 ignored`, full no-default-feature `1203 / 0 / 7`, full default-feature
+`1239 / 0 / 12`, and control-plane `64 / 0 / 0` under the exact MSVC 14.44
+linker pin, with first-party warnings `0`. The two unrelated parallel-suite
+timeouts reproduced as passes individually and the complete suites passed with
+`--test-threads=1`. Independent Terra xHigh rereview returned GO with
+P0/P1/P2 `0`. The bounded listing/memory, child-process cleanup, deferred
+reaper/quarantine ownership, and automatic stale Active-row replacement are
+closed in source. App exit while a deferred reaper is still pending remains an
+explicit unverified OS boundary because this tranche does not install a Windows
+Job Object; sustained-4K performance also remains open. On 2026-08-29, the connected `Insta360 Link` advertised `3840x2160` at
 `30 fps`, `1920x1440`, `1920x1080`, and `1280x720` at `60.0002 fps`, and no
 `120 fps` profile. Direct FFmpeg preflight completed 150 RGBA frames at 4K30
 and 300 RGBA frames at 1080p60 with exit `0`; the exact Syndocal profile probe
