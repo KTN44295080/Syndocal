@@ -16,6 +16,43 @@ editor. Spout remains a separate same-PC transport and does not satisfy this
 native-window acceptance row. Mirroring the Main composition to both Display
 windows also does not satisfy it.
 
+## Alpha.42 route-transaction source checkpoint
+
+The alpha.42 source checkpoint is based on branch `codex/syndocal-v1.2` at
+parent `6456412f3569e5c47aa6b18b870e996d9ddd9b0a`; the checkpoint commit is the
+commit containing this entry. Alpha.41 could acknowledge a Display route B and
+then publish a predecessor or follower persistence mutation in the same worker
+cycle. A later publication failure could therefore restore an image that was
+not the transaction's exact A, which is why the first physical route attempt
+failed closed and was reconciled back to Main rather than retried.
+
+Alpha.42 gives every persistent engine submission one fail-closed submission
+gate. The Display route transaction holds its narrow submission token from the
+exact A read through the acknowledged route B, exact B checkpoint verification,
+history update, and durable output-lease receipt. The route command is also a
+worker drain barrier, so a following mutation enters a later publication cycle.
+Gate poison returns the specific
+`PersistenceMutationSubmissionAuthority` error before enqueue; it is never
+silently recovered. The preallocated Fixture PATCH enqueue path is covered by
+the same gate.
+
+Independent Terra xHigh re-review is `GO` after the original `NO-GO` test
+finding was repaired. The deterministic regression registers a real follower
+inside the gate, forces the real route publication-failure seam, proves exact
+Video A restoration while that follower remains blocked, and releases it only
+after the route token drops. Supervisor reruns under the exact pinned/first
+MSVC `14.44.35207` linker pass: persistence submission `2/2`, engine route
+barrier `3/3`, Syndocal video-output assignment `3/3`, `cargo fmt --check`,
+`git diff --check`, and `pnpm --dir app run check:release`. First-party warnings
+are `0`; the intentional caught poison regression prints its expected panic-hook
+line only.
+
+This is source proof only. No alpha.42 native artifact, physical route, distinct
+foreground/background content, Timeline Video 2 -> MiraBox -> Video 2 sequence,
+or saved/reopened alpha.42 project is claimed here. The next safe action is the
+exact native release build from this committed source, followed by one canonical
+route attempt per distinct non-editor monitor and strict readback after each.
+
 ## Current physical inventory
 
 A read-only run of

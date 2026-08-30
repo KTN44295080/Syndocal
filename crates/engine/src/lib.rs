@@ -2339,10 +2339,105 @@ mod realtime_thread {
 pub enum EngineError {
     #[error("engine command queue is full")]
     QueueFull,
+    #[error("persistence mutation submission authority is unavailable: {0}")]
+    PersistenceMutationSubmissionAuthority(String),
     #[error("safety blackout authority could not be reserved: {0}")]
     SafetyBlackoutAuthority(String),
     #[error("{0}")]
     InvalidAllocatorCapacity(String),
+}
+
+#[derive(Debug, Default)]
+struct PersistenceMutationSubmissionGateState {
+    held: bool,
+    waiters: usize,
+}
+
+/// A fail-closed, observable submission gate for project-persistence
+/// mutations.  Unlike a bare `Mutex<()>`, its waiter count gives deterministic
+/// race tests an exact point at which a follower is blocked behind an active
+/// A-to-B route transaction.
+struct PersistenceMutationSubmissionGate {
+    state: Mutex<PersistenceMutationSubmissionGateState>,
+    wake: Condvar,
+}
+
+impl PersistenceMutationSubmissionGate {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(PersistenceMutationSubmissionGateState::default()),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> Result<PersistenceMutationSubmissionGateGuard<'_>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "persistence mutation submission gate was poisoned".to_string())?;
+        let mut waiting = false;
+        while state.held {
+            if !waiting {
+                state.waiters = state.waiters.saturating_add(1);
+                waiting = true;
+                self.wake.notify_all();
+            }
+            state = self.wake.wait(state).map_err(|_| {
+                "persistence mutation submission gate was poisoned while waiting".to_string()
+            })?;
+        }
+        if waiting {
+            state.waiters = state.waiters.saturating_sub(1);
+        }
+        state.held = true;
+        Ok(PersistenceMutationSubmissionGateGuard { gate: self })
+    }
+
+    fn release(&self) {
+        // A poisoned authority is deliberately never reopened. The caller
+        // that observes the poison receives a specific failure instead of an
+        // unverifiable implicit recovery.
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.held {
+            state.held = false;
+            self.wake.notify_one();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_for_waiter_for_tests(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return false,
+        };
+        while state.waiters == 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let Ok((next, wait_result)) = self.wake.wait_timeout(state, remaining) else {
+                return false;
+            };
+            state = next;
+            if wait_result.timed_out() && state.waiters == 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+struct PersistenceMutationSubmissionGateGuard<'a> {
+    gate: &'a PersistenceMutationSubmissionGate,
+}
+
+impl Drop for PersistenceMutationSubmissionGateGuard<'_> {
+    fn drop(&mut self) {
+        self.gate.release();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5770,6 +5865,11 @@ pub struct EngineHandle {
     /// isolated until the definitive publication ACK so a queued timeout or
     /// rolled-back B can restore the exact allocator tail without ABA reuse.
     fixture_allocator_transaction_gate: Arc<Mutex<()>>,
+    /// Serializes admission of every persistence-changing command. The
+    /// control plane retains this from its authoritative A read through the
+    /// route's acknowledged B publication, so predecessor A is observed and
+    /// a follower cannot enter between A and B.
+    persistence_mutation_submission_gate: Arc<PersistenceMutationSubmissionGate>,
     next_fixture_id: Arc<AtomicU64>,
     next_effect_id: Arc<AtomicU64>,
     next_cue_id: Arc<AtomicU64>,
@@ -5799,6 +5899,40 @@ pub struct EngineHandle {
     test_fail_next_pending_publication: Arc<AtomicBool>,
     #[cfg(test)]
     test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
+}
+
+/// One exclusive persistence-mutation submission interval.  It deliberately
+/// exposes only the authoritative persistence read and the route publication
+/// that uses the same held gate; callers cannot enqueue an arbitrary command
+/// through this token and accidentally bypass the serialization boundary.
+pub struct EnginePersistenceMutationSubmission<'a> {
+    engine: &'a EngineHandle,
+    _gate: PersistenceMutationSubmissionGateGuard<'a>,
+}
+
+impl EnginePersistenceMutationSubmission<'_> {
+    /// Read canonical project truth after every predecessor that was admitted
+    /// before this submission interval.
+    pub fn persistence_snapshot(&self) -> Result<EngineSnapshot, String> {
+        self.engine.persistence_snapshot()
+    }
+
+    /// Publish a routed video-output candidate without reacquiring the gate
+    /// already retained by this submission interval.
+    pub fn set_video_output_routing_published(
+        &self,
+        output_id: VideoOutputId,
+        expected_from_composition_id: CompositionId,
+        composition_id: CompositionId,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        self.engine
+            .set_video_output_routing_published_without_persistence_mutation_submission_gate(
+                output_id,
+                expected_from_composition_id,
+                composition_id,
+                PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+            )
+    }
 }
 
 /// Runtime-only authority for the safer-direction emergency latch. This is
@@ -6390,6 +6524,8 @@ impl EngineHandle {
         let test_media_asset_publication_failed_after_b = Arc::new(AtomicBool::new(false));
         let allocator_gate = Arc::new(Mutex::new(()));
         let fixture_allocator_transaction_gate = Arc::new(Mutex::new(()));
+        let persistence_mutation_submission_gate =
+            Arc::new(PersistenceMutationSubmissionGate::new());
         let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
         let runtime_queue = Arc::clone(&queue);
@@ -6459,6 +6595,7 @@ impl EngineHandle {
             output_ownership_gate,
             allocator_gate,
             fixture_allocator_transaction_gate,
+            persistence_mutation_submission_gate,
             next_fixture_id,
             next_effect_id,
             next_cue_id,
@@ -6786,6 +6923,35 @@ impl EngineHandle {
     }
 
     pub fn send(&self, command: EngineCommand) -> Result<(), EngineError> {
+        if command.mutates_persistence_snapshot() {
+            let _submission_gate = self.begin_persistence_mutation_submission()?;
+            return self.send_without_persistence_mutation_submission_gate(command);
+        }
+        self.send_without_persistence_mutation_submission_gate(command)
+    }
+
+    /// Begin one exclusive persistence-mutation submission interval. The
+    /// interval is intentionally opt-in and narrowly typed: it lets a
+    /// control-plane transaction capture A, publish its acknowledged route B,
+    /// and verify B without a concurrent persistence mutation entering the
+    /// engine queue between those operations.
+    pub fn begin_persistence_mutation_submission(
+        &self,
+    ) -> Result<EnginePersistenceMutationSubmission<'_>, EngineError> {
+        let gate = self
+            .persistence_mutation_submission_gate
+            .acquire()
+            .map_err(EngineError::PersistenceMutationSubmissionAuthority)?;
+        Ok(EnginePersistenceMutationSubmission {
+            engine: self,
+            _gate: gate,
+        })
+    }
+
+    fn send_without_persistence_mutation_submission_gate(
+        &self,
+        command: EngineCommand,
+    ) -> Result<(), EngineError> {
         let command = self
             .prepare_command_for_enqueue(command)
             .map_err(EngineError::InvalidAllocatorCapacity)?;
@@ -8257,18 +8423,52 @@ impl EngineHandle {
         composition_id: CompositionId,
         timeout: Duration,
     ) -> Result<(), SnapshotPublicationFailure> {
-        self.submit_authoritative_snapshot_mutation(
-            "Video output assignment acknowledgement disconnected after engine admission; publication outcome is indeterminate until the next shared snapshot observation",
+        let _submission_gate = self
+            .begin_persistence_mutation_submission()
+            .map_err(|error| SnapshotPublicationFailure::Definitive(error.to_string()))?;
+        self.set_video_output_routing_published_without_persistence_mutation_submission_gate(
+            output_id,
+            expected_from_composition_id,
+            composition_id,
             timeout,
-            |expires_at, admission, ack| EngineCommand::SetVideoOutputRoutingPublished {
+        )
+    }
+
+    fn set_video_output_routing_published_without_persistence_mutation_submission_gate(
+        &self,
+        output_id: VideoOutputId,
+        expected_from_composition_id: CompositionId,
+        composition_id: CompositionId,
+        timeout: Duration,
+    ) -> Result<(), SnapshotPublicationFailure> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send_without_persistence_mutation_submission_gate(
+            EngineCommand::SetVideoOutputRoutingPublished {
                 output_id,
                 expected_from_composition_id,
                 composition_id,
-                expires_at,
-                admission,
+                expires_at: deadline,
+                admission: admission.clone(),
                 ack,
             },
         )
+        .map_err(|error| SnapshotPublicationFailure::Definitive(error.to_string()))?;
+        receive_classified_snapshot_ack(
+            receiver,
+            &admission,
+            deadline,
+            timeout,
+            "Video output assignment acknowledgement disconnected after engine admission; publication outcome is indeterminate until the next shared snapshot observation".to_string(),
+        )
+        .map_err(|error| {
+            if error.allocator_rewind_safe {
+                SnapshotPublicationFailure::Definitive(error.message)
+            } else {
+                SnapshotPublicationFailure::Indeterminate(error.message)
+            }
+        })
     }
 
     /// Definitively remove a Display candidate after native resource setup
@@ -8618,6 +8818,13 @@ impl EngineHandle {
         let fixture_count = u64::try_from(patches.len()).map_err(|_| {
             definitive("Fixture PATCH batch size exceeds allocator capacity".to_string())
         })?;
+        // Keep the shared lock order consistent with `send`: persistence
+        // submission precedes the fixture/allocator gates. The private
+        // preallocated enqueue below deliberately reuses this held interval
+        // so it cannot bypass a route transaction or deadlock behind one.
+        let _persistence_submission_guard = self
+            .begin_persistence_mutation_submission()
+            .map_err(|error| definitive(error.to_string()))?;
         let _fixture_transaction_guard = self
             .fixture_allocator_transaction_gate
             .lock()
@@ -8683,6 +8890,9 @@ impl EngineHandle {
         let deadline = Instant::now() + timeout;
         let admission = ProjectSnapshotLoadAdmission::new();
         let (ack, receiver) = mpsc::sync_channel(1);
+        // Caller holds `persistence_mutation_submission_gate` before its
+        // fixture allocator transaction; never enqueue this preallocated
+        // persistent command through an unguarded bypass.
         self.enqueue_prepared_command(EngineCommand::PatchFixturesPublished {
             candidates,
             expires_at: deadline,
@@ -21670,6 +21880,7 @@ impl EngineRuntime {
                     | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                     | EngineCommand::AddVideoOutputPublished { .. }
                     | EngineCommand::RemoveVideoOutputPublished { .. }
+                    | EngineCommand::SetVideoOutputRoutingPublished { .. }
             );
             if queued_command.command.requests_low_latency_dmx_tick() {
                 self.low_latency_dmx_tick_request_count =
@@ -71267,6 +71478,7 @@ mod tests {
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
+            persistence_mutation_submission_gate: Arc::new(PersistenceMutationSubmissionGate::new()),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),
@@ -79361,6 +79573,253 @@ mod tests {
     }
 
     #[test]
+    fn published_video_output_assignment_is_a_drain_barrier_before_following_mutations() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::AddVideoComposition(CompositionSummary {
+            id: 2,
+            label: "Aux".to_string(),
+            layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
+            output_ids: Vec::new(),
+        }));
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: published_display_output(41),
+        });
+        let before_runtime = runtime.build_snapshot(0);
+        let published = RwLock::new(before_runtime.clone());
+        let before_bpm = runtime.clock.bpm;
+        let queue = ArrayQueue::new(2);
+        let (route_ack, route_receiver) = mpsc::sync_channel(1);
+
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetVideoOutputRoutingPublished {
+                    output_id: 41,
+                    expected_from_composition_id: 1,
+                    composition_id: 2,
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: route_ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetBpm(137.0),
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+
+        assert_eq!(
+            queue.len(),
+            1,
+            "the acknowledged route must publish or roll back before a following normal mutation"
+        );
+        assert_eq!(runtime.video_outputs[0].summary.composition_id, 2);
+        assert_eq!(runtime.clock.bpm, before_bpm);
+
+        // The route's own cycle fails definitively. Its exact A image is
+        // restored without admitting the queued clock mutation into B.
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(queue.len(), &published);
+        assert!(route_receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.build_snapshot(0).video, before_runtime.video);
+        assert_eq!(published.read().unwrap().video, before_runtime.video);
+        assert_eq!(runtime.clock.bpm, before_bpm);
+
+        runtime.consume_commands(&queue);
+        assert!(queue.is_empty());
+        assert_eq!(runtime.clock.bpm, 137.0);
+    }
+
+    #[test]
+    fn published_video_output_assignment_publishes_b_before_following_mutation_cycle() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::AddVideoComposition(CompositionSummary {
+            id: 2,
+            label: "Aux".to_string(),
+            layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
+            output_ids: Vec::new(),
+        }));
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: published_display_output(41),
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let before_bpm = runtime.clock.bpm;
+        let queue = ArrayQueue::new(2);
+        let (route_ack, route_receiver) = mpsc::sync_channel(1);
+
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetVideoOutputRoutingPublished {
+                    output_id: 41,
+                    expected_from_composition_id: 1,
+                    composition_id: 2,
+                    expires_at: Instant::now() + Duration::from_secs(1),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: route_ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetBpm(137.0),
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1, "the follower needs its own worker cycle");
+        assert_eq!(runtime.clock.bpm, before_bpm);
+        assert_eq!(runtime.video_outputs[0].summary.composition_id, 2);
+
+        runtime.publish_pending_command_acks(queue.len(), &published);
+        assert_eq!(route_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().video.outputs[0].composition_id, 2);
+        assert_eq!(queue.len(), 1, "B committed before the follower is drained");
+        assert_eq!(runtime.clock.bpm, before_bpm);
+
+        runtime.consume_commands(&queue);
+        assert!(queue.is_empty());
+        assert_eq!(runtime.clock.bpm, 137.0);
+    }
+
+    #[test]
+    fn persistence_submission_gate_holds_follower_through_route_rollback() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        // This is the predecessor that otherwise could have been accepted
+        // between an app-side preflight and worker-side route admission.
+        engine.send(EngineCommand::SetBpm(128.0)).unwrap();
+        engine
+            .send(EngineCommand::AddVideoComposition(CompositionSummary {
+                id: 2,
+                label: "Aux".to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            }))
+            .unwrap();
+        engine
+            .send(EngineCommand::AddVideoOutput(published_display_output(41)))
+            .unwrap();
+
+        let (follower_done, follower_done_receiver) = mpsc::sync_channel(1);
+
+        let (follower_thread, before_video) = {
+            let submission = engine
+                .begin_persistence_mutation_submission()
+                .expect("submission gate must be available");
+            let before = submission
+                .persistence_snapshot()
+                .expect("submission A must drain its predecessor first");
+            assert_eq!(before.clock.bpm, 128.0);
+            assert_eq!(
+                before
+                    .video
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == 41)
+                    .map(|output| output.composition_id),
+                Some(1)
+            );
+
+            let follower = engine.clone();
+            let follower_thread = std::thread::spawn(move || {
+                follower_done
+                    .send(follower.send(EngineCommand::SetBpm(137.0)))
+                    .expect("follower result receiver must remain available");
+            });
+            assert!(engine
+                .persistence_mutation_submission_gate
+                .wait_for_waiter_for_tests(Duration::from_secs(1)));
+            assert!(matches!(
+                follower_done_receiver.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+
+            engine.force_next_pending_publication_failure_for_tests();
+            let rollback = submission
+                .set_video_output_routing_published(41, 1, 2)
+                .expect_err("forced route publication failure must restore A");
+            assert!(matches!(
+                rollback,
+                SnapshotPublicationFailure::Definitive(_)
+            ));
+            let after_rollback = submission
+                .persistence_snapshot()
+                .expect("rollback A must remain observable before follower admission");
+            assert_eq!(after_rollback.clock.bpm, 128.0);
+            assert_eq!(
+                after_rollback.video, before.video,
+                "the forced publication failure must restore the exact route A image"
+            );
+            assert!(engine
+                .persistence_mutation_submission_gate
+                .wait_for_waiter_for_tests(Duration::from_secs(1)));
+            assert!(matches!(
+                follower_done_receiver.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            (follower_thread, before.video.clone())
+        };
+
+        assert!(follower_done_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("follower must be released only after the route rollback interval ends")
+            .is_ok());
+        follower_thread.join().unwrap();
+        let final_snapshot = engine
+            .persistence_snapshot()
+            .expect("follower persistence mutation must drain after the route rollback");
+        assert_eq!(final_snapshot.clock.bpm, 137.0);
+        assert_eq!(final_snapshot.video, before_video);
+    }
+
+    #[test]
+    fn persistence_submission_gate_poison_fails_closed_without_enqueueing() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let gate = Arc::clone(&engine.persistence_mutation_submission_gate);
+        let poisoned = std::panic::catch_unwind(move || {
+            let _state = gate
+                .state
+                .lock()
+                .expect("fresh persistence submission gate must lock");
+            panic!("intentional persistence submission gate poison");
+        });
+        assert!(poisoned.is_err());
+
+        assert!(matches!(
+            engine.send(EngineCommand::SetBpm(137.0)),
+            Err(EngineError::PersistenceMutationSubmissionAuthority(message))
+                if message == "persistence mutation submission gate was poisoned"
+        ));
+        assert!(matches!(
+            engine.begin_persistence_mutation_submission(),
+            Err(EngineError::PersistenceMutationSubmissionAuthority(message))
+                if message == "persistence mutation submission gate was poisoned"
+        ));
+        assert_ne!(engine.snapshot().clock.bpm, 137.0);
+    }
+
+    #[test]
     fn display_output_monitor_identity_survives_project_snapshot_reload() {
         let output = published_display_output(51);
         let snapshot = VideoSnapshot {
@@ -82241,6 +82700,7 @@ mod tests {
             output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
             allocator_gate: Arc::new(Mutex::new(())),
             fixture_allocator_transaction_gate: Arc::new(Mutex::new(())),
+            persistence_mutation_submission_gate: Arc::new(PersistenceMutationSubmissionGate::new()),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),

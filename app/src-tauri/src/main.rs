@@ -36,9 +36,10 @@ use engine::{
     validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
-    EngineHandle, FixtureFlagClearKind, FixturePatchPublicationFailure, MediaAssetImportCandidate,
-    MediaAssetTransaction, OutputOwnershipActivation, SnapshotPublicationFailure,
-    StageProjectMutation, StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
+    EngineHandle, EnginePersistenceMutationSubmission, FixtureFlagClearKind,
+    FixturePatchPublicationFailure, MediaAssetImportCandidate, MediaAssetTransaction,
+    OutputOwnershipActivation, SnapshotPublicationFailure, StageProjectMutation,
+    StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
     VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
@@ -71735,8 +71736,8 @@ fn assign_video_output_composition_with_output_control_fence(
         output_id,
         composition_id,
         request,
-        |engine, output_id, expected_from_composition_id, composition_id| {
-            engine.set_video_output_routing_published(
+        |submission, output_id, expected_from_composition_id, composition_id| {
+            submission.set_video_output_routing_published(
                 output_id,
                 expected_from_composition_id,
                 composition_id,
@@ -71746,8 +71747,8 @@ fn assign_video_output_composition_with_output_control_fence(
 }
 
 /// The injected publisher is a narrow test seam: production always delegates
-/// to `EngineHandle::set_video_output_routing_published`, while focused tests
-/// can classify definitive versus admitted/terminal ACK ambiguity without
+/// to one held `EnginePersistenceMutationSubmission`, while focused tests can
+/// classify definitive versus admitted/terminal ACK ambiguity without
 /// fabricating a rollback or history receipt.
 fn assign_video_output_composition_with_output_control_fence_with_publication<Publish>(
     state: &AppState,
@@ -71765,7 +71766,7 @@ fn assign_video_output_composition_with_output_control_fence_with_publication<Pu
 >
 where
     Publish: FnOnce(
-        &EngineHandle,
+        &EnginePersistenceMutationSubmission<'_>,
         VideoOutputId,
         CompositionId,
         CompositionId,
@@ -71796,6 +71797,14 @@ where
     let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
         "Output lease registry lock was poisoned before video output assignment".to_string()
     })?;
+    // This gate is the linearization boundary for the exact persistence A
+    // used below. It drains predecessors before A, keeps prospective
+    // persistence writers out through the route ACK, and combines with the
+    // engine drain barrier so the next writer receives a later worker cycle.
+    let submission = state
+        .engine
+        .begin_persistence_mutation_submission()
+        .map_err(|error| error.to_string())?;
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
         || !control_plane_runtime::exact_output_control_owner_matches(
             state,
@@ -71816,7 +71825,7 @@ where
         return Err("Video output ownership is not active".to_string());
     }
 
-    let before_snapshot = state.engine.persistence_snapshot()?;
+    let before_snapshot = submission.persistence_snapshot()?;
     let before_project =
         project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
     let before = ProjectCheckpoint {
@@ -71828,7 +71837,7 @@ where
     };
     let (candidate_snapshot, expected_from_composition_id) =
         video_output_composition_assignment_candidate_snapshot(
-            before_snapshot,
+            before_snapshot.clone(),
             output_id,
             composition_id,
         )?;
@@ -71881,13 +71890,13 @@ where
                 .project_transaction_active
                 .store(true, Ordering::Release);
             match publish(
-                &state.engine,
+                &submission,
                 output_id,
                 expected_from_composition_id,
                 composition_id,
             ) {
                 Ok(()) => {
-                    let actual_hash = state.engine.persistence_snapshot().and_then(|snapshot| {
+                    let actual_hash = submission.persistence_snapshot().and_then(|snapshot| {
                         let project =
                             project_file_for_save_from_parts(snapshot, &coordinator.ancillary);
                         project_checkpoint_hash(&project, &coordinator.mappings)
@@ -94056,7 +94065,7 @@ pub(crate) mod tests {
             .persistence_snapshot()
             .expect("route-assignment A snapshot");
         let (candidate, expected_from) =
-            video_output_composition_assignment_candidate_snapshot(before, output_id, 2)
+            video_output_composition_assignment_candidate_snapshot(before.clone(), output_id, 2)
                 .expect("route-assignment candidate B");
         assert_eq!(expected_from, 1);
         let expected_b_hash = {
@@ -94086,8 +94095,8 @@ pub(crate) mod tests {
                     expected_owner_window_label: "main",
                     expected_owner_incarnation: authority.owner_incarnation,
                 },
-                |engine, output_id, expected_from, composition_id| {
-                    engine.set_video_output_routing_published(
+                |submission, output_id, expected_from, composition_id| {
+                    submission.set_video_output_routing_published(
                         output_id,
                         expected_from,
                         composition_id,
