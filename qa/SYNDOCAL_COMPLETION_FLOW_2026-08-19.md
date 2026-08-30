@@ -4,13 +4,14 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-08-31 alpha.43 source-integration checkpoint (pre-commit)
+## 2026-08-31 alpha.43 source-integration checkpoint
 
-The integration base is branch `codex/syndocal-v1.2` at local `HEAD` and
-`origin/codex/syndocal-v1.2`
-`aa9747509174edbc4854c8413230388d6281cbf9`, before the next source commit.
-The uncommitted integrated set advances all distributed product-version
-surfaces from `1.2.0-alpha.42` to `1.2.0-alpha.43`: workspace Cargo and lock,
+The pushed alpha.43 implementation checkpoint is branch
+`codex/syndocal-v1.2` at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`HEAD`/upstream equality. That committed source checkpoint
+advances all distributed product-version surfaces from `1.2.0-alpha.42` to
+`1.2.0-alpha.43`: workspace Cargo and lock,
 frontend package, Tauri configuration, release metadata checker, README,
 macOS bundle name, and Windows workflow artifact name. It also contains the
 Timeline follow-hint wrapping fix and the fresh-child viewport harness/runner
@@ -27,34 +28,52 @@ exceptions, errors, warnings, or harness errors. Timeline performance,
 context-menu, DJ Link, localization (`3644/3644`, zero unprotected labels),
 TypeScript, Cargo format, and diff checks also passed. Independent Terra xHigh
 adversarial review returned GO after the Vite/CDP endpoint ownership and
-cleanup proof was made fail-closed. No native build, released alpha.43
+cleanup proof was made fail-closed. The current native authority remains
+`1.2.0-alpha.42`. No native build, released alpha.43
 executable/artifact, Syndocal window launch, or alpha.43 physical acceptance
 is claimed. Existing show processes were preserved; rediscover and verify them
 immediately before any native action.
 
-The alpha.42 native executable, fixed Art-Net derivative, source/destination
-hashes, packet boundary, and physical three-display observations below are
-immutable historical evidence. They are not alpha.43 proof and must not be
-rewritten or relabelled. Production DJ configuration/token/Show-LAN and
-hardware boundaries remain pending, as do the standalone Rekordbox local
-physical F13/F14 edge checks.
+The bounded show artifacts are the alpha9 reference-audio/content artifact
+(`1,095,864` bytes, SHA-256
+`93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`),
+the alpha.42 three-display acceptance artifact (`1,120,320` bytes, SHA-256
+`2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`),
+and its alpha.42 Art-Net probe-only derivative (`1,120,306` bytes, SHA-256
+`4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`).
+The legacy alpha4 artifact is retired. None of these bounded artifacts is an
+approved production operator artifact; production use remains fail-closed
+until exact route and hardware acceptance completes. The alpha.42 executable,
+packet boundary, and physical three-display observations below remain immutable
+historical evidence and do not prove alpha.43. Production DJ
+configuration/token/Show-LAN and HW-4 remain pending, as do the standalone
+Rekordbox local physical F13/F14 edge checks.
 
-Next safe action: commit and push the independently reviewed integrated source
-checkpoint. Only after that, initialize and verify the exact MSVC
-`14.44` linker, stop only the exact checkout-owned Syndocal executable if it
-is running, build, launch and maximize the verified Syndocal window, and run
-the separately controlled QA. Do not invent a commit hash, artifact identity,
-or native/physical result before those steps complete.
+The alpha9 content-artifact gate now requires its exact bytes through
+`--require-content-artifact`; the retired `--require-final-artifact` and
+`--test-only-missing-final-artifact` flags fail closed as unknown arguments.
+The content artifact keeps the authored route disabled as `EnttecOpenDmx` at
+`250000` with `serial_port=""`. The physical port is intentionally machine-local:
+it must be enumerated and explicitly selected on the show PC, not persisted as
+the historical development-machine `COM3`.
+
+Next safe action: obtain explicit confirmation that the currently open, unsaved
+Syndocal project is saved. Only then initialize and verify the exact MSVC `14.44`
+linker, stop only the exact checkout-owned alpha.42 Syndocal executable, build
+alpha.43, launch and maximize the verified Syndocal window, and run the
+separately controlled QA. Do not invent an alpha.43 artifact identity or
+native/physical result before those steps complete.
 
 ## 2026-08-30 current show-critical checkpoint
 
 Current pushed KDMX source/QA authority is
-`42cb17ce3ae0272a43f7671da70361d3f2520e98` on
-`codex/syndocal-v1.2`, equal to `origin/codex/syndocal-v1.2` before this
-documentation-only entry. It contains the fixed alpha.42 Art-Net probe
-derivative generator/tests. DJ production-authority documentation is pushed at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b` on
+`codex/syndocal-v1.2`, equal to `origin/codex/syndocal-v1.2`. The fixed alpha.42
+Art-Net derivative generator/tests were introduced at
+`42cb17ce3ae0272a43f7671da70361d3f2520e98`; DJ production-authority
+documentation was introduced at
 `d7449d02dccc686bb99d7b6878a147262868f0b0`. The external clean DJ Agent source
-authority is `beta-v1.1.2` at
+authority remains `beta-v1.1.2` at
 `59df968d91bca71a327ef2a57ee5ab15de9f9947`, product source `1.1.12`.
 
 The running local DJ-only lane deliberately excludes Syndocal: Rekordbox PID
@@ -62,8 +81,9 @@ The running local DJ-only lane deliberately excludes Syndocal: Rekordbox PID
 state is `no-track` / `track-not-loaded`. The next operator action is load/play
 Deck 1, wait for admission, then prove Hook-measured F14 `2 -> 1` beat and F13
 HPF -> ChannelFader fade -> Stop. A fresh self-launch/cold-launch pass follows.
-Production strict-v3 config/token/LAN/HELLO/ACK/STATE_SYNC/reconnect and Timeline
-hardware acceptance remain separate and open.
+Production strict-v3 config/token is absent, and
+LAN/HELLO/ACK/STATE_SYNC/reconnect and Timeline hardware acceptance remain
+separate and open. HW-4 remains exactly `0/12`.
 
 Syndocal PID `115592` and Unity PID `112488` remain responsive; Unity is the
 sole observed UDP `6454` owner. Art-Net physical one-shot, receiver/fixture
@@ -490,9 +510,13 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the superseded alpha.39 checkpoint is recorded below, while
-the current product metadata is `1.2.0-alpha.42` on
-`codex/syndocal-v1.2`. The alpha.39 native checkpoint used source/docs `HEAD`
+alpha checkpoints; the superseded alpha.39 checkpoint is recorded below. Current
+source metadata is `1.2.0-alpha.43` at pushed checkpoint
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, where local `HEAD` and upstream
+were recorded equal, on
+`codex/syndocal-v1.2`, while the current native authority remains alpha.42 and
+alpha.43 native build/launch verification is pending. The alpha.39 native
+checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
 the build checkpoint. It
 repairs the Timeline authoring-output selector's exact UI truth: only one exact

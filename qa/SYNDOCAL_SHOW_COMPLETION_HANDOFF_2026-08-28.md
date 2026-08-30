@@ -4,13 +4,14 @@ Status date: 2026-08-31 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-08-31 alpha.43 source-integration handoff (pre-commit)
+## 2026-08-31 alpha.43 source-integration handoff
 
-The current integration base is branch `codex/syndocal-v1.2` at local `HEAD`
-and `origin/codex/syndocal-v1.2`
-`aa9747509174edbc4854c8413230388d6281cbf9`, before the next commit. The
-uncommitted integrated source set advances the product consistently to
-`1.2.0-alpha.43` across workspace Cargo/lock, frontend package, Tauri
+The pushed alpha.43 implementation checkpoint is branch
+`codex/syndocal-v1.2` at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`HEAD`/upstream equality. That committed source checkpoint
+advances the product consistently to `1.2.0-alpha.43` across workspace
+Cargo/lock, frontend package, Tauri
 configuration, release-check metadata, README, macOS bundle artifact naming,
 and Windows workflow artifact naming. It also contains the Timeline
 follow-hint wrapping change and the control-upper-workspaces fresh-child
@@ -28,38 +29,53 @@ warnings, or harness errors. Timeline performance, context-menu, DJ Link,
 localization (`3644/3644`, zero unprotected labels), TypeScript, Cargo format,
 and diff checks passed. Independent Terra xHigh adversarial review returned GO
 after Vite/CDP endpoint identity, fail-closed input, and cleanup proof were
-closed. No alpha.43 native build, executable or artifact identity, window
+closed. The current native authority remains `1.2.0-alpha.42`. No alpha.43
+native build, executable or artifact identity, window
 launch/maximize verification, release, or physical acceptance is claimed. No
 process-control action was taken for this source checkpoint; preserve the show
 processes and rediscover/verify the exact checkout-owned executable before
 native QA.
 
-The alpha.42 executable identity, fixed Art-Net probe derivative and hashes,
-Art-Net wire boundary, and native three-display/physical observations in the
-following historical sections are immutable evidence. They must remain
-verbatim and do not prove alpha.43. Production DJ configuration/token/Show-LAN
-and hardware acceptance remain pending. The standalone Rekordbox local
-physical F14 beat transition and F13 HPF -> ChannelFader fade -> Stop edge
-remain operator-run pending work.
+The bounded show artifacts are the alpha9 reference-audio/content artifact
+(`1,095,864` bytes, SHA-256
+`93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`),
+the alpha.42 three-display acceptance artifact (`1,120,320` bytes, SHA-256
+`2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`),
+and the alpha.42 Art-Net probe-only derivative (`1,120,306` bytes, SHA-256
+`4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`).
+The legacy alpha4 artifact is retired and must not be loaded as current. These
+three bounded artifacts are evidence inputs, not an approved production
+operator artifact; performance/deployment use remains fail-closed until exact
+route and hardware acceptance completes. The alpha.42 executable identity,
+Art-Net wire boundary, and native three-display observations in the following
+sections remain immutable and do not prove alpha.43. Production DJ
+configuration/token/Show-LAN and HW-4 `0/12` remain pending. The standalone
+Rekordbox local physical F14 beat transition and F13 HPF -> ChannelFader fade ->
+Stop edge remain operator-run pending work.
 
-Next safe action: commit and push this independently reviewed integrated source
-checkpoint with its final dirty-file inventory. Afterwards, under the exact
-pinned and `where.exe`-first MSVC `14.44` linker, terminate
-only an exact checkout-owned running Syndocal executable if present, build,
-launch, and maximize the verified Syndocal window before separately controlled
-QA. Do not supply a final commit hash or alpha.43 artifact identity until
-those actions have actually completed.
+The alpha9 file is pinned only as a content artifact. The tracked gate is
+`node qa/tests/author-dsf2026-show.mjs --require-content-artifact`; the retired
+`--require-final-artifact` and `--test-only-missing-final-artifact` flags are
+unknown and fail closed. Its disabled `EnttecOpenDmx` route persists
+`serial_port=""` at `250000`. USB-DMX port identity is machine-local and must be
+enumerated and deliberately selected on the show PC; historical `COM3` is not
+an authored production requirement.
+
+Next safe action: obtain explicit confirmation that the currently open, unsaved
+Syndocal project is saved. Afterwards, under the exact pinned and `where.exe`-first MSVC
+`14.44` linker, terminate only the exact checkout-owned alpha.42 Syndocal
+executable, build alpha.43, launch, and maximize the verified Syndocal window
+before separately controlled QA. Do not supply an alpha.43 artifact identity
+or native result until those actions have actually completed.
 
 ## 2026-08-30 current source, process, and external-boundary checkpoint
 
 The current pushed source/QA checkpoint is branch `codex/syndocal-v1.2` at
-`42cb17ce3ae0272a43f7671da70361d3f2520e98`, exactly equal to
-`origin/codex/syndocal-v1.2` before this documentation-only entry. The commit
-contains the fixed alpha.42 Art-Net derivative generator and its tests. The
-immediately preceding DJ production-authority documentation checkpoint is
-`d7449d02dccc686bb99d7b6878a147262868f0b0`. The documentation checkpoint is
-the commit containing this entry and is accepted only after local `HEAD` again
-equals the upstream branch.
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, exactly equal to
+`origin/codex/syndocal-v1.2`. The fixed alpha.42 Art-Net derivative generator
+and tests were introduced at `42cb17ce3ae0272a43f7671da70361d3f2520e98`.
+The DJ production-authority documentation checkpoint was introduced at
+`d7449d02dccc686bb99d7b6878a147262868f0b0`.
 
 The external DJ Agent authority is the clean, upstream-equal
 `C:\Users\kouty\Desktop\rb-output` checkout on `beta-v1.1.2` at
@@ -73,7 +89,7 @@ beat and F13 HPF -> ChannelFader fade -> Stop still require the operator to
 load/play Deck 1 and press the pedals. The fresh self-launch/cold-launch
 acceptance also remains pending. These local checks do not replace production
 strict-v3 provisioning, LAN, token, HELLO/ACK/STATE_SYNC, reconnect, or
-Timeline acceptance; HW-4 remains open.
+Timeline acceptance; HW-4 remains exactly `0/12`.
 
 The exact checkout-owned alpha.42 Syndocal executable remains responsive as
 PID `115592`; its immutable native identity is recorded in the next section.
@@ -981,7 +997,7 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 - Fresh native import/save evidence uses the exact operator-owned source `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`. The report is exact at `fixtures=46`, `profiles=12`, `fixture_groups=15`, `cues=2`, `Converted=93`, `Approximate=4`, `Skipped=0`, and `Unsupported=1` for one Daslight hardware binding. The saved base has exact stage layouts: six Mega Bar layouts with 8 cells and 8 logical segments each, plus three Strongpoint layouts with 4 cells and 4 logical segments each.
 - Historical alpha.27 Native Save As output artifact: `target/qa/dsf2026-native-alpha27/DSF2026-imported-alpha27.sdc`, `1,079,564` bytes, SHA-256 `B21165A70A41A4036153359E579E1433C2739EC1C3EDCC0C46B94F513238DFB1`.
 - Alpha.15 is retired as a current authoring base. Its artifacts remain historical evidence only and must not be supplied to the pinned authoring CLI.
-- The former alpha3-alpha8 candidates are superseded. The reviewed final candidate is the alpha9 reference-audio artifact documented below; do not deploy an earlier candidate.
+- At that historical checkpoint, the former alpha3-alpha8 candidates were superseded by the reviewed alpha9 reference-audio candidate documented below. The current authority at the top bounds alpha9 to reference-audio/content evidence and grants no production deployment approval.
 - The current supervisor rerun passed the authored-show test, DJ Link frontend/runtime contract, localization `3556/3556` with 0 unprotected labels, stage-label contract, fixture-limit degree contract, Timeline context-menu browser contract, I/O disclosure scroll contract, Strongpoint segment browser contract, Stage Settings viewport contract at five sizes, TypeScript/Vite production build, release metadata, Tauri wrapper self-test, and the `frontend-typescript-vite-windows` warning ratchet. First-party warnings were zero.
 - Historical alpha.27 native release evidence: the exact MSVC 14.44 linker gate produced `target/release/syndocal.exe` at `60,314,624` bytes with SHA-256 `CEBB44C713043CCE885D87E3651464F3756A5CEE2D1700728D412AC7B18C48EC`.
 - Historical alpha.27 process evidence: exactly one checkout-owned process was responsive after that build, PID `87732`, HWND `124064278`, and the verified Syndocal window was maximized. This is not alpha.28 native acceptance.
@@ -994,7 +1010,7 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 - The two operator-supplied MP3 files are now accepted only as rehearsal/reference material through the ordinary Media Library -> Timeline Audio Clip path. They are not click/guide assets and are not armed for show playback.
 - The authoring helper preserves both originals, copies byte-identical files beside the generated candidate under ASCII names, records SHA-256/byte size/duration, and refuses overwrite or divergent existing bytes.
 - Each authored song Timeline receives one ordinary Audio layer with one `media_asset_id` clip. The layer is muted by default and requires an explicit operator unmute before rehearsal playback.
-- The operator-saved current production candidate `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc` supersedes the earlier alpha9 byte identity. It is `1,095,864` bytes with SHA-256 `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094` and passes the current structural preflight. Measured media durations remain `214032 ms` for 人生オーバー and `273432 ms` for 惑う星; source and managed sidecar SHA-256 values match.
+- At that historical checkpoint, the operator-saved alpha9 candidate `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc` superseded the earlier alpha9 byte identity. It is `1,095,864` bytes with SHA-256 `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094` and passes the structural preflight. Measured media durations remain `214032 ms` for 人生オーバー and `273432 ms` for 惑う星; source and managed sidecar SHA-256 values match. The current authority at the top does not approve it as the production operator artifact.
 - Rehearsal playback now uses a distinct sibling `DSF2026-show-alpha9-rehearsal-reference-audio.sdc`, `1,092,410` bytes with SHA-256 `AC9133AFD2C9AAD022674B45222447115F624175B2C5E20DE1E803ABAA9778CE`. Its `956`-byte approval manifest has SHA-256 `ADA244FE095B48BC67DE6181F1D9EFE55131EF720A4D2B5EEB91714A7DA85AED`. The reviewed fail-closed creator pins the production source and both MP3 identities, requires that exact manifest, creates exclusively, and permits only the three synchronized `Reference Audio` layer changes from `muted=true` to `muted=false`. Independent post-publication audit confirmed no other semantic JSON differences, both source and copy passed all ten structural checks, and the source candidate and sidecars remained byte-identical. The rehearsal copy has not been loaded into the running native app or audibly accepted.
 - Windows publication holds verified non-reparse parent/leaf handles across source and sidecar revalidation through candidate flush. Parent/leaf substitution, same-hash reparse substitution, partial write, and flush failure fail closed without candidate or temporary-directory residue.
 - Focused authoring regression passed with first-party warnings 0, including explicit no-reference assertions for zero Timeline Audio Clips and zero added Media Library assets. The final independent Terra xHigh review is `GO` with no P0/P1.

@@ -1,11 +1,32 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-30
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.39`.
+Updated: 2026-08-31
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.43`.
 
-## 2026-08-30 current alpha.39 native checkpoint
+## 2026-08-31 current alpha.43 source checkpoint
 
-Alpha.39 is the current product checkpoint on branch `codex/syndocal-v1.2`.
+Alpha.43 is the current source checkpoint on branch `codex/syndocal-v1.2`,
+with pushed `HEAD`/upstream equal at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`. It covers the synchronized
+version metadata and Timeline follow-hint/fail-closed 4-viewport harness
+source. `check:release`, `check:release:self-test`, the four viewport checks,
+Timeline performance, context-menu, DJ Link, localization `3644/3644`,
+TypeScript, and format/diff checks pass; independent Terra review is `GO`.
+The native alpha.43 build/window/physical gates remain pending because the
+current exact Syndocal UI showed unsaved `Untitled.sdc*`. The local Rekordbox
+Hook is healthy, but Decks are unloaded and no F13/F14 edge was observed.
+Production DJ configuration, LAN, and hardware acceptance remain pending.
+
+The alpha9 reference-audio artifact is now pinned as a content artifact rather
+than a production operator artifact. Its authored DMX route remains disabled as
+`EnttecOpenDmx` / `250000` with `serial_port=""`; a physical USB-DMX port is
+machine-local and must be enumerated and deliberately selected on the show PC.
+The tracked authoring gate uses `--require-content-artifact`; the retired
+`--require-final-artifact` spelling is rejected rather than retained as a shim.
+
+## 2026-08-30 historical alpha.39 native checkpoint
+
+Alpha.39 is now a historical product checkpoint on branch `codex/syndocal-v1.2`.
 The native build used source/docs `HEAD` and upstream
 `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at the build
 checkpoint. This tranche repairs the Timeline

@@ -1,30 +1,54 @@
 # Syndocal × rekordbox-DJ-Link-ForPCDJ acceptance
 
 Date: 2026-08-21
-Updated: 2026-08-30
-Status: Required; current KDMX product checkpoint is source-only `1.2.0-alpha.27` on `codex/syndocal-v1.2`; the authored final-show artifact is independently pinned below, while the post-freeze native build, artifact identity, launch, and native UI acceptance remain unverified. The current rb-output source authority is branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit `59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version `1.1.12`. No v1.1.12 installer, tag, public release, or hardware acceptance is claimed. Production strict schema/config remains v1.1.11 (`C:\SyndocalShow\dj-agent-v1.1.11.json`); on the current `C:\SyndocalShow`, only `rb-output-rekordbox-local-test-v1.json` is present and the production config/token are absent. The standalone local acceptance is separate and does not replace production. The physical matrix remains unaccepted, with hardware acceptance exactly 0/12
+Updated: 2026-08-31
+Status: Required; the pushed KDMX alpha.43 implementation checkpoint is on
+`codex/syndocal-v1.2` at commit
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`HEAD`/upstream equality. The current native authority is
+still `1.2.0-alpha.42`; no alpha.43 native build, executable identity, launch,
+or native UI acceptance is claimed. The current rb-output source authority is
+branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version
+`1.1.12`. No v1.1.12 installer, tag, public release, or hardware acceptance is
+claimed. Production strict schema/config remains v1.1.11
+(`C:\SyndocalShow\dj-agent-v1.1.11.json`); on the current `C:\SyndocalShow`,
+only `rb-output-rekordbox-local-test-v1.json` is present and the production
+config/token are absent. The standalone local acceptance is separate and does
+not replace production. The physical matrix remains exactly 0/12.
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## Current alpha.27 show/artifact and peer authority — 2026-08-28
+## Current alpha.43 source, show-artifact, and peer authority — 2026-08-31
 
-The active KDMX product metadata is `1.2.0-alpha.27` on `codex/syndocal-v1.2`.
-The final authored production show is
-`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha4.sdc`, exactly
-`1,088,927` bytes with SHA-256
-`5E8AA4215D0F77D75E6CE03A37F83902D5EEB47414EC59EF67F164BA917FF51C`.
-Its required JSON contract is Timeline 1 `人生オーバー` with the indefinite
-four-beat loop `[136941, 138353)`, one-bar Follow with first destination-measure
-hold to Timeline 2 `惑う星`, both `all_white` and `all_max` Lighting events at
-`138353`, the title selector fallback to Deck 1, 46 fixtures with the imported
-stage layouts, and staged-disabled `EnttecOpenDmx` on `COM3` at `250000`.
-The default tracked author test always enters a named local final-artifact gate for the
-current show and fails closed if that exact target is absent, so the release/final
-invocation cannot silently skip artifact proof. `node qa/tests/author-dsf2026-show.mjs`
-and the explicit `--require-final-artifact` form both require alpha4. The only
-artifact-absent behavior is isolated under the named test-only
-`--test-only-missing-final-artifact` flag, which tests the optional-helper skip and
-required-gate failure before continuing generated-contract tests; it is not a
-release or final acceptance invocation.
+The active KDMX source metadata is `1.2.0-alpha.43` at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`; the built and running native
+authority remains alpha.42. Three separate, immutable artifacts have bounded
+roles:
+
+- the alpha9 reference-audio/content artifact
+  `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc`
+  is `1,095,864` bytes with SHA-256
+  `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`;
+- the alpha.42 native three-display acceptance artifact
+  `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha42-three-display-acceptance.sdc`
+  is `1,120,320` bytes with SHA-256
+  `2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`;
+- the alpha.42 Art-Net probe-only derivative
+  `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha42-artnet-probe-acceptance.sdc`
+  is `1,120,306` bytes with SHA-256
+  `4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`.
+
+The legacy alpha4 artifact is retired and must not be loaded or described as
+the current production show. The alpha9 content artifact and both alpha.42 QA
+artifacts are evidence inputs, not an approved production operator artifact.
+Until exact route and hardware acceptance is complete, the production operator
+artifact remains unapproved and every performance/deployment use must fail
+closed.
+
+Immediate KDMX next action is to obtain explicit confirmation that the currently
+open, unsaved Syndocal project is saved, then perform the exact-linker alpha.43
+native build/launch/maximized-window QA. Do not stop the running alpha.42 process
+before that save confirmation.
 
 The current controlled source authority for this checkpoint is branch
 `beta-v1.1.2`, product source version `1.1.12`, clean and upstream-equal at
@@ -37,7 +61,7 @@ absent on the current `C:\SyndocalShow`. The only present config is the separate
 `C:\SyndocalShow\rb-output-rekordbox-local-test-v1.json` standalone test config.
 Local standalone acceptance does not replace production and cannot satisfy
 production HELLO/ACK/STATE_SYNC or advance HW-4. No production HELLO/ACK/
-STATE_SYNC, pedal, Rekordbox MIDI, COM3 fixture-output, reconnect, or other
+STATE_SYNC, pedal, Rekordbox MIDI, selected USB-DMX fixture-output, reconnect, or other
 physical F13/F14 proof or other physical row is accepted here; HW-4 remains
 exactly **0/12 checked (0%)**.
 
@@ -48,7 +72,7 @@ results do not substitute for that production acceptance.
 
 ### Short production operator sequence (after the v1.1.11 config/token is provisioned and reviewed)
 
-1. **Identity, exclusive config, and alpha4:** in the companion
+1. **Identity, exclusive config, and artifact boundary:** in the companion
    `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`, run its **Immutable source
    identity gate** first. Then choose exactly one mutually exclusive block:
    **Path A — exclusive one-time predecessor upgrade** only when the exact
@@ -57,9 +81,12 @@ results do not substitute for that production acceptance.
    run both blocks; each has an explicit `LASTEXITCODE` check and intentional
    stop. After the one-time operator token decision, open a new PowerShell and
    run only the runbook's **Post-provisioning production preflight and launch**
-   block. Do not use the standalone local-test config for production. Load the exact alpha4 `.sdc`,
-   verify its byte count/SHA-256 and JSON contract, and leave its DMX route
-   staged `enabled:false` as `EnttecOpenDmx` / `COM3` / `250000`.
+   block. Do not use the standalone local-test config for production. Do not
+   load the retired alpha4 artifact, and do not promote the alpha9 content or
+   alpha.42 QA artifacts to production. Use a separately saved operator
+   candidate only inside the controlled route/hardware acceptance run; verify
+   its byte count, SHA-256, and JSON contract, keep its output route disabled
+   until deliberate admission, and fail closed until that acceptance completes.
 2. **HELLO/ACK:** start the reviewed product-source `1.1.12` peer with the
    external v1.1.11 production config and KDMX over the wired
    `/dj-link` v3 route. Capture HELLO/authentication and the correlated ACK;
@@ -69,16 +96,19 @@ results do not substitute for that production acceptance.
    LoopHalf MIDI action and a fresh measured `DJ_LOOP_STATE` (only a true no-response window permits the
    distinct fallback). Use Pedal 1/F13 to start HPF and send exactly one
    correlated `DJ_RELEASE` before the independent local fade/stop/reset. Run
-   alpha4's Timeline 1 loop and one-bar Follow, recording the first destination
-   measure hold and the two `138353` lighting events.
+   the controlled candidate's authored Timeline loop and one-bar Follow,
+   recording the first destination-measure hold and the expected lighting
+   transition events.
 4. **Stage 2:** enter only after authoritative `DJ_TIMELINE_STATE(state:"running")`
    with the exact Timeline/play-session/pedal-owner/Release correlation. F13
    toggles the retained current Timeline loop, and Stage 2 F14 sends exactly one
    active-Timeline-only `DJ_TIMELINE_LOOP_HALF` (it never sends Rekordbox MIDI).
    F15 sends `+4` bars; Stage 2 sends no Rekordbox MIDI.
-5. **COM3 output:** only after serial ownership is coordinated with Daslight,
-   deliberately enable the staged route and record the actual FTDI USB Serial
-   Port `(COM3)` and physical fixture response at `250000`. Do not terminate
+5. **USB-DMX output:** enumerate the ports on the actual show PC, select the
+   exact intended FTDI/USB-DMX device in Syndocal, and only after serial
+   ownership is coordinated deliberately enable the staged route. Record the
+   selected machine-local port identity and physical fixture response at
+   `250000`. The project must not persist a guessed `COM3`; do not terminate
    Daslight implicitly.
 6. **Reconnect:** disconnect and reconnect the peer, record the failed/closed
    pending effects, valid State Sync, fresh authoritative Timeline state, and
@@ -211,17 +241,19 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-## Current v3 execution authority — alpha.27 / source 1.1.12 / production v1.1.11 — 2026-08-30
+## Current v3 execution authority — alpha.43 source / alpha.42 native / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete ten-capability set headed by `DJ_TRACK_ACTIVE` and
-`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX product metadata
-is source-only `1.2.0-alpha.27`; the exact alpha4 authored artifact and its JSON
-contract are recorded in the current section above, while the post-freeze native
-build, launch, and native UI acceptance remain unverified. The accepted alpha.25
-artifact and native checks are historical and must not be rebound to alpha.27.
+`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX source authority
+is `1.2.0-alpha.43` at
+`a6586ea87b02a33dbcd8e069305a538d0f8d978b`; the current native authority
+remains alpha.42, and alpha.43 native build/launch/UI acceptance is pending. The
+bounded alpha9 content, alpha.42 three-display, and alpha.42 Art-Net probe
+artifact identities are recorded above. None is an approved production operator
+artifact, and the retired alpha4 artifact must not be loaded as current.
 
 The only current controlled rb-output source is branch `beta-v1.1.2`, product
 source version `1.1.12`, clean and upstream-equal at exact peer commit
@@ -235,9 +267,9 @@ absent on the current `C:\SyndocalShow`; only the separate
 standalone acceptance does not replace production and cannot satisfy production
 HELLO/ACK/STATE_SYNC or advance HW-4. Target-DJ-PC config/token/NIC identity and
 all physical observations remain unverified, so no physical row is accepted.
-Any later text that calls alpha.26, v1.1.9, v2, alpha.18, or peer v1.1.8
-current is dated historical evidence and is superseded by this section, the
-alpha.27 section above, and
+Any later text that calls alpha.27 or earlier, v1.1.9, v2, alpha.18, or peer
+v1.1.8 current is dated historical evidence and is superseded by this section,
+the alpha.43 source section above, and
 `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`.
 
 The common self-launched Rekordbox injection path uses a fixed 15-second
@@ -547,8 +579,9 @@ and artist and requires both to match. Title-only, fuzzy, basename, and guessed
 case-fold matches are forbidden. Ambiguous selectors are rejected at save time; one
 event cannot start multiple Timelines. The initial limit is 128 mappings.
 
-The alpha4 production show has one explicit project-policy owner-selection
-exception: `selector:{titleContains:"人生オーバー",fallbackDeck:1}`. This policy
+The current production contract retains one explicit project-policy
+owner-selection exception originally recorded in the now-retired alpha4
+artifact: `selector:{titleContains:"人生オーバー",fallbackDeck:1}`. This policy
 may choose a fresh playing positive title match; if there are no positive matches,
 only a fresh playing Deck 1 may be used after the bounded metadata wait, and Deck 2
 alone never activates that fallback. This exception changes selection policy only:
@@ -652,7 +685,7 @@ Syndocal proof must cover:
 3. same-ID replay, same-ID/different-shape rejection, sequence rollback, and truthful
    terminal ACKs;
 4. strict content-ID/title+artist wire identity and its title-only/non-playing/
-   no-mapping rejection, plus the sole alpha4 production owner-selection exception
+   no-mapping rejection, plus the sole production-contract owner-selection exception
    `titleContains:"人生オーバー"` with fresh-playing Deck 1 fallback; non-Master
    actual-play acceptance, concurrent-owner protection, and Once-per-deck/play-session
    dedupe;
@@ -1026,7 +1059,8 @@ no hardware row.
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
 then-current alpha.17 source checkpoint superseded them. The later alpha.18
-authority below is also historical; current alpha.27 source-only authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
+authority below is also historical; current alpha.43 source / alpha.42 native
+authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
 configured peer therefore cannot satisfy HW-4.11 restart/next-show reuse without
@@ -1124,7 +1158,8 @@ claimed.
 This append-only section records the source checkpoint that superseded the two
 historical implementation gaps above. The alpha.17 checkpoint was current at
 that historical point; the later alpha.18 authority below is historical and the
-current alpha.27 source-only authority is at the top. This section does not rewrite the dated hardware observations above and
+current alpha.43 source / alpha.42 native authority is at the top. This section
+does not rewrite the dated hardware observations above and
 checks no HW-4 row.
 
 - **Old path:** listener enable/bind/start state and the process-local token did
@@ -1380,8 +1415,8 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## SUPERSEDED / HISTORICAL — alpha.19 Follow-hold / Stage 2 authority — 2026-08-27
 
 This dated alpha.19 record is retained as historical provenance only and is not
-current execution guidance. The current alpha.27 / product-source 1.1.12 /
-production v1.1.11 truth is in the sections
+current execution guidance. The current alpha.43 source / alpha.42 native /
+product-source 1.1.12 / production v1.1.11 truth is in the sections
 above: Stage 1 F14 is Rekordbox LoopHalf MIDI, Stage 2 F13 owns
 `DJ_TIMELINE_LOOP_SET`, and Stage 2 F14 sends active-Timeline-only
 `DJ_TIMELINE_LOOP_HALF`. KDMX source at this historical checkpoint was

@@ -140,15 +140,16 @@ export function resolveExistingLightingCues(base) {
 export const resolveExistingCue = (base, label) => resolveExistingLightingCues(base)[label];
 
 export const SHOW_DMX_PROTOCOL = "EnttecOpenDmx";
-export const SHOW_DMX_SERIAL_PORT = "COM3";
+export const SHOW_DMX_SERIAL_PORT = "";
 export const SHOW_DMX_SERIAL_BAUD_RATE = 250_000;
+const SHOW_DMX_MACHINE_LOCAL_BOUNDARY = "physical port is machine-local; project route serial_port must be empty";
 
 export function stageDmxOutput(base) {
   const output = base?.snapshot?.output;
   const routes = base?.snapshot?.dmx_outputs;
-  if (!isObject(output)) fail("base snapshot.output is missing; the staged show route is ambiguous");
+  if (!isObject(output)) fail(`base snapshot.output is missing; the staged show route is ambiguous; ${SHOW_DMX_MACHINE_LOCAL_BOUNDARY}`);
   if (!Array.isArray(routes) || routes.length !== 1 || !isObject(routes[0])) {
-    fail("base snapshot.dmx_outputs must contain exactly one existing route for deterministic staging");
+    fail(`base snapshot.dmx_outputs must contain exactly one existing route for deterministic staging; ${SHOW_DMX_MACHINE_LOCAL_BOUNDARY}`);
   }
   const route = {
     ...routes[0],
@@ -172,13 +173,13 @@ export function stageDmxOutput(base) {
 export function validateDmxOutputStaging(project) {
   const output = project?.snapshot?.output;
   const routes = project?.snapshot?.dmx_outputs;
-  if (!isObject(output)) return { error: "snapshot.output is missing" };
-  if (!Array.isArray(routes) || routes.length !== 1 || !isObject(routes[0])) return { error: "snapshot.dmx_outputs must contain exactly one route" };
+  if (!isObject(output)) return { error: `snapshot.output is missing; ${SHOW_DMX_MACHINE_LOCAL_BOUNDARY}` };
+  if (!Array.isArray(routes) || routes.length !== 1 || !isObject(routes[0])) return { error: `snapshot.dmx_outputs must contain exactly one route; ${SHOW_DMX_MACHINE_LOCAL_BOUNDARY}` };
   const values = [output, routes[0]];
   if (values.some((route) => route.enabled !== false || route.protocol !== SHOW_DMX_PROTOCOL || route.serial_port !== SHOW_DMX_SERIAL_PORT || route.serial_baud_rate !== SHOW_DMX_SERIAL_BAUD_RATE)) {
-    return { error: "primary and persisted DMX routes must be EnttecOpenDmx COM3 250000 and disabled" };
+    return { error: `primary and persisted DMX routes must be disabled EnttecOpenDmx at 250000 baud; ${SHOW_DMX_MACHINE_LOCAL_BOUNDARY}` };
   }
-  return { detail: "primary and persisted DMX routes are staged as disabled EnttecOpenDmx COM3 at 250000 baud" };
+  return { detail: "primary and persisted DMX routes are staged as disabled EnttecOpenDmx at 250000 baud; physical port is machine-local; project route serial_port is empty" };
 }
 
 export function validateLightingBoundary(project) {

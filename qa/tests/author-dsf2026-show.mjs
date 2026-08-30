@@ -20,6 +20,7 @@ import {
   validateGeneratedTimelineLayerReferences,
   validateBaseProject,
   validateCanonicalManifest,
+  validateDmxOutputStaging,
   writeAuthoredShow,
 } from "../../tools/author-dsf2026-show.mjs";
 import { writeExclusive } from "../../tools/dsf2026/io.mjs";
@@ -33,17 +34,19 @@ const ioPath = fileURLToPath(new URL("../../tools/dsf2026/io.mjs", import.meta.u
 const safeWriteHelperPath = fileURLToPath(new URL("../../tools/dsf2026/safe-write-win32.ps1", import.meta.url));
 const TEST_POWERSHELL_PATH = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const FINAL_ARTIFACT_PATH = join(REPO_ROOT, "target", "qa", "dsf2026-show-authored-20260828", "DSF2026-show-alpha9-reference-audio.sdc");
-const FINAL_ARTIFACT_BYTES = 1_092_555;
-const FINAL_ARTIFACT_SHA256 = "E53AB3B4432E21C8EAEA4F9D727F3AC6ED8793B8282AA10CAEB3A265FDDC3CBF";
-const TEST_ONLY_MISSING_FINAL_ARTIFACT = "--test-only-missing-final-artifact";
+const CONTENT_ARTIFACT_PATH = join(REPO_ROOT, "target", "qa", "dsf2026-show-authored-20260828", "DSF2026-show-alpha9-reference-audio.sdc");
+const CONTENT_ARTIFACT_BYTES = 1_095_864;
+const CONTENT_ARTIFACT_SHA256 = "93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094";
+const REQUIRE_CONTENT_ARTIFACT_FLAG = "--require-content-artifact";
+const TEST_ONLY_MISSING_CONTENT_ARTIFACT = "--test-only-missing-content-artifact";
+const RETIRED_ARTIFACT_FLAGS = ["--require-final-artifact", "--test-only-missing-final-artifact"];
 const TEST_ARGS = process.argv.slice(2);
-const UNKNOWN_TEST_ARGS = TEST_ARGS.filter((arg) => !["--require-final-artifact", TEST_ONLY_MISSING_FINAL_ARTIFACT].includes(arg));
+const UNKNOWN_TEST_ARGS = TEST_ARGS.filter((arg) => ![REQUIRE_CONTENT_ARTIFACT_FLAG, TEST_ONLY_MISSING_CONTENT_ARTIFACT].includes(arg));
 assert.deepEqual(UNKNOWN_TEST_ARGS, [], "unknown author-dsf2026-show test arguments must fail closed");
-const RUN_TEST_ONLY_MISSING_FINAL_ARTIFACT = TEST_ARGS.includes(TEST_ONLY_MISSING_FINAL_ARTIFACT);
-const EXPLICIT_REQUIRE_FINAL_ARTIFACT = TEST_ARGS.includes("--require-final-artifact");
-assert.ok(!(RUN_TEST_ONLY_MISSING_FINAL_ARTIFACT && TEST_ARGS.includes("--require-final-artifact")), "test-only missing-artifact behavior cannot be combined with the release gate");
-const REQUIRE_FINAL_ARTIFACT = EXPLICIT_REQUIRE_FINAL_ARTIFACT || !RUN_TEST_ONLY_MISSING_FINAL_ARTIFACT;
+const RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT = TEST_ARGS.includes(TEST_ONLY_MISSING_CONTENT_ARTIFACT);
+const EXPLICIT_REQUIRE_CONTENT_ARTIFACT = TEST_ARGS.includes(REQUIRE_CONTENT_ARTIFACT_FLAG);
+assert.ok(!(RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT && EXPLICIT_REQUIRE_CONTENT_ARTIFACT), "test-only missing-artifact behavior cannot be combined with the pinned authored content gate");
+const REQUIRE_CONTENT_ARTIFACT = EXPLICIT_REQUIRE_CONTENT_ARTIFACT || !RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT;
 
 function emptyTimeline() {
   return {
@@ -337,13 +340,19 @@ function assertApprovedFixtureStageLayouts(project, label) {
   );
 }
 
-function assertFinalArtifactInvariants(project, label) {
+function assertContentArtifactInvariants(project, label) {
   assert.deepEqual(project.dj_track_triggers, [{
     id: "jinsei-over-production",
-    selector: { titleContains: "人生オーバー", fallbackDeck: 1 },
+    selector: {
+      artist: null,
+      contentId: null,
+      fallbackDeck: 1,
+      title: null,
+      titleContains: "人生オーバー",
+    },
     timelineId: 1,
     retrigger: "once_per_play_session",
-  }], `${label} production title selector must be exact`);
+  }], `${label} authored title selector must be exact`);
 
   const snapshot = project?.snapshot;
   assert.ok(snapshot && typeof snapshot === "object", `${label} must contain a snapshot`);
@@ -391,8 +400,8 @@ function assertFinalArtifactInvariants(project, label) {
     { id: 3, kind: "Audio", order: 0 },
   ], `${label} destination Timeline`);
   assert.equal(destination.label, "惑う星", `${label} destination Timeline label must be exact`);
-  assert.equal(destination.loop_region, null, `${label} destination Timeline must not carry the source loop`);
-  assert.equal(destination.follow, null, `${label} destination Timeline must not carry a second Follow`);
+  assert.equal(Object.hasOwn(destination, "loop_region"), false, `${label} destination Timeline must not carry the source loop`);
+  assert.equal(Object.hasOwn(destination, "follow"), false, `${label} destination Timeline must not carry a second Follow`);
   assert.deepEqual(
     (snapshot.video?.media_assets ?? []).map(({ id, source, byte_size, content_hash }) => ({
       id,
@@ -437,52 +446,64 @@ function assertFinalArtifactInvariants(project, label) {
     }, {
       enabled: false,
       protocol: "EnttecOpenDmx",
-      serial_port: "COM3",
+      serial_port: "",
       serial_baud_rate: 250_000,
-    }, `${label} ${routeLabel} must be staged disabled on EnttecOpenDmx COM3 at 250000`);
+    }, `${label} ${routeLabel} must be staged disabled on EnttecOpenDmx at 250000 with an empty machine-local serial_port`);
   }
   assert.equal(snapshot.dmx_outputs.length, 1, `${label} must contain one staged DMX output`);
   assertApprovedFixtureStageLayouts(project, label);
 }
 
-async function checkOptionalFinalArtifactForTest(path, required) {
+async function checkOptionalContentArtifactForTest(path, required) {
   let bytes;
   try {
     bytes = await readFile(path);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
-    if (required) assert.fail(`required final production artifact is missing: ${path}`);
-    console.log(`test-only missing-artifact behavior: optional final production artifact is intentionally absent: ${path}`);
+    if (required) assert.fail(`required pinned authored content artifact is missing: ${path}`);
+    console.log(`test-only missing-artifact behavior: optional pinned authored content artifact is intentionally absent: ${path}`);
     return false;
   }
-  assert.equal(bytes.length, FINAL_ARTIFACT_BYTES, "final production artifact must retain its exact byte length");
-  assert.equal(sha256(bytes), FINAL_ARTIFACT_SHA256, "final production artifact must retain its exact SHA-256");
+  assert.equal(bytes.length, CONTENT_ARTIFACT_BYTES, "pinned authored content artifact must retain its exact byte length");
+  assert.equal(sha256(bytes), CONTENT_ARTIFACT_SHA256, "pinned authored content artifact must retain its exact SHA-256");
   const project = parseUtf8Json(bytes);
-  checkPass(preflightShowContract(project), "final production artifact");
-  assertFinalArtifactInvariants(project, "final production artifact");
+  checkPass(preflightShowContract(project), "pinned authored content artifact");
+  assertContentArtifactInvariants(project, "pinned authored content artifact");
   return true;
 }
 
-async function runLocalFinalArtifactGate(path) {
-  await checkOptionalFinalArtifactForTest(path, true);
-  console.log(`LOCAL FINAL-ARTIFACT GATE passed: ${path} (${FINAL_ARTIFACT_BYTES} bytes, SHA-256 ${FINAL_ARTIFACT_SHA256})`);
+async function runPinnedContentArtifactGate(path) {
+  await checkOptionalContentArtifactForTest(path, true);
+  console.log(`PINNED AUTHORED CONTENT-ARTIFACT GATE passed: ${path} (${CONTENT_ARTIFACT_BYTES} bytes, SHA-256 ${CONTENT_ARTIFACT_SHA256})`);
 }
 
-async function runTestOnlyMissingFinalArtifactBehavior() {
+async function runTestOnlyMissingContentArtifactBehavior() {
   const work = await mkdtemp(join(tmpdir(), "syndocal-author-dsf2026-missing-artifact-test-"));
   try {
     assert.equal(
-      await checkOptionalFinalArtifactForTest(join(work, "missing-final.sdc"), false),
+      await checkOptionalContentArtifactForTest(join(work, "missing-content.sdc"), false),
       false,
-      "an absent optional final artifact must be an intentional test-only skip",
+      "an absent optional pinned authored content artifact must be an intentional test-only skip",
     );
     await assert.rejects(
-      () => runLocalFinalArtifactGate(join(work, "missing-required-final.sdc")),
-      /required final production artifact is missing/i,
-      "the named local final-artifact gate must fail clearly when its artifact is absent",
+      () => runPinnedContentArtifactGate(join(work, "missing-required-content.sdc")),
+      /required pinned authored content artifact is missing/i,
+      "the pinned authored content-artifact gate must fail clearly when its artifact is absent",
     );
   } finally {
     await rm(work, { recursive: true, force: true });
+  }
+}
+
+function assertRetiredArtifactFlagsFailClosed() {
+  for (const flag of RETIRED_ARTIFACT_FLAGS) {
+    const rejected = spawnSync(process.execPath, [fileURLToPath(import.meta.url), flag], { encoding: "utf8" });
+    assert.notEqual(rejected.status, 0, `${flag} must remain retired and fail closed`);
+    assert.match(
+      `${rejected.stdout}\n${rejected.stderr}`,
+      /unknown author-dsf2026-show test arguments must fail closed/,
+      `${flag} must be rejected as an unknown argument without a compatibility shim`,
+    );
   }
 }
 
@@ -542,16 +563,39 @@ assert.deepEqual(authored.snapshot.output, {
   ...originalBase.snapshot.output,
   enabled: false,
   protocol: "EnttecOpenDmx",
-  serial_port: "COM3",
+  serial_port: "",
   serial_baud_rate: 250_000,
-}, "output config must retain unrelated fields while staging the exact disabled serial route");
+}, "output config must retain unrelated fields while staging the exact disabled logical route with an empty machine-local serial_port");
 assert.deepEqual(authored.snapshot.dmx_outputs, [{
   ...originalBase.snapshot.dmx_outputs[0],
   enabled: false,
   protocol: "EnttecOpenDmx",
-  serial_port: "COM3",
+  serial_port: "",
   serial_baud_rate: 250_000,
-}], "persisted DMX route must be staged identically");
+}], "persisted DMX route must be staged identically without pinning a machine-local physical port");
+assert.deepEqual(
+  validateDmxOutputStaging(authored),
+  { detail: "primary and persisted DMX routes are staged as disabled EnttecOpenDmx at 250000 baud; physical port is machine-local; project route serial_port is empty" },
+  "valid staged DMX output must explain the machine-local physical-port boundary",
+);
+{
+  const stalePhysicalPort = structuredClone(authored);
+  stalePhysicalPort.snapshot.output.serial_port = "COM9";
+  assert.deepEqual(
+    validateDmxOutputStaging(stalePhysicalPort),
+    { error: "primary and persisted DMX routes must be disabled EnttecOpenDmx at 250000 baud; physical port is machine-local; project route serial_port must be empty" },
+    "a project-persisted physical port must fail closed with the exact machine-local boundary",
+  );
+}
+{
+  const stalePersistedPhysicalPort = structuredClone(authored);
+  stalePersistedPhysicalPort.snapshot.dmx_outputs[0].serial_port = "COM9";
+  assert.deepEqual(
+    validateDmxOutputStaging(stalePersistedPhysicalPort),
+    { error: "primary and persisted DMX routes must be disabled EnttecOpenDmx at 250000 baud; physical port is machine-local; project route serial_port must be empty" },
+    "a physical port embedded in the persisted DMX route must fail closed independently of the primary route",
+  );
+}
 assert.deepEqual(authored.snapshot.video, originalBase.snapshot.video, "video state outside the authored Timeline must remain unchanged");
 assert.deepEqual(authored.dj_track_triggers, [{
   id: "jinsei-over-production",
@@ -758,12 +802,13 @@ assert.deepEqual(authoredReport.checks.filter(({ id }) => ["lighting_boundary", 
   { id: "lighting_boundary", status: "PASS" },
   { id: "dmx_staging", status: "PASS" },
 ], "show-specific boundary and disabled DMX staging checks must PASS");
-if (RUN_TEST_ONLY_MISSING_FINAL_ARTIFACT) {
-  await runTestOnlyMissingFinalArtifactBehavior();
-  console.log(`LOCAL FINAL-ARTIFACT GATE intentionally isolated by ${TEST_ONLY_MISSING_FINAL_ARTIFACT}; generated-contract tests continue without the production artifact`);
-} else if (REQUIRE_FINAL_ARTIFACT) {
-  await runLocalFinalArtifactGate(FINAL_ARTIFACT_PATH);
+if (RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT) {
+  await runTestOnlyMissingContentArtifactBehavior();
+  console.log(`PINNED AUTHORED CONTENT-ARTIFACT GATE intentionally isolated by ${TEST_ONLY_MISSING_CONTENT_ARTIFACT}; generated-contract tests continue without the pinned authored content artifact`);
+} else if (REQUIRE_CONTENT_ARTIFACT) {
+  await runPinnedContentArtifactGate(CONTENT_ARTIFACT_PATH);
 }
+assertRetiredArtifactFlagsFailClosed();
 
 assertThrows(() => authorDsf2026Show({ ...originalBase, dj_track_triggers: [{ id: "already-authored" }] }, manifest), /dj_track_triggers.*absent or empty|existing mapping/i, "existing mapping");
 {
