@@ -2434,7 +2434,14 @@ export interface CompositionSummary {
   id: number;
   label: string;
   layer_ids: number[];
+  /** Stable Timeline Video lane identities, resolved at render time. */
+  timeline_layer_ids?: TimelineVideoLayerRef[];
   output_ids: number[];
+}
+
+export interface TimelineVideoLayerRef {
+  timeline_id: number;
+  layer_id: number;
 }
 
 export interface CompositionLayerPlan {

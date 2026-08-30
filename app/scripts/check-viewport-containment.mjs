@@ -6835,25 +6835,84 @@ async function runMappingViewportConformanceViewport(client, viewport) {
 
   // Probe hover-only labels last at the full-stage view. The earlier tracking
   // proof has separated the selected fixture from the mock's stacked fixture
-  // groups. Clearing the pick must also clear the active fixture so no stale
-  // selected label remains while the right-hand selection context reports no pick.
-  await clickVisibleSelector(client, '[data-mapping-selection-action="clear"]');
+  // groups. An empty Stage click must clear the active fixture, and both the
+  // delta and full snapshot paths must preserve that explicit empty selection.
+  const emptyStageClickPoint = await client.evaluate(`(() => {
+    const stage = document.querySelector('.setupStageContext .editableStage');
+    const rect = stage?.getBoundingClientRect();
+    if (!rect) return null;
+    const candidates = [
+      [6, 6],
+      [rect.width - 6, 6],
+      [6, rect.height - 6],
+      [rect.width - 6, rect.height - 6],
+    ];
+    for (const [offsetX, offsetY] of candidates) {
+      const x = rect.left + offsetX;
+      const y = rect.top + offsetY;
+      const target = document.elementFromPoint(x, y);
+      const blocker = target?.closest?.(
+        '[data-stage-fixture-id], [data-stage-overlay-handle], .stageObjectLayer, .stageVideoSurface2d',
+      );
+      if (!blocker) return { x, y };
+    }
+    return null;
+  })()`);
+  if (!emptyStageClickPoint) throw new Error("Mapping viewport empty-stage click point is unavailable");
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
-    x: initial.stageRect.left + 4,
-    y: initial.stageRect.top + 4,
+    x: emptyStageClickPoint.x,
+    y: emptyStageClickPoint.y,
     button: "none",
     buttons: 0,
     pointerType: "mouse",
   });
   await sleep(40);
-  const clearPickState = await client.evaluate(`(() => {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: emptyStageClickPoint.x,
+    y: emptyStageClickPoint.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: emptyStageClickPoint.x,
+    y: emptyStageClickPoint.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(40);
+  const readClearedStageSelection = () => client.evaluate(`(() => {
     return {
       selectedFixtureCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-id].selected').length,
       fixtureLabelCount: document.querySelectorAll('.setupStageContext [data-stage-fixture-label-id]').length,
       geometryLabelCount: document.querySelectorAll('.setupStageContext [data-stage-geometry-label-id]').length,
     };
   })()`);
+  const clearPickState = await readClearedStageSelection();
+  const replayMappingViewportSnapshot = async (kind, setup = undefined) => {
+    const selection = await client.evaluate(`(async () => {
+      const replay = window.__syndocalReplayMappingViewportSnapshot;
+      if (typeof replay !== 'function') return null;
+      const result = replay(${JSON.stringify(kind)}, ${JSON.stringify(setup)});
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return result;
+    })()`);
+    if (!selection) throw new Error(`Mapping viewport ${kind} snapshot replay seam is unavailable`);
+    return { selection, dom: await readClearedStageSelection() };
+  };
+  const deltaClearReplay = await replayMappingViewportSnapshot("delta");
+  const fullClearReplay = await replayMappingViewportSnapshot("full");
+  // Initial project hydration arrives as a full snapshot. It must leave the
+  // valid initial null selection alone rather than promote the first fixture.
+  const freshInitialFullReplay = await replayMappingViewportSnapshot("full", "fresh-initial-null");
+  // A stale non-null ID is invalid on either polling path. Both must clear the
+  // entire pick and its draft rather than retaining a mismatched mapping.
+  const staleSelectedDeltaReplay = await replayMappingViewportSnapshot("delta", "stale-selected-id");
+  const staleSelectedFullReplay = await replayMappingViewportSnapshot("full", "stale-selected-id");
   await setMappingViewportConformanceZoom(client, 1);
   await sleep(50);
   const hoverResetPoints = [
@@ -6996,6 +7055,18 @@ async function runMappingViewportConformanceViewport(client, viewport) {
         && handle.screenMinPx >= handle.minimumHitSizePx
         && handle.topHitOwnsHandle;
     });
+  const selectionHasNoActiveFixture = (state) =>
+    state.selectedFixtureCount === 0
+    && state.fixtureLabelCount === 0
+    && state.geometryLabelCount === 0;
+  const snapshotReplayPreservesNoActiveFixture = (replay) =>
+    replay.selection.selectedFixtureId === null
+    && replay.selection.selectedMappingFixtureIds.length === 0
+    && replay.selection.selectedFixtureLabelDraft === ""
+    && replay.selection.selectedFixtureUniverseDraft === 0
+    && replay.selection.selectedFixtureAddressDraft === 1
+    && replay.selection.selectedFixtureGroupText === ""
+    && selectionHasNoActiveFixture(replay.dom);
   const rotateFixtureHandle = rotateMode.detachedHandles["fixture-yaw"];
   const rectCoversStage = (rect, state) =>
     Boolean(rect && state.stageRect)
@@ -7122,10 +7193,15 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && hoverFixtureIsCurrentHover
       && hoverFixtureLabelVisibleOnHover
       && hoverFixtureLabelAbsentAfterHover,
-    clearPickedSelectionRemovesActiveFixtureLabel:
-      clearPickState.selectedFixtureCount === 0
-      && clearPickState.fixtureLabelCount === 0
-      && clearPickState.geometryLabelCount === 0,
+    emptyStageClickClearsAndSnapshotReplaysPreserveNoActiveFixture:
+      selectionHasNoActiveFixture(clearPickState)
+      && snapshotReplayPreservesNoActiveFixture(deltaClearReplay)
+      && snapshotReplayPreservesNoActiveFixture(fullClearReplay),
+    freshInitialNullSelectionSurvivesItsFullSnapshot:
+      snapshotReplayPreservesNoActiveFixture(freshInitialFullReplay),
+    staleNonNullSelectionAndDraftFailClosedOnDeltaAndFullSnapshots:
+      snapshotReplayPreservesNoActiveFixture(staleSelectedDeltaReplay)
+      && snapshotReplayPreservesNoActiveFixture(staleSelectedFullReplay),
     selectModeUsesOutlineWithoutFixtureYawPins:
       initial.fixtureYawHandleCount === 0
       && zoomOne.fixtureYawHandleCount === 0
@@ -7183,6 +7259,12 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     hoverAttempts,
     hoverFixtureState,
     clearPickState,
+    emptyStageClickPoint,
+    deltaClearReplay,
+    fullClearReplay,
+    freshInitialFullReplay,
+    staleSelectedDeltaReplay,
+    staleSelectedFullReplay,
     hoverFixtureIsCurrentHover,
     hoverFixtureLabelAbsentBeforeHover,
     hoverFixtureLabelVisibleOnHover,

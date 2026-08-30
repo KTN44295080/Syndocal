@@ -15,8 +15,11 @@ not fall back to a generic unreviewed output mutation.
 ## 2026-08-30 alpha.39 native checkpoint
 
 The current product checkpoint is `1.2.0-alpha.39` on branch
-`codex/syndocal-v1.2`; the build source/docs `HEAD` and upstream were both
-`ec93e9160da853ad181de70aee4db7b4a75fafbb`. The Timeline authoring-output selector now admits only one exact
+`codex/syndocal-v1.2`. The native build source was
+`ec93e9160da853ad181de70aee4db7b4a75fafbb`; the later documentation-only
+checkpoint reached clean `HEAD == upstream ==
+71f93803a73f7474ae21f1d8d39eb273bcc36d67` without changing the binary. The
+Timeline authoring-output selector now admits only one exact
 selectable occurrence; duplicate, missing, or ambiguous identities fail closed.
 Status-only polling may reapply the exact desired option without
 list/configuration/routing mutation. Browser Phase A/B passed after the strict
@@ -48,6 +51,82 @@ other hardware acceptance remain pending. The next safe action is operator
 audible confirmation. The historical alpha.38 artifact, PID/window, and
 `PX160` display drift remain immutable evidence and must not be relabeled as
 alpha.39.
+
+## 2026-08-30 Art-Net one-shot probe source checkpoint
+
+The fixed DSF2026 Art-Net one-shot probe is now complete at the source and
+review boundary, but this is not physical acceptance. The old path used a
+legacy diagnostic/lease Pending record without a durable local WebView window
+binding; after renderer rotation it could not prove that the same local window
+still owned the in-doubt operation. The new path uses durable v2 Pending with
+`window_label` captured from the authenticated local window. A v1 Pending record
+without that field fails closed at migration/reconciliation. If the renderer
+rotates within the same window, reconciliation is deliberately **no-send** and
+records the outcome as unobservable, permanently consumes the one-shot physical
+budget, and never retries the datagram. This prevents an ambiguous send from
+becoming a second physical attempt.
+
+The evidence verifier uses the current Windows UDP dynamic-port range rather
+than a stale hard-coded range. The packet proof is exact Art-Net ArtDmx v14 with
+physical byte `0`, wire Universe `0`, exactly 512 DMX channels, and channel 500
+forced to `0`; the fixed source frame remains channel 1 = 255 and channel 5 =
+255. Independent Terra xHigh re-review is `GO`. Focused source evidence is
+engine DSF2026 `3/3`, Syndocal DSF2026 `6/6`, legacy migration `1/1`, and
+monitor/verifier `4/4` (`41` assertions), with UI/runtime/localization checks
+passing and exact MSVC `14.44` first-party warnings `0`.
+
+These are source/deterministic proofs only: no physical UDP packet capture, no
+Unity/fixture observation, and no native build of this probe checkpoint has
+been performed. The probe therefore remains open in the checklist below. The
+first safe resume action is to commit/push this frozen source checkpoint, run
+the exact MSVC `14.44` native build and launch gate, then close Daslight/Easy
+View, start the exact Unity receiver as sole UDP `6454` owner, and capture the
+approved one-shot result without retrying an in-doubt operation.
+
+## 2026-08-30 live readiness audit
+
+The current same-PC candidate remains
+`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc`,
+`1,098,035` bytes, SHA-256
+`DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`.
+`tools/show-structural-preflight.mjs` passes its exact DJ mapping, authored
+Timeline 1 -> Timeline 2 Follow, one-source-measure transition, destination
+first-measure hold, and non-finite source loop contracts. Its persisted output
+surface contains one disabled Art-Net route at `127.0.0.1:6454`, wire Universe
+0, and exactly two enabled 1920x1080 Spout outputs named `Syndocal Background`
+and `Syndocal Foreground`. It currently contains zero video layers, an empty
+Main-composition layer list, and zero Timeline video-automation rows. The fixed
+senders are authored, but an MP4/Camera content switch is not. The existing
+File/Camera layer plus Timeline Opacity-automation path supports a Step cut or
+Linear fade once the actual media and camera identity are supplied; its focused
+Timeline-automation and camera-input UI contracts pass. The non-overwriting
+copy-tool test passes. These are project/source facts, not live output claims.
+
+The last UI-verified open unsaved project was the alpha9 reference-audio source,
+not the alpha10 candidate; the read-only process audit could not re-observe the
+current in-memory project identity. The alpha9 file has a disabled
+`EnttecOpenDmx` route and no video outputs, so that authored file cannot satisfy
+this same-PC contract. Changing the open project remains an operator-visible
+action and was not done during this audit.
+
+Live process inspection found no Unity process. Daslight PID `42752` still owns
+`0.0.0.0:6454`; it was deliberately preserved. The exact Unity receiver scene
+is `E:\UnityProjects\Art-net-Unity\Assets\DSF2026\Scenes\DSF2026_Visualizer.unity`,
+but that Unity checkout is dirty and its Build Settings point at another scene.
+The safe physical sequence therefore remains: the operator explicitly closes
+Daslight/Easy View, opens that exact existing scene without regenerating or
+saving it, enters Play Mode, verifies Unity is the sole UDP 6454 owner, then
+loads the alpha10 candidate and uses only the lease-bound Art-Net/Spout enable
+actions. No Unity, GPU, Art-Net, Spout, or visible Mega PAR result was observed
+in this audit.
+
+The exact two-byte red acceptance frame is covered by a deterministic local UDP
+test, while physical packet capture remains unobserved. The reviewed
+lease-bound one-shot probe is now the approved source path; it is not a route
+activation and cannot by itself prove a packet reached Unity. Until the exact
+native build/launch and physical capture are performed, the red Mega PAR row
+and Unity physical row remain open. There is no serial-DMX fallback for this
+show route.
 
 ## Lighting contract
 

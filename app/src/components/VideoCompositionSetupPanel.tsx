@@ -1,11 +1,18 @@
 import { For, Show } from "solid-js";
-import type { CompositionSummary, VideoLayerSummary } from "../types";
+import type {
+  CompositionSummary,
+  TimelineLayerSummary,
+  TimelineVideoLayerRef,
+  VideoLayerSummary,
+} from "../types";
 
 type MaybePromise = void | Promise<unknown>;
 
 type VideoCompositionSetupPanelProps = {
   compositions: CompositionSummary[];
   layers: VideoLayerSummary[];
+  timelineId: number;
+  timelineLayers: TimelineLayerSummary[];
   draftLabel: string;
   draftLayerIds: number[];
   onDraftLabel: (value: string) => void;
@@ -13,6 +20,10 @@ type VideoCompositionSetupPanelProps = {
   onAddComposition: () => MaybePromise;
   onRemoveComposition: (compositionId: number) => MaybePromise;
   onSetCompositionLayers: (compositionId: number, layerIds: number[]) => MaybePromise;
+  onSetCompositionTimelineLayers: (
+    compositionId: number,
+    timelineLayerIds: TimelineVideoLayerRef[],
+  ) => MaybePromise;
   onMoveCompositionLayer: (
     compositionId: number,
     layerIds: number[],
@@ -24,6 +35,12 @@ type VideoCompositionSetupPanelProps = {
 export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProps) {
   const layerLabel = (layerId: number) =>
     props.layers.find((candidate) => candidate.id === layerId)?.label ?? `Video Layer ${layerId}`;
+  const timelineVideoLayers = () => props.timelineLayers.filter((layer) => layer.kind === "Video");
+  const timelineLayerIds = (composition: CompositionSummary) => composition.timeline_layer_ids ?? [];
+  const isCurrentTimelineLayer = (timelineLayerIds: TimelineVideoLayerRef[], layerId: number) =>
+    timelineLayerIds.some(
+      (candidate) => candidate.timeline_id === props.timelineId && candidate.layer_id === layerId,
+    );
 
   return (
     <>
@@ -33,7 +50,7 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
             <div class="compositionItem">
               <div class="compositionHeader">
                 <strong data-no-localize>{composition.label}</strong>
-                <span>{composition.layer_ids.length} video layer(s) / {composition.output_ids.length} video output(s)</span>
+                <span>{timelineLayerIds(composition).length} Timeline Video lane(s) + {composition.layer_ids.length} fixed video layer(s) / {composition.output_ids.length} video output(s)</span>
               </div>
               <Show when={composition.id !== 1}>
                 <Show when={composition.layer_ids.length > 0}>
@@ -66,6 +83,34 @@ export function VideoCompositionSetupPanel(props: VideoCompositionSetupPanelProp
                   </div>
                 </Show>
                 <div class="compositionLayerPicker">
+                  <strong>Timeline Video — rendered below fixed video layers</strong>
+                  <For each={timelineVideoLayers()}>
+                    {(timelineLayer) => (
+                      <label class="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={isCurrentTimelineLayer(timelineLayerIds(composition), timelineLayer.id)}
+                          onChange={(event) => {
+                            const nextTimelineLayerIds = event.currentTarget.checked
+                              ? [
+                                  ...timelineLayerIds(composition),
+                                  { timeline_id: props.timelineId, layer_id: timelineLayer.id },
+                                ]
+                              : timelineLayerIds(composition).filter(
+                                  (candidate) =>
+                                    candidate.timeline_id !== props.timelineId
+                                      || candidate.layer_id !== timelineLayer.id,
+                                );
+                            void props.onSetCompositionTimelineLayers(composition.id, nextTimelineLayerIds);
+                          }}
+                        />
+                        <span data-no-localize>{timelineLayer.label}</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+                <div class="compositionLayerPicker">
+                  <strong>Fixed video layers — rendered above Timeline Video</strong>
                   <For each={props.layers}>
                     {(layer) => (
                       <label class="checkbox">

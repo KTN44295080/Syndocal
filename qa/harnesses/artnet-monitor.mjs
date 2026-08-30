@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 const ARTNET_ID = Buffer.from("Art-Net\0", "ascii");
 const ART_DMX_OPCODE = 0x5000;
+export const ARTNET_MONITOR_EVIDENCE_SCHEMA = 2;
 const DEFAULT_ARTNET_PORT = 6454;
 const DEFAULT_HTTP_PORT = 6455;
 const DEFAULT_MAX_TRANSITIONS = 128;
@@ -115,12 +116,14 @@ function summarizeFrame(data) {
   return { nonZeroChannels, maxValue, firstNonZero };
 }
 
-function createState(options) {
+export function createArtNetMonitorState(options, startedAtEpochMs = Date.now()) {
   return {
-    schema: 1,
+    schema: ARTNET_MONITOR_EVIDENCE_SCHEMA,
     product: "Syndocal external Art-Net monitor",
-    startedAt: new Date().toISOString(),
+    startedAt: new Date(startedAtEpochMs).toISOString(),
+    startedAtEpochMs,
     endedAt: null,
+    endedAtEpochMs: null,
     listen: { address: "0.0.0.0", port: options.artnetPort },
     monitorUrl: `http://127.0.0.1:${options.httpPort}/`,
     capture: {
@@ -141,10 +144,14 @@ function createState(options) {
     transitions: [],
     lastFrames: {},
     lastFrame: null,
+    // Bounded raw evidence for a later byte-level verifier. This is deliberately
+    // only the first accepted ArtDmx datagram; the monitor remains usable for
+    // long-running captures without retaining an unbounded raw-packet history.
+    rawArtDmx: null,
   };
 }
 
-function recordFrame(state, packet, remote, nowMs) {
+function recordFrame(state, packet, rawDatagram, remote, nowMs) {
   const timestamp = new Date(nowMs).toISOString();
   const digest = frameDigest(packet.data);
   const summary = summarizeFrame(packet.data);
@@ -158,6 +165,15 @@ function recordFrame(state, packet, remote, nowMs) {
   const expectedSequence = priorSequence === 255 ? 1 : priorSequence + 1;
   const sequenceDiscontinuity =
     priorSequence !== 0 && packet.sequence !== 0 && packet.sequence !== expectedSequence;
+
+  if (state.rawArtDmx === null) {
+    state.rawArtDmx = {
+      at: timestamp,
+      receivedAtEpochMs: nowMs,
+      source: sourceKey,
+      bytes: Array.from(rawDatagram),
+    };
+  }
 
   state.artDmxFrames += 1;
   state.firstFrameAt ??= timestamp;
@@ -214,8 +230,28 @@ function recordFrame(state, packet, remote, nowMs) {
   state.lastFrame = lastFrame;
 }
 
-function publicState(state) {
-  const { lastFrame, streams, universes, ...summary } = state;
+/**
+ * Serializable v2 evidence. Unlike the HTTP projection, this retains the
+ * receive epochs and one raw ArtDmx datagram for fail-closed offline review.
+ */
+export function serializeArtNetMonitorEvidence(state) {
+  return structuredClone(state);
+}
+
+/**
+ * Browser-only projection. Never expose raw datagram bytes or receive epochs
+ * through the local HTTP status surface.
+ */
+export function serializeArtNetMonitorPublicState(state) {
+  const {
+    lastFrame,
+    streams,
+    universes,
+    rawArtDmx: _rawArtDmx,
+    startedAtEpochMs: _startedAtEpochMs,
+    endedAtEpochMs: _endedAtEpochMs,
+    ...summary
+  } = state;
   const publicStreams = Object.fromEntries(
     Object.entries(streams).map(([key, value]) => {
       const { lastFrameEpochMs: _epoch, ...rest } = value;
@@ -229,6 +265,23 @@ function publicState(state) {
     }),
   );
   return { ...summary, streams: publicStreams, universes: publicUniverses, lastFrame };
+}
+
+export function recordArtNetMonitorDatagram(state, message, remote, nowMs = Date.now()) {
+  state.totalDatagrams += 1;
+  const packet = parseArtDmx(message);
+  if (!packet) {
+    state.rejectedDatagrams += 1;
+    return null;
+  }
+  recordFrame(state, packet, message, remote, nowMs);
+  return packet;
+}
+
+export function finishArtNetMonitorCapture(state, reason, endedAtEpochMs = Date.now()) {
+  state.endedAt = new Date(endedAtEpochMs).toISOString();
+  state.endedAtEpochMs = endedAtEpochMs;
+  state.reason = reason;
 }
 
 function renderHtml() {
@@ -309,7 +362,7 @@ function renderHtml() {
 function writeEvidence(evidencePath, state) {
   if (!evidencePath) return;
   fs.mkdirSync(path.dirname(path.resolve(evidencePath)), { recursive: true });
-  fs.writeFileSync(evidencePath, `${JSON.stringify(publicState(state), null, 2)}\n`, "utf8");
+  fs.writeFileSync(evidencePath, `${JSON.stringify(serializeArtNetMonitorEvidence(state), null, 2)}\n`, "utf8");
 }
 
 async function runSelfTest() {
@@ -320,24 +373,34 @@ async function runSelfTest() {
   if (parseArtDmx(Buffer.from("not Art-Net")) !== null) {
     throw new Error("Non-Art-Net datagram was accepted");
   }
-  const state = createState({
+  const state = createArtNetMonitorState({
     artnetPort: 6454,
     httpPort: 6455,
     captureChanges: true,
     maxTransitions: 1,
-  });
+  }, 0);
   const sourceA = { address: "127.0.0.1", port: 50001 };
   const sourceB = { address: "127.0.0.1", port: 50002 };
-  recordFrame(state, parseArtDmx(buildArtDmxForSelfTest({ sequence: 10 })), sourceA, 1000);
-  recordFrame(state, parseArtDmx(buildArtDmxForSelfTest({ sequence: 11 })), sourceA, 1023);
-  recordFrame(state, parseArtDmx(buildArtDmxForSelfTest({ sequence: 90 })), sourceB, 1024);
+  recordArtNetMonitorDatagram(state, buildArtDmxForSelfTest({ sequence: 10 }), sourceA, 1000);
+  recordArtNetMonitorDatagram(state, buildArtDmxForSelfTest({ sequence: 11 }), sourceA, 1023);
+  recordArtNetMonitorDatagram(state, buildArtDmxForSelfTest({ sequence: 90 }), sourceB, 1024);
   if (state.sequenceDiscontinuities !== 0 || Object.keys(state.streams).length !== 2) {
     throw new Error("Per-source ArtDMX sequence tracking self-test failed");
   }
+  const evidence = serializeArtNetMonitorEvidence(state);
+  const publicState = serializeArtNetMonitorPublicState(state);
   if (
     state.transitions.length !== 1 ||
     state.transitions[0].data?.[0] !== 255 ||
-    state.lastFrames["0"]?.data?.[1] !== 127
+    state.lastFrames["0"]?.data?.[1] !== 127 ||
+    evidence.schema !== ARTNET_MONITOR_EVIDENCE_SCHEMA ||
+    evidence.rawArtDmx?.bytes?.[0] !== 65 ||
+    evidence.rawArtDmx?.bytes?.[12] !== 10 ||
+    Object.hasOwn(publicState, "rawArtDmx") ||
+    Object.hasOwn(publicState, "startedAtEpochMs") ||
+    Object.hasOwn(publicState, "endedAtEpochMs") ||
+    Object.hasOwn(publicState.streams["127.0.0.1:50001/u0"], "lastFrameEpochMs") ||
+    Object.hasOwn(publicState.universes["0"], "lastFrameEpochMs")
   ) {
     throw new Error("Full transition capture self-test failed");
   }
@@ -351,7 +414,7 @@ async function main() {
     return;
   }
 
-  const state = createState(options);
+  const state = createArtNetMonitorState(options);
   // Art-Net applications commonly bind UDP 6454 themselves so they can answer
   // discovery traffic.  Allow the monitor to share the port with the sender;
   // this is required for same-host Daslight/Syndocal capture on Windows.
@@ -360,7 +423,7 @@ async function main() {
     response.setHeader("Cache-Control", "no-store");
     if (request.url === "/state") {
       response.setHeader("Content-Type", "application/json; charset=utf-8");
-      response.end(JSON.stringify(publicState(state)));
+      response.end(JSON.stringify(serializeArtNetMonitorPublicState(state)));
       return;
     }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -368,13 +431,7 @@ async function main() {
   });
 
   socket.on("message", (message, remote) => {
-    state.totalDatagrams += 1;
-    const packet = parseArtDmx(message);
-    if (!packet) {
-      state.rejectedDatagrams += 1;
-      return;
-    }
-    recordFrame(state, packet, remote, Date.now());
+    recordArtNetMonitorDatagram(state, message, remote, Date.now());
   });
 
   await new Promise((resolve, reject) => {
@@ -394,8 +451,7 @@ async function main() {
   const finish = async (reason) => {
     if (finished) return;
     finished = true;
-    state.endedAt = new Date().toISOString();
-    state.reason = reason;
+    finishArtNetMonitorCapture(state, reason);
     writeEvidence(options.evidencePath, state);
     await Promise.all([
       new Promise((resolve) => socket.close(resolve)),

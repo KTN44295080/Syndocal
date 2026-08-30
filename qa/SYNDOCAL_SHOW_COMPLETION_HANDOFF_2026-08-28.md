@@ -48,6 +48,66 @@ This is the concise authoritative resume note for the final show-critical tranch
   equality is reverified, the next safe action is operator audible
   confirmation.
 
+### 2026-08-30 Art-Net one-shot probe source checkpoint
+
+The fixed DSF2026 Art-Net one-shot probe is complete at the source and review
+boundary, not at the physical boundary. The old diagnostic/lease path could
+leave a Pending operation identified only by a renderer principal, so a new
+renderer after rotation could not prove same-window ownership. The new durable
+v2 Pending record stores `window_label`; a v1 Pending record without that field
+fails closed during migration/reconciliation. Same-window renderer rotation
+reconciliation is explicitly no-send, marks the physical result unobservable,
+permanently consumes the one-shot budget, and never retries.
+
+The verifier now derives the current Windows UDP dynamic-port range. The exact
+packet proof is ArtDmx v14, physical byte `0`, wire Universe `0`, 512 DMX
+channels, and channel 500 = `0` (with the fixed source look ch1/ch5 = `255`).
+Independent Terra xHigh re-review is `GO`. Focused evidence is engine DSF2026
+`3/3`, Syndocal DSF2026 `6/6`, legacy migration `1/1`, and monitor/verifier
+`4/4` (`41` assertions); UI/runtime/localization checks pass and exact MSVC
+`14.44` first-party warnings are `0`.
+
+No physical UDP packet capture, Unity/fixture acceptance, or native build of
+this probe checkpoint has occurred. Do not mark the probe or same-PC physical
+output complete. The first safe resume action is the exact MSVC `14.44` native
+build/launch from the frozen source checkpoint; then close Daslight/Easy View,
+  start the exact Unity receiver as sole UDP `6454` owner, and perform one
+  approved probe capture without retrying an in-doubt operation.
+
+### 2026-08-30 native three-display composition source checkpoint
+
+The distinct native Display route is frozen at source for review. Its custom
+composition membership uses `TimelineVideoLayerRef { timeline_id, layer_id }`.
+Root and Follow resolve only their exact timeline/layer pair, so Timeline
+projection cannot leak across transports. Timeline projection is composed below
+fixed authored layers; the Background route keeps the authored layer ordering
+around the Video 2 -> MiraBox -> Video 2 projection, while Foreground contains
+only fixed Video 1. Main composition is unchanged, and any Main-based split or
+mirror request is rejected. A pre-P0 project missing the field defaults to an
+empty membership list; unshipped numeric-only P0 values fail closed.
+
+The independent original review was `NO-GO`; the corrected implementation and
+its real 50%-weighted Follow integration regression now have independent
+`GO`. The regression proves exact root-Timeline selection when root and Follow
+target share a lane number, fixed-layer ordering, and no ephemeral projection
+ID persistence. Supervisor evidence is protocol `200/200`, engine focused
+`5/5`, weighted-Follow integration `1/1`, Syndocal boundary `1/1`, TypeScript,
+localization `3639/3639`, frontend invoke inventory `443`, output-control,
+Vite, release, fmt/diff, and three-display harness self-tests PowerShell 7
+`90/90` and Windows PowerShell 5.1 `90/90`; first-party warnings are `0`.
+
+Setup Video also passes the five-viewport containment gate, including
+`1366x768` and `1280x720`: document/app scroll remains zero, Advanced details
+remain reachable through their internal scrollport, and no typography or hit
+target was reduced. Independent viewport/UI re-review is `GO`.
+
+The same-PC alpha9 copy tool is historical strict alpha9 -> alpha10
+Spout/Art-Net authoring and is not used for the alpha12 distinct Display
+project. Its old schema-key list remains explicit nonblocking P2 debt until the
+tool is retired or updated. Physical native build and the 2 s / 5 s / 9 s
+two-output content acceptance remain pending. The first safe action is now the
+exact native build and live sequence from this source-reviewed checkpoint.
+
   A subsequent bounded native show-UI pass used the same exact responsive,
   maximized alpha.39 PID `87640` / window id `2033716740` and left the opened
   project paused and unsaved. Right-clicking its Timeline Audio Clip opened the
@@ -59,6 +119,82 @@ This is the concise authoritative resume note for the final show-critical tranch
   Web Remote succeeded without restoring the disclosure scroll position first.
   This is native visual evidence for context-menu dismissal/hierarchy and
   Web Remote/DJ Link reachability only, not DJ/network/remote-server acceptance.
+
+### 2026-08-30 read-only live-audit checkpoint
+
+The read-only FOH/show audit at `2026-08-30 07:10–07:14 JST` ran on branch
+`codex/syndocal-v1.2` with `HEAD == @{upstream} ==
+71f93803a73f7474ae21f1d8d39eb273bcc36d67`. It changed no files, processes,
+network state, UI state, build output, commit, or push; first-party warnings
+were `0` because no compile/build ran. It updates live blockers only and does
+not change the completion claims above.
+
+- DJ Link is disconnected: bound `イーサネット 4` / interface GUID prefix
+  `19578d89...` is `Disconnected` at `0 bps`, and `192.168.50.1` is
+  `Deprecated`. No TCP/9100 listener or peer session appeared in the
+  read-only socket snapshot; `.50.2` was only a stale ARP neighbor. The current
+  peer identity is v1.1.11 / `a13d7bff...`; the older v1.1.10 launch identity
+  is stale. HW-4 remains `0/12`.
+- Normal audio persists `route=explicit_device` to `Music (Elgato Virtual
+  Audio)` (fingerprint
+  `A2D9603C75ED1A6ECBC37F0FE851AAD56C632DFF31314544F2F606C220C9479C`), but
+  current topology was not UI-confirmed and audible output was not verified.
+  Alpha9 production reference layers are muted by design (candidate SHA-256
+  `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`);
+  the rehearsal sibling is unmuted for listening (SHA-256
+  `AC9133AFD2C9AAD022674B45222447115F624175B2C5E20DE1E803ABAA9778CE`).
+  No current alpha.39 ASIO artifact/profile exists; TOPPING/CUE physical
+  output remains unverified.
+- The last UI-verified loaded unsaved project was alpha9; this read-only audit
+  did not re-observe the current in-memory project identity. The alpha9 file
+  has disabled `EnttecOpenDmx` and no video outputs. The separate alpha10
+  same-PC candidate (`1,098,035` bytes, SHA-256
+  `DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`) has a
+  disabled Art-Net `127.0.0.1:6454` U0 route and enabled exact `1920x1080`
+  Spout senders `Syndocal Background` / `Syndocal Foreground`. Its exact shape
+  is `video.media_assets=2`, `video.layers=0`, Main `layer_ids=[]`, and
+  `timeline.video_automations=0`; the pinned alpha9 source/media hashes were
+  retained and structural preflight passed. Fixed Spout
+  output exists, but actual MP4/Camera switching content is not authored. The
+  operation contract is existing File/Camera video layer plus Timeline Opacity
+  automation (`Step cut` / `Linear fade`); no concrete asset or camera
+  identity was supplied, so no physical/content proof exists.
+- Authored release-visible `all_white` (Cue 1) and `all_max` (Cue 2) are both
+  Timeline 1 `Lighting` events at `138353 ms`, immediately at loop end
+  `loop_region.b_ms=138353`.
+- Unity is not running. Daslight PID `42752` owns UDP `6454` and must not be
+  stopped without the operator. The exact scene
+  `E:\UnityProjects\Art-net-Unity\Assets\DSF2026\Scenes\DSF2026_Visualizer.unity`
+  has not been played; physical DMX/GPU/Spout remains unverified. The reviewed
+  lease-bound one-shot red probe now exists in the source path, but no native
+  build or physical packet/capture/Unity acceptance has been performed.
+
+Safe next actions are operator-owned: connect the DJ wired peer and capture the
+v1.1.11 state-sync sequence; audible-test the unmuted rehearsal sibling;
+manually close Daslight/Easy View, verify UDP `6454` is empty, open the exact
+Unity scene and press Play, then use lease-bound Art-Net/Spout enable actions
+and verify the fixed senders. Do not unmute the production alpha9 candidate or
+claim the red probe until the exact native build/launch and one physical
+packet/capture acceptance are recorded; an in-doubt probe must not be retried.
+
+Representative read-only commands/evidence:
+
+```powershell
+git branch --show-current
+git rev-parse HEAD
+git rev-parse '@{upstream}'
+git status --short
+Get-CimInstance Win32_Process
+Get-NetTCPConnection
+Get-NetUDPEndpoint
+Get-NetAdapter -IncludeHidden
+Get-NetIPAddress -AddressFamily IPv4
+Get-NetNeighbor -InterfaceIndex 3 -AddressFamily IPv4
+Get-FileHash target/release/syndocal.exe -Algorithm SHA256
+cmdkey /list
+git -C C:\Users\kouty\Desktop\rb-output status --short
+node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc
+```
 
 - Historical alpha.38 native authority remains immutable. The exact MSVC
   `14.44` native gate ran `pnpm --dir app tauri build --no-bundle` in `3m12s`

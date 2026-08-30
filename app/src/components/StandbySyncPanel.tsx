@@ -13,6 +13,7 @@ import type {
   OutputLeaseAuthority,
   OutputLeaseAuthorityQuery,
   OutputLeaseAuthorityQueryHeld,
+  OutputLeaseResource,
 } from "../outputControlController";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 
@@ -79,6 +80,25 @@ const STATUS_POLL_INVOKE_TIMEOUT_MS = 2_000;
 const STATUS_POLL_TIMEOUT_MS = 3_000;
 const STATUS_POLL_INTERVAL_MS = 1_000;
 const OUTPUT_ENABLE_TIMEOUT_MS = 3_000;
+
+const terminalNoOutputAppliedRejectionCodes = new Set([
+  "invalid_request",
+  "forbidden",
+  "stale_fence",
+  "busy",
+  "overloaded",
+]);
+
+/**
+ * `executeOutputLeaseLifecycle` accepts only a strict terminal response before
+ * it produces this shape. Keep all unrecognised errors fail-closed: a malformed
+ * response, publication failure, or lost reply may leave physical state unknown.
+ */
+function isTerminalNoOutputAppliedRejection(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  const match = /^OutputControl rejected \(([^)]+)\); (output was not applied; refresh lease state\.|nothing was applied\.)$/.exec(error.message);
+  return match !== null && terminalNoOutputAppliedRejectionCodes.has(match[1]);
+}
 
 function boundedPromise<T>(
   factory: () => Promise<T>,
@@ -200,6 +220,19 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const selectedLeaseStatus = createMemo<OutputLeaseAuthorityQueryHeld | null>(() =>
     heldLeases().find((candidate) => candidate.authority.lease_id === selectedLeaseId()) ?? null,
   );
+  const requestedLeaseRole = createMemo<OutputControlTargetRole>(() =>
+    machineRole() === "Lighting" ? "lighting" : machineRole() === "Video" ? "video" : "both",
+  );
+  const requestedLeaseResources = createMemo<readonly OutputLeaseResource[]>(() =>
+    requestedLeaseRole() === "lighting" ? ["lighting"]
+      : requestedLeaseRole() === "video" ? ["video"]
+        : ["lighting", "video"],
+  );
+  const activeLeaseOverlapsRequestedRole = createMemo(() => {
+    const requestedResources = requestedLeaseResources();
+    return heldLeases().some((candidate) => candidate.status === "held_active"
+      && candidate.resources.some((resource) => requestedResources.includes(resource)));
+  });
   const outputEnabled = createMemo(() => {
     const current = ownershipStatus();
     return props.backendAvailable
@@ -539,6 +572,14 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       await executeOutputLeaseLifecycle(props.invokeCommand, action);
       await pollStatus();
     } catch (error) {
+      if (isTerminalNoOutputAppliedRejection(error)) {
+        // This exact terminal rejection guarantees no lease mutation. Reconcile
+        // once through the existing read-only status poll so a still-held lease
+        // remains available. Any malformed/lost/publication failure stays fenced.
+        await pollStatus();
+        setActionError(error.message);
+        return;
+      }
       clearOutputAuthority();
       setActionError(String(error));
     } finally {
@@ -547,8 +588,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   };
 
   const acquireLease = () => {
-    const role = machineRole() === "Lighting" ? "lighting" : machineRole() === "Video" ? "video" : "both";
-    return void runLeaseLifecycle({ kind: "acquire_lease", role });
+    return void runLeaseLifecycle({ kind: "acquire_lease", role: requestedLeaseRole() });
   };
   const runSelectedLeaseLifecycle = (kind: "renew_lease" | "recover_lease" | "relinquish_output_lease") => {
     try {
@@ -696,7 +736,13 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           </label>
         </Show>
         <div class="buttonRow">
-          <button onClick={acquireLease} disabled={!props.backendAvailable || busy()}>Acquire selected-role lease</button>
+          <button
+            data-io-control="acquire-selected-role-lease"
+            onClick={acquireLease}
+            disabled={!props.backendAvailable || busy() || activeLeaseOverlapsRequestedRole()}
+          >
+            Acquire selected-role lease
+          </button>
           <button onClick={renewLease} disabled={!props.backendAvailable || busy() || selectedLeaseStatus()?.status !== "held_active"}>Renew</button>
           <button onClick={recoverLease} disabled={!props.backendAvailable || busy() || selectedLeaseStatus()?.status !== "held_orphaned"}>Recover</button>
           <button onClick={relinquishLease} disabled={!props.backendAvailable || busy() || !selectedLeaseStatus()}>Relinquish</button>

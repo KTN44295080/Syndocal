@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     hash::{BuildHasherDefault, Hasher},
+    net::UdpSocket,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Condvar, Mutex, RwLock, Weak,
@@ -95,7 +96,7 @@ pub fn dj_link_authored_bar_jump_target(
 
 use crossbeam_queue::ArrayQueue;
 use io::{
-    artnet::ArtNetSender,
+    artnet::{build_art_dmx_packet, ArtNetSender},
     sacn::SacnSender,
     serial_dmx::{EnttecOpenDmxSender, EnttecUsbProSender, OpenDmxSafetyWriteGate},
 };
@@ -151,8 +152,8 @@ use protocol::{
     TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineScheduleSource,
     TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation, TimelineTempoMeterPoint,
     TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
-    TimelineVideoClipSummary, TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    TimelineVideoClipSummary, TimelineVideoLayerRef, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    Transform2D, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
     ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
     VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
     VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
@@ -3896,6 +3897,16 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// The fixed DSF2026 local acceptance probe. This never enables a route
+    /// or creates a normal DMX sender: the engine verifies the disabled
+    /// staged route and sends exactly one immutable ArtDmx datagram itself.
+    SendDsf2026ArtNetAcceptanceProbe {
+        expected_disabled_output: DmxOutputConfig,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), Dsf2026ArtNetAcceptanceProbeError>>,
+    },
     /// The one show-specific same-machine video publication. Its payload is
     /// derived only by the native control plane after a local R4 admission;
     /// it cannot create arbitrary Spout names or dimensions.
@@ -5043,6 +5054,10 @@ define_engine_command! {
         composition_id: CompositionId,
         layer_ids: Vec<VideoLayerId>,
     },
+    SetVideoCompositionTimelineLayers {
+        composition_id: CompositionId,
+        timeline_layer_ids: Vec<TimelineVideoLayerRef>,
+    },
     BootstrapVjShow {
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
         output: VideoOutputSummary,
@@ -5236,6 +5251,7 @@ macro_rules! engine_command_video_presentation_relevance {
             EngineCommand::AddVideoComposition(_)
             | EngineCommand::RemoveVideoComposition(_)
             | EngineCommand::SetVideoCompositionLayers { .. }
+            | EngineCommand::SetVideoCompositionTimelineLayers { .. }
             | EngineCommand::AddVideoCuePoint { .. }
             | EngineCommand::RemoveVideoCuePoint { .. }
             | EngineCommand::SetVideoCuePoint { .. }
@@ -5326,6 +5342,7 @@ macro_rules! engine_command_video_presentation_relevance {
             EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
             | EngineCommand::RetireShowSpoutOutputsPublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
@@ -5609,6 +5626,7 @@ impl EngineCommand {
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
                 | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+                | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
                 | EngineCommand::EnableShowSpoutOutputsPublished { .. }
                 | EngineCommand::RetireShowSpoutOutputsPublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
@@ -5791,6 +5809,28 @@ pub struct SafetyBlackoutAuthority {
     pub engaged: bool,
     pub epoch: u64,
     pub generation: u64,
+}
+
+/// Result classification for the fixed DSF2026 one-shot Art-Net probe.
+///
+/// Socket creation and every rejected fence are provably pre-send. Once the
+/// engine enters `send_to`, however, an error or a short write cannot prove
+/// that a loopback receiver did not observe the datagram. Callers therefore
+/// retain their durable Pending receipt for `InDoubt` and never retry it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dsf2026ArtNetAcceptanceProbeError {
+    PreSend(String),
+    InDoubt(String),
+}
+
+impl Dsf2026ArtNetAcceptanceProbeError {
+    fn pre_send(message: impl Into<String>) -> Self {
+        Self::PreSend(message.into())
+    }
+
+    fn in_doubt(message: impl Into<String>) -> Self {
+        Self::InDoubt(message.into())
+    }
 }
 
 /// A priority S0 request reserves the safety authority before it is made
@@ -6784,6 +6824,47 @@ impl EngineHandle {
                 "Show Art-Net loopback route activation worker disconnected before acknowledgement"
                     .to_string(),
             ),
+        }
+    }
+
+    /// Send the single fixed DSF2026 ArtDmx acceptance probe through the
+    /// engine worker. The caller supplies only already-captured internal
+    /// fences; endpoint, universe, payload, retries, and route activation
+    /// are deliberately not configurable.
+    pub fn send_dsf2026_artnet_acceptance_probe(
+        &self,
+        expected_disabled_output: DmxOutputConfig,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), Dsf2026ArtNetAcceptanceProbeError> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SendDsf2026ArtNetAcceptanceProbe {
+            expected_disabled_output,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| {
+            Dsf2026ArtNetAcceptanceProbeError::pre_send(format!(
+                "DSF2026 Art-Net acceptance probe could not enqueue: {error}"
+            ))
+        })?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            // The worker may have crossed the UDP send boundary and lost its
+            // acknowledgement. Treat both outcomes as physically ambiguous.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(Dsf2026ArtNetAcceptanceProbeError::in_doubt(
+                    "DSF2026 Art-Net acceptance probe acknowledgement timed out after engine admission",
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(Dsf2026ArtNetAcceptanceProbeError::in_doubt(
+                    "DSF2026 Art-Net acceptance probe worker disconnected after engine admission",
+                ))
+            }
         }
     }
 
@@ -10545,6 +10626,11 @@ impl EngineHandle {
         match command {
             EngineCommand::LoadProjectSnapshot(snapshot)
             | EngineCommand::LoadProjectSnapshotPublished { snapshot, .. } => {
+                // Reject an invalid direct Video automation before this
+                // enqueue-side allocator reservation. The worker repeats the
+                // same ingress gate for direct callers, but a queued request
+                // must not advance any allocator just to later fail closed.
+                validate_project_timeline_video_automation_targets_for_load(snapshot)?;
                 let snapshot = normalized_engine_snapshot_video_for_load(snapshot.clone())?;
                 observe_project_snapshot_allocator_sources(&mut maxima, &snapshot)?;
             }
@@ -10996,6 +11082,7 @@ impl EngineHandle {
             | EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
             | EngineCommand::RetireShowSpoutOutputsPublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
@@ -11126,6 +11213,7 @@ impl EngineHandle {
             | EngineCommand::SetVideoBlackout(_)
             | EngineCommand::RemoveVideoComposition(_)
             | EngineCommand::SetVideoCompositionLayers { .. }
+            | EngineCommand::SetVideoCompositionTimelineLayers { .. }
             | EngineCommand::RemoveVideoOutput(_)
             | EngineCommand::RemoveVideoOutputPublished { .. }
             | EngineCommand::SetVideoOutputConfig { .. }
@@ -11618,6 +11706,116 @@ fn validate_current_schema_snapshot_reference_integrity_for_load(
         .map_err(|error| format!("project snapshot reference integrity: {error}"))
 }
 
+/// A Timeline Video automation always addresses a serialized authored
+/// `VideoLayerId`. Its optional `timeline_layer_id` merely places that
+/// automation on a Timeline Video lane; it is not a renderer projection
+/// identity. Keep that distinction at project ingress so stale direct IDs and
+/// retired lane-targeting projects cannot be silently dropped by runtime
+/// conversion when an entry later becomes active.
+fn validate_project_video_composition_timeline_layers_for_load(
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    let video = snapshot.authored_video.as_ref().unwrap_or(&snapshot.video);
+    let mut video_lanes = HashSet::new();
+    for layer in snapshot
+        .timeline_bank
+        .iter()
+        .chain(std::iter::once(&snapshot.timeline))
+        .flat_map(|timeline| {
+            timeline
+                .layers
+                .iter()
+                .map(move |layer| (timeline.id, layer))
+        })
+    {
+        if matches!(layer.1.kind, TimelineLayerKind::Video) {
+            video_lanes.insert((layer.0, layer.1.id));
+        }
+    }
+    for composition in &video.compositions {
+        if composition.id == 1 && !composition.timeline_layer_ids.is_empty() {
+            return Err(
+                "Main video composition cannot persist Timeline Video lane membership".to_string(),
+            );
+        }
+        let mut seen = HashSet::new();
+        for timeline_layer in &composition.timeline_layer_ids {
+            if timeline_layer.timeline_id.0 == 0
+                || timeline_layer.layer_id == 0
+                || !seen.insert(*timeline_layer)
+            {
+                return Err(format!(
+                    "Project video composition {} has a zero or duplicate Timeline {} Video lane {}",
+                    composition.id, timeline_layer.timeline_id.0, timeline_layer.layer_id
+                ));
+            }
+            if !video_lanes.contains(&(timeline_layer.timeline_id, timeline_layer.layer_id)) {
+                return Err(format!(
+                    "Project video composition {} references stale or non-Video Timeline {} lane {}",
+                    composition.id, timeline_layer.timeline_id.0, timeline_layer.layer_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_timeline_video_automation_targets_for_load(
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    let authored_video = snapshot.authored_video.as_ref().unwrap_or(&snapshot.video);
+    // This ingress gate handles untrusted/legacy summaries, so it must not
+    // materialize a `RuntimeVideoLayer`: materialization assumes an
+    // engine-ready media asset and intentionally unwraps that invariant. The
+    // later pure normalizer keeps the first non-zero ID and drops later
+    // duplicates; mirror only that safe identity policy here.
+    let mut authored_layer_ids = HashSet::new();
+    for layer in &authored_video.layers {
+        if layer.id != 0 {
+            authored_layer_ids.insert(layer.id);
+        }
+    }
+    let timelines = if snapshot.timeline_bank.is_empty() {
+        std::slice::from_ref(&snapshot.timeline)
+    } else {
+        snapshot.timeline_bank.as_slice()
+    };
+
+    for timeline in timelines {
+        for automation in &timeline.video_automations {
+            if !authored_layer_ids.contains(&automation.layer_id) {
+                let lane = automation
+                    .timeline_layer_id
+                    .map(|lane_id| format!(
+                        "; Timeline lane {lane_id} is scheduling-only and cannot name a renderer projection target"
+                    ))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "project load Timeline {} Video automation {} targets missing authored Video layer {}{lane}",
+                    timeline.id.0, automation.id, automation.layer_id
+                ));
+            }
+            if automation.keyframes.is_empty() {
+                return Err(format!(
+                    "project load Timeline {} Video automation {} requires at least one keyframe",
+                    timeline.id.0, automation.id
+                ));
+            }
+            if !automation
+                .keyframes
+                .iter()
+                .all(|keyframe| keyframe.value.is_finite())
+            {
+                return Err(format!(
+                    "project load Timeline {} Video automation {} contains a non-finite keyframe value",
+                    timeline.id.0, automation.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Prepare the authored video image before either project-load reservation or
 /// runtime installation. Old snapshots can contain zero or duplicate layer
 /// IDs; retain the first usable serialized layer before any migration so
@@ -11670,6 +11868,7 @@ fn reconcile_video_effect_hosts_for_load(video: &VideoSnapshot) -> VideoSnapshot
             id: 1,
             label: "Main".to_string(),
             layer_ids: runtime_layers.iter().map(|layer| layer.id).collect(),
+            timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         },
     }];
@@ -18373,6 +18572,7 @@ struct RuntimeVideoLayer {
 /// persisted.
 #[derive(Clone)]
 struct RuntimeTimelineVideoProjection {
+    timeline_id: TimelineId,
     timeline_layer_id: u32,
     layer_order: u32,
     clip_id: TimelineVideoClipId,
@@ -20279,13 +20479,17 @@ impl EngineRuntime {
         // FC27: raw current-schema reference integrity runs before any
         // allocator reservation, migration, or staging so a rejected project
         // cannot mutate allocator, history, recovery, or runtime state.
+        // This direct-target gate is deliberately before the broader protocol
+        // validator so its clean-break error stays actionable rather than
+        // being collapsed into a generic reference-integrity rejection.
+        validate_project_video_composition_timeline_layers_for_load(&snapshot)?;
+        validate_project_timeline_video_automation_targets_for_load(&snapshot)?;
         validate_current_schema_snapshot_reference_integrity_for_load(&snapshot)?;
         // The legacy/current-schema shape is decided once, from the raw
         // ingress image. Later normalization (for example
         // `normalize_timeline_bank` filling an empty legacy bank) must not
         // reclassify an explicitly older snapshot as current schema.
         let ingress_current_schema = !snapshot.timeline_bank.is_empty();
-        let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         snapshot = normalized_engine_snapshot_video_for_load(snapshot)?;
         // Runtime authority is never imported with project JSON or an
         // in-memory authored image. The live process owns its epoch.
@@ -20330,6 +20534,9 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
+        // All candidate-only validation has passed. Reserving the next audio
+        // transport revision is the first self mutation in this load path.
+        let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         // Every load failure above ran only against the candidate/staged
         // image. Do not tear down an active Follow until all fallible work has
         // succeeded, otherwise a rejected project would mutate live runtime A.
@@ -20596,7 +20803,7 @@ impl EngineRuntime {
             .into_iter()
             .map(|summary| runtime_node_graph_from_summary(summary, now))
             .collect();
-        self.sanitize_loaded_show_references(now);
+        self.sanitize_loaded_show_references(now)?;
         self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
         if self.timeline_has_conformed_events() {
             if let Err(error) = self.reconform_timeline_events_to_bpm(snapshot.clock.bpm) {
@@ -20907,7 +21114,7 @@ impl EngineRuntime {
 
         let mut result = (|| {
             self.recompute_timeline_event_layers()?;
-            self.sanitize_loaded_show_references(now);
+            self.sanitize_loaded_show_references(now)?;
             self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
             if self.timeline_has_conformed_events() {
                 self.resolve_timeline_events_for_bpm(snapshot.clock.bpm)
@@ -20962,7 +21169,7 @@ impl EngineRuntime {
         result
     }
 
-    fn sanitize_loaded_show_references(&mut self, now: Instant) {
+    fn sanitize_loaded_show_references(&mut self, now: Instant) -> Result<(), String> {
         let cues = std::mem::take(&mut self.cues);
         self.cues = cues
             .into_iter()
@@ -21067,13 +21274,19 @@ impl EngineRuntime {
         let timeline_video_automations = std::mem::take(&mut self.timeline_video_automations);
         self.timeline_video_automations = timeline_video_automations
             .into_iter()
-            .filter_map(|automation| {
+            .map(|automation| {
+                let automation_id = automation.id;
+                let layer_id = automation.layer_id;
                 let keyframes = self
-                    .resolve_timeline_video_automation(automation.layer_id, automation.keyframes)
-                    .ok()?;
-                Some(RuntimeTimelineVideoAutomation {
+                    .resolve_timeline_video_automation(layer_id, automation.keyframes)
+                    .map_err(|error| {
+                        format!(
+                            "project load Timeline Video automation {automation_id} targets invalid authored Video layer {layer_id}: {error}"
+                        )
+                    })?;
+                Ok(RuntimeTimelineVideoAutomation {
                     id: automation.id,
-                    layer_id: automation.layer_id,
+                    layer_id,
                     timeline_layer_id: automation.timeline_layer_id,
                     param: automation.param,
                     track: TimelineTrackKind::Video,
@@ -21081,7 +21294,7 @@ impl EngineRuntime {
                     enabled: automation.enabled,
                 })
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
 
         self.sanitize_node_graph_references();
 
@@ -21175,6 +21388,7 @@ impl EngineRuntime {
             })
             .collect();
         self.sanitize_cue_effect_targets();
+        Ok(())
     }
 
     fn sanitize_node_graph_references(&mut self) {
@@ -22627,6 +22841,30 @@ impl EngineRuntime {
                     publication_error:
                         "Show Art-Net loopback route activation could not publish an acknowledged snapshot",
                 });
+            }
+            EngineCommand::SendDsf2026ArtNetAcceptanceProbe {
+                expected_disabled_output,
+                expected_safety_epoch,
+                expected_safety_generation,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err(Dsf2026ArtNetAcceptanceProbeError::pre_send(
+                        "DSF2026 Art-Net acceptance probe expired before engine execution",
+                    ))
+                } else {
+                    self.send_dsf2026_artnet_acceptance_probe(
+                        &expected_disabled_output,
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                };
+                // No project/runtime state is changed by the probe, so its
+                // acknowledgement must not wait for an unrelated snapshot
+                // publication. The engine worker itself is the final route,
+                // U0-input, and S0 linearization owner.
+                let _ = ack.send(result);
             }
             EngineCommand::EnableShowSpoutOutputsPublished {
                 expected_background,
@@ -28110,6 +28348,11 @@ impl EngineRuntime {
                 let composition = sanitize_video_composition(composition, &self.video_layers);
                 if composition.id == 1 {
                     self.last_error = Some("Main video composition cannot be replaced".to_string());
+                } else if let Err(error) = validate_runtime_timeline_video_layer_ids(
+                    &composition.timeline_layer_ids,
+                    &self.timeline_bank_snapshot(),
+                ) {
+                    self.last_error = Some(error);
                 } else {
                     self.video_compositions
                         .retain(|candidate| candidate.summary.id != composition.id);
@@ -28150,6 +28393,32 @@ impl EngineRuntime {
                     composition.summary.layer_ids =
                         valid_unique_layer_ids(layer_ids, &self.video_layers);
                     self.sanitize_video_effect_catalog_lifecycle();
+                    self.last_error = None;
+                } else {
+                    self.last_error =
+                        Some(format!("Video composition {composition_id} was not found"));
+                }
+            }
+            EngineCommand::SetVideoCompositionTimelineLayers {
+                composition_id,
+                timeline_layer_ids,
+            } => {
+                if composition_id == 1 {
+                    self.last_error = Some(
+                        "Main video composition always contains all active Timeline Video lanes"
+                            .to_string(),
+                    );
+                } else if let Err(error) = validate_runtime_timeline_video_layer_ids(
+                    &timeline_layer_ids,
+                    &self.timeline_bank_snapshot(),
+                ) {
+                    self.last_error = Some(error);
+                } else if let Some(composition) = self
+                    .video_compositions
+                    .iter_mut()
+                    .find(|composition| composition.summary.id == composition_id)
+                {
+                    composition.summary.timeline_layer_ids = timeline_layer_ids;
                     self.last_error = None;
                 } else {
                     self.last_error =
@@ -44300,6 +44569,16 @@ impl EngineRuntime {
     }
 
     fn apply_timeline_video_automations(&mut self) {
+        // `layer_id` is the sole target authority for a Timeline Video
+        // automation. `timeline_layer_id` assigns that automation to a
+        // Timeline lane for scheduling, muting, ordering, and persistence; it
+        // must never be inferred as a target for an ephemeral media-clip
+        // projection. Those projection IDs do not exist in authored state, so
+        // a lane-only inference could silently apply a Camera automation to a
+        // file clip (or vice versa). A future projection-target schema must be
+        // explicit and validate a stable projection identity before it is
+        // rendered. Until then, ambiguous projection automation is rejected
+        // by omission rather than promoted at render time.
         let updates = self
             .timeline_video_automations
             .iter()
@@ -44322,6 +44601,47 @@ impl EngineRuntime {
                 apply_video_param(&mut layer.state, &param, value);
                 layer.state = video::sanitize_layer_state(layer.state.clone());
             }
+        }
+    }
+
+    /// Apply a Timeline's root Video automations to an isolated render image.
+    /// Follow needs this for the incoming Timeline: its direct Camera/VJ
+    /// layer can differ from the outgoing Timeline while both images share
+    /// the same runtime-owned authored-layer catalog. The lane remains only
+    /// scheduling metadata, so a renderer-only file projection can never be
+    /// selected from `timeline_layer_id`.
+    fn apply_timeline_video_automation_summaries_to_snapshot(
+        &self,
+        snapshot: &mut VideoSnapshot,
+        automations: &[TimelineVideoAutomationSummary],
+        position_ms: u64,
+    ) {
+        let authored_layer_ids = self
+            .video_layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<HashSet<_>>();
+        for automation in automations.iter().filter(|automation| automation.enabled) {
+            if !authored_layer_ids.contains(&automation.layer_id) {
+                // Project ingress rejects this state. Keep an in-memory stale
+                // authoring image fail-closed rather than treating its lane as
+                // an implicit projection target.
+                continue;
+            }
+            let Some(value) =
+                evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+            else {
+                continue;
+            };
+            let Some(layer) = snapshot
+                .layers
+                .iter_mut()
+                .find(|layer| layer.id == automation.layer_id)
+            else {
+                continue;
+            };
+            apply_video_param(&mut layer.state, &automation.param, value);
+            layer.state = video::sanitize_layer_state(layer.state.clone());
         }
     }
 
@@ -45064,6 +45384,7 @@ impl EngineRuntime {
     /// changes, the projection simply disappears without a retire mutation.
     fn timeline_video_projection_layers(
         &self,
+        timeline_id: TimelineId,
         clips: &[TimelineVideoClipSummary],
         timeline_layers: &[TimelineLayerSummary],
         position_ms: u64,
@@ -45075,6 +45396,7 @@ impl EngineRuntime {
             .map(|layer| layer.id)
             .collect::<HashSet<_>>();
         self.timeline_video_projection_layers_with_used_ids(
+            timeline_id,
             clips,
             timeline_layers,
             position_ms,
@@ -45085,6 +45407,7 @@ impl EngineRuntime {
 
     fn timeline_video_projection_layers_with_used_ids(
         &self,
+        timeline_id: TimelineId,
         clips: &[TimelineVideoClipSummary],
         timeline_layers: &[TimelineLayerSummary],
         position_ms: u64,
@@ -45156,6 +45479,7 @@ impl EngineRuntime {
                     format!("{} · {}", timeline_layer.label.trim(), asset.label)
                 };
                 Some(RuntimeTimelineVideoProjection {
+                    timeline_id,
                     timeline_layer_id,
                     layer_order: timeline_layer.order,
                     clip_id: clip.id,
@@ -45187,62 +45511,39 @@ impl EngineRuntime {
         projections
     }
 
-    fn apply_timeline_video_projection_automations(
+    /// Build only custom compositions for a renderer snapshot. Persisted
+    /// Timeline lane IDs are resolved here, at the last responsible moment,
+    /// to the current renderer-only projection IDs. Their ordering is always
+    /// bottom-most first; fixed authored VJ layers then draw above them.
+    fn resolved_custom_video_compositions_for_render(
         &self,
-        projections: &mut [RuntimeTimelineVideoProjection],
-        position_ms: u64,
-    ) {
-        for automation in self
-            .timeline_video_automations
+        outputs: &[VideoOutputSummary],
+        timeline_projections: &[RuntimeTimelineVideoProjection],
+    ) -> Vec<CompositionSummary> {
+        self.video_compositions
             .iter()
-            .filter(|automation| automation.enabled && automation.timeline_layer_id.is_some())
-        {
-            let Some(value) =
-                evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
-            else {
-                continue;
-            };
-            let Some(timeline_layer_id) = automation.timeline_layer_id else {
-                continue;
-            };
-            for projection in projections
-                .iter_mut()
-                .filter(|projection| projection.timeline_layer_id == timeline_layer_id)
-            {
-                apply_video_param(&mut projection.layer.state, &automation.param, value);
-                projection.layer.state =
-                    video::sanitize_layer_state(projection.layer.state.clone());
-            }
-        }
-    }
-
-    fn apply_timeline_video_projection_automations_from_summaries(
-        &self,
-        projections: &mut [RuntimeTimelineVideoProjection],
-        automations: &[TimelineVideoAutomationSummary],
-        position_ms: u64,
-    ) {
-        for automation in automations
-            .iter()
-            .filter(|automation| automation.enabled && automation.timeline_layer_id.is_some())
-        {
-            let Some(value) =
-                evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
-            else {
-                continue;
-            };
-            let Some(timeline_layer_id) = automation.timeline_layer_id else {
-                continue;
-            };
-            for projection in projections
-                .iter_mut()
-                .filter(|projection| projection.timeline_layer_id == timeline_layer_id)
-            {
-                apply_video_param(&mut projection.layer.state, &automation.param, value);
-                projection.layer.state =
-                    video::sanitize_layer_state(projection.layer.state.clone());
-            }
-        }
+            .map(|composition| {
+                let mut summary =
+                    sanitize_video_composition(composition.summary.clone(), &self.video_layers);
+                let mut resolved_layer_ids = summary
+                    .timeline_layer_ids
+                    .iter()
+                    .flat_map(|timeline_layer| {
+                        timeline_projections
+                            .iter()
+                            .filter(move |projection| {
+                                projection.timeline_id == timeline_layer.timeline_id
+                                    && projection.timeline_layer_id == timeline_layer.layer_id
+                            })
+                            .map(|projection| projection.layer.id)
+                    })
+                    .collect::<Vec<_>>();
+                resolved_layer_ids.extend(summary.layer_ids.iter().copied());
+                summary.layer_ids = resolved_layer_ids;
+                summary.output_ids = output_ids_for_composition(outputs, summary.id);
+                summary
+            })
+            .collect()
     }
 
     /// Authored/runtime video projection without the legacy Follow weighting
@@ -45261,34 +45562,29 @@ impl EngineRuntime {
             .iter()
             .map(|layer| self.video_layer_summary_with_effects(layer, now))
             .collect::<Vec<_>>();
-        let mut timeline_projections = self.timeline_video_projection_layers(
+        let timeline_projections = self.timeline_video_projection_layers(
+            self.timeline_id,
             &self.timeline_video_clips,
             &self.timeline_layers,
             self.timeline_position_ms,
             self.timeline_playing,
         );
-        self.apply_timeline_video_projection_automations(
-            &mut timeline_projections,
-            self.timeline_position_ms,
-        );
         layers.extend(
             timeline_projections
-                .into_iter()
-                .map(|projection| projection.layer),
+                .iter()
+                .map(|projection| projection.layer.clone()),
         );
         let main_layer_ids = layers.iter().map(|layer| layer.id).collect::<Vec<_>>();
         let mut compositions = vec![CompositionSummary {
             id: 1,
             label: "Main".to_string(),
             layer_ids: main_layer_ids,
+            timeline_layer_ids: Vec::new(),
             output_ids: output_ids_for_composition(&outputs, 1),
         }];
-        compositions.extend(self.video_compositions.iter().map(|composition| {
-            let mut summary =
-                sanitize_video_composition(composition.summary.clone(), &self.video_layers);
-            summary.output_ids = output_ids_for_composition(&outputs, summary.id);
-            summary
-        }));
+        compositions.extend(
+            self.resolved_custom_video_compositions_for_render(&outputs, &timeline_projections),
+        );
         VideoSnapshot {
             layers,
             media_assets: self.media_assets.clone(),
@@ -45331,40 +45627,42 @@ impl EngineRuntime {
                 })
                 .min(transition.target.duration_ms)
         };
+        // The incoming Timeline owns its own root automation values, but the
+        // resulting mutation stays on this private Follow image. Apply only
+        // exact authored `layer_id` targets before adding renderer-only file
+        // projections below; `timeline_layer_id` never addresses a
+        // projection.
+        self.apply_timeline_video_automation_summaries_to_snapshot(
+            &mut snapshot,
+            &transition.target.video_automations,
+            position_ms,
+        );
         let target_has_explicit_video_lanes = transition
             .target
             .layers
             .iter()
             .any(|layer| matches!(layer.kind, TimelineLayerKind::Video));
+        let mut incoming_timeline_projections = Vec::new();
         if target_has_explicit_video_lanes {
             // A target Timeline lane is not an authored VJ layer.  Build the
             // same renderer-only projection used by the active Timeline and
-            // keep its ID disjoint from the outgoing snapshot.  The target's
-            // lane automations are evaluated against the captured Follow
-            // snapshot, so later authoring edits cannot retarget this run.
+            // keep its ID disjoint from the outgoing snapshot. Timeline Video
+            // automations remain authored-layer operations; they do not infer
+            // a target among this renderer-only projection set.
             let mut used_ids = snapshot.layers.iter().map(|layer| layer.id).collect();
-            let mut projections = self.timeline_video_projection_layers_with_used_ids(
+            incoming_timeline_projections = self.timeline_video_projection_layers_with_used_ids(
+                transition.target_timeline_id,
                 &transition.target.video_clips,
                 &transition.target.layers,
                 position_ms,
                 true,
                 &mut used_ids,
             );
-            self.apply_timeline_video_projection_automations_from_summaries(
-                &mut projections,
-                &transition.target.video_automations,
-                position_ms,
+            snapshot.layers.extend(
+                incoming_timeline_projections
+                    .iter()
+                    .map(|projection| projection.layer.clone()),
             );
-            snapshot
-                .layers
-                .extend(projections.into_iter().map(|projection| projection.layer));
-            if let Some(main) = snapshot
-                .compositions
-                .iter_mut()
-                .find(|composition| composition.id == 1)
-            {
-                main.layer_ids = snapshot.layers.iter().map(|layer| layer.id).collect();
-            }
         } else {
             // Legacy Timeline data had no explicit lane summaries and used
             // the numeric lane value as an authored VJ-layer ID.  Keep that
@@ -45410,6 +45708,22 @@ impl EngineRuntime {
                 layer.default_clip_slot_id = None;
             }
         }
+        if let Some(main) = snapshot
+            .compositions
+            .iter_mut()
+            .find(|composition| composition.id == 1)
+        {
+            main.layer_ids = snapshot.layers.iter().map(|layer| layer.id).collect();
+        }
+        snapshot
+            .compositions
+            .retain(|composition| composition.id == 1);
+        snapshot
+            .compositions
+            .extend(self.resolved_custom_video_compositions_for_render(
+                &snapshot.outputs,
+                &incoming_timeline_projections,
+            ));
         self.apply_follow_video_automation_subtree_to_snapshot(
             &mut snapshot,
             RuntimeChildTransportId::Follow,
@@ -45488,14 +45802,11 @@ impl EngineRuntime {
             .map(|layer| self.video_layer_summary_with_effects(layer, now))
             .collect::<Vec<_>>();
         let mut timeline_projections = self.timeline_video_projection_layers(
+            self.timeline_id,
             &self.timeline_video_clips,
             &self.timeline_layers,
             self.timeline_position_ms,
             self.timeline_playing,
-        );
-        self.apply_timeline_video_projection_automations(
-            &mut timeline_projections,
-            self.timeline_position_ms,
         );
         let root_timeline_projection_ids = timeline_projections
             .iter()
@@ -45503,8 +45814,8 @@ impl EngineRuntime {
             .collect::<HashSet<_>>();
         layers.extend(
             timeline_projections
-                .into_iter()
-                .map(|projection| projection.layer),
+                .iter()
+                .map(|projection| projection.layer.clone()),
         );
         if let Some(transition) = &self.timeline_follow_transition {
             let duration_ms = transition.duration.as_millis().max(1) as u64;
@@ -45534,22 +45845,19 @@ impl EngineRuntime {
                 .any(|layer| matches!(layer.kind, TimelineLayerKind::Video));
             if target_has_explicit_video_lanes {
                 let mut used_ids = layers.iter().map(|layer| layer.id).collect();
-                let mut projections = self.timeline_video_projection_layers_with_used_ids(
+                let projections = self.timeline_video_projection_layers_with_used_ids(
+                    transition.target_timeline_id,
                     &transition.target.video_clips,
                     &transition.target.layers,
                     target_position_ms,
                     true,
                     &mut used_ids,
                 );
-                self.apply_timeline_video_projection_automations_from_summaries(
-                    &mut projections,
-                    &transition.target.video_automations,
-                    target_position_ms,
-                );
-                layers.extend(projections.into_iter().map(|mut projection| {
+                for mut projection in projections {
                     projection.layer.state.opacity *= incoming_weight;
-                    projection.layer
-                }));
+                    layers.push(projection.layer.clone());
+                    timeline_projections.push(projection);
+                }
             } else {
                 // Legacy Timeline data had no explicit lane summaries and
                 // used the numeric lane value as an authored VJ-layer ID.
@@ -45603,14 +45911,12 @@ impl EngineRuntime {
             id: 1,
             label: "Main".to_string(),
             layer_ids: main_layer_ids,
+            timeline_layer_ids: Vec::new(),
             output_ids: output_ids_for_composition(&outputs, 1),
         }];
-        compositions.extend(self.video_compositions.iter().map(|composition| {
-            let mut summary =
-                sanitize_video_composition(composition.summary.clone(), &self.video_layers);
-            summary.output_ids = output_ids_for_composition(&outputs, summary.id);
-            summary
-        }));
+        compositions.extend(
+            self.resolved_custom_video_compositions_for_render(&outputs, &timeline_projections),
+        );
         VideoSnapshot {
             layers,
             media_assets: self.media_assets.clone(),
@@ -45633,6 +45939,7 @@ impl EngineRuntime {
     fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
         let timeline_video_projection_layer_ids = self
             .timeline_video_projection_layers(
+                self.timeline_id,
                 &self.timeline_video_clips,
                 &self.timeline_layers,
                 self.timeline_position_ms,
@@ -45844,6 +46151,7 @@ impl EngineRuntime {
             id: 1,
             label: "Main".to_string(),
             layer_ids: self.video_layers.iter().map(|layer| layer.id).collect(),
+            timeline_layer_ids: Vec::new(),
             output_ids: output_ids_for_composition(&rendered.outputs, 1),
         }];
         compositions.extend(self.video_compositions.iter().map(|composition| {
@@ -48395,6 +48703,175 @@ impl EngineRuntime {
             expected_safety_epoch,
             expected_safety_generation,
             create_verified_show_artnet_loopback_sender,
+        )
+    }
+
+    /// Engine-owned final physical boundary for the DSF2026 one-shot probe.
+    ///
+    /// The callback receives only the immutable ArtDmx packet. The socket
+    /// bind happens before this boundary and can therefore safely abort. A
+    /// callback error or short write follows `send_to` and is deliberately
+    /// classified InDoubt so the control plane retains its durable Pending
+    /// marker rather than sending a second packet.
+    fn send_dsf2026_artnet_acceptance_probe_with_transport<F>(
+        &mut self,
+        expected_disabled_output: &DmxOutputConfig,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        send: F,
+    ) -> Result<(), Dsf2026ArtNetAcceptanceProbeError>
+    where
+        F: FnOnce(&[u8; 530]) -> Result<usize, String>,
+    {
+        let reject_pre_send =
+            |message: &str| Dsf2026ArtNetAcceptanceProbeError::pre_send(message.to_string());
+        if !show_artnet_loopback_route_is_exact_staged(expected_disabled_output) {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe did not name the exact disabled 127.0.0.1:6454/U0 route",
+            ));
+        }
+        if !self.additional_dmx_outputs.is_empty() {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe requires exactly one authored DMX route",
+            ));
+        }
+        if self.output != *expected_disabled_output
+            || !show_artnet_loopback_route_is_exact_staged(&self.output)
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe route changed or is active",
+            ));
+        }
+        if self.dmx_sender.is_some() {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe requires no active DMX sender",
+            ));
+        }
+        if self
+            .dmx_input_frames
+            .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe requires no Universe 0 DMX input/merge",
+            ));
+        }
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Ready
+            || ownership.effective_role != MachineOutputRole::Both
+            || ownership.desired_role != MachineOutputRole::Both
+            || !ownership.lighting_allowed
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe requires the exact active local Both lighting authority",
+            ));
+        }
+
+        // This is the same S0 linearization boundary as live DMX writes and
+        // show-route publication. Retain it across the last route/input
+        // observation and send_to so a successfully queued blackout always
+        // wins before any non-zero probe packet can leave this process.
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _safety_enqueue_gate = shared_telemetry
+            .safety_blackout_enqueue_gate
+            .lock()
+            .map_err(|_| {
+                Dsf2026ArtNetAcceptanceProbeError::pre_send(
+                    "Safety blackout enqueue gate was poisoned before DSF2026 Art-Net acceptance probe",
+                )
+            })?;
+        let safety = shared_telemetry.safety_blackout.lock().map_err(|_| {
+            Dsf2026ArtNetAcceptanceProbeError::pre_send(
+                "Safety blackout authority lock was poisoned before DSF2026 Art-Net acceptance probe",
+            )
+        })?;
+        if shared_telemetry
+            .has_pending_safety_blackout_enqueue()
+            .map_err(Dsf2026ArtNetAcceptanceProbeError::pre_send)?
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe was superseded by a queued emergency blackout",
+            ));
+        }
+        if safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe was superseded by an emergency blackout authority change",
+            ));
+        }
+
+        // Recheck engine-owned mutable state immediately before send_to.
+        // These checks cannot use AppState because only the engine worker
+        // serializes DMX input/merge frames with its transport boundary.
+        if !self.additional_dmx_outputs.is_empty()
+            || self.output != *expected_disabled_output
+            || !show_artnet_loopback_route_is_exact_staged(&self.output)
+            || self.dmx_sender.is_some()
+            || self
+                .dmx_input_frames
+                .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe engine route, sender, or Universe 0 input/merge changed immediately before send",
+            ));
+        }
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Ready
+            || ownership.effective_role != MachineOutputRole::Both
+            || ownership.desired_role != MachineOutputRole::Both
+            || !ownership.lighting_allowed
+        {
+            return Err(reject_pre_send(
+                "DSF2026 Art-Net acceptance probe lost its exact local Both lighting authority immediately before send",
+            ));
+        }
+
+        let mut frame = [0u8; 512];
+        frame[0] = 255;
+        frame[4] = 255;
+        frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX] = 0;
+        let packet = build_art_dmx_packet(SHOW_ARTNET_LOOPBACK_UNIVERSE, &frame);
+        let sent = send(&packet).map_err(|error| {
+            Dsf2026ArtNetAcceptanceProbeError::in_doubt(format!(
+                "DSF2026 Art-Net acceptance probe send_to outcome is physically ambiguous: {error}"
+            ))
+        })?;
+        if sent != packet.len() {
+            return Err(Dsf2026ArtNetAcceptanceProbeError::in_doubt(format!(
+                "DSF2026 Art-Net acceptance probe send_to wrote {sent} of {} bytes; physical outcome is ambiguous",
+                packet.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn send_dsf2026_artnet_acceptance_probe(
+        &mut self,
+        expected_disabled_output: &DmxOutputConfig,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+    ) -> Result<(), Dsf2026ArtNetAcceptanceProbeError> {
+        // Binding the fixed loopback socket has no external output effect;
+        // only the later send_to is an irreversible acceptance boundary.
+        let socket = UdpSocket::bind((SHOW_ARTNET_LOOPBACK_TARGET_IP, 0)).map_err(|error| {
+            Dsf2026ArtNetAcceptanceProbeError::pre_send(format!(
+                "DSF2026 Art-Net acceptance probe socket bind failed: {error}"
+            ))
+        })?;
+        let _ = socket.set_write_timeout(Some(Duration::from_millis(2)));
+        self.send_dsf2026_artnet_acceptance_probe_with_transport(
+            expected_disabled_output,
+            expected_safety_epoch,
+            expected_safety_generation,
+            |packet| {
+                socket
+                    .send_to(
+                        packet,
+                        (SHOW_ARTNET_LOOPBACK_TARGET_IP, SHOW_ARTNET_LOOPBACK_PORT),
+                    )
+                    .map_err(|error| error.to_string())
+            },
         )
     }
 
@@ -62007,6 +62484,44 @@ fn sanitize_loaded_video_compositions(
         .collect()
 }
 
+/// Timeline lanes in a custom composition are stable authored identities, so
+/// never coerce or silently drop them. A lane number is only meaningful with
+/// its owning Timeline, and both must name a distinct, non-zero Video lane in
+/// the currently authoritative Timeline bank.
+fn validate_runtime_timeline_video_layer_ids(
+    timeline_layer_ids: &[TimelineVideoLayerRef],
+    timelines: &[TimelineSnapshot],
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for timeline_layer in timeline_layer_ids {
+        if timeline_layer.timeline_id.0 == 0
+            || timeline_layer.layer_id == 0
+            || !seen.insert(*timeline_layer)
+        {
+            return Err(format!(
+                "Timeline {} Video lane {} is zero or duplicated in this composition",
+                timeline_layer.timeline_id.0, timeline_layer.layer_id
+            ));
+        }
+        if !timelines
+            .iter()
+            .find(|timeline| timeline.id == timeline_layer.timeline_id)
+            .is_some_and(|timeline| {
+                timeline.layers.iter().any(|layer| {
+                    layer.id == timeline_layer.layer_id
+                        && matches!(layer.kind, TimelineLayerKind::Video)
+                })
+            })
+        {
+            return Err(format!(
+                "Timeline {} Video lane {} is stale or is not a Video lane",
+                timeline_layer.timeline_id.0, timeline_layer.layer_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn sanitize_loaded_video_outputs(
     outputs: &[VideoOutputSummary],
     compositions: &[RuntimeVideoComposition],
@@ -67342,6 +67857,7 @@ mod tests {
                     id: 45,
                     label: "Loaded Comp".to_string(),
                     layer_ids: vec![44],
+                    timeline_layer_ids: Vec::new(),
                     output_ids: Vec::new(),
                 }],
                 outputs: vec![VideoOutputSummary {
@@ -68624,18 +69140,21 @@ mod tests {
                         id: 0,
                         label: "Zero Composition".to_string(),
                         layer_ids: vec![2],
+                        timeline_layer_ids: Vec::new(),
                         output_ids: vec![6],
                     },
                     CompositionSummary {
                         id: 4,
                         label: " Aux ".to_string(),
                         layer_ids: vec![2, 99, 2],
+                        timeline_layer_ids: Vec::new(),
                         output_ids: vec![99],
                     },
                     CompositionSummary {
                         id: 4,
                         label: "Duplicate Aux".to_string(),
                         layer_ids: vec![2],
+                        timeline_layer_ids: Vec::new(),
                         output_ids: Vec::new(),
                     },
                 ],
@@ -68684,7 +69203,7 @@ mod tests {
             ..DmxOutputConfig::default()
         });
         let controls = sample_profile().dmx_modes[0].controls.clone();
-        let snapshot = EngineSnapshot {
+        let mut snapshot = EngineSnapshot {
             fixtures: vec![PatchedFixtureSummary {
                 id: 1,
                 label: "Loaded Fixture".to_string(),
@@ -69041,7 +69560,84 @@ mod tests {
             ..EngineSnapshot::default()
         };
 
-        engine.load_project_snapshot(snapshot).unwrap();
+        // Timeline Video automation rejection is now a clean break: the
+        // legacy incomplete Video layer must never be materialized by ingress
+        // validation, and bad direct targets/keyframes must not be silently
+        // dropped. The definitive load acknowledgement proves that no worker
+        // panic was converted into a timeout.
+        let before_rejection = engine.persistence_snapshot().unwrap();
+        let before_audio_revision = engine.snapshot().timeline.audio_transport_revision;
+        let allocator_before = allocator_counter_values(&engine);
+        let error = engine
+            .load_project_snapshot_and_wait(snapshot.clone())
+            .unwrap_err();
+        assert!(
+            error.contains("Timeline")
+                && error.contains("Video automation 41")
+                && error.contains("non-finite keyframe value"),
+            "unexpected error: {error}"
+        );
+        // The public telemetry clock advances independently, so compare the
+        // complete authored/history surface rather than tick-derived fields.
+        let after_rejection = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_rejection.fixtures, before_rejection.fixtures);
+        assert_eq!(after_rejection.cues, before_rejection.cues);
+        assert_eq!(after_rejection.cue_lists, before_rejection.cue_lists);
+        assert_eq!(after_rejection.palettes, before_rejection.palettes);
+        assert_eq!(
+            after_rejection.playback_executors,
+            before_rejection.playback_executors
+        );
+        assert_eq!(
+            after_rejection.playback_master,
+            before_rejection.playback_master
+        );
+        assert_eq!(
+            after_rejection.active_cue_id,
+            before_rejection.active_cue_id
+        );
+        assert_eq!(after_rejection.timeline, before_rejection.timeline);
+        assert_eq!(
+            after_rejection.timeline_bank,
+            before_rejection.timeline_bank
+        );
+        assert_eq!(after_rejection.video, before_rejection.video);
+        assert_eq!(
+            after_rejection.authored_video,
+            before_rejection.authored_video
+        );
+        assert_eq!(after_rejection.effects, before_rejection.effects);
+        assert_eq!(after_rejection.node_graphs, before_rejection.node_graphs);
+        assert_eq!(after_rejection.output, before_rejection.output);
+        assert_eq!(after_rejection.dmx_outputs, before_rejection.dmx_outputs);
+        assert_eq!(after_rejection.stage_map, before_rejection.stage_map);
+        assert_eq!(
+            after_rejection.stage_map_presets,
+            before_rejection.stage_map_presets
+        );
+        assert_eq!(
+            after_rejection.stage_objects,
+            before_rejection.stage_objects
+        );
+        assert_eq!(
+            after_rejection.touch_surface,
+            before_rejection.touch_surface
+        );
+        assert_eq!(
+            engine.snapshot().timeline.audio_transport_revision,
+            before_audio_revision
+        );
+        assert_eq!(allocator_counter_values(&engine), allocator_before);
+
+        // Keep the established legacy sanitizer proof for unrelated invalid
+        // Cue/lighting references. Once the invalid Video automation seam is
+        // removed explicitly, those historical non-Video repairs still load
+        // and canonicalize as before.
+        snapshot
+            .timeline
+            .video_automations
+            .retain(|automation| automation.id == 40);
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
         let mut loaded = engine.snapshot();
         for _ in 0..20 {
             if loaded.cues.len() == 1
@@ -70180,6 +70776,7 @@ mod tests {
             id,
             label: "Reserved Composition".to_string(),
             layer_ids: vec![id],
+            timeline_layer_ids: Vec::new(),
             output_ids: vec![id],
         }];
         snapshot.video.outputs = vec![VideoOutputSummary {
@@ -70468,6 +71065,7 @@ mod tests {
                     id: candidate,
                     label: "Boundary".to_string(),
                     layer_ids: Vec::new(),
+                    timeline_layer_ids: Vec::new(),
                     output_ids: Vec::new(),
                 }];
             }
@@ -70916,6 +71514,7 @@ mod tests {
                 id: 1,
                 label: "Allocator C1 composition".to_string(),
                 layer_ids: vec![1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             ..VideoSnapshot::default()
@@ -71916,6 +72515,7 @@ mod tests {
                         id,
                         label: format!("Allocator Composition {id}"),
                         layer_ids: vec![1],
+                        timeline_layer_ids: Vec::new(),
                         output_ids: vec![1],
                     })
                 }),
@@ -78698,6 +79298,7 @@ mod tests {
             id: 2,
             label: "Aux".to_string(),
             layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }));
         runtime.video_outputs.push(RuntimeVideoOutput {
@@ -83199,6 +83800,7 @@ mod tests {
                 id: 2,
                 label: "Aux".to_string(),
                 layer_ids: vec![source_layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }))
             .unwrap();
@@ -83664,18 +84266,21 @@ mod tests {
                 id: 0,
                 label: "Legacy zero host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
             CompositionSummary {
                 id: 2,
                 label: "Recovered host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
             CompositionSummary {
                 id: 2,
                 label: "Discarded duplicate host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
         ]);
@@ -83720,18 +84325,21 @@ mod tests {
                 id: 0,
                 label: "Legacy zero host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
             CompositionSummary {
                 id: 2,
                 label: "Recovered host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
             CompositionSummary {
                 id: 2,
                 label: "Discarded duplicate host".to_string(),
                 layer_ids: vec![layer_id],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             },
         ]);
@@ -84579,6 +85187,7 @@ mod tests {
                     layer_ids[5],
                     layer_ids[6],
                 ],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }))
             .unwrap();
@@ -84844,6 +85453,7 @@ mod tests {
                 id: 2,
                 label: "C1 lifecycle composition".to_string(),
                 layer_ids: vec![1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![3],
             },
         });
@@ -89677,6 +90287,7 @@ mod tests {
             id: 2,
             label: "Retained composition".to_string(),
             layer_ids: vec![1],
+            timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }));
         let before = runtime.video_snapshot();
@@ -89734,6 +90345,7 @@ mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }]
         );
@@ -91203,6 +91815,91 @@ mod tests {
     }
 
     #[test]
+    fn custom_composition_resolves_stable_timeline_lane_below_authored_layer() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        add_runtime_test_video_layer(&mut runtime, 11, VideoLayerState::default());
+        runtime.video_compositions.push(RuntimeVideoComposition {
+            summary: CompositionSummary {
+                id: 2,
+                label: "Background".to_string(),
+                layer_ids: vec![11],
+                timeline_layer_ids: vec![TimelineVideoLayerRef {
+                    timeline_id: TimelineId(1),
+                    layer_id: 7,
+                }],
+                output_ids: Vec::new(),
+            },
+        });
+        let mut projection_layer =
+            runtime.video_layer_summary_with_effects(&runtime.video_layers[0], runtime.last_tick);
+        projection_layer.id = 99;
+        projection_layer.label = "Timeline Video 2".to_string();
+        let mut incoming_projection_layer = projection_layer.clone();
+        incoming_projection_layer.id = 100;
+        incoming_projection_layer.label = "Timeline Video 2 incoming".to_string();
+        let compositions = runtime.resolved_custom_video_compositions_for_render(
+            &[],
+            &[
+                RuntimeTimelineVideoProjection {
+                    timeline_id: TimelineId(1),
+                    timeline_layer_id: 7,
+                    layer_order: 0,
+                    clip_id: TimelineVideoClipId(1),
+                    layer: projection_layer,
+                },
+                // A weighted Follow target may have the same lane ID as the
+                // root Timeline. The persisted composition is scoped to the
+                // root, so it must not receive this incoming projection.
+                RuntimeTimelineVideoProjection {
+                    timeline_id: TimelineId(2),
+                    timeline_layer_id: 7,
+                    layer_order: 0,
+                    clip_id: TimelineVideoClipId(2),
+                    layer: incoming_projection_layer,
+                },
+            ],
+        );
+        assert_eq!(compositions.len(), 1);
+        assert_eq!(
+            compositions[0].timeline_layer_ids,
+            vec![TimelineVideoLayerRef {
+                timeline_id: TimelineId(1),
+                layer_id: 7,
+            }]
+        );
+        assert_eq!(compositions[0].layer_ids, vec![99, 11]);
+
+        let before = runtime.video_compositions[0]
+            .summary
+            .timeline_layer_ids
+            .clone();
+        runtime.apply_command(EngineCommand::SetVideoCompositionTimelineLayers {
+            composition_id: 2,
+            timeline_layer_ids: vec![
+                TimelineVideoLayerRef {
+                    timeline_id: TimelineId(0),
+                    layer_id: 0,
+                },
+                TimelineVideoLayerRef {
+                    timeline_id: TimelineId(0),
+                    layer_id: 0,
+                },
+            ],
+        });
+        assert_eq!(
+            runtime.video_compositions[0].summary.timeline_layer_ids,
+            before
+        );
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("zero or duplicated")));
+    }
+
+    #[test]
     fn custom_video_compositions_filter_layers_and_reroute_outputs() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
@@ -91232,6 +91929,7 @@ mod tests {
                 id: composition_id,
                 label: "Aux".to_string(),
                 layer_ids: vec![layer_one, 99_999, layer_one],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![99_999],
             }))
             .unwrap();
@@ -117558,7 +118256,8 @@ mod tests {
     }
 
     #[test]
-    fn timeline_video_media_asset_projection_keeps_lanes_independent_and_applies_lane_automation() {
+    fn timeline_video_media_asset_projection_keeps_lanes_independent_and_rejects_implicit_projection_automation(
+    ) {
         let mut runtime = runtime_with_lfo_effects(&[]);
         let source = media_asset_test_source("shared");
         runtime.timeline_layers = vec![
@@ -117582,6 +118281,22 @@ mod tests {
         // renderer projection namespace; the projection allocator will probe
         // to a distinct ID instead of relying on a numeric predicate.
         runtime.video_layers = vec![runtime_video_layer_from_summary(&authored_high)];
+        let camera_id = 2;
+        runtime.apply_command(EngineCommand::AddVideoLayer {
+            layer_id: camera_id,
+            label: "Camera target".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::Camera,
+                path: None,
+                name: Some("test camera".to_string()),
+                codec: None,
+                metadata: None,
+            },
+        });
+        assert!(
+            runtime.last_error.is_none(),
+            "the direct Camera source must materialize as an authored video layer"
+        );
         runtime.timeline_video_clips = vec![
             TimelineVideoClipSummary {
                 id: TimelineVideoClipId(901),
@@ -117604,30 +118319,48 @@ mod tests {
                 fade_out_ms: 0,
             },
         ];
-        runtime.timeline_video_automations = vec![RuntimeTimelineVideoAutomation {
-            id: 903,
-            // This ID is deliberately not an authored VideoLayer ID.  The
-            // lane identity is the authoritative target for this projection.
-            layer_id: 9_999,
-            timeline_layer_id: Some(50),
-            param: VideoParam::Opacity,
-            track: TimelineTrackKind::Video,
-            keyframes: vec![
-                VideoAutomationKeyframeSummary {
+        runtime.timeline_video_automations = vec![
+            RuntimeTimelineVideoAutomation {
+                id: 903,
+                // The direct Camera layer remains the exact target even when
+                // this automation is presented on Timeline Video lane 50.
+                layer_id: camera_id,
+                timeline_layer_id: Some(50),
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 0,
+                        value: 0.25,
+                        interpolation: AutomationInterpolation::Linear,
+                    },
+                    VideoAutomationKeyframeSummary {
+                        time_ms: 1_000,
+                        value: 0.75,
+                        interpolation: AutomationInterpolation::Linear,
+                    },
+                ],
+                enabled: true,
+            },
+            RuntimeTimelineVideoAutomation {
+                id: 904,
+                // No current persisted field names a renderer-only projection.
+                // A stale/non-authored target must not be inferred from lane 51.
+                layer_id: 9_999,
+                timeline_layer_id: Some(51),
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
                     time_ms: 0,
-                    value: 0.25,
-                    interpolation: AutomationInterpolation::Linear,
-                },
-                VideoAutomationKeyframeSummary {
-                    time_ms: 1_000,
-                    value: 0.75,
-                    interpolation: AutomationInterpolation::Linear,
-                },
-            ],
-            enabled: true,
-        }];
+                    value: 0.0,
+                    interpolation: AutomationInterpolation::Step,
+                }],
+                enabled: true,
+            },
+        ];
         runtime.timeline_position_ms = 500;
         runtime.timeline_playing = false;
+        runtime.apply_timeline_video_automations();
 
         let first = runtime.video_snapshot();
         assert!(first
@@ -117645,22 +118378,25 @@ mod tests {
             .iter()
             .all(|layer| layer.id != authored_high_id));
         assert!(first_layers.iter().all(|layer| layer.source == source));
-        let automated = first_layers
+        assert!(first_layers
             .iter()
-            .find(|layer| layer.state.opacity > 0.49 && layer.state.opacity < 0.51)
-            .expect("lane automation must reach the corresponding runtime projection");
-        let automated_id = automated.id;
+            .all(|layer| (layer.state.opacity - 1.0).abs() < f32::EPSILON));
+        assert!(first.layers.iter().any(|layer| {
+            layer.id == camera_id && (layer.state.opacity - 0.5).abs() < f32::EPSILON
+        }));
 
         runtime.timeline_layers[0].label = "Renamed lane".to_string();
         runtime.timeline_layers[0].order = 9;
         let renamed = runtime.video_snapshot();
-        let renamed_layer = renamed
+        let renamed_projections = renamed
             .layers
             .iter()
-            .find(|layer| layer.id == automated_id)
-            .expect("lane reorder must not retire or retarget the active clip");
-        assert_eq!(renamed_layer.source, source);
-        assert_eq!(renamed_layer.media_asset_id, Some(90));
+            .filter(|layer| layer.media_asset_id == Some(90) && layer.id != authored_high_id)
+            .collect::<Vec<_>>();
+        assert_eq!(renamed_projections.len(), 2);
+        assert!(renamed_projections.iter().all(|layer| {
+            layer.source == source && (layer.state.opacity - 1.0).abs() < f32::EPSILON
+        }));
         assert!(runtime
             .build_persistence_snapshot()
             .authored_video
@@ -117695,6 +118431,382 @@ mod tests {
             .layers
             .iter()
             .any(|layer| layer.id == authored_high_id));
+    }
+
+    #[test]
+    fn project_load_rejects_stale_timeline_video_automation_target_without_silent_drop() {
+        let mut author = runtime_with_lfo_effects(&[]);
+        let camera_id = 2;
+        author.apply_command(EngineCommand::AddVideoLayer {
+            layer_id: camera_id,
+            label: "Load target Camera".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::Camera,
+                path: None,
+                name: Some("load-test camera".to_string()),
+                codec: None,
+                metadata: None,
+            },
+        });
+        let mut timeline = author.authored_timeline_snapshot();
+        timeline.duration_ms = 1_000;
+        timeline.layers = vec![timeline_test_layer(
+            73,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Video,
+        )];
+        timeline.video_automations = vec![TimelineVideoAutomationSummary {
+            id: 7_301,
+            layer_id: camera_id,
+            timeline_layer_id: Some(73),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![VideoAutomationKeyframeSummary {
+                time_ms: 0,
+                value: 0.5,
+                interpolation: AutomationInterpolation::Step,
+            }],
+            enabled: true,
+        }];
+        author
+            .apply_timeline_bank_state(vec![timeline.clone()], timeline.id, false)
+            .unwrap();
+        let valid = author.build_persistence_snapshot();
+
+        let mut loader = runtime_with_lfo_effects(&[]);
+        loader.load_project_snapshot_checked(valid.clone()).unwrap();
+        assert_eq!(loader.timeline_video_automations.len(), 1);
+        assert_eq!(loader.timeline_video_automations[0].layer_id, camera_id);
+
+        let before = loader.build_persistence_snapshot();
+        let before_audio_revision = loader.timeline_audio_transport_revision;
+        let mut stale = valid;
+        stale.timeline.video_automations[0].layer_id = 9_999;
+        stale
+            .timeline_bank
+            .iter_mut()
+            .find(|timeline| timeline.id == stale.timeline.id)
+            .expect("active bank Timeline")
+            .video_automations[0]
+            .layer_id = 9_999;
+        let error = loader.load_project_snapshot_checked(stale).unwrap_err();
+        assert!(
+            error.contains("Timeline")
+                && error.contains("Video automation 7301")
+                && error.contains("missing authored Video layer 9999")
+                && error.contains("scheduling-only"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(loader.build_persistence_snapshot(), before);
+        assert_eq!(
+            loader.timeline_audio_transport_revision,
+            before_audio_revision
+        );
+    }
+
+    #[test]
+    fn timeline_follow_direct_camera_automation_never_targets_shared_lane_projection() {
+        let now = Instant::now();
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let camera_id = 2;
+        runtime.apply_command(EngineCommand::AddVideoLayer {
+            layer_id: camera_id,
+            label: "Follow Camera".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::Camera,
+                path: None,
+                name: Some("follow-test camera".to_string()),
+                codec: None,
+                metadata: None,
+            },
+        });
+        let source_asset = media_asset_test_summary(
+            7_401,
+            "Follow source",
+            media_asset_test_source("follow-source"),
+        );
+        let target_asset = media_asset_test_summary(
+            7_402,
+            "Follow target",
+            media_asset_test_source("follow-target"),
+        );
+        let shared_video_lane =
+            timeline_test_layer(74, 0, false, false, false, TimelineLayerKind::Video);
+        let source_clip = TimelineVideoClipSummary {
+            id: TimelineVideoClipId(7_403),
+            layer_id: 74,
+            media_asset_id: 7_401,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let target_clip = TimelineVideoClipSummary {
+            id: TimelineVideoClipId(7_404),
+            layer_id: 74,
+            media_asset_id: 7_402,
+            ..source_clip.clone()
+        };
+        let source_camera = TimelineVideoAutomationSummary {
+            id: 7_405,
+            layer_id: camera_id,
+            timeline_layer_id: Some(74),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![VideoAutomationKeyframeSummary {
+                time_ms: 0,
+                value: 0.25,
+                interpolation: AutomationInterpolation::Step,
+            }],
+            enabled: true,
+        };
+        let target_camera = TimelineVideoAutomationSummary {
+            id: 7_406,
+            layer_id: camera_id,
+            timeline_layer_id: Some(74),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![VideoAutomationKeyframeSummary {
+                time_ms: 0,
+                value: 0.75,
+                interpolation: AutomationInterpolation::Step,
+            }],
+            enabled: true,
+        };
+        let stale_target = TimelineVideoAutomationSummary {
+            id: 7_407,
+            layer_id: 9_999,
+            timeline_layer_id: Some(74),
+            param: VideoParam::Opacity,
+            track: TimelineTrackKind::Video,
+            keyframes: vec![VideoAutomationKeyframeSummary {
+                time_ms: 0,
+                value: 0.0,
+                interpolation: AutomationInterpolation::Step,
+            }],
+            enabled: true,
+        };
+
+        runtime.media_assets = vec![source_asset, target_asset];
+        runtime.timeline_layers = vec![shared_video_lane.clone()];
+        runtime.timeline_video_clips = vec![source_clip.clone()];
+        runtime.timeline_video_automations = vec![runtime_timeline_video_automation_from_summary(
+            &source_camera,
+        )];
+        runtime.timeline_bank[0].layers = vec![shared_video_lane.clone()];
+        runtime.timeline_bank[0].video_clips = vec![source_clip];
+        runtime.timeline_bank[0].video_automations = vec![source_camera];
+        runtime.timeline_bank[1].layers = vec![shared_video_lane];
+        runtime.timeline_bank[1].video_clips = vec![target_clip];
+        runtime.timeline_bank[1].video_automations = vec![target_camera, stale_target];
+        runtime.timeline_position_ms = 50;
+        runtime.timeline_playing = true;
+        runtime.apply_timeline_video_automations();
+
+        let root = runtime.video_snapshot_unweighted();
+        assert!(root.layers.iter().any(|layer| {
+            layer.id == camera_id && (layer.state.opacity - 0.25).abs() < f32::EPSILON
+        }));
+        assert!(root.layers.iter().any(|layer| {
+            layer.media_asset_id == Some(7_401) && (layer.state.opacity - 1.0).abs() < f32::EPSILON
+        }));
+
+        let shared = Arc::new(RwLock::new(None));
+        runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&shared));
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                now,
+            )
+            .unwrap();
+        runtime
+            .timeline_follow_transport
+            .as_mut()
+            .expect("Follow transport")
+            .position_ms = 50;
+        runtime.refresh_timeline_follow_video_render_snapshot();
+
+        let rendered = shared.read().unwrap().clone().expect("Follow render");
+        assert!(rendered.outgoing_video.layers.iter().any(|layer| {
+            layer.id == camera_id && (layer.state.opacity - 0.25).abs() < f32::EPSILON
+        }));
+        assert!(rendered.incoming_video.layers.iter().any(|layer| {
+            layer.id == camera_id && (layer.state.opacity - 0.75).abs() < f32::EPSILON
+        }));
+        assert!(
+            rendered
+                .incoming_video
+                .layers
+                .iter()
+                .filter(|layer| layer.media_asset_id == Some(7_402))
+                .all(|layer| (layer.state.opacity - 1.0).abs() < f32::EPSILON),
+            "a stale direct target must not be inferred from the shared Video lane"
+        );
+        assert!(
+            (runtime_video_layer_state(&runtime, camera_id).opacity - 0.25).abs() < f32::EPSILON,
+            "Follow rendering must not mutate the outgoing authored Camera state"
+        );
+    }
+
+    #[test]
+    fn timeline_follow_weighted_custom_composition_scopes_shared_lane_to_exact_timeline() {
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        let root_timeline_id = runtime.timeline_id;
+        let target_timeline_id = runtime.timeline_bank[1].id;
+        let shared_lane_id = 91;
+        let root_asset_id = 7_501;
+        let target_asset_id = 7_502;
+        let fixed_layer_id = 7_503;
+        let membership = TimelineVideoLayerRef {
+            timeline_id: root_timeline_id,
+            layer_id: shared_lane_id,
+        };
+        let shared_video_lane = timeline_test_layer(
+            shared_lane_id,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Video,
+        );
+        let root_clip = TimelineVideoClipSummary {
+            id: TimelineVideoClipId(7_504),
+            layer_id: shared_lane_id,
+            media_asset_id: root_asset_id,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        };
+        let target_clip = TimelineVideoClipSummary {
+            id: TimelineVideoClipId(7_505),
+            media_asset_id: target_asset_id,
+            ..root_clip.clone()
+        };
+
+        runtime.media_assets = vec![
+            media_asset_test_summary(
+                root_asset_id,
+                "Root Timeline Video",
+                media_asset_test_source("follow-scoped-root"),
+            ),
+            media_asset_test_summary(
+                target_asset_id,
+                "Follow Timeline Video",
+                media_asset_test_source("follow-scoped-target"),
+            ),
+        ];
+        runtime.timeline_layers = vec![shared_video_lane.clone()];
+        runtime.timeline_video_clips = vec![root_clip.clone()];
+        runtime.timeline_position_ms = 50;
+        runtime.timeline_playing = true;
+        runtime.timeline_bank[0].layers = vec![shared_video_lane.clone()];
+        runtime.timeline_bank[0].video_clips = vec![root_clip];
+        runtime.timeline_bank[1].layers = vec![shared_video_lane];
+        runtime.timeline_bank[1].video_clips = vec![target_clip];
+        add_runtime_test_video_layer(&mut runtime, fixed_layer_id, VideoLayerState::default());
+
+        runtime.apply_command(EngineCommand::AddVideoComposition(CompositionSummary {
+            id: 2,
+            label: "Root plus fixed".to_string(),
+            layer_ids: vec![fixed_layer_id],
+            timeline_layer_ids: vec![membership],
+            output_ids: Vec::new(),
+        }));
+        assert!(runtime.last_error.is_none());
+
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                runtime.last_tick,
+            )
+            .unwrap();
+        let transition = runtime
+            .timeline_follow_transition
+            .as_mut()
+            .expect("weighted Follow transition");
+        transition.started_at = runtime.last_tick - Duration::from_millis(50);
+        runtime
+            .timeline_follow_transport
+            .as_mut()
+            .expect("Follow transport")
+            .position_ms = 50;
+        let durable_composition_before_render = runtime
+            .video_compositions
+            .iter()
+            .find(|composition| composition.summary.id == 2)
+            .expect("runtime custom composition")
+            .summary
+            .clone();
+        let timeline_position_before_render = runtime.timeline_position_ms;
+
+        let rendered = runtime.video_snapshot();
+        let root_projection = rendered
+            .layers
+            .iter()
+            .find(|layer| layer.media_asset_id == Some(root_asset_id))
+            .expect("root Timeline projection");
+        let target_projection = rendered
+            .layers
+            .iter()
+            .find(|layer| layer.media_asset_id == Some(target_asset_id))
+            .expect("weighted Follow target projection");
+        assert!(root_projection.state.opacity > 0.0 && root_projection.state.opacity < 1.0);
+        assert!(target_projection.state.opacity > 0.0 && target_projection.state.opacity < 1.0);
+
+        let composition = rendered
+            .compositions
+            .iter()
+            .find(|composition| composition.id == 2)
+            .expect("custom composition");
+        assert_eq!(composition.timeline_layer_ids, vec![membership]);
+        assert_eq!(
+            composition.layer_ids,
+            vec![root_projection.id, fixed_layer_id]
+        );
+        assert!(
+            !composition.layer_ids.contains(&target_projection.id),
+            "the Follow target reuses lane {shared_lane_id}, but belongs to Timeline {} rather than the selected Timeline {}",
+            target_timeline_id.0,
+            root_timeline_id.0,
+        );
+
+        let persisted = runtime.build_persistence_snapshot();
+        let persisted_composition = persisted
+            .authored_video
+            .as_ref()
+            .expect("persistence carries the canonical authored video image")
+            .compositions
+            .iter()
+            .find(|composition| composition.id == 2)
+            .expect("persisted custom composition");
+        assert_eq!(persisted_composition.timeline_layer_ids, vec![membership]);
+        assert_eq!(persisted_composition.layer_ids, vec![fixed_layer_id]);
+        assert!(
+            !persisted_composition.layer_ids.iter().any(
+                |layer_id| *layer_id == root_projection.id || *layer_id == target_projection.id
+            ),
+            "renderer projection IDs must never persist",
+        );
+        assert_eq!(
+            runtime
+                .video_compositions
+                .iter()
+                .find(|composition| composition.summary.id == 2)
+                .expect("runtime custom composition after render")
+                .summary,
+            durable_composition_before_render,
+            "render/persistence snapshots must not mutate durable composition membership",
+        );
+        assert_eq!(
+            runtime.timeline_position_ms,
+            timeline_position_before_render
+        );
     }
 
     #[test]
@@ -127914,6 +129026,7 @@ mod tests {
                 id: 40,
                 label: "FC27 Comp".to_string(),
                 layer_ids: vec![10],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             ..VideoSnapshot::default()
@@ -131207,6 +132320,134 @@ mod tests {
         ] {
             assert!(!show_artnet_loopback_route_is_exact_staged(&invalid));
         }
+    }
+
+    #[test]
+    fn dsf2026_probe_engine_boundary_sends_one_exact_u0_packet_without_route_mutation() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        let before = runtime.build_snapshot(0);
+        let sends = AtomicUsize::new(0);
+
+        runtime
+            .send_dsf2026_artnet_acceptance_probe_with_transport(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |packet| {
+                    sends.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(packet.len(), 530);
+                    assert_eq!(&packet[..8], b"Art-Net\0");
+                    assert_eq!(&packet[8..10], &[0x00, 0x50]);
+                    assert_eq!(&packet[14..16], &[0, 0]);
+                    assert_eq!(&packet[16..18], &[0x02, 0x00]);
+                    assert_eq!(packet[18], 255);
+                    assert_eq!(packet[22], 255);
+                    assert_eq!(packet[18 + SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX], 0);
+                    assert!(packet[18..].iter().enumerate().all(|(index, value)| {
+                        matches!((index, value), (0, 255) | (4, 255) | (_, 0))
+                    }));
+                    Ok(packet.len())
+                },
+            )
+            .expect("the exact staged engine boundary must send once");
+
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.build_snapshot(0), before);
+        assert_eq!(runtime.output, staged);
+        assert!(runtime.dmx_sender.is_none());
+    }
+
+    #[test]
+    fn dsf2026_probe_engine_boundary_retains_in_doubt_on_send_error_or_short_write_without_retry() {
+        let staged = staged_show_artnet_loopback_output();
+        for send_result in [Err("injected send failure".to_string()), Ok(529)] {
+            let mut runtime = EngineRuntime::new(staged.clone());
+            let safety = runtime.shared_telemetry.safety_blackout_authority();
+            let sends = AtomicUsize::new(0);
+            let result = runtime.send_dsf2026_artnet_acceptance_probe_with_transport(
+                &staged,
+                safety.epoch,
+                safety.generation,
+                |_| {
+                    sends.fetch_add(1, Ordering::SeqCst);
+                    send_result.clone()
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(Dsf2026ArtNetAcceptanceProbeError::InDoubt(_))
+            ));
+            assert_eq!(sends.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn dsf2026_probe_engine_boundary_rejects_u0_merge_and_queued_s0_with_zero_sends() {
+        let staged = staged_show_artnet_loopback_output();
+        let mut runtime = EngineRuntime::new(staged.clone());
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime.dmx_input_frames.insert(
+            SHOW_ARTNET_LOOPBACK_UNIVERSE,
+            RuntimeDmxInputFrame {
+                values: Box::new([1; 512]),
+                merge_mode: DmxMergeMode::Ltp,
+            },
+        );
+        let sends = AtomicUsize::new(0);
+        let result = runtime.send_dsf2026_artnet_acceptance_probe_with_transport(
+            &staged,
+            safety.epoch,
+            safety.generation,
+            |_| {
+                sends.fetch_add(1, Ordering::SeqCst);
+                Ok(530)
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(Dsf2026ArtNetAcceptanceProbeError::PreSend(_))
+        ));
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let mut s0_runtime =
+            EngineRuntime::new_with_shared_telemetry(staged.clone(), Arc::clone(&shared));
+        let mut handle = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        handle.shared_telemetry = Arc::clone(&shared);
+        let before_s0 = s0_runtime.shared_telemetry.safety_blackout_authority();
+        let enqueue_handle = handle.clone();
+        let emergency = thread::spawn(move || {
+            enqueue_handle.safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
+        });
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while handle.safety_queue.is_empty() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert_eq!(handle.safety_queue.len(), 1);
+        let s0_sends = AtomicUsize::new(0);
+        let result = s0_runtime.send_dsf2026_artnet_acceptance_probe_with_transport(
+            &staged,
+            before_s0.epoch,
+            before_s0.generation,
+            |_| {
+                s0_sends.fetch_add(1, Ordering::SeqCst);
+                Ok(530)
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(Dsf2026ArtNetAcceptanceProbeError::PreSend(_))
+        ));
+        assert_eq!(s0_sends.load(Ordering::SeqCst), 0);
+        let snapshot = RwLock::new(s0_runtime.build_snapshot(0));
+        s0_runtime.consume_commands(&handle.safety_queue);
+        s0_runtime.publish_pending_command_acks(0, &snapshot);
+        assert_eq!(
+            emergency.join().expect("S0 enqueue thread panicked"),
+            Ok(SafetyBlackoutEngageDisposition::Applied),
+        );
     }
 
     #[test]

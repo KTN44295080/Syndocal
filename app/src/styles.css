@@ -38549,7 +38549,11 @@ button.timelineExternalSourceCard:active,
    advanced disclosure retains a real internal scrollport without shrinking
    control targets or typography. */
 @media (max-height: 820px) {
-  .layoutSetup.setupMode-video .videoOutputStatusPane {
+  /* Match the direct-child desktop rule above so the compact reflow can
+     actually replace its flex layout.  Without the third selector component
+     the higher-specificity direct-child rule keeps the summaries stacked,
+     making the status pane's intrinsic height escape its bounded workspace. */
+  .layoutSetup.setupMode-video .videoOutputSetupShell > .videoOutputStatusPane {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(190px, 0.8fr);
     grid-template-rows: auto minmax(44px, auto) minmax(44px, 1fr);
@@ -38579,6 +38583,14 @@ button.timelineExternalSourceCard:active,
     grid-column: 1 / -1;
     grid-row: 3;
     min-height: 44px;
+  }
+
+  /* The source/tool rail is its own scrollport.  Layout containment keeps
+     its intentionally taller composition/output tool list from contributing
+     scrollable overflow to the fixed application shell while preserving the
+     existing internal rail scroll and all authored hit-target sizes. */
+  .layoutSetup.setupMode-video .videoSetupSidebar {
+    contain: layout;
   }
 }
 

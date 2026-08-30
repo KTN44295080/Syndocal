@@ -58,6 +58,120 @@ bytes. Git also reported one approximately `568 KiB` garbage object. Cleanup
 conditions are not satisfied; no cleanup Apply or ad-hoc deletion ran and
 reclaimed bytes remain `0`.
 
+## 2026-08-30 native three-display source checkpoint (live acceptance pending)
+
+The source route for one editor window plus two ordinary native Display
+outputs is frozen and independently reviewed `GO`. Foreground can route fixed
+Video 1 to the LED while Background resolves exact Timeline Video membership
+for Video 2 -> MiraBox -> Video 2 on the projector. Membership is the explicit
+`TimelineVideoLayerRef { timeline_id, layer_id }`; root/Follow lanes with the
+same numeric ID do not leak, projection IDs are not persisted, fixed authored
+layers remain above Timeline projection, and Main mirroring is not substituted.
+
+Supervisor gates include protocol `200/200`, engine focused `5/5`, the real
+weighted-Follow integration regression `1/1`, Syndocal boundary `1/1`,
+localization `3639/3639`, frontend invoke inventory `443`, output-control,
+TypeScript, Vite/release, format/diff, and three-display harness self-tests
+`90/90` in both PowerShell 7 and Windows PowerShell 5.1. Setup Video passes all
+five viewports including `1366x768` and `1280x720`, with document/app scroll
+zero and Advanced details internally scrollable; independent UI review is
+`GO`. First-party warnings are `0` for the evidenced source checks.
+
+This is not native or physical acceptance. The exact alpha.40 native build,
+two canonical Add Display transactions, distinct LED/projector composition
+routes, and joint 2 s / 5 s / 9 s visual proof remain pending. If Add fails,
+the new executable must be launched with stderr captured and the first raw
+`OutputControl operation syndocal.output.display.add.v2 failed before publication`
+line recorded; a PublicationFailed/in-doubt result must not be blindly retried.
+
+## 2026-08-30 read-only live-audit checkpoint
+
+A read-only FOH/show audit was captured at `2026-08-30 07:10–07:14 JST` from
+branch `codex/syndocal-v1.2`, with `HEAD == @{upstream} ==
+71f93803a73f7474ae21f1d8d39eb273bcc36d67`. It changed no files, processes,
+network state, UI state, build output, commit, or push. The first-party warning
+count for this no-compile checkpoint is `0`. This records live state only; it
+does not replace the alpha.39 build identity or advance any completion claim.
+
+- DJ Link is still not connected. The persisted authority is v2/rev17,
+  generation 4, `192.168.50.1:9100`, with auto-start armed. The bound
+  `イーサネット 4` adapter, interface GUID prefix `19578d89...`, is
+  `Disconnected` at `0 bps`, and `192.168.50.1` is `Deprecated`. The
+  read-only `Get-NetTCPConnection`/`Get-NetUDPEndpoint` snapshot found no
+  TCP/9100 listener or peer session, and checkout PID `87640` owned no TCP or
+  UDP endpoint. `192.168.50.2` was only a stale ARP neighbor. The current peer
+  authority is DJ Agent v1.1.11 / `a13d7bff...`; the older v1.1.10 launch
+  identity is stale, and no target-side v1.1.11 launch artifact was present on
+  FOH. HW-4 remains exactly `0/12`.
+- Normal audio has the machine-local setting
+  `route=explicit_device`, `Music (Elgato Virtual Audio)`, with persisted
+  topology fingerprint
+  `A2D9603C75ED1A6ECBC37F0FE851AAD56C632DFF31314544F2F606C220C9479C`.
+  The named Windows endpoint is present, but current topology/CPAL status was
+  not UI-confirmed and audible output was not verified. The production alpha9
+  reference-audio candidate (SHA-256
+  `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`)
+  keeps both reference layers muted by design; its rehearsal sibling (SHA-256
+  `AC9133AFD2C9AAD022674B45222447115F624175B2C5E20DE1E803ABAA9778CE`)
+  keeps them unmuted for listening. No current alpha.39
+  `asio-output-profile.v1.json` or Show-ASIO artifact is available; TOPPING/CUE
+  physical identity and output remain unverified.
+- The last UI-verified loaded unsaved project was alpha9; this read-only audit
+  did not re-observe the current in-memory project identity. The alpha9 file
+  has one disabled `EnttecOpenDmx` output and no video outputs. The existing
+  same-PC alpha10 candidate is a
+  separate `1,098,035`-byte file (SHA-256
+  `DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`): it
+  has one disabled controlled Art-Net route at `127.0.0.1:6454`, wire U0, and
+  two enabled exact `1920x1080` Spout senders, `Syndocal Background` and
+  `Syndocal Foreground`. Its persisted shape is
+  `video.media_assets=2`, `video.layers=0`, Main composition
+  `layer_ids=[]`, and `timeline.video_automations=0`. The pinned alpha9
+  source/media hashes were retained and the structural preflight passed. Fixed
+  Spout outputs are present, but no actual MP4/Camera-switching content is
+  authored. The available operation contract is an existing
+  File/Camera video layer plus Timeline Opacity automation (`Step cut` or
+  `Linear fade`); no concrete asset/camera identity was specified, so this is
+  not physical or content proof.
+- The authored release-visible cues are `all_white` (Cue 1) and `all_max`
+  (Cue 2). Both Timeline 1 events are `track=Lighting`,
+  `time_ms=138353`, immediately at the loop end `loop_region.b_ms=138353`
+  (the post-loop release boundary).
+- Unity was not running. Daslight PID `42752` owned UDP `6454`; do not stop it
+  without the operator. The exact receiver scene,
+  `E:\UnityProjects\Art-net-Unity\Assets\DSF2026\Scenes\DSF2026_Visualizer.unity`,
+  was not played, and physical DMX, GPU, and Spout observation remain
+  unverified. The exact red probe has no production UI path yet; the existing
+  diagnostics fail closed with `no frame was sent` / `no frames were sent`, so
+  they provide no physical frame evidence.
+
+The next safe actions are operator-owned: connect the DJ wired peer and capture
+the v1.1.11 HELLO/ACK/state-sync evidence; use the unmuted rehearsal sibling
+for an audible Music-device test without unmuting the production candidate;
+close Daslight/Easy View manually and verify UDP `6454` is empty before opening
+the exact Unity scene and pressing Play; then use the lease-bound Art-Net and
+Spout enable actions and verify the fixed sender names. The red probe remains
+blocked until an approved production UI path or live fixture is available.
+
+Representative read-only commands/evidence were:
+
+```powershell
+git branch --show-current
+git rev-parse HEAD
+git rev-parse '@{upstream}'
+git status --short
+Get-CimInstance Win32_Process
+Get-NetTCPConnection
+Get-NetUDPEndpoint
+Get-NetAdapter -IncludeHidden
+Get-NetIPAddress -AddressFamily IPv4
+Get-NetNeighbor -InterfaceIndex 3 -AddressFamily IPv4
+Get-FileHash target/release/syndocal.exe -Algorithm SHA256
+cmdkey /list
+git -C C:\Users\kouty\Desktop\rb-output status --short
+node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc
+```
+
 The alpha.38 native authority below is historical and immutable. Its warning-free
 automated gates and independent review are recorded below; exact source
 checkpoint `bd6c2af5cedd588cd080643abe13c6991c835b95` and native-build source

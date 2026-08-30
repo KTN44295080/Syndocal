@@ -6483,6 +6483,7 @@ pub fn build_composition_plans(snapshot: &VideoSnapshot) -> Vec<CompositionPlan>
             id: 1,
             label: "Main".to_string(),
             layer_ids: snapshot.layers.iter().map(|layer| layer.id).collect(),
+            timeline_layer_ids: Vec::new(),
             output_ids: snapshot.outputs.iter().map(|output| output.id).collect(),
         }]
     } else {

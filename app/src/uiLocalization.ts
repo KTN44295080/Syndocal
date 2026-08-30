@@ -24,6 +24,10 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Timeline Video lane(s) +": "タイムライン映像レーン +",
+  "fixed video layer(s) /": "固定映像レイヤー /",
+  "Timeline Video — rendered below fixed video layers": "タイムライン映像 — 固定映像レイヤーの下に描画",
+  "Fixed video layers — rendered above Timeline Video": "固定映像レイヤー — タイムライン映像の上に描画",
   "· g": "· 世代",
   "· generation": "· 世代",
   "Acquire selected-role lease": "選択したロールのリースを取得",
@@ -1213,6 +1217,19 @@ const japaneseText: Record<string, string> = {
     "の2つのSpout送信元だけを1920×1080で使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
   "Confirm and enable show Spout outputs": "公演用Spout出力を確定して有効化",
   "Staged same-PC Art-Net loopback show route enabled.": "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。",
+  "Send fixed red DSF2026 Art-Net probe once": "固定赤色DSF2026 Art-Netプローブを1回送信",
+  "One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.":
+    "127.0.0.1:6454へ530バイトの固定赤色ArtDmx U0検証フレームを1回だけ送信します。payload[0]とpayload[4]は255、payload[499]は0のままです。作成済みルートは無効のステージ状態を維持します。OSのUDP受付だけを確認し、受信側と物理出力は未確認です。",
+  "DSF2026 fixed red probe: OS accepted one 530-byte ArtDmx U0 datagram to 127.0.0.1:6454; receiver and physical output remain unverified.": "DSF2026固定赤色プローブ: OSは127.0.0.1:6454への530バイトArtDmx U0データグラムを1回受け付けました。受信側と物理出力は未確認です。",
+  "DSF2026 fixed red probe: OS accepted one 530-byte ArtDmx U0 datagram to 127.0.0.1:6454; receiver and physical output remain unverified. A second probe is permanently prohibited, including after restart.": "DSF2026固定赤色プローブ: OSは127.0.0.1:6454への530バイトArtDmx U0データグラムを1回受け付けました。受信側と物理出力は未確認です。再起動後を含め、2回目のプローブは恒久的に禁止されます。",
+  "DSF2026 fixed probe is available once, only while the exact route remains staged disabled.": "DSF2026固定プローブは、完全一致するルートが無効のステージ状態を保つ間に1回だけ実行できます。",
+  "DSF2026 probe outcome is InDoubt. Reconcile without sending after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or a new probe.": "DSF2026プローブの結果はInDoubtです。受信側と物理出力を独立して確認した後、送信なしで照合してください。不観測の結果を恒久的に消費済みとして記録し、再試行や新しいプローブを再び許可しません。",
+  "DSF2026 fixed red probe is permanently consumed. A second probe is prohibited, including after restart or reconciliation.": "DSF2026固定赤色プローブは恒久的に消費済みです。再起動後または照合後も、2回目のプローブは禁止されます。",
+  "DSF2026 probe status is loading; no probe can be sent.": "DSF2026プローブの状態を読み込み中です。プローブは送信できません。",
+  "Reconcile DSF2026 probe InDoubt (no send)": "DSF2026プローブのInDoubtを照合（送信なし）",
+  "Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.": "照合は、受信側と物理出力を独立して確認した後に行う送信なしの別操作です。不観測の結果を恒久的に消費済みとして記録し、再試行や別の固定プローブを再び許可しません。",
+  "DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator.": "Art-Netを送信せずにDSF2026プローブのInDoubt保留を照合しました。受信側と物理出力はオペレーターが独立して確認済みです。",
+  "DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator. A fresh probe remains permanently prohibited.": "Art-Netを送信せずにDSF2026プローブのInDoubt保留を照合しました。受信側と物理出力はオペレーターが独立して確認済みです。新しいプローブは恒久的に禁止されたままです。",
   "Same-PC Syndocal Background/Foreground Spout outputs enabled.":
     "同一PCのSyndocal Background と Syndocal Foreground Spout出力を有効化しました。",
   "Video Output Enable": "映像出力を有効化",

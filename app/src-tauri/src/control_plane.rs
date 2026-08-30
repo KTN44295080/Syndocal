@@ -22,7 +22,9 @@ use protocol::control_plane_command::{
     CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_RENAME_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID,
     OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
     OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
-    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
+    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+    OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+    OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
     OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
     OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
     OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
@@ -46,6 +48,8 @@ use sha2::{Digest, Sha256};
 const MAX_REGISTERED_OPERATIONS: usize = 2048;
 const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.query.output.display.add.authority.v1";
+const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1";
 const MAIN_RS_SOURCE: &str = include_str!("main.rs");
 const FRONTEND_INVOKE_MANIFEST: &str = include_str!("../../src/tauri-invoke-manifest.json");
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
@@ -53,9 +57,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 499;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 502;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "7bab5e9088a4a874b4b84dfeaf909c2ccab8492a82b7888e0f3b251896024435";
+    "89c8bc3eb07433b83a5730e0cb3a7a24f98af05b43f5bae6c335a40170c9607b";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -174,7 +178,12 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         Class::ProjectHistory
     } else if matches!(command, "safety_blackout_engage_v1") {
         Class::SafetyMutation
-    } else if matches!(command, "enable_show_spout_outputs_v1") {
+    } else if matches!(
+        command,
+        "enable_show_spout_outputs_v1"
+            | "send_dsf2026_artnet_acceptance_probe_v1"
+            | "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1"
+    ) {
         Class::LocalPhysicalMutation
     } else if matches!(
         command,
@@ -328,6 +337,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "query_control_plane_project_authority"
             | "query_control_plane_runtime_generations"
             | "query_display_add_lease_authority_v1"
+            | "query_dsf2026_artnet_acceptance_probe_status_v1"
             | "query_output_control_authority_v1"
             | "query_output_lease_authority_v1"
             | "query_timeline_follow_abort_authority_v1"
@@ -382,6 +392,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "discover_art_rdm_devices"
             | "discover_usb_rdm_devices"
             | "enable_show_art_net_loopback_route_v1"
+            | "send_dsf2026_artnet_acceptance_probe_v1"
             | "enable_output_control_v2"
             | "end_media_asset_preview"
             | "fade_video_layer_opacity"
@@ -1169,6 +1180,8 @@ enum ReviewedCanonicalOperation {
     AssignVideoOutputComposition,
     EnableShowArtNetLoopbackRoute,
     EnableShowSpoutOutputs,
+    SendDsf2026ArtNetAcceptanceProbe,
+    AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt,
     EnableOutput,
     AcquireOutputLease,
     RenewOutputLease,
@@ -1199,6 +1212,12 @@ impl ReviewedCanonicalOperation {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
             Self::EnableShowSpoutOutputs => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+            Self::SendDsf2026ArtNetAcceptanceProbe => {
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+            }
+            Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt => {
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+            }
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
             Self::AcquireOutputLease => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewOutputLease => OUTPUT_LEASE_RENEW_OPERATION_ID,
@@ -1238,6 +1257,12 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
             Some(ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute)
         }
         "enable_show_spout_outputs_v1" => Some(ReviewedCanonicalOperation::EnableShowSpoutOutputs),
+        "send_dsf2026_artnet_acceptance_probe_v1" => {
+            Some(ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe)
+        }
+        "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1" => {
+            Some(ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt)
+        }
         "enable_output_control_v2" => Some(ReviewedCanonicalOperation::EnableOutput),
         "acquire_output_lease_v2" => Some(ReviewedCanonicalOperation::AcquireOutputLease),
         "renew_output_lease_v2" => Some(ReviewedCanonicalOperation::RenewOutputLease),
@@ -1361,6 +1386,8 @@ fn canonical_descriptor_for_source(
         | ReviewedCanonicalOperation::AddDisplayOutput
         | ReviewedCanonicalOperation::AssignVideoOutputComposition
         | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+        | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
+        | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
         | ReviewedCanonicalOperation::EnableShowSpoutOutputs
         | ReviewedCanonicalOperation::ForceTransferOutputLease => (
             OperationClass::Mutation,
@@ -1412,6 +1439,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
+                | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1438,6 +1467,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
+                | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1464,6 +1495,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
+                | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
                 | ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::AcquireOutputLease
@@ -1497,6 +1530,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
+                | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
@@ -1552,6 +1587,11 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
         ),
         "query_output_control_authority_v1" => (
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_dsf2026_artnet_acceptance_probe_status_v1" => (
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
@@ -1629,6 +1669,8 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "assign_video_output_composition_v2"
             | "enable_show_art_net_loopback_route_v1"
             | "enable_show_spout_outputs_v1"
+            | "send_dsf2026_artnet_acceptance_probe_v1"
+            | "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1"
             | "set_display_output_window_open_v2"
             | "enable_output_control_v2"
             | "acquire_output_lease_v2"
@@ -1814,6 +1856,8 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2038,6 +2082,14 @@ mod tests {
                 TauriRouteAdmissionClass::LocalPhysicalMutation,
             ),
             (
+                "send_dsf2026_artnet_acceptance_probe_v1",
+                TauriRouteAdmissionClass::LocalPhysicalMutation,
+            ),
+            (
+                "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+                TauriRouteAdmissionClass::LocalPhysicalMutation,
+            ),
+            (
                 "set_timeline_audio_clip_output_bus",
                 TauriRouteAdmissionClass::RendererTicketedProjectMutation,
             ),
@@ -2087,7 +2139,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("registered route is unclassified: {name}"));
             *counts.entry(class).or_insert(0usize) += 1;
         }
-        assert_eq!(names.len(), 499);
+        assert_eq!(names.len(), 502);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
             130
@@ -2096,10 +2148,10 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 93);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 94);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 1);
+        assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
@@ -2116,7 +2168,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 16] = [
+        const R0_ALLOWLIST: [&str; 17] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2131,11 +2183,12 @@ mod tests {
             "syndocal.query.video.output_window_observation.v1",
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
-        assert_eq!(names.len(), 499);
-        const ENGINE_COMMAND_COUNT: usize = 271;
+        assert_eq!(names.len(), 502);
+        const ENGINE_COMMAND_COUNT: usize = 272;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2157,16 +2210,16 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 439;
+        const FRONTEND_INVOKE_COUNT: usize = 442;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
-            499 + ENGINE_COMMAND_COUNT
+            502 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1531);
+        assert_eq!(registry.operations.len(), 1538);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2176,7 +2229,7 @@ mod tests {
         assert_eq!(r0.len(), R0_ALLOWLIST.len());
         assert_eq!(
             registry.operations.len() - r0.len(),
-            483 + ENGINE_COMMAND_COUNT
+            485 + ENGINE_COMMAND_COUNT
                 + REMOTE_OPERATION_COUNT
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
@@ -2207,7 +2260,7 @@ mod tests {
             descriptor.source_family == OperationSourceFamily::TauriCommand
                 && !R0_ALLOWLIST.contains(&descriptor.operation_id.as_str())
         });
-        assert_eq!(tauri_unavailable.clone().count(), 483);
+        assert_eq!(tauri_unavailable.clone().count(), 485);
         for descriptor in tauri_unavailable {
             assert_eq!(
                 descriptor.risk,
@@ -2253,6 +2306,14 @@ mod tests {
             (
                 "enable_show_spout_outputs_v1",
                 OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+            ),
+            (
+                "send_dsf2026_artnet_acceptance_probe_v1",
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+            ),
+            (
+                "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
             ),
             ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
@@ -2482,21 +2543,21 @@ mod tests {
         canonical.validate().unwrap();
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
-        const TAURI_COUNT: usize = 499;
-        const ENGINE_COUNT: usize = 271;
+        const TAURI_COUNT: usize = 502;
+        const ENGINE_COUNT: usize = 272;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 439;
+        const FRONTEND_COUNT: usize = 442;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1531);
-        assert_eq!(SOURCE_TOTAL, 1564);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1538);
+        assert_eq!(SOURCE_TOTAL, 1571);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 38);
+        assert_eq!(canonical.canonical_operations.len(), 41);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2512,6 +2573,8 @@ mod tests {
                         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                         | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                         | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                        | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                        | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                         | OUTPUT_ENABLE_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2521,7 +2584,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 14);
+        assert_eq!(output_control_operations.len(), 16);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -2535,6 +2598,14 @@ mod tests {
             (
                 "enable_show_spout_outputs_v1",
                 OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+            ),
+            (
+                "send_dsf2026_artnet_acceptance_probe_v1",
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+            ),
+            (
+                "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
             ),
             ("enable_output_control_v2", OUTPUT_ENABLE_OPERATION_ID),
             (
@@ -2814,11 +2885,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 38);
+        assert_eq!(direct.len(), 41);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
-        assert_eq!(unclassified.len(), 1082);
+        assert_eq!(unclassified.len(), 1083);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3113,6 +3184,8 @@ mod tests {
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                    | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                    | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3256,6 +3329,8 @@ mod tests {
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                    | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                    | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                     | OUTPUT_ENABLE_OPERATION_ID
                     | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                     | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3483,11 +3558,11 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        assert_eq!(legacy.operations.len(), 1531);
+        assert_eq!(legacy.operations.len(), 1538);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1531);
+        assert_eq!(operations.len(), 1538);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

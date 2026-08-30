@@ -45,8 +45,9 @@ use super::output_lease::{
 use super::{
     ensure_no_pending_project_transaction, ensure_project_operator_video_clip_slot_runtime_allowed,
     lock_project_coordinator, lock_project_external_command_admission,
-    reconcile_project_checkpoint_for_coordinator, AppState, ControlPlaneQueryState,
-    ProjectCoordinator, StandbyCheckpointIdentity, StandbyTakeoverCheckpointSelector,
+    reconcile_project_checkpoint_for_coordinator, replay_durable_dsf2026_output_control_terminal,
+    AppState, ControlPlaneQueryState, ProjectCoordinator, StandbyCheckpointIdentity,
+    StandbyTakeoverCheckpointSelector,
 };
 
 const RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
@@ -76,6 +77,8 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
         action,
         OutputControlActionV2::ReleaseBlackout { .. }
             | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+            | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
+            | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
             | OutputControlActionV2::EnableShowSpoutOutputs { .. }
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
@@ -119,6 +122,87 @@ fn native_output_confirmation_copy_for_editor_target(
     }
 }
 
+fn native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
+    locale: &str,
+) -> (&'static str, &'static str) {
+    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
+        (
+            "DSF2026 Art-Netプローブの確認",
+            "127.0.0.1:6454へ、530バイトの固定ArtDmx U0データグラムを1回だけ送信します。payload[0]とpayload[4]は255、payload[499]は0です。作成済みルートは無効のステージ状態を維持します。これはOSのUDP受付だけを確認し、受信側および物理出力は未確認です。続行しますか？",
+        )
+    } else {
+        (
+            "Confirm DSF2026 Art-Net probe",
+            "Send one fixed 530-byte ArtDmx U0 datagram to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] is 0. The authored route stays staged disabled. This proves OS UDP acceptance only; receiver and physical output remain unverified. Continue?",
+        )
+    }
+}
+
+fn native_dsf2026_artnet_acceptance_probe_confirmation_copy() -> (&'static str, &'static str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+        let mut locale = [0u16; 85];
+        let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
+        if length > 1 {
+            if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
+                return native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
+                    &locale,
+                );
+            }
+        }
+        native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale("en")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
+            std::env::var("LANG").as_deref().unwrap_or("en"),
+        )
+    }
+}
+
+fn native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
+    locale: &str,
+) -> (&'static str, &'static str) {
+    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
+        (
+            "DSF2026 Art-Netプローブの照合確認",
+            "この操作はArt-Netを送信しません。127.0.0.1:6454への530バイトArtDmx U0プローブについて、受信側と物理出力を独立して確認した後、不観測の結果を恒久的に消費済みとして記録します。再試行や別のプローブを再び許可しません。OSのUDP受付は受信側および物理出力を証明しません。続行しますか？",
+        )
+    } else {
+        (
+            "Confirm DSF2026 Art-Net probe reconciliation",
+            "This action sends no Art-Net. After independently checking the receiver and physical output for the 530-byte ArtDmx U0 probe to 127.0.0.1:6454, it records the unobservable result as permanently consumed. It never re-enables retry or another probe. OS UDP acceptance does not prove receiver or physical output. Continue?",
+        )
+    }
+}
+
+fn native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy(
+) -> (&'static str, &'static str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+        let mut locale = [0u16; 85];
+        let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
+        if length > 1 {
+            if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
+                return native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
+                    &locale,
+                );
+            }
+        }
+        native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale("en")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
+            std::env::var("LANG").as_deref().unwrap_or("en"),
+        )
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn native_output_confirmation_copy() -> (&'static str, &'static str) {
     use windows::Win32::Globalization::GetUserDefaultLocaleName;
@@ -158,7 +242,15 @@ fn confirm_native_dangerous_output_action(
         OutputControlActionV2::SetDisplayWindowOpen { .. } => false,
         _ => false,
     };
-    let (title, description) = native_output_confirmation_copy_for_editor_target(editor_target);
+    let (title, description) = match action {
+        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
+            native_dsf2026_artnet_acceptance_probe_confirmation_copy()
+        }
+        OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
+            native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy()
+        }
+        _ => native_output_confirmation_copy_for_editor_target(editor_target),
+    };
     matches!(
         MessageDialog::new()
             .set_level(MessageLevel::Warning)
@@ -268,6 +360,20 @@ where
         Ok(binding) => binding,
         Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
     };
+    match replay_durable_dsf2026_output_control_terminal(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        &request,
+        &shape_sha256,
+        &argument_fingerprint,
+    ) {
+        Ok(Some(response)) => return response,
+        Ok(None) => {}
+        Err(_) => {
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
+        }
+    }
     if let Err(code) = state
         .runtime_control_plane
         .reserve_output_control_request_identity(
@@ -616,6 +722,40 @@ where
                 lease_now_ms,
             )
         }
+        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
+            super::show_artnet_acceptance_probe::send_dsf2026_artnet_acceptance_probe_with_output_control_fence(
+                state,
+                super::show_artnet_acceptance_probe::Dsf2026ArtNetAcceptanceProbeControlRequest {
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &binding.principal,
+                    expected_owner_window_label: &binding.window_label,
+                    expected_owner_incarnation: binding.owner_incarnation,
+                    public_request: &request,
+                    shape_sha256: &shape_sha256,
+                    argument_fingerprint: &argument_fingerprint,
+                    audit_sequence,
+                },
+            )
+        }
+        OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
+            super::show_artnet_acceptance_probe::acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_with_output_control_fence(
+                state,
+                super::show_artnet_acceptance_probe::Dsf2026ArtNetAcceptanceProbeControlRequest {
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &binding.principal,
+                    expected_owner_window_label: &binding.window_label,
+                    expected_owner_incarnation: binding.owner_incarnation,
+                    public_request: &request,
+                    shape_sha256: &shape_sha256,
+                    argument_fingerprint: &argument_fingerprint,
+                    audit_sequence,
+                },
+            )
+        }
         OutputControlActionV2::EnableShowSpoutOutputs { .. } => {
             super::enable_show_spout_outputs_with_output_control_fence(
                 state,
@@ -754,8 +894,43 @@ where
             return response;
         }
     };
-    let lease_result =
-        match output_control_lease_result_from_registry_receipt(&request.action, &lease_receipt) {
+    let response = if matches!(
+        &request.action,
+        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
+            | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
+    ) {
+        // The physical/no-send DSF action wrote its private lease receipt,
+        // consumed/pending state, and this exact response in one durable
+        // candidate. Never reconstruct a second public receipt afterward.
+        match replay_durable_dsf2026_output_control_terminal(
+            state,
+            &binding.principal,
+            &binding.window_label,
+            &request,
+            &shape_sha256,
+            &argument_fingerprint,
+        ) {
+            Ok(Some(response)) => response,
+            Ok(None) | Err(_) => {
+                state
+                    .runtime_control_plane
+                    .finish_output_control_inflight(&inflight);
+                let response =
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+                state.runtime_control_plane.store_output_control_terminal(
+                    key,
+                    shape_sha256,
+                    response.clone(),
+                    Instant::now(),
+                );
+                return response;
+            }
+        }
+    } else {
+        let lease_result = match output_control_lease_result_from_registry_receipt(
+            &request.action,
+            &lease_receipt,
+        ) {
             Ok(result) => result,
             Err(_) => {
                 state
@@ -772,29 +947,30 @@ where
                 return response;
             }
         };
-
-    let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
-        operation_id: request.operation_id.clone(),
-        request_id: request.request_id,
-        shape_sha256: shape_sha256.clone(),
-        argument_fingerprint,
-        audit_sequence,
-        fence_before: request.expected_fence.clone(),
-        fence_after,
-        outcome: if applied {
-            OutputControlReceiptOutcomeV2::Applied
-        } else {
-            OutputControlReceiptOutcomeV2::NoOp
-        },
-        lease_result: Some(lease_result),
-    }));
-    if let Err(error) = response.validate() {
-        eprintln!(
-            "OutputControl operation {} produced an invalid terminal response: {}",
-            request.action.operation_id(),
-            error
-        );
-    }
+        let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
+            operation_id: request.operation_id.clone(),
+            request_id: request.request_id,
+            shape_sha256: shape_sha256.clone(),
+            argument_fingerprint: argument_fingerprint.clone(),
+            audit_sequence,
+            fence_before: request.expected_fence.clone(),
+            fence_after,
+            outcome: if applied {
+                OutputControlReceiptOutcomeV2::Applied
+            } else {
+                OutputControlReceiptOutcomeV2::NoOp
+            },
+            lease_result: Some(lease_result),
+        }));
+        if let Err(error) = response.validate() {
+            eprintln!(
+                "OutputControl operation {} produced an invalid terminal response: {}",
+                request.action.operation_id(),
+                error
+            );
+        }
+        response
+    };
     state
         .runtime_control_plane
         .finish_output_control_inflight(&inflight);
@@ -911,6 +1087,18 @@ fn validate_output_action_current(
         OutputControlActionV2::EnableOutput => Ok(()),
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
+        }
+        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
+            super::show_artnet_acceptance_probe::validate_current_dsf2026_artnet_acceptance_probe(
+                state,
+            )
+            .map(|_| ())
+        }
+        OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
+            super::show_artnet_acceptance_probe::validate_current_dsf2026_artnet_acceptance_probe(
+                state,
+            )
+            .map(|_| ())
         }
         OutputControlActionV2::EnableShowSpoutOutputs { .. } => {
             super::validate_current_show_spout_outputs_action(state).map(|_| ())
@@ -1725,6 +1913,8 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+        | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
+        | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
         | OutputControlActionV2::EnableShowSpoutOutputs { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
@@ -4357,7 +4547,8 @@ mod tests {
     use protocol::control_plane_command::{
         OutputControlActionV2, OutputLeaseAuthorityV1, ProjectMutationFenceV1,
         SetTimelinePlayingRuntimePayloadV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
-        OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
+        OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     };
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
@@ -4527,6 +4718,66 @@ mod tests {
     }
 
     #[test]
+    fn dsf2026_probe_confirmation_copy_states_the_exact_os_only_boundary() {
+        for locale in ["en-US", "ja-JP"] {
+            let (title, body) =
+                native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(locale);
+            assert!(title.contains("DSF2026"));
+            for required in [
+                "127.0.0.1:6454",
+                "530",
+                "payload[0]",
+                "payload[4]",
+                "payload[499]",
+            ] {
+                assert!(
+                    body.contains(required),
+                    "{locale} confirmation omitted {required}"
+                );
+            }
+            assert!(
+                body.contains("staged disabled") || body.contains("無効のステージ状態"),
+                "{locale} confirmation must state the disabled staged-route boundary"
+            );
+            assert!(
+                body.contains("physical output remain unverified")
+                    || body.contains("物理出力は未確認"),
+                "{locale} confirmation must not overclaim physical acceptance"
+            );
+        }
+    }
+
+    #[test]
+    fn dsf2026_probe_reconcile_confirmation_copy_is_explicitly_no_send() {
+        for locale in ["en-US", "ja-JP"] {
+            let (title, body) =
+                native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
+                    locale,
+                );
+            assert!(title.contains("DSF2026"));
+            assert!(
+                body.contains("sends no Art-Net") || body.contains("Art-Netを送信しません"),
+                "{locale} reconciliation copy must promise no packet"
+            );
+            assert!(body.contains("127.0.0.1:6454"));
+            assert!(body.contains("530"));
+            assert!(
+                body.contains("permanently consumed") || body.contains("恒久的に消費済み"),
+                "{locale} reconciliation must state that an unobservable result is consumed"
+            );
+            assert!(
+                body.contains("never re-enables retry")
+                    || body.contains("再試行や別のプローブを再び許可しません"),
+                "{locale} reconciliation must never promise another send"
+            );
+            assert!(
+                body.contains("physical output") || body.contains("物理出力"),
+                "{locale} reconciliation must require physical verification"
+            );
+        }
+    }
+
+    #[test]
     fn editor_display_confirmation_copy_is_distinct_from_ordinary_output_copy() {
         let ordinary = native_output_confirmation_copy_for_editor_target(false);
         let editor = native_output_confirmation_copy_for_editor_target(true);
@@ -4570,6 +4821,33 @@ mod tests {
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 
+        let dsf2026_probe = OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        assert_eq!(
+            output_confirmation_gate(&dsf2026_probe, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden),
+            "the fixed DSF2026 one-shot probe can never bypass local native R4 confirmation"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let dsf2026_reconcile =
+            OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+                lease: OutputLeaseAuthorityV1 {
+                    lease_id: "lease-0000000000000001".to_string(),
+                    generation: 1,
+                },
+            };
+        assert_eq!(
+            output_confirmation_gate(&dsf2026_reconcile, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden),
+            "the no-send DSF2026 reconciliation still requires local native R4 confirmation"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+
         let accept_calls = std::sync::atomic::AtomicUsize::new(0);
         let accept = |_: &OutputControlActionV2| {
             accept_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -4585,7 +4863,7 @@ mod tests {
         let binding = test_binding("dialog-replay", "main", 3);
         let key = test_output_key(
             &binding.principal,
-            OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
             91,
             binding.owner_incarnation,
         );
@@ -4625,11 +4903,11 @@ mod tests {
             state.reserve_output_control_lane(&key, &shape, now),
             OutputControlLaneReservation::Terminal(response) if response == cancelled
         ));
-        assert!(output_confirmation_gate(
-            &OutputControlActionV2::EnableOutput,
-            &retry_confirmation
-        )
-        .is_ok());
+        assert!(matches!(
+            state.recheck_output_control_terminal(&key, &shape, now),
+            Some(OutputControlLaneReservation::Terminal(response)) if response == cancelled
+        ));
+        let _ = retry_confirmation;
         assert_eq!(retry_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 

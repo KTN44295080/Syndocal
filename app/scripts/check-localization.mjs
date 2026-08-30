@@ -67,6 +67,28 @@ assert.equal(localization.translateUiText("Explicit Device", "ja"), "出力デ�
 assert.equal(localization.translateUiText("Click gain", "ja"), "クリック音量");
 assert.equal(localization.translateUiText("Refresh outputs", "ja"), "出力を更新");
 assert.equal(localization.translateUiText("Staged same-PC Art-Net loopback show route enabled.", "ja"), "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。");
+assert.equal(localization.translateUiText("Send fixed red DSF2026 Art-Net probe once", "ja"), "固定赤色DSF2026 Art-Netプローブを1回送信");
+assert.equal(
+  localization.translateUiText("One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.", "ja"),
+  "127.0.0.1:6454へ530バイトの固定赤色ArtDmx U0検証フレームを1回だけ送信します。payload[0]とpayload[4]は255、payload[499]は0のままです。作成済みルートは無効のステージ状態を維持します。OSのUDP受付だけを確認し、受信側と物理出力は未確認です。",
+);
+assert.equal(
+  localization.translateUiText("DSF2026 fixed red probe: OS accepted one 530-byte ArtDmx U0 datagram to 127.0.0.1:6454; receiver and physical output remain unverified.", "ja"),
+  "DSF2026固定赤色プローブ: OSは127.0.0.1:6454への530バイトArtDmx U0データグラムを1回受け付けました。受信側と物理出力は未確認です。",
+);
+assert.equal(localization.translateUiText("Reconcile DSF2026 probe InDoubt (no send)", "ja"), "DSF2026プローブのInDoubtを照合（送信なし）");
+assert.equal(
+  localization.translateUiText("DSF2026 probe outcome is InDoubt. Reconcile without sending after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or a new probe.", "ja"),
+  "DSF2026プローブの結果はInDoubtです。受信側と物理出力を独立して確認した後、送信なしで照合してください。不観測の結果を恒久的に消費済みとして記録し、再試行や新しいプローブを再び許可しません。",
+);
+assert.equal(
+  localization.translateUiText("Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.", "ja"),
+  "照合は、受信側と物理出力を独立して確認した後に行う送信なしの別操作です。不観測の結果を恒久的に消費済みとして記録し、再試行や別の固定プローブを再び許可しません。",
+);
+assert.equal(
+  localization.translateUiText("DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator.", "ja"),
+  "Art-Netを送信せずにDSF2026プローブのInDoubt保留を照合しました。受信側と物理出力はオペレーターが独立して確認済みです。",
+);
 assert.equal(localization.translateUiText("Same-PC Syndocal Background/Foreground Spout outputs enabled.", "ja"), "同一PCのSyndocal Background と Syndocal Foreground Spout出力を有効化しました。");
 assert.match(
   videoOutputCreatePanelSource,

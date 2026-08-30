@@ -17,6 +17,7 @@ use std::{
 
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
+mod show_artnet_acceptance_probe;
 #[cfg(test)]
 mod show_artnet_loopback_route_tests;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -65,10 +66,12 @@ use protocol::{
         TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeRequestV1,
         TimelineFollowAbortRuntimeResponseV1, OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
         OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
-        OUTPUT_ENABLE_OPERATION_ID, OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
-        OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID, OUTPUT_LEASE_RECOVER_OPERATION_ID,
-        OUTPUT_LEASE_RELINQUISH_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
-        OUTPUT_OWNERSHIP_ARM_OPERATION_ID, OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
+        OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+        OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
+        OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     },
@@ -102,12 +105,12 @@ use protocol::{
     TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
     TimelineLoopRegionSummary, TimelineLoopScale, TimelinePhaseSummary, TimelineScheduleSource,
     TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary,
-    TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
-    VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeKind,
-    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
-    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
-    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    TimelineVideoLayerRef, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
+    VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary,
+    VideoEffectScope, VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
     VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
     VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
@@ -478,7 +481,24 @@ const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
 const FIXTURE_PROFILE_CACHE_DIRECTORY: &str = "fixture-profile-cache";
 const OUTPUT_OWNERSHIP_STATE_VERSION: u32 = 1;
 const OUTPUT_OWNERSHIP_STATE_FILE: &str = "machine-output-ownership.json";
-const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 1;
+/// Version 2 binds the only physical DSF2026 Pending record to the concrete
+/// local WebView label that created it.  The original renderer principal can
+/// retire on reload; a new principal is permitted to reconcile only through
+/// that same local window binding and the ordinary current-owner fences.
+const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 2;
+const OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN: &str = "output-control";
+const OUTPUT_LEASE_DSF2026_PROBE_DOMAIN: &str = "output-control-dsf2026-probe";
+const OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN: &str = "output-control-dsf2026-probe-reconcile";
+fn is_dsf2026_artnet_acceptance_probe_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+            | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+    )
+}
+
+const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID: &str =
+    "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1";
 const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE: &str = "output-lease-receipts.json";
 const MAX_OUTPUT_LEASE_DURABLE_RECEIPT_STATE_BYTES: u64 = 8 * 1024 * 1024;
 const PROJECT_RECOVERY_AUTHORITY_STATE_VERSION: u32 = 1;
@@ -609,6 +629,11 @@ const MAX_DURABLE_OUTPUT_LEASE_RECEIPTS: usize = output_lease::MAX_OUTPUT_LEASE_
 // fresh principal arriving after exactly 128 retained receipts is rejected
 // before the oldest receipt can be evicted.
 const MAX_DURABLE_OUTPUT_LEASE_ORIGINS: usize = output_lease::MAX_OUTPUT_LEASE_REQUEST_ORIGINS + 1;
+/// The DSF2026 probe has one successful send and, at most, one successful
+/// explicit reconciliation. Keep both public terminal receipts forever so a
+/// reply-loss retry remains a no-confirmation/no-transport replay after a
+/// process restart.
+const MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS: usize = 2;
 
 fn default_output_lease_replay_guard() -> bool {
     // Older journals did not distinguish a receiptless SafeAbort from an
@@ -641,6 +666,21 @@ struct PersistedOutputLeaseReceiptOrigin {
 struct PersistedOutputLeasePendingReceipt {
     key: output_lease::OutputLeaseRequestKey,
     shape_hash: output_lease::OutputLeaseShapeHash,
+    /// Present only for the fixed DSF2026 physical-send domain.  Generic
+    /// output-control Pending records deliberately remain principal-scoped.
+    #[serde(default)]
+    window_label: Option<String>,
+}
+
+/// Public R4 terminal response retained alongside the private lease receipt.
+/// The public response contains the exact fence, shape, argument fingerprint,
+/// and audit identity the renderer must receive on an idempotent retry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedDsf2026OutputControlTerminal {
+    principal: String,
+    window_label: String,
+    response: OutputControlResponseV2,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -651,6 +691,18 @@ struct PersistedOutputLeaseReceiptState {
     origins: Vec<PersistedOutputLeaseReceiptOrigin>,
     #[serde(default)]
     pending: Vec<PersistedOutputLeasePendingReceipt>,
+    /// This fixed machine-local Art-Net proof has one physical budget for the
+    /// lifetime of the durable journal.  It is intentionally global rather
+    /// than principal-scoped: another renderer, request ID, restart, or
+    /// reconciliation acknowledgement must never make a second datagram
+    /// eligible.
+    #[serde(default)]
+    dsf2026_artnet_acceptance_probe_consumed: bool,
+    /// Unlike the general in-memory response cache, these two fixed action
+    /// receipts survive restart. They are intentionally not used by generic
+    /// output-control operations.
+    #[serde(default)]
+    dsf2026_artnet_acceptance_probe_terminals: Vec<PersistedDsf2026OutputControlTerminal>,
 }
 
 impl Default for PersistedOutputLeaseReceiptState {
@@ -660,6 +712,8 @@ impl Default for PersistedOutputLeaseReceiptState {
             receipts: Vec::new(),
             origins: Vec::new(),
             pending: Vec::new(),
+            dsf2026_artnet_acceptance_probe_consumed: false,
+            dsf2026_artnet_acceptance_probe_terminals: Vec::new(),
         }
     }
 }
@@ -674,6 +728,17 @@ struct OutputLeaseDurableReceiptJournal {
 enum OutputLeaseDurablePrepareResult {
     Fresh,
     Terminal,
+}
+
+/// Durable visibility for the fixed DSF2026 machine-local probe.  This is
+/// intentionally separate from output-route state: no normal Art-Net or
+/// Spout command reads or writes the one-shot physical budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Dsf2026ArtNetAcceptanceProbeStatus {
+    Available,
+    InDoubt,
+    Consumed,
 }
 
 /// Classifies a physical/project callback failure at the durable output
@@ -733,7 +798,15 @@ impl OutputLeaseDurableReceiptJournal {
     }
 
     fn install_path(&mut self, path: PathBuf) -> Result<(), String> {
-        let state = load_output_lease_receipt_state_from_path(&path)?;
+        let mut state = load_output_lease_receipt_state_from_path(&path)?;
+        // The consumed marker is additive.  If a journal created by the
+        // immediately preceding implementation contains a retained terminal
+        // probe receipt, fail closed on upgrade as well instead of permitting
+        // a new fixed packet merely because the marker had not existed yet.
+        state.dsf2026_artnet_acceptance_probe_consumed |= state
+            .receipts
+            .iter()
+            .any(|receipt| receipt.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
         self.path = Some(path);
         self.state = state;
         Ok(())
@@ -774,6 +847,19 @@ impl OutputLeaseDurableReceiptJournal {
             }
             return Err(output_lease::OutputLeaseError::Conflict);
         }
+        if request.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+            && (self.state.dsf2026_artnet_acceptance_probe_consumed
+                || self
+                    .state
+                    .pending
+                    .iter()
+                    .any(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN))
+        {
+            // An exact terminal replay was returned above. Every other
+            // request is a second physical attempt and must fail before the
+            // candidate registry or transport callback is reached.
+            return Err(output_lease::OutputLeaseError::RequestCapacity);
+        }
         if let Some(pending) = self.state.pending.iter().find(|pending| {
             pending.key.principal == request.key.principal
                 && pending.key.domain == request.key.domain
@@ -802,9 +888,39 @@ impl OutputLeaseDurableReceiptJournal {
     /// callback.  Startup must refuse every request in this origin until the
     /// operator can reconcile the physical target; replaying it would violate
     /// exactly-once output semantics.
+    /// Prepare an ordinary output transition.  The fixed DSF2026 send must
+    /// use `prepare_dsf2026_artnet_acceptance_probe`: accepting it here would
+    /// lose the concrete local-window identity needed for a no-send recovery.
     fn prepare(
         &mut self,
         request: &OutputLeaseRequest,
+    ) -> Result<OutputLeaseDurablePrepareResult, output_lease::OutputLeaseError> {
+        if request.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN {
+            return Err(output_lease::OutputLeaseError::InvalidRequest);
+        }
+        self.prepare_with_pending_window_label(request, None)
+    }
+
+    /// Persist the fixed local window binding before the one irreversible
+    /// DSF2026 send.  This is not caller metadata: it is captured from the
+    /// registered R4 WebView binding and later matched again at reconciliation.
+    fn prepare_dsf2026_artnet_acceptance_probe(
+        &mut self,
+        request: &OutputLeaseRequest,
+        window_label: &str,
+    ) -> Result<OutputLeaseDurablePrepareResult, output_lease::OutputLeaseError> {
+        if request.key.domain != OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+            || OutputLeaseOwner::new(&request.key.principal, window_label, 1, 1).is_err()
+        {
+            return Err(output_lease::OutputLeaseError::InvalidRequest);
+        }
+        self.prepare_with_pending_window_label(request, Some(window_label))
+    }
+
+    fn prepare_with_pending_window_label(
+        &mut self,
+        request: &OutputLeaseRequest,
+        pending_window_label: Option<&str>,
     ) -> Result<OutputLeaseDurablePrepareResult, output_lease::OutputLeaseError> {
         if request.shape.canonical_hash()? != request.shape_hash {
             return Err(output_lease::OutputLeaseError::InvalidRequest);
@@ -820,6 +936,15 @@ impl OutputLeaseDurableReceiptJournal {
                 return Err(output_lease::OutputLeaseError::Conflict);
             }
             return Ok(OutputLeaseDurablePrepareResult::Terminal);
+        }
+        if request.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+            && (candidate.dsf2026_artnet_acceptance_probe_consumed
+                || candidate
+                    .pending
+                    .iter()
+                    .any(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN))
+        {
+            return Err(output_lease::OutputLeaseError::RequestCapacity);
         }
         if candidate.pending.iter().any(|pending| {
             pending.key.principal == request.key.principal
@@ -854,6 +979,7 @@ impl OutputLeaseDurableReceiptJournal {
         candidate.pending.push(PersistedOutputLeasePendingReceipt {
             key: request.key.clone(),
             shape_hash: request.shape_hash.clone(),
+            window_label: pending_window_label.map(str::to_string),
         });
         if let Some(path) = self.path.as_deref() {
             persist_output_lease_receipt_state_to_path(path, &candidate)
@@ -885,7 +1011,23 @@ impl OutputLeaseDurableReceiptJournal {
         receipt: &output_lease::OutputLeaseRequestReceipt,
     ) -> Result<(), output_lease::OutputLeaseError> {
         let mut candidate = self.state.clone();
-        Self::prune_empty_origins(&mut candidate);
+        Self::record_receipt_in_candidate(&mut candidate, receipt)?;
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)
+                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        }
+        self.state = candidate;
+        Ok(())
+    }
+
+    /// Apply one private lease receipt to an unpublished journal candidate.
+    /// DSF2026 uses this exact mutation as part of its larger atomic terminal
+    /// record; ordinary output control persists the candidate immediately.
+    fn record_receipt_in_candidate(
+        candidate: &mut PersistedOutputLeaseReceiptState,
+        receipt: &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), output_lease::OutputLeaseError> {
+        Self::prune_empty_origins(candidate);
         if let Some(existing) = candidate
             .receipts
             .iter()
@@ -928,14 +1070,215 @@ impl OutputLeaseDurableReceiptJournal {
             }
         }
         candidate.receipts.push(receipt.clone());
+        if receipt.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN {
+            // This write is persisted atomically with the terminal receipt.
+            // A crash before it leaves Pending; a crash after it forbids every
+            // fresh probe request after restart.
+            candidate.dsf2026_artnet_acceptance_probe_consumed = true;
+        }
         if candidate.receipts.len() > MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
             let remove_count = candidate.receipts.len() - MAX_DURABLE_OUTPUT_LEASE_RECEIPTS;
             candidate.receipts.drain(..remove_count);
         }
-        Self::prune_empty_origins(&mut candidate);
+        Self::prune_empty_origins(candidate);
+        Ok(())
+    }
+
+    /// Non-mutating pre-send/no-send reconciliation fence. The terminal
+    /// mutation itself happens only in `record_dsf2026_output_control_terminal`
+    /// together with its lease receipt and public response.
+    fn validate_dsf2026_probe_pending(
+        &self,
+        window_label: &str,
+    ) -> Result<(), output_lease::OutputLeaseError> {
+        let probe_pending = self
+            .state
+            .pending
+            .iter()
+            .filter(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+            .collect::<Vec<_>>();
+        (probe_pending.len() == 1 && probe_pending[0].window_label.as_deref() == Some(window_label))
+            .then_some(())
+            .ok_or(output_lease::OutputLeaseError::InvalidRequest)
+    }
+
+    fn lookup_dsf2026_output_control_terminal(
+        &self,
+        principal: &str,
+        window_label: &str,
+        request: &OutputControlCommandRequestV2,
+        shape_sha256: &str,
+        argument_fingerprint: &str,
+    ) -> Result<Option<OutputControlResponseV2>, String> {
+        if !is_dsf2026_artnet_acceptance_probe_operation(&request.operation_id) {
+            return Ok(None);
+        }
+        for terminal in &self.state.dsf2026_artnet_acceptance_probe_terminals {
+            if terminal.principal != principal
+                || terminal.window_label != window_label
+                || terminal.response.validate().is_err()
+            {
+                continue;
+            }
+            let OutputControlResponseV2::Receipt(receipt) = &terminal.response else {
+                return Err("DSF2026 durable terminal is not a receipt".to_string());
+            };
+            if receipt.operation_id != request.operation_id
+                || receipt.request_id != request.request_id
+            {
+                continue;
+            }
+            if receipt.shape_sha256 == shape_sha256
+                && receipt.argument_fingerprint == argument_fingerprint
+            {
+                return Ok(Some(terminal.response.clone()));
+            }
+            return Err(
+                "DSF2026 durable terminal request identity conflicts with its replay shape"
+                    .to_string(),
+            );
+        }
+        if request.operation_id == OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+            && (self.state.dsf2026_artnet_acceptance_probe_consumed
+                || self
+                    .state
+                    .pending
+                    .iter()
+                    .any(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN))
+        {
+            // An old journal cannot reconstruct the full public receipt. It
+            // must therefore fail closed before confirmation rather than
+            // allowing a legacy same-ID retry to reach native code.
+            return Err("DSF2026 Art-Net probe is globally consumed or in doubt".to_string());
+        }
+        if request.operation_id == OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID {
+            let probe_pending = self
+                .state
+                .pending
+                .iter()
+                .filter(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+                .collect::<Vec<_>>();
+            if probe_pending.len() != 1
+                || probe_pending[0].window_label.as_deref() != Some(window_label)
+            {
+                return Err(
+                    "DSF2026 reconciliation has no pending physical outcome for this local window"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(None)
+    }
+
+    /// Atomically persist the DSF2026 private lease receipt, global consumed
+    /// latch, and exact public R4 response. A crash can therefore observe
+    /// either the prior Pending state or the complete terminal state, never a
+    /// consumed/private-success state without the replayable public receipt.
+    fn record_dsf2026_output_control_terminal(
+        &mut self,
+        private_receipt: &output_lease::OutputLeaseRequestReceipt,
+        principal: &str,
+        window_label: &str,
+        request: &OutputControlCommandRequestV2,
+        shape_sha256: &str,
+        argument_fingerprint: &str,
+        response: &OutputControlResponseV2,
+    ) -> Result<(), String> {
+        if !is_dsf2026_artnet_acceptance_probe_operation(&request.operation_id) {
+            return Ok(());
+        }
+        OutputLeaseOwner::new(principal, window_label, 1, 1)
+            .map_err(|_| "DSF2026 durable terminal caller identity is invalid".to_string())?;
+        response
+            .validate()
+            .map_err(|_| "DSF2026 durable terminal response is invalid".to_string())?;
+        let OutputControlResponseV2::Receipt(receipt) = response else {
+            return Err("DSF2026 durable terminal is not a receipt".to_string());
+        };
+        if receipt.operation_id != request.operation_id
+            || receipt.request_id != request.request_id
+            || receipt.shape_sha256 != shape_sha256
+            || receipt.argument_fingerprint != argument_fingerprint
+        {
+            return Err("DSF2026 durable terminal does not exactly match its request".to_string());
+        }
+        let expected_domain = match request.operation_id.as_str() {
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID => {
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+            }
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID => {
+                OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN
+            }
+            _ => return Err("DSF2026 durable terminal operation is invalid".to_string()),
+        };
+        if private_receipt.key.principal != principal
+            || private_receipt.key.domain != expected_domain
+            || private_receipt.key.request_id != request.request_id
+        {
+            return Err(
+                "DSF2026 private lease receipt does not exactly match its public terminal"
+                    .to_string(),
+            );
+        }
+        let mut candidate = self.state.clone();
+        if request.operation_id == OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID {
+            let probe_pending = candidate
+                .pending
+                .iter()
+                .filter(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+                .collect::<Vec<_>>();
+            if probe_pending.len() != 1
+                || probe_pending[0].window_label.as_deref() != Some(window_label)
+            {
+                return Err(
+                    "DSF2026 reconciliation requires exactly one probe Pending record for this local window"
+                        .to_string(),
+                );
+            }
+            candidate
+                .pending
+                .retain(|pending| pending.key.domain != OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
+            candidate.dsf2026_artnet_acceptance_probe_consumed = true;
+        }
+        Self::record_receipt_in_candidate(&mut candidate, private_receipt).map_err(|error| {
+            format!("DSF2026 private lease terminal receipt is invalid: {error:?}")
+        })?;
+        if let Some(existing) = candidate
+            .dsf2026_artnet_acceptance_probe_terminals
+            .iter()
+            .find(|existing| {
+                existing.principal == principal
+                    && existing.window_label == window_label
+                    && matches!(
+                        &existing.response,
+                        OutputControlResponseV2::Receipt(existing_receipt)
+                            if existing_receipt.operation_id == request.operation_id
+                                && existing_receipt.request_id == request.request_id
+                    )
+            })
+        {
+            if existing.response == *response {
+                return Ok(());
+            }
+            return Err(
+                "DSF2026 durable terminal request identity conflicts with an existing receipt"
+                    .to_string(),
+            );
+        }
+        if candidate.dsf2026_artnet_acceptance_probe_terminals.len()
+            >= MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS
+        {
+            return Err("DSF2026 durable terminal receipt capacity is exhausted".to_string());
+        }
+        candidate.dsf2026_artnet_acceptance_probe_terminals.push(
+            PersistedDsf2026OutputControlTerminal {
+                principal: principal.to_string(),
+                window_label: window_label.to_string(),
+                response: response.clone(),
+            },
+        );
         if let Some(path) = self.path.as_deref() {
-            persist_output_lease_receipt_state_to_path(path, &candidate)
-                .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+            persist_output_lease_receipt_state_to_path(path, &candidate)?;
         }
         self.state = candidate;
         Ok(())
@@ -944,6 +1287,21 @@ impl OutputLeaseDurableReceiptJournal {
     #[cfg(test)]
     fn receipt_count(&self) -> usize {
         self.state.receipts.len()
+    }
+
+    fn dsf2026_artnet_acceptance_probe_status(&self) -> Dsf2026ArtNetAcceptanceProbeStatus {
+        if self.state.dsf2026_artnet_acceptance_probe_consumed {
+            Dsf2026ArtNetAcceptanceProbeStatus::Consumed
+        } else if self
+            .state
+            .pending
+            .iter()
+            .any(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+        {
+            Dsf2026ArtNetAcceptanceProbeStatus::InDoubt
+        } else {
+            Dsf2026ArtNetAcceptanceProbeStatus::Available
+        }
     }
 
     fn origin_is_retained(&self, origin: &PersistedOutputLeaseReceiptOrigin) -> bool {
@@ -963,6 +1321,31 @@ impl OutputLeaseDurableReceiptJournal {
             }) || origin.replay_guard
         });
     }
+}
+
+/// Resolve a retained DSF2026 public response before the control-plane lane
+/// can reserve work, validate a fence, or open the native confirmation. This
+/// is deliberately limited to the two fixed DSF2026 operations; the ordinary
+/// output-control response cache remains process-local.
+pub(crate) fn replay_durable_dsf2026_output_control_terminal(
+    state: &AppState,
+    principal: &str,
+    window_label: &str,
+    request: &OutputControlCommandRequestV2,
+    shape_sha256: &str,
+    argument_fingerprint: &str,
+) -> Result<Option<OutputControlResponseV2>, String> {
+    state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+        .lookup_dsf2026_output_control_terminal(
+            principal,
+            window_label,
+            request,
+            shape_sha256,
+            argument_fingerprint,
+        )
 }
 
 const DJ_LINK_DEDUPE_LIMIT: usize = 4_096;
@@ -23912,6 +24295,7 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
 /// dialogs, hardware I/O, joins, or async work and would invert lifecycle
 /// ordering without strengthening project identity.
 const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
+    "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
     "acquire_output_lease_v2",
     "add_display_output_v2",
     "add_local_media_layers",
@@ -23941,6 +24325,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
     "enable_show_art_net_loopback_route_v1",
+    "send_dsf2026_artnet_acceptance_probe_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -24493,6 +24878,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         EngineCommand::SetOutput(..)
         | EngineCommand::SetDmxOutputs(..)
         | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+        | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
         | EngineCommand::EnableShowSpoutOutputsPublished { .. }
         | EngineCommand::RetireShowSpoutOutputsPublished { .. }
         | EngineCommand::SetOutputOwnershipRole { .. }
@@ -24761,6 +25147,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::AddVideoComposition(..)
         | EngineCommand::RemoveVideoComposition(..)
         | EngineCommand::SetVideoCompositionLayers { .. }
+        | EngineCommand::SetVideoCompositionTimelineLayers { .. }
         | EngineCommand::BootstrapVjShow { .. }
         | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
         | EngineCommand::SaveVideoOutputMappingPreset { .. }
@@ -36087,6 +36474,7 @@ fn derived_main_video_composition(video: &protocol::VideoSnapshot) -> Compositio
         id: 1,
         label: "Main".to_string(),
         layer_ids: video.layers.iter().map(|layer| layer.id).collect(),
+        timeline_layer_ids: Vec::new(),
         output_ids: video
             .outputs
             .iter()
@@ -46644,6 +47032,7 @@ fn add_video_composition(
             id: composition_id,
             label,
             layer_ids,
+            timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }))
         .map_err(|error| error.to_string())?;
@@ -46677,6 +47066,24 @@ fn set_video_composition_layers(
         .send(EngineCommand::SetVideoCompositionLayers {
             composition_id,
             layer_ids,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_video_composition_timeline_layers(
+    state: State<'_, AppState>,
+    composition_id: CompositionId,
+    timeline_layer_ids: Vec<TimelineVideoLayerRef>,
+) -> Result<(), String> {
+    let snapshot = state.engine.snapshot();
+    validate_editable_video_composition(&snapshot, composition_id)?;
+    validate_timeline_video_layer_ids(&snapshot, &timeline_layer_ids)?;
+    state
+        .engine
+        .send(EngineCommand::SetVideoCompositionTimelineLayers {
+            composition_id,
+            timeline_layer_ids,
         })
         .map_err(|error| error.to_string())
 }
@@ -47998,6 +48405,53 @@ async fn query_output_control_authority_v1(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Dsf2026ArtNetAcceptanceProbeStatusQueryV1 {
+    operation_id: String,
+    status: Dsf2026ArtNetAcceptanceProbeStatus,
+}
+
+/// Read only the fixed probe's durable one-shot status for the calling local
+/// renderer.  It intentionally exposes no route or lease authority and takes
+/// only the journal lock, so normal Art-Net/Spout and safety paths cannot be
+/// blocked by this UI status refresh.
+fn query_dsf2026_artnet_acceptance_probe_status_for_window(
+    window_label: &str,
+    state: &AppState,
+) -> Result<Dsf2026ArtNetAcceptanceProbeStatusQueryV1, String> {
+    state.ensure_window_authority_not_blocked(window_label)?;
+    let journal = match state.output_lease_durable_receipts.try_lock() {
+        Ok(journal) => journal,
+        Err(TryLockError::WouldBlock) => {
+            return Err("DSF2026 Art-Net probe status is busy".to_string())
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("DSF2026 Art-Net probe status journal lock was poisoned".to_string())
+        }
+    };
+    Ok(Dsf2026ArtNetAcceptanceProbeStatusQueryV1 {
+        operation_id: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID.to_string(),
+        status: journal.dsf2026_artnet_acceptance_probe_status(),
+    })
+}
+
+/// Read-only durable UI status for the fixed probe.  A status refresh cannot
+/// reconcile, reset, or consume a physical attempt.
+#[tauri::command]
+async fn query_dsf2026_artnet_acceptance_probe_status_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<Dsf2026ArtNetAcceptanceProbeStatusQueryV1, String> {
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        query_dsf2026_artnet_acceptance_probe_status_for_window(&window_label, &state)
+    })
+    .await
+    .map_err(|error| format!("DSF2026 Art-Net probe status query worker failed: {error}"))?
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum DisplayAddLeaseAuthorityStatusV1 {
     HeldActive,
@@ -48196,6 +48650,41 @@ async fn enable_show_art_net_loopback_route_v1(
         app,
         window,
         OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// R4-only local-confirmed DSF2026 proof. The command accepts no test-frame
+/// data: native code can emit only one fixed ArtDmx U0 datagram to loopback.
+#[tauri::command]
+async fn send_dsf2026_artnet_acceptance_probe_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// R4-only acknowledgement after independent receiver/physical inspection.
+/// This command cannot send Art-Net; it resolves only the probe-scoped durable
+/// InDoubt hold and permanently consumes the fixed one-shot budget.
+#[tauri::command]
+async fn acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
         request,
     )
     .await
@@ -54515,6 +55004,112 @@ fn submit_output_lease_candidate_with_classified_commit<T, Commit>(
 where
     Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
 {
+    submit_output_lease_candidate_with_classified_commit_and_durable_record(
+        state,
+        live_registry,
+        request,
+        now_ms,
+        context,
+        commit,
+        |durable, receipt| {
+            durable
+                .record(receipt)
+                .map_err(|error| format!("{error:?}"))
+        },
+    )
+}
+
+/// Shared physical candidate commit seam with a caller-supplied durable
+/// terminal record. The record closure receives the admitted private lease
+/// receipt before the candidate is published. DSF2026 uses it to persist that
+/// private receipt, its consumed latch, and the public R4 response in one
+/// atomic journal replacement.
+fn submit_output_lease_candidate_with_classified_commit_and_durable_record<T, Commit, Record>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+    durable_record: Record,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    Record: FnOnce(
+        &mut OutputLeaseDurableReceiptJournal,
+        &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), String>,
+{
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window(
+        state,
+        live_registry,
+        request,
+        now_ms,
+        context,
+        None,
+        commit,
+        durable_record,
+    )
+}
+
+/// DSF2026's one physical send must durably bind Pending to the local WebView
+/// label that passed the R4 confirmation.  It is deliberately a narrow helper
+/// rather than a second authorization path: all admission and terminal
+/// persistence remain in the canonical candidate commit seam below.
+pub(crate) fn submit_dsf2026_artnet_acceptance_probe_candidate_with_classified_commit_and_durable_record<
+    T,
+    Commit,
+    Record,
+>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+    context: &str,
+    pending_window_label: &str,
+    commit: Commit,
+    durable_record: Record,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    Record: FnOnce(
+        &mut OutputLeaseDurableReceiptJournal,
+        &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), String>,
+{
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window(
+        state,
+        live_registry,
+        request,
+        now_ms,
+        context,
+        Some(pending_window_label),
+        commit,
+        durable_record,
+    )
+}
+
+fn submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window<
+    T,
+    Commit,
+    Record,
+>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    now_ms: u64,
+    context: &str,
+    pending_window_label: Option<&str>,
+    commit: Commit,
+    durable_record: Record,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    Record: FnOnce(
+        &mut OutputLeaseDurableReceiptJournal,
+        &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), String>,
+{
     let mut candidate = live_registry.clone();
     let receipt = candidate
         .submit_request(request, now_ms)
@@ -54525,8 +55120,14 @@ where
                 let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
+                let prepare_result = match pending_window_label {
+                    Some(window_label) => {
+                        durable.prepare_dsf2026_artnet_acceptance_probe(request, window_label)
+                    }
+                    None => durable.prepare(request),
+                };
                 if matches!(
-                    durable.prepare(request).map_err(|error| {
+                    prepare_result.map_err(|error| {
                         format!("Output lease {context} durable prepare failed: {error:?}")
                     })?,
                     OutputLeaseDurablePrepareResult::Terminal
@@ -54573,14 +55174,14 @@ where
                 let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
-                if let Err(error) = durable.record(&receipt) {
+                if let Err(error) = durable_record(&mut durable, &receipt) {
                     // The physical callback already returned success. Keep
                     // the candidate live so authority matches the device, but
                     // retain the durable Pending marker and surface the
                     // indeterminate receipt rather than inviting a retry.
                     *live_registry = candidate;
                     return Err(format!(
-                        "Output lease {context} was physically acknowledged but its durable terminal receipt is pending: {error:?}"
+                        "Output lease {context} was physically acknowledged but its durable terminal receipt is pending: {error}"
                     ));
                 }
             }
@@ -54865,6 +55466,12 @@ fn output_lease_resources_for_control_action(
         | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             ..
         }
+        | protocol::control_plane_command::OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
+            ..
+        }
+        | protocol::control_plane_command::OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+            ..
+        }
         | protocol::control_plane_command::OutputControlActionV2::EnableShowSpoutOutputs {
             ..
         }
@@ -54956,6 +55563,8 @@ pub(crate) fn build_output_lease_authorization_request(
         OutputControlActionV2::Arm { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
+        | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
+        | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
         | OutputControlActionV2::EnableShowSpoutOutputs { lease }
         | OutputControlActionV2::TakeOverStandby { lease, .. }
         | OutputControlActionV2::AssignVideoOutputComposition { lease, .. } => {
@@ -54970,13 +55579,18 @@ pub(crate) fn build_output_lease_authorization_request(
         }
         _ => return Err("Output lease authority is not an ordinary output action".to_string()),
     };
-    let request = OutputLeaseRequest::from_action(
-        binding.to_string(),
-        "output-control",
-        request_id,
-        lease_action,
-    )
-    .map_err(|error| format!("Output lease request is invalid: {error:?}"))?;
+    let domain = match action {
+        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
+            OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+        }
+        OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
+            OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN
+        }
+        _ => OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN,
+    };
+    let request =
+        OutputLeaseRequest::from_action(binding.to_string(), domain, request_id, lease_action)
+            .map_err(|error| format!("Output lease request is invalid: {error:?}"))?;
     let now_ms = state.output_lease_now_ms()?;
     Ok((request, now_ms))
 }
@@ -57340,6 +57954,94 @@ fn validate_output_lease_receipt_state(
             MAX_DURABLE_OUTPUT_LEASE_RECEIPTS
         ));
     }
+    if state.dsf2026_artnet_acceptance_probe_terminals.len()
+        > MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS
+    {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} DSF2026 public terminal records",
+            MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS
+        ));
+    }
+    for (index, terminal) in state
+        .dsf2026_artnet_acceptance_probe_terminals
+        .iter()
+        .enumerate()
+    {
+        OutputLeaseOwner::new(&terminal.principal, &terminal.window_label, 1, 1).map_err(|_| {
+            format!(
+                "Output-lease receipt state has invalid DSF2026 terminal caller at index {index}"
+            )
+        })?;
+        terminal.response.validate().map_err(|_| {
+            format!(
+                "Output-lease receipt state has invalid DSF2026 terminal response at index {index}"
+            )
+        })?;
+        let OutputControlResponseV2::Receipt(receipt) = &terminal.response else {
+            return Err(format!(
+                "Output-lease receipt state has non-receipt DSF2026 terminal at index {index}"
+            ));
+        };
+        if !is_dsf2026_artnet_acceptance_probe_operation(&receipt.operation_id) {
+            return Err(format!(
+                "Output-lease receipt state has unexpected DSF2026 terminal operation at index {index}"
+            ));
+        }
+        let expected_private_domain = match receipt.operation_id.as_str() {
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID => {
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN
+            }
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID => {
+                OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN
+            }
+            _ => unreachable!("validated DSF2026 operation"),
+        };
+        if !state.receipts.iter().any(|private_receipt| {
+            private_receipt.key.principal == terminal.principal
+                && private_receipt.key.domain == expected_private_domain
+                && private_receipt.key.request_id == receipt.request_id
+        }) {
+            return Err(format!(
+                "Output-lease receipt state has DSF2026 public terminal without its private receipt at index {index}"
+            ));
+        }
+        if state.dsf2026_artnet_acceptance_probe_terminals[index + 1..]
+            .iter()
+            .any(|other| {
+                other.principal == terminal.principal
+                    && other.window_label == terminal.window_label
+                    && matches!(
+                        &other.response,
+                        OutputControlResponseV2::Receipt(other_receipt)
+                            if other_receipt.operation_id == receipt.operation_id
+                                && other_receipt.request_id == receipt.request_id
+                    )
+            })
+        {
+            return Err(
+                "Output-lease receipt state has duplicate DSF2026 public terminals".to_string(),
+            );
+        }
+    }
+    if !state.dsf2026_artnet_acceptance_probe_terminals.is_empty()
+        && !state.dsf2026_artnet_acceptance_probe_consumed
+    {
+        return Err(
+            "Output-lease receipt state has DSF2026 public terminal without consumed budget"
+                .to_string(),
+        );
+    }
+    if state
+        .receipts
+        .iter()
+        .any(|receipt| receipt.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+        && !state.dsf2026_artnet_acceptance_probe_consumed
+    {
+        return Err(
+            "Output-lease receipt state has DSF2026 physical receipt without consumed budget"
+                .to_string(),
+        );
+    }
     for (index, origin) in state.origins.iter().enumerate() {
         let origin_key = output_lease::OutputLeaseRequestKey::new(
             origin.principal.clone(),
@@ -57430,6 +58132,32 @@ fn validate_output_lease_receipt_state(
                     .to_string(),
             );
         }
+        if pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN {
+            let Some(window_label) = pending.window_label.as_deref() else {
+                return Err(
+                    "Output-lease receipt state has DSF2026 Pending without its local window label"
+                        .to_string(),
+                );
+            };
+            OutputLeaseOwner::new(&pending.key.principal, window_label, 1, 1).map_err(|_| {
+                format!(
+                    "Output-lease receipt state has invalid DSF2026 Pending local window at index {index}"
+                )
+            })?;
+            if state.pending[index + 1..]
+                .iter()
+                .any(|other| other.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+            {
+                return Err(
+                    "Output-lease receipt state has multiple DSF2026 Pending records".to_string(),
+                );
+            }
+        } else if pending.window_label.is_some() {
+            return Err(
+                "Output-lease receipt state has a local window label on a non-DSF Pending record"
+                    .to_string(),
+            );
+        }
         if pending.key.request_id > origin.high_water_request_id {
             return Err(format!(
                 "Output-lease receipt state high-water mark is behind pending request {}",
@@ -57457,6 +58185,44 @@ fn validate_output_lease_receipt_state(
         }
     }
     Ok(())
+}
+
+/// Migrate the durable journal only when its physical meaning can be
+/// preserved. Version 1 did not bind DSF2026 Pending to a local window, so a
+/// restart cannot safely decide who may acknowledge that unobservable send.
+/// Refuse that one ambiguous legacy state rather than assigning it to a new
+/// renderer principal or re-enabling a probe.
+fn migrate_output_lease_receipt_state_to_current(
+    state: &mut PersistedOutputLeaseReceiptState,
+) -> Result<bool, String> {
+    match state.version {
+        OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION => Ok(false),
+        1 => {
+            if state
+                .pending
+                .iter()
+                .any(|pending| pending.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN)
+            {
+                return Err(
+                    "Legacy DSF2026 Pending receipt lacks a fixed local window label; restart refuses reconciliation and any new probe"
+                        .to_string(),
+                );
+            }
+            // Version 1 stored some successful fixed probe receipts before
+            // the global marker was made explicit. Retain the one-shot budget
+            // during this safe migration rather than relying on in-memory
+            // upgrade behavior.
+            state.dsf2026_artnet_acceptance_probe_consumed |= state
+                .receipts
+                .iter()
+                .any(|receipt| receipt.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
+            state.version = OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION;
+            Ok(true)
+        }
+        version => Err(format!(
+            "Unsupported output-lease receipt state version {version}"
+        )),
+    }
 }
 
 fn load_output_lease_receipt_state_from_path(
@@ -57560,12 +58326,21 @@ fn load_output_lease_receipt_state_from_path(
         });
         origin.replay_guard = has_pending || origin.high_water_request_id > max_retained_request_id;
     }
+    let migrated = migrate_output_lease_receipt_state_to_current(&mut state).map_err(|error| {
+        format!(
+            "Output-lease receipt state {} cannot be safely migrated: {error}",
+            path.display()
+        )
+    })?;
     validate_output_lease_receipt_state(&state).map_err(|error| {
         format!(
             "Output-lease receipt state {} is invalid: {error}",
             path.display()
         )
     })?;
+    if migrated {
+        persist_output_lease_receipt_state_to_path(path, &state)?;
+    }
     Ok(state)
 }
 
@@ -65691,6 +66466,18 @@ fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String>
         .iter()
         .map(|graph| graph.id)
         .collect::<HashSet<_>>();
+    let timeline_video_lane_ids = snapshot
+        .timeline_bank
+        .iter()
+        .chain(std::iter::once(&snapshot.timeline))
+        .flat_map(|timeline| {
+            timeline
+                .layers
+                .iter()
+                .filter(|layer| matches!(layer.kind, TimelineLayerKind::Video))
+                .map(move |layer| (timeline.id, layer.id))
+        })
+        .collect::<HashSet<_>>();
 
     validate_project_isf_source_budget(project_isf_source_bytes(snapshot)?)?;
     for layer in &snapshot.video.layers {
@@ -65726,6 +66513,24 @@ fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String>
             &format!("video composition {} layer", composition.id),
             &composition.layer_ids,
         )?;
+        if composition.id == 1 && !composition.timeline_layer_ids.is_empty() {
+            return Err(
+                "Project Main video composition cannot persist Timeline Video lanes".to_string(),
+            );
+        }
+        if composition.timeline_layer_ids.len()
+            != composition
+                .timeline_layer_ids
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+                .len()
+        {
+            return Err(format!(
+                "Project video composition {} has duplicate Timeline Video lane references",
+                composition.id
+            ));
+        }
         validate_project_unique_refs(
             &format!("video composition {} output", composition.id),
             &composition.output_ids,
@@ -65735,6 +66540,21 @@ fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String>
                 return Err(format!(
                     "Project video composition {} '{}' references missing video layer {}",
                     composition.id, composition.label, layer_id
+                ));
+            }
+        }
+        for timeline_layer in &composition.timeline_layer_ids {
+            if timeline_layer.timeline_id.0 == 0
+                || timeline_layer.layer_id == 0
+                || !timeline_video_lane_ids
+                    .contains(&(timeline_layer.timeline_id, timeline_layer.layer_id))
+            {
+                return Err(format!(
+                    "Project video composition {} '{}' references stale or non-Video Timeline {} lane {}",
+                    composition.id,
+                    composition.label,
+                    timeline_layer.timeline_id.0,
+                    timeline_layer.layer_id,
                 ));
             }
         }
@@ -72125,9 +72945,15 @@ pub(crate) fn enable_output_with_output_control_fence(
     )
 }
 
-const SHOW_ARTNET_LOOPBACK_TARGET_IP: &str = "127.0.0.1";
-const SHOW_ARTNET_LOOPBACK_PORT: u16 = 6454;
-const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 = 0;
+#[cfg(test)]
+const SHOW_ARTNET_LOOPBACK_TARGET_IP: &str =
+    show_artnet_acceptance_probe::DSF2026_ARTNET_ACCEPTANCE_PROBE_TARGET_IP;
+#[cfg(test)]
+const SHOW_ARTNET_LOOPBACK_PORT: u16 =
+    show_artnet_acceptance_probe::DSF2026_ARTNET_ACCEPTANCE_PROBE_PORT;
+#[cfg(test)]
+const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 =
+    show_artnet_acceptance_probe::DSF2026_ARTNET_ACCEPTANCE_PROBE_UNIVERSE;
 
 /// The show Spout action is deliberately payloadless.  It always targets the
 /// authoritative Main composition; accepting a UI-selected composition here
@@ -72272,12 +73098,7 @@ fn show_spout_worker_authority_identity_rejects_role_generation_and_project_repl
 }
 
 fn is_exact_staged_show_artnet_loopback_route(route: &DmxOutputConfig) -> bool {
-    !route.enabled
-        && route.protocol == DmxOutputProtocol::ArtNet
-        && route.target_ip == SHOW_ARTNET_LOOPBACK_TARGET_IP
-        && route.port == SHOW_ARTNET_LOOPBACK_PORT
-        && route.serial_port.is_empty()
-        && route.universe == SHOW_ARTNET_LOOPBACK_UNIVERSE
+    show_artnet_acceptance_probe::is_exact_staged_dsf2026_artnet_acceptance_probe_route(route)
 }
 
 fn validate_current_staged_show_artnet_loopback_route(
@@ -81647,6 +82468,42 @@ fn validate_video_layer_ids(
     Ok(())
 }
 
+fn validate_timeline_video_layer_ids(
+    snapshot: &EngineSnapshot,
+    timeline_layer_ids: &[TimelineVideoLayerRef],
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for timeline_layer in timeline_layer_ids {
+        if timeline_layer.timeline_id.0 == 0
+            || timeline_layer.layer_id == 0
+            || !seen.insert(*timeline_layer)
+        {
+            return Err(format!(
+                "Timeline {} Video lane {} is zero or duplicated in this composition",
+                timeline_layer.timeline_id.0, timeline_layer.layer_id
+            ));
+        }
+        if !snapshot
+            .timeline_bank
+            .iter()
+            .chain(std::iter::once(&snapshot.timeline))
+            .find(|timeline| timeline.id == timeline_layer.timeline_id)
+            .is_some_and(|timeline| {
+                timeline.layers.iter().any(|layer| {
+                    layer.id == timeline_layer.layer_id
+                        && matches!(layer.kind, TimelineLayerKind::Video)
+                })
+            })
+        {
+            return Err(format!(
+                "Timeline {} Video lane {} is stale or is not a Video lane",
+                timeline_layer.timeline_id.0, timeline_layer.layer_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_video_composition_exists(
     snapshot: &EngineSnapshot,
     composition_id: CompositionId,
@@ -86658,12 +87515,15 @@ pub(crate) mod tests {
         }
     }
 
-    fn durable_output_lease_acquire_request(request_id: u64) -> OutputLeaseRequest {
+    fn durable_output_lease_acquire_request_in_domain(
+        request_id: u64,
+        domain: &str,
+    ) -> OutputLeaseRequest {
         let owner = OutputLeaseOwner::new("local-ui", "main", 41, 7)
             .expect("durable output-lease test owner");
         OutputLeaseRequest::from_action(
             "local-ui",
-            "output-control",
+            domain,
             request_id,
             OutputLeaseRequestAction::Acquire {
                 owner,
@@ -86677,6 +87537,533 @@ pub(crate) mod tests {
             },
         )
         .expect("durable output-lease test request")
+    }
+
+    fn durable_output_lease_acquire_request(request_id: u64) -> OutputLeaseRequest {
+        durable_output_lease_acquire_request_in_domain(
+            request_id,
+            OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN,
+        )
+    }
+
+    fn dsf2026_public_terminal_request(
+        operation_id: &'static str,
+        request_id: u64,
+    ) -> OutputControlCommandRequestV2 {
+        use protocol::control_plane_command::{OutputControlActionV2, OutputLeaseAuthorityV1};
+        let lease = OutputLeaseAuthorityV1 {
+            lease_id: "lease-0000000000000001".to_string(),
+            generation: 1,
+        };
+        let action = match operation_id {
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID => {
+                OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
+            }
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID => {
+                OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
+            }
+            _ => panic!("test requires a DSF2026 operation"),
+        };
+        let request = OutputControlCommandRequestV2 {
+            operation_id: operation_id.to_string(),
+            request_id,
+            expected_fence: OutputControlFenceV1 {
+                process_incarnation: 1,
+                session_incarnation: 1,
+                project_epoch: 1,
+                project_revision: 1,
+                project_checkpoint_hash: "a".repeat(64),
+                project_publication_generation: 1,
+                output_epoch: 1,
+                output_generation: 1,
+                safety_blackout_epoch: 1,
+                safety_blackout_generation: 1,
+            },
+            action,
+        };
+        request.validate().expect("DSF2026 public terminal request");
+        request
+    }
+
+    fn dsf2026_public_terminal_response(
+        request: &OutputControlCommandRequestV2,
+    ) -> OutputControlResponseV2 {
+        use protocol::control_plane_command::{
+            OutputControlLeaseResultV2, OutputControlReceiptOutcomeV2, OutputControlReceiptV2,
+            OutputControlTargetRoleV1, OutputLeaseReceiptChangeV2, OutputLeaseReceiptOutcomeV2,
+            OutputLeaseReceiptPhaseV2,
+        };
+        let authority = match &request.action {
+            protocol::control_plane_command::OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
+                lease,
+            }
+            | protocol::control_plane_command::OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+                lease,
+            } => lease.clone(),
+            _ => panic!("test requires a DSF2026 action"),
+        };
+        let resources = vec![
+            OutputControlTargetRoleV1::Lighting,
+            OutputControlTargetRoleV1::Video,
+        ];
+        let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
+            operation_id: request.operation_id.clone(),
+            request_id: request.request_id,
+            shape_sha256: control_plane_runtime::hex_sha256(
+                &request
+                    .canonical_shape_bytes()
+                    .expect("DSF2026 public terminal shape"),
+            ),
+            argument_fingerprint: control_plane_runtime::hex_sha256(
+                &request
+                    .argument_fingerprint_bytes()
+                    .expect("DSF2026 public terminal arguments"),
+            ),
+            audit_sequence: 1,
+            fence_before: request.expected_fence.clone(),
+            fence_after: request.expected_fence.clone(),
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(OutputControlLeaseResultV2 {
+                authority: authority.clone(),
+                resources: resources.clone(),
+                phase: OutputLeaseReceiptPhaseV2::HeldActive,
+                outcome: OutputLeaseReceiptOutcomeV2::Authorized,
+                audit_sequence: 1,
+                changes: vec![OutputLeaseReceiptChangeV2 {
+                    lease_id: authority.lease_id,
+                    before_generation: Some(authority.generation),
+                    after_generation: Some(authority.generation),
+                    before_resources: resources.clone(),
+                    after_resources: resources,
+                    before_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                    after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                }],
+            }),
+        }));
+        response
+            .validate()
+            .expect("DSF2026 public terminal response");
+        response
+    }
+
+    fn dsf2026_private_terminal_request_and_receipt(
+        public_request: &OutputControlCommandRequestV2,
+    ) -> (OutputLeaseRequest, output_lease::OutputLeaseRequestReceipt) {
+        dsf2026_private_terminal_request_and_receipt_for(public_request, "local-ui", "main")
+    }
+
+    fn dsf2026_private_terminal_request_and_receipt_for(
+        public_request: &OutputControlCommandRequestV2,
+        principal: &str,
+        window_label: &str,
+    ) -> (OutputLeaseRequest, output_lease::OutputLeaseRequestReceipt) {
+        let (domain, lease) = match &public_request.action {
+            protocol::control_plane_command::OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
+                lease,
+            } => (OUTPUT_LEASE_DSF2026_PROBE_DOMAIN, lease),
+            protocol::control_plane_command::OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+                lease,
+            } => (OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN, lease),
+            _ => panic!("test requires a DSF2026 public action"),
+        };
+        let owner = OutputLeaseOwner::new(principal, window_label, 41, 7)
+            .expect("DSF2026 private terminal owner");
+        let resources =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+                .expect("DSF2026 private terminal resources");
+        let acquire = OutputLeaseRequest::from_action(
+            principal,
+            "dsf2026-private-fixture",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner: owner.clone(),
+                resources: resources.clone(),
+                project_identity: output_lease_project_identity(1),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("DSF2026 private fixture acquire request");
+        let mut registry =
+            OutputLeaseRegistry::fresh_process(41).expect("DSF2026 private fixture registry");
+        let acquired = registry
+            .submit_request(&acquire, 1)
+            .expect("DSF2026 private fixture acquire receipt");
+        assert_eq!(
+            acquired
+                .lease_id
+                .expect("DSF2026 private fixture lease id")
+                .encode(),
+            lease.lease_id
+        );
+        let request = OutputLeaseRequest::from_action(
+            principal,
+            domain,
+            public_request.request_id,
+            OutputLeaseRequestAction::AuthorizeOrdinary {
+                lease_id: output_lease::OutputLeaseId::decode(&lease.lease_id)
+                    .expect("DSF2026 public lease id"),
+                owner,
+                expected_generation: lease.generation,
+                exact_resources: resources,
+            },
+        )
+        .expect("DSF2026 private terminal authorization request");
+        let receipt = registry
+            .submit_request(&request, 2)
+            .expect("DSF2026 private terminal authorization receipt");
+        (request, receipt)
+    }
+
+    fn record_dsf2026_atomic_terminal_for_test(
+        journal: &mut OutputLeaseDurableReceiptJournal,
+        private_request: &OutputLeaseRequest,
+        private_receipt: &output_lease::OutputLeaseRequestReceipt,
+        public_request: &OutputControlCommandRequestV2,
+        response: &OutputControlResponseV2,
+    ) -> Result<(), String> {
+        let prepare = if private_request.key.domain == OUTPUT_LEASE_DSF2026_PROBE_DOMAIN {
+            journal.prepare_dsf2026_artnet_acceptance_probe(private_request, "main")
+        } else {
+            journal.prepare(private_request)
+        };
+        assert_eq!(
+            prepare,
+            Ok(OutputLeaseDurablePrepareResult::Fresh),
+            "production durable seam must create Pending before terminal persistence"
+        );
+        let shape_sha256 = control_plane_runtime::hex_sha256(
+            &public_request
+                .canonical_shape_bytes()
+                .expect("DSF2026 atomic public shape"),
+        );
+        let argument_fingerprint = control_plane_runtime::hex_sha256(
+            &public_request
+                .argument_fingerprint_bytes()
+                .expect("DSF2026 atomic public arguments"),
+        );
+        journal.record_dsf2026_output_control_terminal(
+            private_receipt,
+            "local-ui",
+            "main",
+            public_request,
+            &shape_sha256,
+            &argument_fingerprint,
+            response,
+        )
+    }
+
+    #[test]
+    fn dsf2026_public_terminal_replay_survives_restart_without_confirmation_or_callback() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("dsf2026-public-terminal-replay");
+        fs::create_dir_all(&directory).expect("create DSF2026 public-terminal directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install DSF2026 public terminal journal")
+            .install_path(path.clone())
+            .expect("persist DSF2026 public terminal journal");
+
+        let request = dsf2026_public_terminal_request(
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+            41,
+        );
+        let response = dsf2026_public_terminal_response(&request);
+        let (private_request, private_receipt) =
+            dsf2026_private_terminal_request_and_receipt(&request);
+        let shape_sha256 = control_plane_runtime::hex_sha256(
+            &request
+                .canonical_shape_bytes()
+                .expect("DSF2026 replay public shape"),
+        );
+        let argument_fingerprint = control_plane_runtime::hex_sha256(
+            &request
+                .argument_fingerprint_bytes()
+                .expect("DSF2026 replay public arguments"),
+        );
+        {
+            let mut journal = harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("record atomic DSF2026 public terminal");
+            record_dsf2026_atomic_terminal_for_test(
+                &mut journal,
+                &private_request,
+                &private_receipt,
+                &request,
+                &response,
+            )
+            .expect(
+                "atomically persist private lease receipt, consumed latch, and public response",
+            );
+        }
+        let serialized = serde_json::to_vec(&response).expect("serialize DSF2026 public receipt");
+        assert_eq!(
+            serde_json::from_slice::<OutputControlResponseV2>(&serialized)
+                .expect("deserialize DSF2026 public receipt"),
+            response
+        );
+
+        let callbacks = AtomicU64::new(0);
+        let replay = replay_durable_dsf2026_output_control_terminal(
+            &harness.state,
+            "local-ui",
+            "main",
+            &request,
+            &shape_sha256,
+            &argument_fingerprint,
+        )
+        .expect("same public request resolves before confirmation");
+        if replay.is_none() {
+            callbacks.fetch_add(1, Ordering::AcqRel);
+        }
+        assert_eq!(replay, Some(response.clone()));
+        assert_eq!(callbacks.load(Ordering::Acquire), 0);
+
+        let mut restarted = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted
+            .install_path(path)
+            .expect("restart loads DSF2026 public terminal response");
+        *harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install restarted DSF2026 public terminal journal") = restarted;
+        let restarted_replay = replay_durable_dsf2026_output_control_terminal(
+            &harness.state,
+            "local-ui",
+            "main",
+            &request,
+            &shape_sha256,
+            &argument_fingerprint,
+        )
+        .expect("restart same public request resolves before confirmation");
+        if restarted_replay.is_none() {
+            callbacks.fetch_add(1, Ordering::AcqRel);
+        }
+        assert_eq!(restarted_replay, Some(response));
+        assert_eq!(callbacks.load(Ordering::Acquire), 0);
+
+        assert!(
+            replay_durable_dsf2026_output_control_terminal(
+                &harness.state,
+                "other-ui",
+                "main",
+                &request,
+                &shape_sha256,
+                &argument_fingerprint,
+            )
+            .is_err(),
+            "a different principal is rejected before confirmation/native action"
+        );
+        let foreign_owner =
+            OutputLeaseOwner::new("other-ui", "main", 41, 7).expect("foreign DSF2026 owner");
+        let foreign_probe = OutputLeaseRequest::from_action(
+            "other-ui",
+            OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+            42,
+            OutputLeaseRequestAction::Acquire {
+                owner: foreign_owner,
+                resources: OutputLeaseResources::new(&[
+                    OutputLeaseResource::Lighting,
+                    OutputLeaseResource::Video,
+                ])
+                .expect("foreign DSF2026 resources"),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("foreign DSF2026 probe request");
+        assert_eq!(
+            harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("inspect consumed DSF2026 journal")
+                .lookup(&foreign_probe),
+            Err(output_lease::OutputLeaseError::RequestCapacity),
+            "a different principal is denied before its physical callback"
+        );
+
+        let mut generic_registry =
+            OutputLeaseRegistry::fresh_process(41).expect("generic output-control registry");
+        let generic_callbacks = Arc::new(AtomicU64::new(0));
+        let generic_callback = Arc::clone(&generic_callbacks);
+        submit_output_lease_candidate_with_classified_commit(
+            &harness.state,
+            &mut generic_registry,
+            &durable_output_lease_acquire_request(1),
+            1,
+            "generic output-control after DSF2026 consumption",
+            move || {
+                generic_callback.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), OutputLeaseCandidateCommitFailure>(())
+            },
+        )
+        .expect("DSF2026 consumption does not suppress the generic output-control callback");
+        assert_eq!(generic_callbacks.load(Ordering::Acquire), 1);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn dsf2026_atomic_terminal_persist_failure_retains_only_pending_and_refuses_resend_after_restart(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("dsf2026-atomic-terminal-persist-failure");
+        fs::create_dir_all(&directory).expect("create DSF2026 atomic-failure directory");
+        let durable_path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install DSF2026 atomic-failure journal")
+            .install_path(durable_path.clone())
+            .expect("persist empty DSF2026 atomic-failure journal");
+
+        let public_request = dsf2026_public_terminal_request(
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+            71,
+        );
+        let public_response = dsf2026_public_terminal_response(&public_request);
+        let (private_request, private_receipt) =
+            dsf2026_private_terminal_request_and_receipt(&public_request);
+        let shape_sha256 = control_plane_runtime::hex_sha256(
+            &public_request
+                .canonical_shape_bytes()
+                .expect("DSF2026 atomic-failure public shape"),
+        );
+        let argument_fingerprint = control_plane_runtime::hex_sha256(
+            &public_request
+                .argument_fingerprint_bytes()
+                .expect("DSF2026 atomic-failure public arguments"),
+        );
+        let blocker = directory.join("terminal-persist-blocker");
+        fs::write(&blocker, b"not a directory").expect("create terminal persistence blocker");
+        {
+            let mut journal = harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("lock DSF2026 atomic-failure journal");
+            assert_eq!(
+                journal.prepare_dsf2026_artnet_acceptance_probe(&private_request, "main"),
+                Ok(OutputLeaseDurablePrepareResult::Fresh),
+                "the physical callback sees a durable Pending marker before terminal persistence"
+            );
+            // Fault only the terminal replacement.  The already-persisted
+            // Pending state at `durable_path` models a power loss/failure
+            // between physical success and the one atomic terminal write.
+            journal.path = Some(blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE));
+            assert!(
+                journal
+                    .record_dsf2026_output_control_terminal(
+                        &private_receipt,
+                        "local-ui",
+                        "main",
+                        &public_request,
+                        &shape_sha256,
+                        &argument_fingerprint,
+                        &public_response,
+                    )
+                    .is_err(),
+                "a failed terminal replacement must not publish a partial terminal candidate"
+            );
+            assert_eq!(journal.state.pending.len(), 1);
+            assert!(journal.state.receipts.is_empty());
+            assert!(journal
+                .state
+                .dsf2026_artnet_acceptance_probe_terminals
+                .is_empty());
+            assert!(
+                !journal.state.dsf2026_artnet_acceptance_probe_consumed,
+                "memory cannot report consumed when no public receipt was persisted"
+            );
+        }
+
+        let mut restarted = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted
+            .install_path(durable_path)
+            .expect("restart observes only the prior durable Pending marker");
+        assert_eq!(
+            restarted.dsf2026_artnet_acceptance_probe_status(),
+            Dsf2026ArtNetAcceptanceProbeStatus::InDoubt
+        );
+        assert!(restarted.state.receipts.is_empty());
+        assert!(restarted
+            .state
+            .dsf2026_artnet_acceptance_probe_terminals
+            .is_empty());
+        assert!(
+            !restarted.state.dsf2026_artnet_acceptance_probe_consumed,
+            "restart cannot observe a consumed state without its exact public receipt"
+        );
+        *harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install DSF2026 atomic-failure restart journal") = restarted;
+
+        let owner =
+            OutputLeaseOwner::new("local-ui", "main", 41, 7).expect("DSF2026 atomic-failure owner");
+        let resources =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+                .expect("DSF2026 atomic-failure resources");
+        let active_lease = OutputLeaseRequest::from_action(
+            "local-ui",
+            "dsf2026-atomic-failure-fixture-lease",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner,
+                resources,
+                project_identity: output_lease_project_identity(1),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("DSF2026 atomic-failure active lease request");
+        let mut registry =
+            OutputLeaseRegistry::fresh_process(41).expect("DSF2026 atomic-failure registry");
+        registry
+            .submit_request(&active_lease, 1)
+            .expect("DSF2026 atomic-failure active lease");
+        let callbacks = Arc::new(AtomicU64::new(0));
+        let callback = Arc::clone(&callbacks);
+        assert!(
+            submit_output_lease_candidate_with_classified_commit_and_durable_record(
+                &harness.state,
+                &mut registry,
+                &private_request,
+                2,
+                "DSF2026 Art-Net acceptance probe terminal-persist retry",
+                move || {
+                    callback.fetch_add(1, Ordering::AcqRel);
+                    Ok::<(), OutputLeaseCandidateCommitFailure>(())
+                },
+                |_durable, _receipt| Ok(()),
+            )
+            .is_err(),
+            "the recovered Pending marker refuses a resend before the callback"
+        );
+        assert_eq!(
+            callbacks.load(Ordering::Acquire),
+            0,
+            "terminal persistence failure cannot make a second physical send eligible"
+        );
+        assert!(
+            replay_durable_dsf2026_output_control_terminal(
+                &harness.state,
+                "local-ui",
+                "main",
+                &public_request,
+                &shape_sha256,
+                &argument_fingerprint,
+            )
+            .is_err(),
+            "no partial public response is replayable after a failed terminal replacement"
+        );
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -87338,6 +88725,421 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dsf2026_post_send_indoubt_and_reconciliation_permanently_consume_the_one_shot() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("dsf2026-probe-indoubt");
+        fs::create_dir_all(&directory).expect("create DSF2026 in-doubt journal directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install DSF2026 durable journal")
+            .install_path(path.clone())
+            .expect("persist DSF2026 durable journal");
+        let request =
+            durable_output_lease_acquire_request_in_domain(1, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
+        let mut registry = OutputLeaseRegistry::fresh_process(41).expect("DSF2026 registry");
+        let sends = Arc::new(AtomicU64::new(0));
+        let send = Arc::clone(&sends);
+        let error = submit_dsf2026_artnet_acceptance_probe_candidate_with_classified_commit_and_durable_record(
+            &harness.state,
+            &mut registry,
+            &request,
+            1,
+            "DSF2026 Art-Net acceptance probe",
+            "main",
+            move || {
+                send.fetch_add(1, Ordering::AcqRel);
+                // This is the post-send_to classification returned by the
+                // engine helper for an error or short UDP write.
+                Err::<(), _>(OutputLeaseCandidateCommitFailure::in_doubt(
+                    "injected DSF2026 send_to acknowledgement loss",
+                ))
+            },
+            |_durable, _receipt| Ok(()),
+        )
+        .expect_err("post-send ambiguity must retain the durable Pending marker");
+        assert!(error.contains("pending receipt retained"));
+        assert_eq!(sends.load(Ordering::Acquire), 1);
+
+        for rejected_request in [
+            request.clone(),
+            durable_output_lease_acquire_request_in_domain(2, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN),
+        ] {
+            let rejected_sends = Arc::clone(&sends);
+            assert!(submit_output_lease_candidate_with_classified_commit(
+                &harness.state,
+                &mut registry,
+                &rejected_request,
+                1,
+                "DSF2026 Art-Net acceptance probe replay",
+                move || {
+                    rejected_sends.fetch_add(1, Ordering::AcqRel);
+                    Ok::<(), OutputLeaseCandidateCommitFailure>(())
+                },
+            )
+            .is_err());
+            assert_eq!(
+                sends.load(Ordering::Acquire),
+                1,
+                "same request and a new request must both be rejected before a second UDP send"
+            );
+        }
+
+        let mut restarted = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted
+            .install_path(path)
+            .expect("reload DSF2026 pending receipt after restart");
+        assert_eq!(
+            restarted.lookup(&request),
+            Err(output_lease::OutputLeaseError::RequestCapacity)
+        );
+        assert_eq!(
+            restarted.lookup(&durable_output_lease_acquire_request_in_domain(
+                2,
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+            )),
+            Err(output_lease::OutputLeaseError::RequestCapacity)
+        );
+
+        // Install the recovered journal in a fresh authority registry to
+        // prove that a process restart still reaches the Pending barrier
+        // before the physical callback can run.
+        *harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install restarted DSF2026 journal") = restarted;
+        let pending_reconcile_request = dsf2026_public_terminal_request(
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
+            3,
+        );
+        let pending_reconcile_shape_sha256 = control_plane_runtime::hex_sha256(
+            &pending_reconcile_request
+                .canonical_shape_bytes()
+                .expect("pending DSF2026 reconcile public shape"),
+        );
+        let pending_reconcile_argument_fingerprint = control_plane_runtime::hex_sha256(
+            &pending_reconcile_request
+                .argument_fingerprint_bytes()
+                .expect("pending DSF2026 reconcile public arguments"),
+        );
+        assert_eq!(
+            replay_durable_dsf2026_output_control_terminal(
+                &harness.state,
+                "local-ui",
+                "main",
+                &pending_reconcile_request,
+                &pending_reconcile_shape_sha256,
+                &pending_reconcile_argument_fingerprint,
+            )
+            .expect("the pending owner may reach the no-send reconciliation action"),
+            None
+        );
+        assert_eq!(
+            replay_durable_dsf2026_output_control_terminal(
+                &harness.state,
+                "reloaded-local-ui",
+                "main",
+                &pending_reconcile_request,
+                &pending_reconcile_shape_sha256,
+                &pending_reconcile_argument_fingerprint,
+            )
+            .expect("a newly registered principal at the same local window may reach no-send reconciliation"),
+            None,
+            "the durable journal binds InDoubt to the local window, not a retired renderer principal"
+        );
+        for foreign_window in ["secondary", "remote"] {
+            assert!(
+                replay_durable_dsf2026_output_control_terminal(
+                    &harness.state,
+                    "other-ui",
+                    foreign_window,
+                    &pending_reconcile_request,
+                    &pending_reconcile_shape_sha256,
+                    &pending_reconcile_argument_fingerprint,
+                )
+                .is_err(),
+                "a different local window or remote caller cannot reconcile the Pending physical outcome"
+            );
+        }
+        let mut restart_registry =
+            OutputLeaseRegistry::fresh_process(41).expect("fresh DSF2026 restart registry");
+        let restart_send = Arc::clone(&sends);
+        assert!(submit_output_lease_candidate_with_classified_commit(
+            &harness.state,
+            &mut restart_registry,
+            &durable_output_lease_acquire_request_in_domain(2, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,),
+            1,
+            "DSF2026 Art-Net acceptance probe restarted replay",
+            move || {
+                restart_send.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), OutputLeaseCandidateCommitFailure>(())
+            },
+        )
+        .is_err());
+        assert_eq!(
+            sends.load(Ordering::Acquire),
+            1,
+            "a restarted process must not resend before explicit reconciliation"
+        );
+
+        // The production R4 acknowledgement reaches the no-send durable
+        // transaction only after native confirmation and exact owner/fence/
+        // lease checks. Exercise that candidate seam directly: its
+        // reconciliation Pending removal, private lease receipt, consumed
+        // latch, and public receipt share one persistence candidate.
+        let reconcile_request = dsf2026_public_terminal_request(
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
+            3,
+        );
+        let reconcile_response = dsf2026_public_terminal_response(&reconcile_request);
+        let (reconcile_private_request, _) = dsf2026_private_terminal_request_and_receipt_for(
+            &reconcile_request,
+            "reloaded-local-ui",
+            "main",
+        );
+        let reconcile_shape_sha256 = control_plane_runtime::hex_sha256(
+            &reconcile_request
+                .canonical_shape_bytes()
+                .expect("DSF2026 reconcile public shape"),
+        );
+        let reconcile_argument_fingerprint = control_plane_runtime::hex_sha256(
+            &reconcile_request
+                .argument_fingerprint_bytes()
+                .expect("DSF2026 reconcile public arguments"),
+        );
+        let lease_owner = OutputLeaseOwner::new("reloaded-local-ui", "main", 41, 7)
+            .expect("DSF2026 reconcile owner after renderer reload");
+        let lease_resources =
+            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+                .expect("DSF2026 reconcile resources");
+        let lease_acquire = OutputLeaseRequest::from_action(
+            "reloaded-local-ui",
+            "dsf2026-reconcile-fixture-lease",
+            1,
+            OutputLeaseRequestAction::Acquire {
+                owner: lease_owner,
+                resources: lease_resources,
+                project_identity: output_lease_project_identity(1),
+                ttl_ms: 30_000,
+            },
+        )
+        .expect("DSF2026 reconcile active lease request");
+        restart_registry
+            .submit_request(&lease_acquire, 1)
+            .expect("DSF2026 reconcile active lease");
+        let reconcile_callbacks = Arc::new(AtomicU64::new(0));
+        let reconcile_callback = Arc::clone(&reconcile_callbacks);
+        let (_, reconcile_private_receipt) =
+            submit_output_lease_candidate_with_classified_commit_and_durable_record(
+                &harness.state,
+                &mut restart_registry,
+                &reconcile_private_request,
+                2,
+                "DSF2026 Art-Net acceptance probe reconciliation",
+                move || {
+                    reconcile_callback.fetch_add(1, Ordering::AcqRel);
+                    // The real acknowledgement callback is deliberately
+                    // no-send.  This counter is the production callback seam.
+                    Ok::<(), OutputLeaseCandidateCommitFailure>(())
+                },
+                |durable, private_receipt| {
+                    durable.record_dsf2026_output_control_terminal(
+                        private_receipt,
+                        "reloaded-local-ui",
+                        "main",
+                        &reconcile_request,
+                        &reconcile_shape_sha256,
+                        &reconcile_argument_fingerprint,
+                        &reconcile_response,
+                    )
+                },
+            )
+            .expect("acknowledge callback and durable public/private terminal commit atomically");
+        assert_eq!(
+            reconcile_callbacks.load(Ordering::Acquire),
+            1,
+            "the acknowledged no-send callback runs exactly once"
+        );
+        assert_eq!(
+            reconcile_private_receipt.key.domain, OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN,
+            "the combined terminal retains the reconciliation private receipt"
+        );
+        assert_eq!(
+            harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("inspect no-send reconciliation journal")
+                .lookup(&durable_output_lease_acquire_request(3)),
+            Ok(None),
+            "the probe-scoped hold must not block an unrelated output-control request"
+        );
+        assert_eq!(
+            serde_json::from_slice::<OutputControlResponseV2>(
+                &serde_json::to_vec(&reconcile_response)
+                    .expect("serialize no-send DSF2026 reconciliation receipt"),
+            )
+            .expect("deserialize no-send DSF2026 reconciliation receipt"),
+            reconcile_response
+        );
+        assert_eq!(
+            replay_durable_dsf2026_output_control_terminal(
+                &harness.state,
+                "reloaded-local-ui",
+                "main",
+                &reconcile_request,
+                &reconcile_shape_sha256,
+                &reconcile_argument_fingerprint,
+            )
+            .expect("reconcile terminal replay"),
+            Some(reconcile_response)
+        );
+        assert_eq!(
+            sends.load(Ordering::Acquire),
+            1,
+            "the public reconciliation receipt is serializable and performs no UDP send"
+        );
+        assert_eq!(
+            harness
+                .state
+                .output_lease_durable_receipts
+                .lock()
+                .expect("inspect reconciled DSF2026 journal")
+                .lookup(&durable_output_lease_acquire_request_in_domain(
+                    2,
+                    OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+                )),
+            Err(output_lease::OutputLeaseError::RequestCapacity),
+            "a no-send reconciliation resolves uncertainty but never re-authorizes a fresh fixed probe"
+        );
+        let post_reconcile_sends = Arc::clone(&sends);
+        assert!(submit_output_lease_candidate_with_classified_commit(
+            &harness.state,
+            &mut restart_registry,
+            &durable_output_lease_acquire_request_in_domain(3, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN),
+            1,
+            "DSF2026 Art-Net acceptance probe post-reconcile replay",
+            move || {
+                post_reconcile_sends.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), OutputLeaseCandidateCommitFailure>(())
+            },
+        )
+        .is_err());
+        assert_eq!(
+            sends.load(Ordering::Acquire),
+            1,
+            "reconciliation must not admit a second UDP send"
+        );
+        let mut reconciled_restart = OutputLeaseDurableReceiptJournal::in_memory();
+        reconciled_restart
+            .install_path(directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE))
+            .expect("reload reconciled DSF2026 journal");
+        assert_eq!(
+            reconciled_restart.dsf2026_artnet_acceptance_probe_status(),
+            Dsf2026ArtNetAcceptanceProbeStatus::Consumed
+        );
+        assert_eq!(
+            reconciled_restart.lookup(&durable_output_lease_acquire_request_in_domain(
+                4,
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+            )),
+            Err(output_lease::OutputLeaseError::RequestCapacity),
+            "restart after reconciliation remains permanently fail-closed"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn dsf2026_success_replay_returns_its_receipt_but_fresh_requests_are_globally_rejected_after_restart(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        let directory = unique_test_directory("dsf2026-probe-success-one-shot");
+        fs::create_dir_all(&directory).expect("create DSF2026 success journal directory");
+        let path = directory.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
+        harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("install DSF2026 success durable journal")
+            .install_path(path.clone())
+            .expect("persist DSF2026 success durable journal");
+        let request =
+            durable_output_lease_acquire_request_in_domain(1, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
+        let mut registry =
+            OutputLeaseRegistry::fresh_process(41).expect("DSF2026 success registry");
+        let sends = Arc::new(AtomicU64::new(0));
+        let first_send = Arc::clone(&sends);
+        let (_, first_receipt) = submit_dsf2026_artnet_acceptance_probe_candidate_with_classified_commit_and_durable_record(
+            &harness.state,
+            &mut registry,
+            &request,
+            1,
+            "DSF2026 Art-Net acceptance probe success",
+            "main",
+            move || {
+                first_send.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), OutputLeaseCandidateCommitFailure>(())
+            },
+            |durable, receipt| {
+                durable
+                    .record(receipt)
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .expect("one fixed proof is admitted exactly once");
+        assert_eq!(sends.load(Ordering::Acquire), 1);
+        let journal = harness
+            .state
+            .output_lease_durable_receipts
+            .lock()
+            .expect("inspect successful DSF2026 journal");
+        assert_eq!(
+            journal.lookup(&request),
+            Ok(Some(first_receipt)),
+            "same request replay returns the terminal receipt without transport"
+        );
+        assert_eq!(
+            journal.lookup(&durable_output_lease_acquire_request_in_domain(
+                2,
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+            )),
+            Err(output_lease::OutputLeaseError::RequestCapacity),
+            "a fresh request ID is a forbidden second physical attempt"
+        );
+        assert_eq!(
+            journal.lookup(&durable_output_lease_acquire_request(2)),
+            Ok(None),
+            "the global probe budget does not alter the generic Art-Net/output-control domain"
+        );
+        assert_eq!(
+            journal.dsf2026_artnet_acceptance_probe_status(),
+            Dsf2026ArtNetAcceptanceProbeStatus::Consumed
+        );
+        drop(journal);
+
+        let mut restarted = OutputLeaseDurableReceiptJournal::in_memory();
+        restarted
+            .install_path(path)
+            .expect("reload successful DSF2026 journal");
+        assert_eq!(
+            restarted.dsf2026_artnet_acceptance_probe_status(),
+            Dsf2026ArtNetAcceptanceProbeStatus::Consumed
+        );
+        assert_eq!(
+            restarted.lookup(&durable_output_lease_acquire_request_in_domain(
+                2,
+                OUTPUT_LEASE_DSF2026_PROBE_DOMAIN,
+            )),
+            Err(output_lease::OutputLeaseError::RequestCapacity),
+            "restart cannot make a second probe eligible"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn durable_output_lease_origin_gc_preserves_pending_and_allows_new_principals_after_reload() {
         let directory = unique_test_directory("output-lease-origin-gc");
         fs::create_dir_all(&directory).expect("create origin-gc directory");
@@ -87624,6 +89426,7 @@ pub(crate) mod tests {
         journal.record(&receipt).expect("record migration receipt");
 
         let mut legacy = serde_json::to_value(&journal.state).expect("encode legacy state");
+        legacy["version"] = serde_json::Value::from(1_u64);
         legacy["origins"][0]
             .as_object_mut()
             .expect("legacy origin object")
@@ -87635,6 +89438,10 @@ pub(crate) mod tests {
         .expect("write legacy journal");
         let migrated =
             load_output_lease_receipt_state_from_path(&path).expect("load legacy journal");
+        assert_eq!(
+            migrated.version, OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION,
+            "the explicit v1-to-v2 migration is atomically persisted before use"
+        );
         assert!(!migrated.origins[0].replay_guard);
 
         legacy["origins"][0]["high_water_request_id"] = serde_json::Value::from(2_u64);
@@ -87646,6 +89453,30 @@ pub(crate) mod tests {
         let guarded =
             load_output_lease_receipt_state_from_path(&path).expect("load guarded legacy journal");
         assert!(guarded.origins[0].replay_guard);
+
+        let probe_pending_request =
+            durable_output_lease_acquire_request_in_domain(2, OUTPUT_LEASE_DSF2026_PROBE_DOMAIN);
+        let mut probe_pending = OutputLeaseDurableReceiptJournal::in_memory();
+        assert_eq!(
+            probe_pending.prepare_dsf2026_artnet_acceptance_probe(&probe_pending_request, "main"),
+            Ok(OutputLeaseDurablePrepareResult::Fresh)
+        );
+        let mut ambiguous_v1 =
+            serde_json::to_value(&probe_pending.state).expect("encode DSF2026 Pending state");
+        ambiguous_v1["version"] = serde_json::Value::from(1_u64);
+        ambiguous_v1["pending"][0]
+            .as_object_mut()
+            .expect("DSF2026 Pending object")
+            .remove("window_label");
+        fs::write(
+            &path,
+            serde_json::to_vec(&ambiguous_v1).expect("encode ambiguous v1 probe Pending"),
+        )
+        .expect("write ambiguous v1 probe Pending");
+        assert!(
+            load_output_lease_receipt_state_from_path(&path).is_err(),
+            "a v1 DSF2026 Pending without a local window binding must fail closed rather than pick a new owner"
+        );
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -90362,6 +92193,7 @@ pub(crate) mod tests {
                 id: 2,
                 label: "Route Assignment Aux".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }))
             .expect("route-assignment auxiliary composition must seed");
@@ -91323,6 +93155,7 @@ pub(crate) mod tests {
                 id: 1,
                 label: "Follow".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![output_id],
             }],
             outputs: vec![VideoOutputSummary {
@@ -94679,6 +96512,7 @@ pub(crate) mod tests {
                 id: 2,
                 label: "Aux".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }))
             .unwrap();
@@ -94841,6 +96675,7 @@ pub(crate) mod tests {
                 id: 2,
                 label: "Aux".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }))
             .unwrap();
@@ -100115,6 +101950,7 @@ pub(crate) mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![1],
             });
         recovered_project
@@ -100597,6 +102433,7 @@ pub(crate) mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![1],
             });
         recovered_project
@@ -109722,6 +111559,7 @@ f 1 2 3
                 id: 5,
                 label: "Main".to_string(),
                 layer_ids: vec![2, 3],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![9],
             }],
             outputs: vec![VideoOutputSummary {
@@ -110331,12 +112169,14 @@ f 1 2 3
                         id: 1,
                         label: "Main".to_string(),
                         layer_ids: Vec::new(),
+                        timeline_layer_ids: Vec::new(),
                         output_ids: Vec::new(),
                     },
                     CompositionSummary {
                         id: 7,
                         label: "Aux".to_string(),
                         layer_ids: Vec::new(),
+                        timeline_layer_ids: Vec::new(),
                         output_ids: Vec::new(),
                     },
                 ],
@@ -112521,6 +114361,7 @@ f 1 2 3
                         id: 1,
                         label: "Main".to_string(),
                         layer_ids: vec![10],
+                        timeline_layer_ids: Vec::new(),
                         output_ids: vec![7],
                     }],
                     outputs: vec![project_video_output(7, 1)],
@@ -134697,6 +136538,7 @@ mod video_recording_runtime_tests {
             id: 3,
             label: "Program".to_string(),
             layer_ids: vec![7],
+            timeline_layer_ids: Vec::new(),
             output_ids: vec![9],
         }];
         snapshot.video.outputs = vec![VideoOutputSummary {
@@ -135822,6 +137664,7 @@ fn main() {
             add_video_composition,
             remove_video_composition,
             set_video_composition_layers,
+            set_video_composition_timeline_layers,
             add_video_output,
             remove_video_output,
             set_video_output_config,
@@ -135865,9 +137708,12 @@ fn main() {
             query_timeline_follow_abort_authority_v1,
             abort_timeline_follow_runtime_v1,
             query_output_control_authority_v1,
+            query_dsf2026_artnet_acceptance_probe_status_v1,
             release_blackout_output_control_v2,
             arm_output_control_v2,
             enable_show_art_net_loopback_route_v1,
+            send_dsf2026_artnet_acceptance_probe_v1,
+            acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1,
             enable_show_spout_outputs_v1,
             enable_output_control_v2,
             take_over_output_control_v2,

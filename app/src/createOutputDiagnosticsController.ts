@@ -1,9 +1,12 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import {
   executeOutputControl,
+  OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+  queryDsf2026ArtNetAcceptanceProbeStatus,
   queryOutputLeaseAuthority,
   selectOnlyActiveOutputLease,
 } from "./outputControlController";
+import type { Dsf2026ArtNetAcceptanceProbeStatusQuery } from "./outputControlController";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type {
   DmxOutputConfig,
@@ -79,6 +82,20 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   const [dmxTestChannel, setDmxTestChannel] = createSignal(1);
   const [dmxTestWidth, setDmxTestWidth] = createSignal(1);
   const [dmxTestValue, setDmxTestValue] = createSignal(255);
+  // Unknown remains disabled in the panel.  The fixed route must never become
+  // clickable merely because the status refresh has not completed yet.
+  const [dsf2026ArtNetAcceptanceProbeStatus, setDsf2026ArtNetAcceptanceProbeStatus] =
+    createSignal<Dsf2026ArtNetAcceptanceProbeStatusQuery | null>(null);
+  const refreshDsf2026ArtNetAcceptanceProbeStatus = async () => {
+    try {
+      const status = await queryDsf2026ArtNetAcceptanceProbeStatus(options.invoke);
+      setDsf2026ArtNetAcceptanceProbeStatus(status);
+      return status;
+    } catch {
+      setDsf2026ArtNetAcceptanceProbeStatus(null);
+      return null;
+    }
+  };
   const refreshEngineTelemetryReport = async () => {
     try {
       setEngineTelemetryReport(await options.invoke<EngineTelemetryReport>("get_engine_telemetry_report"));
@@ -126,6 +143,56 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       });
       await options.refreshSnapshot();
       options.setMessage("Staged same-PC Art-Net loopback show route enabled.");
+    } catch (error) {
+      options.setMessage(String(error));
+    }
+  };
+
+  const sendDsf2026ArtNetAcceptanceProbe = async () => {
+    try {
+      const status = await refreshDsf2026ArtNetAcceptanceProbeStatus();
+      if (status?.status !== "available") {
+        throw new Error("DSF2026 fixed probe is unavailable: its durable one-shot status was not available for a new send.");
+      }
+      const lease = selectOnlyActiveOutputLease(
+        await queryOutputLeaseAuthority(options.invoke),
+        ["lighting", "video"],
+      );
+      await executeOutputControl(options.invoke, {
+        kind: "send_dsf2026_artnet_acceptance_probe",
+        lease,
+      });
+      await options.refreshSnapshot();
+      setDsf2026ArtNetAcceptanceProbeStatus({
+        operationId: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+        status: "consumed",
+      });
+      options.setMessage("DSF2026 fixed red probe: OS accepted one 530-byte ArtDmx U0 datagram to 127.0.0.1:6454; receiver and physical output remain unverified. A second probe is permanently prohibited, including after restart.");
+    } catch (error) {
+      options.setMessage(String(error));
+    }
+  };
+
+  const acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt = async () => {
+    try {
+      const status = await refreshDsf2026ArtNetAcceptanceProbeStatus();
+      if (status?.status !== "in_doubt") {
+        throw new Error("DSF2026 probe reconciliation is unavailable: there is no durable InDoubt outcome to resolve.");
+      }
+      const lease = selectOnlyActiveOutputLease(
+        await queryOutputLeaseAuthority(options.invoke),
+        ["lighting", "video"],
+      );
+      await executeOutputControl(options.invoke, {
+        kind: "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt",
+        lease,
+      });
+      await options.refreshSnapshot();
+      setDsf2026ArtNetAcceptanceProbeStatus({
+        operationId: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+        status: "consumed",
+      });
+      options.setMessage("DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator. A fresh probe remains permanently prohibited.");
     } catch (error) {
       options.setMessage(String(error));
     }
@@ -209,6 +276,8 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
+  void refreshDsf2026ArtNetAcceptanceProbeStatus();
+
   return {
     output,
     setOutput,
@@ -221,11 +290,14 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     setDmxTestWidth,
     dmxTestValue,
     setDmxTestValue,
+    dsf2026ArtNetAcceptanceProbeStatus,
     refreshEngineTelemetryReport,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
     applyOutput,
     enableStagedShowArtNetLoopbackRoute,
+    sendDsf2026ArtNetAcceptanceProbe,
+    acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt,
     enableShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,

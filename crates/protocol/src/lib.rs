@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 pub mod control_plane;
@@ -1701,7 +1701,57 @@ pub struct CompositionSummary {
     pub id: CompositionId,
     pub label: String,
     pub layer_ids: Vec<VideoLayerId>,
+    /// Stable Timeline Video lane identities rendered below this custom
+    /// composition's authored layers. The Timeline ID is part of the durable
+    /// identity: a lane number is only unique within one Timeline. These are
+    /// resolved to ephemeral renderer projection IDs only when a snapshot is
+    /// rendered.
+    #[serde(default, deserialize_with = "deserialize_timeline_video_layer_refs")]
+    pub timeline_layer_ids: Vec<TimelineVideoLayerRef>,
     pub output_ids: Vec<VideoOutputId>,
+}
+
+/// One authored Timeline Video lane selected by a custom video composition.
+/// `VideoLayerId` is intentionally not used here: a Timeline lane is a
+/// different identity domain and its renderer projection is transient.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimelineVideoLayerRef {
+    pub timeline_id: TimelineId,
+    pub layer_id: u32,
+}
+
+/// The immediately preceding, unshipped P0 shape persisted only a lane number.
+/// That is not enough information to reconstruct a Timeline-scoped identity
+/// when a Follow target reuses the same lane ID, so loading it must fail rather
+/// than silently attaching it to an arbitrary Timeline. Files from before P0
+/// omit the field and continue to deserialize as an empty membership.
+fn deserialize_timeline_video_layer_refs<'de, D>(
+    deserializer: D,
+) -> Result<Vec<TimelineVideoLayerRef>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WireRef {
+        Scoped(TimelineVideoLayerRef),
+        LegacyLaneId(u32),
+    }
+
+    let refs = Vec::<WireRef>::deserialize(deserializer)?;
+    let mut scoped = Vec::with_capacity(refs.len());
+    for reference in refs {
+        match reference {
+            WireRef::Scoped(reference) => scoped.push(reference),
+            WireRef::LegacyLaneId(legacy_lane_id) => {
+                let _ = legacy_lane_id;
+                return Err(de::Error::custom(
+                    "legacy unscoped timeline_layer_ids cannot be migrated safely; reselect the Timeline Video lane",
+                ));
+            }
+        }
+    }
+    Ok(scoped)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -10486,6 +10536,22 @@ fn validate_video_project_references<'a>(
         "video transition bus",
     )?;
 
+    // A custom video composition persists Timeline lane identities, never
+    // ephemeral renderer projection layer IDs. A project may reference any
+    // authored Timeline in the bank, because Follow renders its target as an
+    // isolated incoming image. The lane itself must nevertheless be a Video
+    // lane in that authored bank.
+    let timeline_video_lanes = timelines
+        .iter()
+        .flat_map(|(timeline_id, timeline)| {
+            timeline
+                .layers
+                .iter()
+                .filter(|layer| matches!(layer.kind, TimelineLayerKind::Video))
+                .map(move |layer| (TimelineId(*timeline_id), layer.id))
+        })
+        .collect::<BTreeSet<_>>();
+
     let mut slot_ids = BTreeSet::new();
     for layer in &video.layers {
         let owner = format!("video layer {}", layer.id);
@@ -10524,6 +10590,12 @@ fn validate_video_project_references<'a>(
 
     let mut layer_memberships = BTreeMap::<VideoLayerId, usize>::new();
     for composition in &video.compositions {
+        if composition.id == 1 && !composition.timeline_layer_ids.is_empty() {
+            return Err(project_reference_mismatch(
+                "Main video composition",
+                "cannot persist Timeline Video lane memberships",
+            ));
+        }
         let mut own_layers = BTreeSet::new();
         for layer_id in &composition.layer_ids {
             if !own_layers.insert(*layer_id) {
@@ -10540,6 +10612,30 @@ fn validate_video_project_references<'a>(
                 ));
             }
             *layer_memberships.entry(*layer_id).or_default() += 1;
+        }
+        let mut own_timeline_layers = BTreeSet::new();
+        for timeline_layer in &composition.timeline_layer_ids {
+            if timeline_layer.timeline_id.0 == 0
+                || timeline_layer.layer_id == 0
+                || !own_timeline_layers.insert(*timeline_layer)
+            {
+                return Err(project_reference_mismatch(
+                    format!("video composition {}", composition.id),
+                    format!(
+                        "contains Timeline {} Video lane {} more than once or with a zero identity",
+                        timeline_layer.timeline_id.0, timeline_layer.layer_id
+                    ),
+                ));
+            }
+            if !timeline_video_lanes
+                .contains(&(timeline_layer.timeline_id, timeline_layer.layer_id))
+            {
+                return Err(project_missing_reference(
+                    format!("video composition {}", composition.id),
+                    "Timeline Video lane",
+                    timeline_layer.layer_id as u64,
+                ));
+            }
         }
         let mut own_outputs = BTreeSet::new();
         for output_id in &composition.output_ids {
@@ -11052,6 +11148,7 @@ fn validate_authored_video_reference_projection(
             .copied()
             .collect::<Vec<_>>();
         if rendered_authored_layers != authored_composition.layer_ids
+            || rendered_composition.timeline_layer_ids != authored_composition.timeline_layer_ids
             || rendered_composition.output_ids != authored_composition.output_ids
         {
             return Err(authored_video_conflict(
@@ -15146,6 +15243,35 @@ mod tests {
     }
 
     #[test]
+    fn composition_summary_legacy_json_defaults_timeline_layer_membership() {
+        let composition: super::CompositionSummary = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "label": "Legacy",
+            "layer_ids": [3],
+            "output_ids": [9]
+        }))
+        .unwrap();
+        assert_eq!(
+            composition.timeline_layer_ids,
+            Vec::<super::TimelineVideoLayerRef>::new()
+        );
+        assert_eq!(composition.layer_ids, vec![3]);
+    }
+
+    #[test]
+    fn composition_summary_rejects_unscoped_p0_timeline_lane_membership() {
+        let error = serde_json::from_value::<super::CompositionSummary>(serde_json::json!({
+            "id": 7,
+            "label": "Unshipped P0",
+            "layer_ids": [3],
+            "timeline_layer_ids": [7],
+            "output_ids": [9]
+        }))
+        .expect_err("an unscoped lane cannot be migrated to a Timeline identity");
+        assert!(error.to_string().contains("cannot be migrated safely"));
+    }
+
+    #[test]
     fn video_clip_slot_migration_creates_one_default_without_asset_duplication() {
         let mut video = super::VideoSnapshot {
             layers: vec![media_asset_test_layer(
@@ -15157,6 +15283,7 @@ mod tests {
                 id: 19,
                 label: "Program".to_string(),
                 layer_ids: vec![4],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             ..super::VideoSnapshot::default()
@@ -17463,6 +17590,7 @@ mod tests {
                 id: 9,
                 label: "Main".to_string(),
                 layer_ids: vec![1, 2, 3],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             layer_groups: vec![super::VideoLayerGroupSummary {
@@ -17522,6 +17650,7 @@ mod tests {
                 id: 9,
                 label: "Ambiguous".to_string(),
                 layer_ids: vec![3],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             });
         assert!(super::validate_authored_video_effect_chains(&duplicate_composition).is_err());
@@ -17705,6 +17834,7 @@ mod tests {
                 id: 9,
                 label: "Main".to_string(),
                 layer_ids: vec![1, 2, 3],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             effect_chains: vec![super::VideoEffectChainSummary {
@@ -19202,6 +19332,7 @@ mod tests {
                 id: 40,
                 label: "Main".to_string(),
                 layer_ids: vec![10],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![30],
             }],
             outputs: vec![output],
@@ -19611,6 +19742,24 @@ mod tests {
                 domain: "video layer group",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn video_project_references_reject_main_timeline_membership() {
+        let timeline = reference_integrity_timeline();
+        let mut video = reference_integrity_video();
+        video.compositions[0].id = 1;
+        video.compositions[0].timeline_layer_ids = vec![super::TimelineVideoLayerRef {
+            timeline_id: timeline.id,
+            layer_id: 2,
+        }];
+        video.outputs[0].composition_id = 1;
+        let timelines = std::collections::BTreeMap::from([(timeline.id.0, &timeline)]);
+
+        assert!(matches!(
+            super::validate_video_project_references(&video, &timelines),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { .. })
         ));
     }
 

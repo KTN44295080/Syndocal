@@ -1860,6 +1860,7 @@ mod tests {
                 id: 1,
                 label: "Follow".to_string(),
                 layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![output_id],
             }],
             outputs: vec![protocol::VideoOutputSummary {

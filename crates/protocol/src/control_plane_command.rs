@@ -1643,10 +1643,11 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 /// OutputControl v2 changed the command shape and confirmation boundary. Its
 /// request/response schema identity is therefore distinct from the v1
 /// inventory schema and the Rust mutation DTO names now match that boundary.
-// v4 adds an independent, payloadless same-machine Spout show activation.
-// v3's Art-Net action shape stays frozen: the new two-sender contract is not
-// smuggled through the DMX route action or a generic video-output payload.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 4;
+// v6 appends the fixed DSF2026 in-doubt reconciliation acknowledgement. Its
+// only payload is the existing lease authority; it can clear only the
+// probe-scoped durable Pending hold and can never send a packet. v5's fixed
+// probe, v4's Spout, and v3's Art-Net action shapes stay frozen.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 6;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
@@ -1681,6 +1682,12 @@ pub const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID: &str =
 /// native code and are never caller-controlled.
 pub const OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID: &str =
     "syndocal.output.show_spout_outputs.enable.v1";
+/// Fixed DSF2026 same-PC acceptance proof. This is not output activation and
+/// has no caller-supplied endpoint, universe, channel, payload, or retry.
+pub const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID: &str =
+    "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1";
+pub const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID: &str =
+    "syndocal.output.dsf2026_artnet_acceptance_probe.reconcile.v1";
 pub const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.output.lease.authority.query.v1";
 pub const OUTPUT_LEASE_TTL_MS: u64 = 60_000;
@@ -2303,6 +2310,12 @@ pub enum OutputControlActionV2 {
     EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
+    SendDsf2026ArtNetAcceptanceProbe {
+        lease: OutputLeaseAuthorityV1,
+    },
+    AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+        lease: OutputLeaseAuthorityV1,
+    },
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2357,6 +2370,14 @@ enum OutputControlActionV2Wire {
     EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
+    #[serde(rename = "send_dsf2026_artnet_acceptance_probe")]
+    SendDsf2026ArtNetAcceptanceProbe {
+        lease: OutputLeaseAuthorityV1,
+    },
+    #[serde(rename = "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt")]
+    AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+        lease: OutputLeaseAuthorityV1,
+    },
     Arm {
         role: OutputControlTargetRoleV1,
         lease: OutputLeaseAuthorityV1,
@@ -2409,6 +2430,12 @@ impl OutputControlActionV2 {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
             Self::EnableShowSpoutOutputs { .. } => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+            Self::SendDsf2026ArtNetAcceptanceProbe { .. } => {
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+            }
+            Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
+                OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+            }
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -2450,6 +2477,8 @@ impl OutputControlActionV2 {
             Self::EnableOutput => {}
             Self::EnableShowArtNetLoopbackRoute { lease }
             | Self::EnableShowSpoutOutputs { lease }
+            | Self::SendDsf2026ArtNetAcceptanceProbe { lease }
+            | Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
             | Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
             | Self::RenewLease { lease }
@@ -2497,6 +2526,16 @@ impl OutputControlActionV2 {
             }
             Self::EnableShowSpoutOutputs { lease } => {
                 OutputControlActionV2Wire::EnableShowSpoutOutputs {
+                    lease: lease.clone(),
+                }
+            }
+            Self::SendDsf2026ArtNetAcceptanceProbe { lease } => {
+                OutputControlActionV2Wire::SendDsf2026ArtNetAcceptanceProbe {
+                    lease: lease.clone(),
+                }
+            }
+            Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease } => {
+                OutputControlActionV2Wire::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
                     lease: lease.clone(),
                 }
             }
@@ -2578,6 +2617,20 @@ impl OutputControlActionV2 {
                 // 0..=12 are frozen.  The new show video action is
                 // deliberately payloadless and cannot impersonate Art-Net.
                 output.push(13);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::SendDsf2026ArtNetAcceptanceProbe { lease } => {
+                // 0..=13 are frozen. The acceptance probe carries only the
+                // current authority; no generic test-frame fields exist.
+                output.push(14);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease } => {
+                // 0..=14 are frozen. Reconciliation is a fixed no-send
+                // acknowledgement for the probe's own durable Pending hold.
+                output.push(15);
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
@@ -2698,6 +2751,12 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             }
             OutputControlActionV2Wire::EnableShowSpoutOutputs { lease } => {
                 Self::EnableShowSpoutOutputs { lease }
+            }
+            OutputControlActionV2Wire::SendDsf2026ArtNetAcceptanceProbe { lease } => {
+                Self::SendDsf2026ArtNetAcceptanceProbe { lease }
+            }
+            OutputControlActionV2Wire::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease } => {
+                Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
             }
             OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
             OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
@@ -3152,6 +3211,15 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
+            OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID => {
+                OutputLeaseReceiptOutcomeV2::Authorized
+            }
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID => {
+                OutputLeaseReceiptOutcomeV2::Authorized
+            }
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID => {
+                OutputLeaseReceiptOutcomeV2::Authorized
+            }
             OUTPUT_ENABLE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             _ => return Err(OutputControlValidationErrorV1::UnexpectedOperationId),
         };
@@ -3310,6 +3378,9 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -3337,6 +3408,9 @@ impl OutputControlReceiptV2 {
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                            | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                            | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -3351,6 +3425,9 @@ impl OutputControlReceiptV2 {
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                            | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                            | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -3434,6 +3511,9 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+                | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -4161,6 +4241,29 @@ mod tests {
         }
     }
 
+    fn authorized_both_lease_result() -> OutputControlLeaseResultV2 {
+        let resources = vec![
+            OutputControlTargetRoleV1::Lighting,
+            OutputControlTargetRoleV1::Video,
+        ];
+        OutputControlLeaseResultV2 {
+            authority: lease_authority(),
+            resources: resources.clone(),
+            phase: OutputLeaseReceiptPhaseV2::HeldActive,
+            outcome: OutputLeaseReceiptOutcomeV2::Authorized,
+            audit_sequence: 1,
+            changes: vec![OutputLeaseReceiptChangeV2 {
+                lease_id: lease_authority().lease_id,
+                before_generation: Some(1),
+                after_generation: Some(1),
+                before_resources: resources.clone(),
+                after_resources: resources,
+                before_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+            }],
+        }
+    }
+
     #[test]
     fn enable_output_lease_result_accepts_only_exact_acquire_or_recover_transitions() {
         let resources = vec![
@@ -4217,6 +4320,172 @@ mod tests {
         assert!(forged_acquire
             .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
             .is_err());
+    }
+
+    #[test]
+    fn dsf2026_reconcile_receipt_and_rejection_are_strict_public_wire_contracts() {
+        let receipt = OutputControlReceiptV2 {
+            operation_id: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID.to_string(),
+            request_id: 27,
+            shape_sha256: hash('d'),
+            argument_fingerprint: hash('e'),
+            audit_sequence: 1,
+            fence_before: output_fence(),
+            fence_after: output_fence(),
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(OutputControlLeaseResultV2 {
+                authority: lease_authority(),
+                resources: vec![
+                    OutputControlTargetRoleV1::Lighting,
+                    OutputControlTargetRoleV1::Video,
+                ],
+                phase: OutputLeaseReceiptPhaseV2::HeldActive,
+                outcome: OutputLeaseReceiptOutcomeV2::Authorized,
+                audit_sequence: 1,
+                changes: vec![OutputLeaseReceiptChangeV2 {
+                    lease_id: lease_authority().lease_id,
+                    before_generation: Some(1),
+                    after_generation: Some(1),
+                    before_resources: vec![
+                        OutputControlTargetRoleV1::Lighting,
+                        OutputControlTargetRoleV1::Video,
+                    ],
+                    after_resources: vec![
+                        OutputControlTargetRoleV1::Lighting,
+                        OutputControlTargetRoleV1::Video,
+                    ],
+                    before_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                    after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                }],
+            }),
+        };
+        assert_eq!(receipt.validate(), Ok(()));
+        let response = OutputControlResponseV2::Receipt(Box::new(receipt.clone()));
+        let response_json = serde_json::to_value(&response).expect("serialize reconcile receipt");
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV2>(response_json.clone())
+                .expect("deserialize reconcile receipt"),
+            response
+        );
+        let mut unknown_receipt_field = response_json;
+        unknown_receipt_field["receipt"]["unreviewed"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_receipt_field).is_err());
+
+        let mut changed_fence = receipt;
+        changed_fence.fence_after.output_generation += 1;
+        assert!(changed_fence.validate().is_err());
+
+        let rejection = OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
+            operation_id: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID.to_string(),
+            request_id: 28,
+            error: OutputControlErrorCodeV2::Busy,
+        });
+        let rejection_json =
+            serde_json::to_value(&rejection).expect("serialize reconcile rejection");
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV2>(rejection_json)
+                .expect("deserialize reconcile rejection"),
+            rejection
+        );
+    }
+
+    #[test]
+    fn show_spout_native_success_response_is_strict_authorized_and_unchanged() {
+        let request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID.to_string(),
+            request_id: 61,
+            expected_fence: output_fence(),
+            action: OutputControlActionV2::EnableShowSpoutOutputs {
+                lease: lease_authority(),
+            },
+        };
+        request
+            .validate()
+            .expect("fixed Spout command request is valid");
+        let request_json = serde_json::to_value(&request).expect("serialize Spout request");
+        assert_eq!(
+            serde_json::from_value::<OutputControlCommandRequestV2>(request_json.clone())
+                .expect("deserialize Spout request"),
+            request
+        );
+        let mut wrong_request_operation = request.clone();
+        wrong_request_operation.operation_id =
+            OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID.to_string();
+        assert!(
+            serde_json::to_value(wrong_request_operation).is_err(),
+            "Spout action cannot be submitted through the Art-Net operation ID"
+        );
+        let mut unknown_request_field = request_json;
+        unknown_request_field["sender_name"] = serde_json::json!("forged");
+        assert!(
+            serde_json::from_value::<OutputControlCommandRequestV2>(unknown_request_field).is_err(),
+            "the fixed Spout action accepts no caller-controlled sender payload"
+        );
+
+        let lease_result = authorized_both_lease_result();
+        assert_eq!(
+            lease_result.validate_for_operation(OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID),
+            Ok(()),
+            "Spout success retains the exact active Both lease authorization"
+        );
+        assert!(
+            lease_result
+                .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
+                .is_err(),
+            "Spout Authorized evidence cannot be relabeled as an acquire"
+        );
+        let receipt = OutputControlReceiptV2 {
+            operation_id: OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            shape_sha256: hash('d'),
+            argument_fingerprint: hash('e'),
+            audit_sequence: 1,
+            fence_before: request.expected_fence.clone(),
+            fence_after: request.expected_fence.clone(),
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(lease_result),
+        };
+        assert_eq!(receipt.validate(), Ok(()));
+        let response = OutputControlResponseV2::Receipt(Box::new(receipt.clone()));
+        let response_json = serde_json::to_value(&response)
+            .expect("native Spout command success response serializes");
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV2>(response_json.clone())
+                .expect("native Spout command success response deserializes"),
+            response,
+            "the native command response remains an exact public terminal"
+        );
+        let mut changed_fence = receipt.clone();
+        changed_fence.fence_after.output_generation += 1;
+        assert!(
+            changed_fence.validate().is_err(),
+            "fixed Spout publication must retain its exact unchanged control fence"
+        );
+        let mut wrong_receipt_operation = receipt;
+        wrong_receipt_operation.operation_id = OUTPUT_ENABLE_OPERATION_ID.to_string();
+        assert!(
+            wrong_receipt_operation.validate().is_err(),
+            "Spout Authorized evidence cannot be accepted under a different operation"
+        );
+
+        let rejection = OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
+            operation_id: OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID.to_string(),
+            request_id: 62,
+            error: OutputControlErrorCodeV2::PublicationFailed,
+        });
+        let rejection_json =
+            serde_json::to_value(&rejection).expect("serialize Spout rejection terminal");
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV2>(rejection_json)
+                .expect("deserialize Spout rejection terminal"),
+            rejection
+        );
+        let invalid_rejection = OutputControlRejectionV2 {
+            operation_id: "syndocal.output.show_spout_outputs.enable.v2".to_string(),
+            request_id: 62,
+            error: OutputControlErrorCodeV2::PublicationFailed,
+        };
+        assert!(invalid_rejection.validate().is_err());
     }
 
     #[test]
@@ -4502,6 +4771,69 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<OutputControlActionV2>(show_spout_json).unwrap(),
             show_spout_enable
+        );
+        // v5 appends the DSF2026 acceptance probe. It is fixed native data:
+        // the wire action carries only the existing lease authority.
+        let dsf2026_probe = OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
+            lease: authority.clone(),
+        };
+        let mut dsf2026_probe_shape = Vec::new();
+        dsf2026_probe
+            .append_canonical_bytes(&mut dsf2026_probe_shape)
+            .unwrap();
+        assert_eq!(
+            dsf2026_probe.operation_id(),
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
+        );
+        assert_eq!(dsf2026_probe_shape.first(), Some(&14));
+        let dsf2026_probe_json = serde_json::to_value(&dsf2026_probe).unwrap();
+        assert_eq!(
+            dsf2026_probe_json,
+            serde_json::json!({
+                "kind": "send_dsf2026_artnet_acceptance_probe",
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            })
+        );
+        for forged_key in ["target_ip", "port", "universe", "payload", "retry"] {
+            let mut forged_probe_json = dsf2026_probe_json.clone();
+            forged_probe_json[forged_key] = serde_json::json!("caller_controlled");
+            assert!(serde_json::from_value::<OutputControlActionV2>(forged_probe_json).is_err());
+        }
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(dsf2026_probe_json).unwrap(),
+            dsf2026_probe
+        );
+        let dsf2026_reconcile =
+            OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
+                lease: authority.clone(),
+            };
+        let mut dsf2026_reconcile_shape = Vec::new();
+        dsf2026_reconcile
+            .append_canonical_bytes(&mut dsf2026_reconcile_shape)
+            .unwrap();
+        assert_eq!(
+            dsf2026_reconcile.operation_id(),
+            OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+        );
+        assert_eq!(dsf2026_reconcile_shape.first(), Some(&15));
+        let dsf2026_reconcile_json = serde_json::to_value(&dsf2026_reconcile).unwrap();
+        assert_eq!(
+            dsf2026_reconcile_json,
+            serde_json::json!({
+                "kind": "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt",
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            })
+        );
+        for forged_key in ["target_ip", "port", "universe", "payload", "retry"] {
+            let mut forged_reconcile_json = dsf2026_reconcile_json.clone();
+            forged_reconcile_json[forged_key] = serde_json::json!("caller_controlled");
+            assert!(
+                serde_json::from_value::<OutputControlActionV2>(forged_reconcile_json).is_err()
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(dsf2026_reconcile_json).unwrap(),
+            dsf2026_reconcile
         );
         let windows_device_label = DisplayOutputSpecV2 {
             label: r"\\.\DISPLAY2".to_string(),

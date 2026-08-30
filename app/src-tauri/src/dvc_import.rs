@@ -8752,11 +8752,19 @@ fn non_empty_label(value: Option<&str>, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, io::Write, net::UdpSocket, time::Duration};
+    use std::{
+        collections::{BTreeSet, HashMap},
+        fs,
+        io::Write,
+        net::UdpSocket,
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
 
     use base64::Engine as _;
     use engine::{EngineCommand, EngineHandle};
     use flate2::{write::ZlibEncoder, Compress, Compression, FlushCompress};
+    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -8836,6 +8844,449 @@ mod tests {
         assert!(matches!(status, Status::Ok | Status::BufError));
         output.truncate(compressor.total_out() as usize);
         output
+    }
+
+    const DANCE_DVC_ACCEPTANCE_SHA256: &str =
+        "33e1ead49f59b511d6a812fd06f506a89ff23721ae6cd99a927fdc89877b6b65";
+    const DANCE_ARTNET_PACKET_BYTES: usize = 530;
+    const DANCE_ARTNET_RECEIVE_BUFFER_BYTES: usize = 2048;
+    const DANCE_ARTNET_RECEIVE_DEADLINE: Duration = Duration::from_secs(2);
+    const DANCE_ARTNET_MAX_RECEIVES: usize = 128;
+
+    /// Decode only the verified raw `FIXTUREDATA` big-endian channel section.
+    ///
+    /// This deliberately does not call `decode_fixture_data`: the external
+    /// acceptance expected frame must not share the importer's channel decoder.
+    /// The sync-flush decompressor is shared because the compressed container is
+    /// not a source-to-runtime mapping; this reader independently validates the
+    /// BE header and every physical DMX channel before constructing U0.
+    fn dance_independent_fixture_channels(
+        encoded: &str,
+        expected_channels: usize,
+    ) -> Result<Vec<Option<u8>>, String> {
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(encoded.trim())
+            .map_err(|error| format!("dance.dvc FIXTUREDATA base64 is invalid: {error}"))?;
+        let inflated = inflate_sync_flush_tolerant(&compressed, DVC_FIXTURE_DATA_MAX_BYTES)?;
+        if inflated.len() < 2 {
+            return Err("dance.dvc FIXTUREDATA is shorter than its BE channel header".to_string());
+        }
+        let channel_count = u16::from_be_bytes([inflated[0], inflated[1]]) as usize;
+        if channel_count != expected_channels {
+            return Err(format!(
+                "dance.dvc FIXTUREDATA declares {channel_count} channels but PATCH declares {expected_channels}"
+            ));
+        }
+        let values_end = 2usize
+            .checked_add(channel_count.saturating_mul(2))
+            .ok_or_else(|| "dance.dvc FIXTUREDATA channel section overflows".to_string())?;
+        if inflated.len() < values_end {
+            return Err("dance.dvc FIXTUREDATA ends inside its BE channel section".to_string());
+        }
+
+        inflated[2..values_end]
+            .chunks_exact(2)
+            .enumerate()
+            .map(
+                |(channel, bytes)| match u16::from_be_bytes([bytes[0], bytes[1]]) {
+                    u16::MAX => Ok(None),
+                    value @ 0..=255 => Ok(Some(value as u8)),
+                    value => Err(format!(
+                        "dance.dvc FIXTUREDATA channel {} is non-DMX value {value}",
+                        channel + 1
+                    )),
+                },
+            )
+            .collect()
+    }
+
+    /// Read a raw Daslight `all_white` payload into U0 without looking at the
+    /// imported Cue or using the production PATCH/fixture-data decoder. This
+    /// deliberately checks the engine's rendered frame against source fixture
+    /// bytes, while leaving effects, lasers, devices, audio, and full dynamic
+    /// parity outside this static-scene acceptance boundary.
+    fn dance_all_white_source_u0_frame(bytes: &[u8]) -> Result<[u8; 512], String> {
+        let source = std::str::from_utf8(bytes)
+            .map_err(|error| format!("dance.dvc XML is not UTF-8: {error}"))?;
+        let document = Document::parse(source)
+            .map_err(|error| format!("dance.dvc XML is invalid: {error}"))?;
+        let root = document.root_element();
+        validate_dvc_root(root)?;
+        let patch_data = direct_child(root, "PATCHS")
+            .and_then(|node| node.attribute("DATA"))
+            .ok_or_else(|| "dance.dvc is missing PATCHS DATA".to_string())?;
+        let patch_xml = decode_qcompress_base64(patch_data)?;
+        let patch_source = std::str::from_utf8(&patch_xml)
+            .map_err(|error| format!("dance.dvc PATCH XML is not UTF-8: {error}"))?;
+        let patch_document = Document::parse(patch_source)
+            .map_err(|error| format!("dance.dvc PATCH XML is invalid: {error}"))?;
+        let patch_root = patch_document.root_element();
+        if !patch_root.has_tag_name("PATCH") {
+            return Err(format!(
+                "dance.dvc PATCH payload has unexpected root <{}>",
+                patch_root.tag_name().name()
+            ));
+        }
+
+        // The test-side routing table uses only source PATCH primitives: one
+        // source profile mode's raw physical-channel count and each fixture's
+        // U0/address. It intentionally does not construct `ParsedProfile`,
+        // `PatchedFixtureSummary`, or `FixtureImportRef`.
+        let mut fixture_routes = HashMap::<String, (u16, u16, usize)>::new();
+        for container in element_children(patch_root).filter(|node| node.has_tag_name("FIXTURES")) {
+            let library = direct_child(container, "SSLLIBRARY")
+                .ok_or_else(|| "dance.dvc PATCH FIXTURES has no SSLLIBRARY".to_string())?;
+            let modes = library
+                .descendants()
+                .filter(|node| node.has_tag_name("SSLMODE"))
+                .collect::<Vec<_>>();
+            if modes.len() != 1 {
+                return Err(format!(
+                    "dance.dvc PATCH fixture profile has {} modes; the static acceptance reader requires one",
+                    modes.len()
+                ));
+            }
+            let mode = modes[0];
+            let physical_channels = required_attribute(mode, "SSLNBCHANNEL", "SSLMODE")?
+                .parse::<usize>()
+                .map_err(|_| "dance.dvc PATCH SSLMODE has invalid SSLNBCHANNEL".to_string())?;
+            let actual_channels = element_children(mode)
+                .filter(|node| node.has_tag_name("SSLCHANNEL"))
+                .count();
+            if actual_channels != physical_channels {
+                return Err(format!(
+                    "dance.dvc PATCH SSLMODE declares {physical_channels} channels but contains {actual_channels}"
+                ));
+            }
+            for fixture in element_children(container).filter(|node| node.has_tag_name("FIXTURE")) {
+                let fixture_uid = required_attribute(fixture, "DASUID", "FIXTURE")?;
+                let universe = required_attribute(fixture, "UNIVERS", "FIXTURE")?
+                    .parse::<u16>()
+                    .map_err(|_| format!("dance.dvc fixture {fixture_uid} has invalid UNIVERS"))?
+                    .checked_sub(1)
+                    .ok_or_else(|| format!("dance.dvc fixture {fixture_uid} has zero UNIVERS"))?;
+                let address = required_attribute(fixture, "ADDRESS", "FIXTURE")?
+                    .parse::<u16>()
+                    .map_err(|_| format!("dance.dvc fixture {fixture_uid} has invalid ADDRESS"))?;
+                if address == 0 {
+                    return Err(format!("dance.dvc fixture {fixture_uid} has address 0"));
+                }
+                if fixture_routes
+                    .insert(
+                        fixture_uid.to_string(),
+                        (universe, address, physical_channels),
+                    )
+                    .is_some()
+                {
+                    return Err(format!(
+                        "dance.dvc PATCH has duplicate fixture {fixture_uid}"
+                    ));
+                }
+            }
+        }
+        let all_white = direct_child(root, "SCENES")
+            .into_iter()
+            .flat_map(element_children)
+            .filter(|bank| bank.has_tag_name("BANK") && bank.attribute("NAME") == Some("color"))
+            .flat_map(element_children)
+            .find(|scene| {
+                scene.has_tag_name("SCENE") && scene.attribute("NAME") == Some("all_white")
+            })
+            .ok_or_else(|| "dance.dvc is missing color/all_white".to_string())?;
+        let fixture_data = direct_child(all_white, "FIXTUREDATAS")
+            .ok_or_else(|| "dance.dvc all_white is missing FIXTUREDATAS".to_string())?;
+        let data_nodes = element_children(fixture_data)
+            .filter(|node| node.has_tag_name("FIXTUREDATA"))
+            .collect::<Vec<_>>();
+        if fixture_data
+            .attribute("NB")
+            .and_then(|value| value.parse::<usize>().ok())
+            != Some(data_nodes.len())
+        {
+            return Err("dance.dvc all_white FIXTUREDATAS count is invalid".to_string());
+        }
+
+        let mut frame = [0_u8; 512];
+        let mut written = [false; 512];
+        for data_node in data_nodes {
+            let fixture_uid = required_attribute(data_node, "FIXTURE", "FIXTUREDATA")?;
+            let (universe, address, physical_channels) =
+                fixture_routes.get(fixture_uid).ok_or_else(|| {
+                    format!("dance.dvc all_white references unknown fixture {fixture_uid}")
+                })?;
+            if *universe != 0 {
+                continue;
+            }
+            let encoded = required_attribute(data_node, "DATA", "FIXTUREDATA")?;
+            let decoded = dance_independent_fixture_channels(encoded, *physical_channels)?;
+            let start = usize::from(*address)
+                .checked_sub(1)
+                .ok_or_else(|| format!("dance.dvc fixture {fixture_uid} has address 0"))?;
+            for (offset, value) in decoded.into_iter().enumerate() {
+                let Some(value) = value else {
+                    continue;
+                };
+                let channel = start.checked_add(offset).ok_or_else(|| {
+                    format!("dance.dvc fixture {fixture_uid} channel offset overflowed")
+                })?;
+                if channel >= frame.len() {
+                    return Err(format!(
+                        "dance.dvc fixture {fixture_uid} writes U0 channel {} outside 1..=512",
+                        channel + 1
+                    ));
+                }
+                if written[channel] && frame[channel] != value {
+                    return Err(format!(
+                        "dance.dvc all_white overlaps U0 channel {} with conflicting values {} and {value}",
+                        channel + 1,
+                        frame[channel]
+                    ));
+                }
+                frame[channel] = value;
+                written[channel] = true;
+            }
+        }
+        Ok(frame)
+    }
+
+    fn dance_art_dmx_datagram(universe: u16, data: &[u8; 512]) -> [u8; DANCE_ARTNET_PACKET_BYTES] {
+        let mut wire = [0_u8; DANCE_ARTNET_PACKET_BYTES];
+        wire[..8].copy_from_slice(b"Art-Net\0");
+        wire[8..12].copy_from_slice(&[0x00, 0x50, 0x00, 0x0e]);
+        wire[14..16].copy_from_slice(&universe.to_le_bytes());
+        wire[16..18].copy_from_slice(&(data.len() as u16).to_be_bytes());
+        wire[18..].copy_from_slice(data);
+        wire
+    }
+
+    fn receive_expected_dance_art_dmx(
+        receiver: &UdpSocket,
+        expected: &[u8],
+    ) -> [u8; DANCE_ARTNET_PACKET_BYTES] {
+        assert_eq!(
+            expected.len(),
+            512,
+            "the expected U0 frame must have 512 slots"
+        );
+        let deadline = Instant::now() + DANCE_ARTNET_RECEIVE_DEADLINE;
+        let mut receive_buffer = [0_u8; DANCE_ARTNET_RECEIVE_BUFFER_BYTES];
+        let mut receive_attempts = 0;
+        while receive_attempts < DANCE_ARTNET_MAX_RECEIVES {
+            if Instant::now() >= deadline {
+                break;
+            }
+            receive_attempts += 1;
+            match receiver.recv_from(&mut receive_buffer) {
+                Ok((received, _)) => {
+                    // The buffer is intentionally larger than a valid ArtDmx
+                    // packet. This exact check happens before any slice or
+                    // payload comparison, so a truncated oversized UDP packet
+                    // cannot look like the required 530-byte datagram.
+                    assert_eq!(
+                        received, DANCE_ARTNET_PACKET_BYTES,
+                        "local ArtDmx datagram must be exactly 530 bytes (received {received})"
+                    );
+                    let packet = io::artnet::parse_art_dmx_packet(&receive_buffer[..received])
+                        .expect("local output must be a valid ArtDmx datagram");
+                    if packet.universe == 0 && packet.data == expected {
+                        let mut wire = [0_u8; DANCE_ARTNET_PACKET_BYTES];
+                        wire.copy_from_slice(&receive_buffer[..DANCE_ARTNET_PACKET_BYTES]);
+                        return wire;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(error) => panic!("receive local ArtDmx datagram: {error}"),
+            }
+        }
+        panic!(
+            "did not receive the expected U0 ArtDmx frame within {:?} after {receive_attempts} of {DANCE_ARTNET_MAX_RECEIVES} receive attempts",
+            DANCE_ARTNET_RECEIVE_DEADLINE,
+        );
+    }
+
+    #[test]
+    fn dvc_external_acceptance_loopback_filters_nonmatching_artdmx_before_match() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral Art-Net receiver");
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .expect("set bounded local Art-Net receiver timeout");
+        let sender = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral Art-Net sender");
+        let expected = [0xa5_u8; 512];
+        let wrong_payload = [0x5a_u8; 512];
+        let local_address = receiver.local_addr().expect("receiver address");
+        sender
+            .send_to(&dance_art_dmx_datagram(1, &expected), local_address)
+            .expect("send nonmatching U1 ArtDmx");
+        sender
+            .send_to(&dance_art_dmx_datagram(0, &wrong_payload), local_address)
+            .expect("send nonmatching U0 ArtDmx");
+        sender
+            .send_to(&dance_art_dmx_datagram(0, &expected), local_address)
+            .expect("send matching U0 ArtDmx");
+
+        let wire = receive_expected_dance_art_dmx(&receiver, &expected);
+        assert_eq!(&wire[18..], expected.as_slice());
+    }
+
+    #[test]
+    #[ignore = "requires KDMX_DVC_ACCEPTANCE_PATH=C:\\Users\\kouty\\Downloads\\dance.dvc and a hash-pinned external specimen"]
+    fn dvc_external_dance_acceptance_is_in_memory_and_u0_loopback_only() {
+        let path = std::env::var_os("KDMX_DVC_ACCEPTANCE_PATH")
+            .map(PathBuf::from)
+            .expect("set KDMX_DVC_ACCEPTANCE_PATH to the hash-pinned dance.dvc specimen");
+        assert_eq!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("dvc"),
+            "external acceptance rejects a non-.dvc path before parsing"
+        );
+        let bytes = fs::read(&path).expect("read hash-pinned dance.dvc specimen");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            DANCE_DVC_ACCEPTANCE_SHA256,
+            "KDMX_DVC_ACCEPTANCE_PATH did not name the reviewed dance.dvc bytes"
+        );
+
+        let source_frame = dance_all_white_source_u0_frame(&bytes)
+            .expect("independent dance.dvc all_white U0 frame extraction");
+        assert_eq!(source_frame.len(), 512);
+        assert_eq!(source_frame[499], 0, "dance all_white source channel 500");
+
+        let outcome = import_bytes(&bytes, &path.to_string_lossy())
+            .expect("hash-pinned dance.dvc must import in memory");
+        crate::validate_project_file(&outcome.project).expect(
+            "all imported cue, cue-list, fixture, and child-timeline references must resolve",
+        );
+        assert_eq!(outcome.report.summary.fixtures, 46);
+        assert_eq!(outcome.report.summary.profiles, 12);
+        assert_eq!(outcome.report.summary.fixture_groups, 15);
+        assert_eq!(outcome.report.summary.cues, 56);
+        // dance.dvc has 16 direct BANK elements. The one Super Scene is an
+        // authored child timeline owned by Scene1, not a synthetic 17th cue
+        // list; preserving it separately below avoids inventing a list.
+        assert_eq!(outcome.report.summary.groups, 16);
+        assert_eq!(outcome.project.snapshot.cue_lists.len(), 16);
+
+        let super_scenes = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter(|cue| cue.child_timeline.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            super_scenes.len(),
+            1,
+            "dance.dvc has one authored Super Scene"
+        );
+        let super_scene = super_scenes[0];
+        assert_eq!(super_scene.group_id.as_deref(), Some("TIMELINE"));
+        assert_eq!(super_scene.label, "New Scene");
+        let child = super_scene
+            .child_timeline
+            .as_ref()
+            .expect("the exact dance.dvc Super Scene must retain its child timeline");
+        assert_eq!(child.layers.len(), 18);
+        assert_eq!(child.events.len(), 194);
+        assert_eq!(outcome.report.summary.timeline_scene_blocks, 194);
+        assert_eq!(outcome.report.summary.missing_audio_files, 1);
+        assert_eq!(
+            outcome
+                .report
+                .warnings
+                .iter()
+                .filter(|warning| warning
+                    .starts_with("Timeline audio file is unavailable and must be relinked:"))
+                .count(),
+            1,
+            "the unavailable source audio remains an explicit relink boundary",
+        );
+        assert!(child.events.iter().all(|event| outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .any(|cue| cue.id == event.cue_id)));
+
+        let imported = &outcome.project.snapshot;
+        let u0_route = imported
+            .dmx_outputs
+            .iter()
+            .find(|route| route.universe == 0)
+            .expect("dance import must provision a disabled U0 preview route");
+        assert!(!u0_route.enabled);
+        assert_eq!(
+            imported
+                .dmx_previews
+                .iter()
+                .find(|preview| preview.universe == 0)
+                .expect("dance import must provision a U0 preview")
+                .values,
+            vec![0; 512],
+            "import must never activate or prefill U0 output",
+        );
+        assert_eq!(imported.dmx_preview, vec![0; 512]);
+
+        // Work on a clone only. No project is loaded into the desktop runtime,
+        // no .sdc/.dvc is written, and the sole output destination is this
+        // ephemeral local test receiver.
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral Art-Net receiver");
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(25)))
+            .expect("set bounded local Art-Net receiver timeout");
+        let mut snapshot = outcome.project.snapshot.clone();
+        let local_route = DmxOutputConfig {
+            enabled: true,
+            protocol: protocol::DmxOutputProtocol::ArtNet,
+            target_ip: "127.0.0.1".to_string(),
+            port: receiver.local_addr().expect("receiver address").port(),
+            universe: 0,
+            ..DmxOutputConfig::default()
+        };
+        snapshot.output = local_route.clone();
+        snapshot.dmx_outputs = vec![local_route];
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .load_project_snapshot(snapshot)
+            .expect("load the in-memory imported snapshot");
+        let all_white = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.group_id.as_deref() == Some("color") && cue.label == "all_white")
+            .expect("dance.dvc must retain color/all_white")
+            .id;
+        engine
+            .send(EngineCommand::TriggerCue(all_white))
+            .expect("trigger in-memory color/all_white cue");
+
+        let rendered = (0..100)
+            .find_map(|_| {
+                let snapshot = engine.snapshot();
+                (snapshot.active_cue_id == Some(all_white) && snapshot.dmx_preview == source_frame)
+                    .then_some(snapshot.dmx_preview)
+                    .or_else(|| {
+                        std::thread::sleep(Duration::from_millis(10));
+                        None
+                    })
+            })
+            .expect("all_white must render the independently extracted full U0 frame");
+        assert_eq!(rendered.len(), 512);
+        assert_eq!(rendered[499], 0, "rendered channel 500");
+
+        let wire = receive_expected_dance_art_dmx(&receiver, &rendered);
+        assert_eq!(&wire[..8], b"Art-Net\0");
+        assert_eq!(&wire[8..12], &[0x00, 0x50, 0x00, 0x0e]);
+        assert_eq!(wire[13], 0);
+        assert_eq!(&wire[14..18], &[0, 0, 0x02, 0x00]);
+        assert_eq!(&wire[18..], rendered.as_slice());
     }
 
     fn synthetic_dvc() -> String {

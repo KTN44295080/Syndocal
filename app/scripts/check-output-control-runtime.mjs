@@ -19,6 +19,7 @@ const fence = {
 };
 
 const controllerSource = await read("src/outputControlController.ts");
+const protocolCommandSource = await read("../crates/protocol/src/control_plane_command.rs");
 const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   controllerSource,
   {
@@ -33,11 +34,16 @@ const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.trans
 
 const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
   || action.kind === "add_display" || action.kind === "assign_video_output_composition"
-  || action.kind === "enable_show_artnet_loopback_route" || action.kind === "enable_show_spout_outputs"
+  || action.kind === "enable_show_artnet_loopback_route" || action.kind === "send_dsf2026_artnet_acceptance_probe"
+  || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
+  || action.kind === "enable_show_spout_outputs"
   ? ["lighting", "video"] : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
   enable_show_artnet_loopback_route: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+  send_dsf2026_artnet_acceptance_probe: runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+  acknowledge_dsf2026_artnet_acceptance_probe_in_doubt:
+    runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
   enable_show_spout_outputs: runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
   arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
@@ -53,6 +59,9 @@ const operationFor = (action) => ({
 const commandFor = (action) => ({
   enable_output: "enable_output_control_v2",
   enable_show_artnet_loopback_route: "enable_show_art_net_loopback_route_v1",
+  send_dsf2026_artnet_acceptance_probe: "send_dsf2026_artnet_acceptance_probe_v1",
+  acknowledge_dsf2026_artnet_acceptance_probe_in_doubt:
+    "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   enable_show_spout_outputs: "enable_show_spout_outputs_v1",
   arm: "arm_output_control_v2",
   release_blackout: "release_blackout_output_control_v2",
@@ -68,6 +77,57 @@ const commandFor = (action) => ({
 
 const enableAction = { kind: "enable_output" };
 const showArtNetLoopbackRouteAction = { kind: "enable_show_artnet_loopback_route", lease: lease() };
+const dsf2026ArtNetAcceptanceProbeAction = { kind: "send_dsf2026_artnet_acceptance_probe", lease: lease() };
+const dsf2026ArtNetAcceptanceProbeWireFixture = Object.freeze({
+  kind: "send_dsf2026_artnet_acceptance_probe",
+  lease: lease(),
+});
+const dsf2026ArtNetAcceptanceProbeReconcileAction = {
+  kind: "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt", lease: lease(),
+};
+assert.deepEqual(
+  dsf2026ArtNetAcceptanceProbeAction,
+  dsf2026ArtNetAcceptanceProbeWireFixture,
+  "the TypeScript DSF2026 action must serialize to the exact Rust wire fixture",
+);
+assert.match(
+  protocolCommandSource,
+  /#\[serde\(rename = "send_dsf2026_artnet_acceptance_probe"\)\]\s*SendDsf2026ArtNetAcceptanceProbe/,
+  "the Rust tagged-union discriminant must equal the TypeScript wire fixture",
+);
+assert.doesNotMatch(
+  protocolCommandSource,
+  /"send_dsf2026_art_net_acceptance_probe"/,
+  "the legacy split Art-Net spelling must not remain on the wire",
+);
+const probeStatusCalls = [];
+assert.deepEqual(
+  await runtime.queryDsf2026ArtNetAcceptanceProbeStatus(async (command, args) => {
+    probeStatusCalls.push({ command, args });
+    return {
+      operationId: runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+      status: "consumed",
+    };
+  }),
+  {
+    operationId: runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+    status: "consumed",
+  },
+  "the durable DSF2026 status query must accept only its fixed terminal shape",
+);
+assert.deepEqual(probeStatusCalls, [{
+  command: "query_dsf2026_artnet_acceptance_probe_status_v1",
+  args: undefined,
+}]);
+await assert.rejects(
+  runtime.queryDsf2026ArtNetAcceptanceProbeStatus(async () => ({
+    operationId: runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+    status: "available",
+    unexpected: true,
+  })),
+  /status was invalid/,
+  "unknown durable probe status fields must fail closed",
+);
 const showSpoutOutputsAction = { kind: "enable_show_spout_outputs", lease: lease() };
 const ordinaryActions = [
   { kind: "arm", role: "lighting", lease: lease() },
@@ -98,6 +158,8 @@ const ordinaryActions = [
     lease: lease(),
   },
   showArtNetLoopbackRouteAction,
+  dsf2026ArtNetAcceptanceProbeAction,
+  dsf2026ArtNetAcceptanceProbeReconcileAction,
   showSpoutOutputsAction,
 ];
 const lifecycleActions = [
@@ -147,6 +209,8 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
     arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
     enable_show_artnet_loopback_route: "authorized",
+    send_dsf2026_artnet_acceptance_probe: "authorized",
+    acknowledge_dsf2026_artnet_acceptance_probe_in_doubt: "authorized",
     enable_show_spout_outputs: "authorized",
     acquire_lease: "acquired", enable_output: recoveringEnable ? "recovered" : "acquired",
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
@@ -162,7 +226,9 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
       audit_sequence: 1,
       fence_before: structuredClone(request.expected_fence),
       fence_after: structuredClone(request.expected_fence),
-      outcome: "no_op",
+      outcome: action.kind === "send_dsf2026_artnet_acceptance_probe"
+        || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
+        ? "applied" : "no_op",
       lease_result: {
         authority: action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
           ? lease(1) : lease(terminalGeneration),
@@ -229,6 +295,8 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
       || action.kind === "take_over_standby" || action.kind === "add_display"
       || action.kind === "assign_video_output_composition"
       || action.kind === "enable_show_artnet_loopback_route"
+      || action.kind === "send_dsf2026_artnet_acceptance_probe"
+      || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
       || action.kind === "enable_show_spout_outputs"
       ? await runtime.executeOutputControl(harness.invoke, action)
       : await runtime.executeOutputLeaseLifecycle(harness.invoke, action);
@@ -252,6 +320,54 @@ assert.deepEqual(
   Object.keys(showSpoutOutputsHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the strict show Spout action must not carry names, dimensions, or generic route fields",
+);
+
+const dsf2026ArtNetAcceptanceProbeHarness = createHarness({ action: dsf2026ArtNetAcceptanceProbeAction, queryState: "active" });
+const dsf2026ArtNetAcceptanceProbeReceipt = await runtime.executeOutputControl(
+  dsf2026ArtNetAcceptanceProbeHarness.invoke,
+  dsf2026ArtNetAcceptanceProbeAction,
+);
+assert.equal(
+  dsf2026ArtNetAcceptanceProbeReceipt.operation_id,
+  runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
+);
+assert.equal(
+  dsf2026ArtNetAcceptanceProbeReceipt.outcome,
+  "applied",
+  "a successfully accepted one-shot probe is an Applied physical receipt, not NoOp",
+);
+assert.deepEqual(
+  dsf2026ArtNetAcceptanceProbeReceipt.fence_before,
+  dsf2026ArtNetAcceptanceProbeReceipt.fence_after,
+  "the fixed probe must leave every project/output fence unchanged",
+);
+assert.deepEqual(
+  Object.keys(dsf2026ArtNetAcceptanceProbeHarness.executeArgs[0].request.action).sort(),
+  ["kind", "lease"],
+  "the DSF2026 probe action must not carry a target, universe, payload, or retry field",
+);
+
+const dsf2026ArtNetAcceptanceProbeReconcileHarness = createHarness({
+  action: dsf2026ArtNetAcceptanceProbeReconcileAction,
+  queryState: "active",
+});
+const dsf2026ArtNetAcceptanceProbeReconcileReceipt = await runtime.executeOutputControl(
+  dsf2026ArtNetAcceptanceProbeReconcileHarness.invoke,
+  dsf2026ArtNetAcceptanceProbeReconcileAction,
+);
+assert.equal(
+  dsf2026ArtNetAcceptanceProbeReconcileReceipt.operation_id,
+  runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
+);
+assert.equal(
+  dsf2026ArtNetAcceptanceProbeReconcileReceipt.outcome,
+  "applied",
+  "an explicit no-send reconciliation is a terminal Applied receipt",
+);
+assert.deepEqual(
+  dsf2026ArtNetAcceptanceProbeReconcileReceipt.fence_before,
+  dsf2026ArtNetAcceptanceProbeReconcileReceipt.fence_after,
+  "probe reconciliation must not mutate a project/output fence",
 );
 
 const assignmentAction = ordinaryActions.find((action) => action.kind === "assign_video_output_composition");
@@ -398,6 +514,35 @@ assert.equal(replyLossHarness.executeCalls, 2);
 assert.equal(replyLossHarness.executeArgs[0], replyLossHarness.executeArgs[1]);
 assert.equal(Object.isFrozen(replyLossHarness.executeArgs[0]), true);
 
+const dsf2026ProbeReplyLossHarness = createHarness({
+  action: dsf2026ArtNetAcceptanceProbeAction,
+  queryState: "active",
+  loseFirstReply: true,
+});
+await assert.rejects(
+  runtime.executeOutputControl(
+    dsf2026ProbeReplyLossHarness.invoke,
+    dsf2026ArtNetAcceptanceProbeAction,
+  ),
+  /no IPC retry was attempted/,
+  "a lost fixed-probe IPC reply must not issue a second native command that could send again",
+);
+assert.equal(
+  dsf2026ProbeReplyLossHarness.executeCalls,
+  1,
+  "the fixed probe reply-loss path makes exactly one IPC command invocation",
+);
+assert.equal(
+  dsf2026ProbeReplyLossHarness.executeArgs.length,
+  1,
+  "the fixed probe has no transparent reply-retry request",
+);
+assert.match(
+  controllerSource,
+  /send_dsf2026_artnet_acceptance_probe[\s\S]*no IPC retry was attempted/,
+  "the production fixed-probe reply-loss boundary must remain explicitly non-retrying",
+);
+
 const rejectionHarness = createHarness({ action: ordinaryActions[0], typedRejection: true });
 await assert.rejects(runtime.executeOutputControl(rejectionHarness.invoke, ordinaryActions[0]), /refresh lease state/);
 assert.equal(rejectionHarness.executeCalls, 1);
@@ -453,7 +598,10 @@ const commandBody = (source, commandName) => {
 const requiredCommands = [
   "enable_output_control_v2", "add_display_output_v2", "arm_output_control_v2",
   "assign_video_output_composition_v2",
+  "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+  "query_dsf2026_artnet_acceptance_probe_status_v1",
   "enable_show_art_net_loopback_route_v1",
+  "send_dsf2026_artnet_acceptance_probe_v1",
   "release_blackout_output_control_v2", "take_over_output_control_v2",
   "acquire_output_lease_v2", "force_transfer_output_lease_v2", "query_output_lease_authority_v1",
   "recover_output_lease_v2", "relinquish_output_lease_v2", "renew_output_lease_v2",
@@ -465,6 +613,7 @@ const legacyCommands = [
   "renew_output_lease_v1", "prepare_output_consent_v1", "query_output_consent_status_v1",
 ];
 const canonicalOutputMutationWrappers = [
+  "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   "acquire_output_lease_v2",
   "add_display_output_v2",
   "arm_output_control_v2",
@@ -476,14 +625,17 @@ const canonicalOutputMutationWrappers = [
   "release_blackout_output_control_v2",
   "relinquish_output_lease_v2",
   "renew_output_lease_v2",
+  "send_dsf2026_artnet_acceptance_probe_v1",
   "take_over_output_control_v2",
 ];
 const outputControlWrappers = new Set([
+  "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   "add_display_output_v2",
   "assign_video_output_composition_v2",
   "arm_output_control_v2",
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
+  "send_dsf2026_artnet_acceptance_probe_v1",
   "release_blackout_output_control_v2",
   "take_over_output_control_v2",
 ]);
@@ -503,7 +655,7 @@ for (const command of legacyCommands) {
 }
 const detectedAsyncOutputMutationWrappers = [
   ...mainSource.matchAll(
-    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_art_net_loopback_route_v1))\(/g,
+    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_art_net_loopback_route_v1|send_dsf2026_artnet_acceptance_probe_v1|acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1))\(/g,
   ),
 ].map((match) => match[1])
   .filter((command) => canonicalOutputMutationWrappers.includes(command))
@@ -549,6 +701,13 @@ assert.match(
   outputAuthorityQueryBody,
   /spawn_blocking[\s\S]*issue_output_control_authority_for_window_label/,
   "output authority query must run off the event loop",
+);
+const dsf2026ProbeStatusQueryBody = commandBody(mainSource, "query_dsf2026_artnet_acceptance_probe_status_v1");
+assert.match(dsf2026ProbeStatusQueryBody, /async fn query_dsf2026_artnet_acceptance_probe_status_v1\(/);
+assert.match(
+  dsf2026ProbeStatusQueryBody,
+  /spawn_blocking[\s\S]*query_dsf2026_artnet_acceptance_probe_status_for_window/,
+  "fixed probe status query must run off the event loop through its read-only status helper",
 );
 const standbyStatusBody = commandBody(mainSource, "standby_sync_status");
 assert.match(standbyStatusBody, /async fn standby_sync_status\(/);
@@ -670,6 +829,7 @@ for (const operationId of [
   "syndocal.output.display.add.v2",
   "syndocal.output.video.composition.assign.v2",
   "syndocal.output.show_artnet_loopback_route.enable.v1",
+  "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1",
   "syndocal.output.lease.acquire.v2",
   "syndocal.output.lease.renew.v2",
   "syndocal.output.lease.recover.v2",
@@ -697,7 +857,7 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSpoutOutputs", "ForceTransferLease"]) {
+for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "SendDsf2026ArtNetAcceptanceProbe", "EnableShowSpoutOutputs", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(
@@ -777,9 +937,14 @@ assert.doesNotMatch(setupIoFixtureSource, /EnttecOpenDmx|serial_baud_rate: 250_0
   "the Setup I/O fixture must stage the exact Art-Net show route, not a retired serial route");
 assert.match(runtimeSource, /OutputControlActionV2::EnableOutput[\s\S]*enable_output_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::EnableShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe[\s\S]*send_dsf2026_artnet_acceptance_probe_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt[\s\S]*acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::EnableShowSpoutOutputs[\s\S]*enable_show_spout_outputs_with_output_control_fence/);
 assert.match(controlPlaneSource, /enable_output_control_v2/);
 assert.match(controlPlaneSource, /enable_show_art_net_loopback_route_v1/);
+assert.match(controlPlaneSource, /send_dsf2026_artnet_acceptance_probe_v1/);
+assert.match(controlPlaneSource, /acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1/);
+assert.match(controlPlaneSource, /query_dsf2026_artnet_acceptance_probe_status_v1/);
 assert.match(controlPlaneSource, /enable_show_spout_outputs_v1/);
 assert.match(
   appSource,
@@ -792,6 +957,13 @@ assert.match(dmxOutputPanelSource, /output\.port === 6454/);
 assert.match(dmxOutputPanelSource, /output\.serial_port === ""/);
 assert.match(dmxOutputPanelSource, /output\.universe === 0/);
 assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-artnet-loopback-route"/);
+assert.match(dmxOutputPanelSource, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
+assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "available"/,
+  "a successful or unknown durable one-shot status must keep the probe disabled");
+assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "in_doubt"/,
+  "only a durable InDoubt outcome may enable the no-send reconciliation action");
+assert.match(dmxOutputPanelSource, /permanently consumed[\s\S]*second probe is prohibited/,
+  "the fixed probe UI must disclose that success never re-enables a second send");
 assert.match(
   dmxOutputPanelSource,
   /disabled=\{!exactRoute\(\) \|\| props\.output\.enabled\}/,
@@ -810,6 +982,13 @@ assert.doesNotMatch(
   "the route mutation stays in the DMX workbench, not the compact connection selector",
 );
 assert.match(outputDiagnosticsSource, /enableStagedShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route/);
+assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*send_dsf2026_artnet_acceptance_probe/);
+assert.match(outputDiagnosticsSource, /acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt[\s\S]*acknowledge_dsf2026_artnet_acceptance_probe_in_doubt/);
+assert.match(outputDiagnosticsSource, /refreshDsf2026ArtNetAcceptanceProbeStatus[\s\S]*queryDsf2026ArtNetAcceptanceProbeStatus/);
+assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*status\?\.status !== "available"/,
+  "the controller must refuse a new probe before lease selection when its durable status is not available");
+assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*status: "consumed"/,
+  "a successful native receipt must leave the frontend probe control permanently disabled");
 assert.match(outputDiagnosticsSource, /enableShowSpoutOutputs[\s\S]*enable_show_spout_outputs/);
 assert.doesNotMatch(
   outputDiagnosticsSource,
@@ -1031,4 +1210,4 @@ assert.equal(enableMutationHarness.rawPending, false);
 assert.equal(enableMutationHarness.authority, "unavailable",
   "a late terminal response must not directly restore enabled UI state");
 
-console.log("output control runtime contract: PASS (v4 output commands, fixed same-PC Art-Net loopback and Spout pair, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v6 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/Spout pair, strict receipts, fail-closed query)");

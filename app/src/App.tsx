@@ -1169,6 +1169,7 @@ const projectMutationCommands = new Set([
   "add_video_composition",
   "remove_video_composition",
   "set_video_composition_layers",
+  "set_video_composition_timeline_layers",
   "add_video_output",
   "remove_video_output",
   "set_video_output_config",
@@ -5314,6 +5315,17 @@ export default function App() {
     __syndocalReadControlStageEditFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadTimelineProductionCaptureSnapshot?: () => EngineSnapshot;
     __syndocalSelectMappingViewportStageObject?: () => void;
+    __syndocalReplayMappingViewportSnapshot?: (
+      kind: "delta" | "full",
+      setup?: "fresh-initial-null" | "stale-selected-id",
+    ) => {
+      selectedFixtureId: number | null;
+      selectedMappingFixtureIds: number[];
+      selectedFixtureLabelDraft: string;
+      selectedFixtureUniverseDraft: number;
+      selectedFixtureAddressDraft: number;
+      selectedFixtureGroupText: string;
+    };
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
     __syndocalSetSceneMatrixBankAuthorityFault?: (enabled: boolean) => void;
@@ -5460,6 +5472,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadTimelineProductionCaptureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject;
+    delete sceneBlockFixtureWindow.__syndocalReplayMappingViewportSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalReadSceneMatrixFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetSceneMatrixBankAuthorityFault;
@@ -5919,10 +5932,13 @@ export default function App() {
     setDmxTestWidth,
     dmxTestValue,
     setDmxTestValue,
+    dsf2026ArtNetAcceptanceProbeStatus,
     refreshEngineTelemetryReport,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
     enableStagedShowArtNetLoopbackRoute,
+    sendDsf2026ArtNetAcceptanceProbe,
+    acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt,
     enableShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
@@ -12160,9 +12176,10 @@ export default function App() {
     const selectedExists = selectedId !== null && next.fixtures.some((fixture) => fixture.id === selectedId);
     const liveFixtureIds = new Set(next.fixtures.map((fixture) => fixture.id));
     const nextMappingSelection = selectedMappingFixtureIds().filter((id) => liveFixtureIds.has(id));
-    if (!selectedExists && next.fixtures.length > 0) {
-      selectFixture(next.fixtures[0]);
-    } else if (!selectedExists) {
+    // A null selection is an explicit, valid operator action: clicking an
+    // empty part of the Stage clears the pick. Snapshot convergence must not
+    // reinterpret it as an invalid selection and promote the first fixture.
+    if (!selectedExists) {
       setSelectedFixtureId(null);
       setSelectedMappingFixtureIds([]);
       setSelectedFixtureLabelDraft("");
@@ -12261,6 +12278,46 @@ export default function App() {
     }
     return next;
   };
+  if (viewportFixture === "mapping-viewport-conformance") {
+    sceneBlockFixtureWindow.__syndocalReplayMappingViewportSnapshot = (kind, setup) => {
+      const next = structuredClone(snapshot());
+      // The browser fixture bypasses the native poller. Recreate both of its
+      // snapshot-application paths deterministically for the Stage selection
+      // regression while keeping the seam confined to the browser fixture.
+      if (setup === "fresh-initial-null") {
+        // This is the state a fresh UI load has before its first snapshot.
+        setSelectedFixtureId(null);
+        setSelectedMappingFixtureIds([]);
+        setSelectedFixtureLabelDraft("");
+        setSelectedFixtureUniverseDraft(0);
+        setSelectedFixtureAddressDraft(1);
+        setSelectedFixtureGroupText("");
+      } else if (setup === "stale-selected-id") {
+        const staleFixtureId = Math.max(0, ...next.fixtures.map((fixture) => fixture.id)) + 1;
+        setSelectedFixtureId(staleFixtureId);
+        setSelectedMappingFixtureIds([staleFixtureId, next.fixtures[0]?.id ?? staleFixtureId]);
+        setSelectedFixtureLabelDraft("stale fixture draft");
+        setSelectedFixtureUniverseDraft(99);
+        setSelectedFixtureAddressDraft(321);
+        setSelectedFixtureGroupText("stale group");
+      }
+      latestEngineSnapshot = next;
+      applyEngineSnapshotSyncResponse(
+        kind === "full"
+          ? { revision: 41, full: next }
+          : { revision: 42, delta: { active_cue_id: next.active_cue_id } },
+        true,
+      );
+      return {
+        selectedFixtureId: selectedFixtureId(),
+        selectedMappingFixtureIds: selectedMappingFixtureIds(),
+        selectedFixtureLabelDraft: selectedFixtureLabelDraft(),
+        selectedFixtureUniverseDraft: selectedFixtureUniverseDraft(),
+        selectedFixtureAddressDraft: selectedFixtureAddressDraft(),
+        selectedFixtureGroupText: selectedFixtureGroupText(),
+      };
+    };
+  }
   if (viewportFixture === "mapping-live-snapshot") {
     applyEngineSnapshotSyncResponse({
       revision: 28,
@@ -22581,6 +22638,18 @@ export default function App() {
     }
   };
 
+  const setVideoCompositionTimelineLayers = async (
+    compositionId: number,
+    timelineLayerIds: import("./types").TimelineVideoLayerRef[],
+  ) => {
+    try {
+      await invoke("set_video_composition_timeline_layers", { compositionId, timelineLayerIds });
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const moveVideoCompositionLayer = (
     compositionId: number,
     layerIds: number[],
@@ -27162,6 +27231,8 @@ export default function App() {
           outputs={snapshot().video.outputs}
           compositions={snapshot().video.compositions}
           layers={snapshot().video.layers}
+          timelineId={snapshot().timeline.id ?? 0}
+          timelineLayers={snapshot().timeline.layers ?? []}
           mappingPresets={snapshot().video.mapping_presets}
           compositionLabel={videoCompositionLabel()}
           compositionLayerIds={videoCompositionLayerIds()}
@@ -27216,6 +27287,7 @@ export default function App() {
           onAddComposition={addVideoComposition}
           onRemoveComposition={removeVideoComposition}
           onSetCompositionLayers={setVideoCompositionLayers}
+          onSetCompositionTimelineLayers={setVideoCompositionTimelineLayers}
           onMoveCompositionLayer={moveVideoCompositionLayer}
           onOutputLabel={setVideoOutputLabel}
           onOutputKind={setVideoOutputKind}
@@ -28491,7 +28563,10 @@ export default function App() {
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
+            dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
             onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
+            onSendDsf2026ArtNetAcceptanceProbe={sendDsf2026ArtNetAcceptanceProbe}
+            onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
           />
           <div class="ioDisclosureStack">
           <IoDisclosure

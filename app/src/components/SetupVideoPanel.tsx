@@ -1,6 +1,7 @@
 import type { ComponentProps } from "solid-js";
 import type {
   CompositionSummary,
+  TimelineLayerSummary,
   VideoLayerSummary,
   VideoOutputKind,
   VideoOutputMapping,
@@ -22,6 +23,8 @@ type SetupVideoPanelProps = {
   outputs: VideoOutputSummary[];
   compositions: CompositionSummary[];
   layers: VideoLayerSummary[];
+  timelineId: number;
+  timelineLayers: TimelineLayerSummary[];
   mappingPresets: VideoOutputMappingPresetSummary[];
   compositionLabel: string;
   compositionLayerIds: number[];
@@ -45,6 +48,10 @@ type SetupVideoPanelProps = {
   onAddComposition: () => MaybePromise;
   onRemoveComposition: (compositionId: number) => MaybePromise;
   onSetCompositionLayers: (compositionId: number, layerIds: number[]) => MaybePromise;
+  onSetCompositionTimelineLayers: (
+    compositionId: number,
+    timelineLayerIds: import("../types").TimelineVideoLayerRef[],
+  ) => MaybePromise;
   onMoveCompositionLayer: (
     compositionId: number,
     layerIds: number[],
@@ -103,6 +110,8 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                 <VideoCompositionSetupPanel
                   compositions={props.compositions}
                   layers={props.layers}
+                  timelineId={props.timelineId}
+                  timelineLayers={props.timelineLayers}
                   draftLabel={props.compositionLabel}
                   draftLayerIds={props.compositionLayerIds}
                   onDraftLabel={props.onCompositionLabel}
@@ -110,6 +119,7 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   onAddComposition={props.onAddComposition}
                   onRemoveComposition={props.onRemoveComposition}
                   onSetCompositionLayers={props.onSetCompositionLayers}
+                  onSetCompositionTimelineLayers={props.onSetCompositionTimelineLayers}
                   onMoveCompositionLayer={props.onMoveCompositionLayer}
                 />
                 <VideoOutputCreatePanel

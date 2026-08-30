@@ -17,6 +17,12 @@ export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_artnet_loopback_route.enable.v1";
+export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID =
+  "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1";
+export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID =
+  "syndocal.output.dsf2026_artnet_acceptance_probe.reconcile.v1";
+export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID =
+  "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1";
 export const OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID =
   "syndocal.output.show_spout_outputs.enable.v1";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
@@ -70,6 +76,13 @@ export interface OutputLeaseAuthorityQuery {
   statuses: OutputLeaseAuthorityQueryStatus[];
 }
 
+export type Dsf2026ArtNetAcceptanceProbeStatus = "available" | "in_doubt" | "consumed";
+
+export interface Dsf2026ArtNetAcceptanceProbeStatusQuery {
+  operationId: typeof OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID;
+  status: Dsf2026ArtNetAcceptanceProbeStatus;
+}
+
 export type DisplayAddLeaseAuthorityStatus =
   | "held_active"
   | "expired_recoverable"
@@ -120,6 +133,16 @@ export type OutputShowArtNetLoopbackRouteEnableAction = {
   kind: "enable_show_artnet_loopback_route";
   lease: OutputLeaseAuthority;
 };
+/** A fixed, one-shot local ArtDmx proof frame; it accepts no mutable payload. */
+export type OutputDsf2026ArtNetAcceptanceProbeAction = {
+  kind: "send_dsf2026_artnet_acceptance_probe";
+  lease: OutputLeaseAuthority;
+};
+/** Explicit no-send acknowledgement after independent physical reconciliation. */
+export type OutputDsf2026ArtNetAcceptanceProbeReconcileAction = {
+  kind: "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt";
+  lease: OutputLeaseAuthority;
+};
 /** The fixed two-sender same-PC show output activation. */
 export type OutputShowSpoutOutputsEnableAction = {
   kind: "enable_show_spout_outputs";
@@ -129,6 +152,8 @@ export type OutputShowSpoutOutputsEnableAction = {
 export type OutputControlAction =
   | OutputEnableAction
   | OutputShowArtNetLoopbackRouteEnableAction
+  | OutputDsf2026ArtNetAcceptanceProbeAction
+  | OutputDsf2026ArtNetAcceptanceProbeReconcileAction
   | OutputShowSpoutOutputsEnableAction
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
@@ -374,6 +399,8 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
     case "enable_output": return OUTPUT_ENABLE_OPERATION_ID;
     case "enable_show_artnet_loopback_route": return OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID;
+    case "send_dsf2026_artnet_acceptance_probe": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID;
+    case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID;
     case "enable_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID;
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
@@ -392,6 +419,8 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
 type OutputControlInvokeCommand =
   | "enable_output_control_v2"
   | "enable_show_art_net_loopback_route_v1"
+  | "send_dsf2026_artnet_acceptance_probe_v1"
+  | "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1"
   | "enable_show_spout_outputs_v1"
   | "arm_output_control_v2"
   | "release_blackout_output_control_v2"
@@ -409,6 +438,8 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
   switch (action.kind) {
     case "enable_output": return "enable_output_control_v2";
     case "enable_show_artnet_loopback_route": return "enable_show_art_net_loopback_route_v1";
+    case "send_dsf2026_artnet_acceptance_probe": return "send_dsf2026_artnet_acceptance_probe_v1";
+    case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1";
     case "enable_show_spout_outputs": return "enable_show_spout_outputs_v1";
     case "arm": return "arm_output_control_v2";
     case "release_blackout": return "release_blackout_output_control_v2";
@@ -567,6 +598,30 @@ export async function queryOutputLeaseAuthority(
   return assertOutputLeaseAuthorityQuery(await invoke<unknown>("query_output_lease_authority_v1"));
 }
 
+const assertDsf2026ArtNetAcceptanceProbeStatusQuery = (
+  value: unknown,
+): Dsf2026ArtNetAcceptanceProbeStatusQuery => {
+  if (!isObject(value)
+    || !hasExactKeys(value, ["operationId", "status"])
+    || value.operationId !== OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID
+    || value.status !== "available" && value.status !== "in_doubt" && value.status !== "consumed") {
+    throw new Error("DSF2026 Art-Net acceptance probe status was invalid; no probe was sent.");
+  }
+  return {
+    operationId: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
+    status: value.status,
+  };
+};
+
+/** Read-only durable status for the single fixed physical proof budget. */
+export async function queryDsf2026ArtNetAcceptanceProbeStatus(
+  invoke: FrontendTauriInvoke,
+): Promise<Dsf2026ArtNetAcceptanceProbeStatusQuery> {
+  return assertDsf2026ArtNetAcceptanceProbeStatusQuery(
+    await invoke<unknown>("query_dsf2026_artnet_acceptance_probe_status_v1"),
+  );
+}
+
 export async function queryDisplayAddLeaseAuthority(
   invoke: FrontendTauriInvoke,
 ): Promise<DisplayAddLeaseAuthorityQuery> {
@@ -639,6 +694,20 @@ const assertAction = (action: OutputControlOperationAction): void => {
       throw new Error("Show Art-Net loopback route action was invalid; nothing was applied.");
     }
     assertLeaseAuthority(action.lease, "Show serial DMX route lease was invalid; nothing was applied.");
+    return;
+  }
+  if (action.kind === "send_dsf2026_artnet_acceptance_probe") {
+    if (!hasExactKeys(record, ["kind", "lease"])) {
+      throw new Error("DSF2026 Art-Net acceptance probe action was invalid; nothing was sent.");
+    }
+    assertLeaseAuthority(action.lease, "DSF2026 Art-Net acceptance probe lease was invalid; nothing was sent.");
+    return;
+  }
+  if (action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt") {
+    if (!hasExactKeys(record, ["kind", "lease"])) {
+      throw new Error("DSF2026 Art-Net acceptance probe reconciliation action was invalid; nothing was applied.");
+    }
+    assertLeaseAuthority(action.lease, "DSF2026 Art-Net acceptance probe reconciliation lease was invalid; nothing was applied.");
     return;
   }
   if (action.kind === "enable_show_spout_outputs") {
@@ -759,6 +828,8 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
           || beforePhase !== "held_orphaned" || !sameResources(beforeResources, ["lighting", "video"]))) throw new Error(errorMessage);
       break;
     case "enable_show_artnet_loopback_route":
+    case "send_dsf2026_artnet_acceptance_probe":
+    case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt":
     case "enable_show_spout_outputs":
       if (outcome !== "authorized" || phase !== "held_active"
         || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
@@ -853,6 +924,8 @@ const assertResponse = (
   const fenceUnchanged = fencesEqual(fenceBefore, fenceAfter);
   const fenceUnchangedPhysicalAction = action.kind === "set_display_window_open"
     || action.kind === "enable_show_artnet_loopback_route"
+    || action.kind === "send_dsf2026_artnet_acceptance_probe"
+    || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
   if (!fencesEqual(fenceBefore, expectedFence)
     || result.outcome === "no_op" && !fenceUnchanged
@@ -883,6 +956,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
     || action.kind === "enable_show_artnet_loopback_route" && selected[0].status !== "held_active"
+    || action.kind === "send_dsf2026_artnet_acceptance_probe" && selected[0].status !== "held_active"
+    || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt" && selected[0].status !== "held_active"
     || action.kind === "enable_show_spout_outputs" && selected[0].status !== "held_active"
     || action.kind === "take_over_standby" && selected[0].status !== "held_active"
     || action.kind === "add_display"
@@ -901,6 +976,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
     || action.kind === "enable_show_artnet_loopback_route"
+    || action.kind === "send_dsf2026_artnet_acceptance_probe"
+    || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs"
     || action.kind === "assign_video_output_composition") {
     const expectedResources = ["lighting", "video"] as const;
@@ -937,6 +1014,12 @@ const executeOutputControlOperation = async (
   try {
     terminal = await invoke<unknown>(command, executeArgs);
   } catch (firstError) {
+    if (action.kind === "send_dsf2026_artnet_acceptance_probe"
+      || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt") {
+      throw new Error(
+        `DSF2026 Art-Net probe execution reply was lost (${String(firstError)}); no IPC retry was attempted. The fixed physical outcome is unknown; query its durable status before any further action.`,
+      );
+    }
     try {
       terminal = await invoke<unknown>(command, executeArgs);
     } catch {

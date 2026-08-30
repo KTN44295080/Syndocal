@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.39",
+  "version": "1.2.0-alpha.40",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -50,7 +50,7 @@
     "check:fx-visual-viewport": "node scripts/check-viewport-containment.mjs --fx-visual-only",
     "check:identity-color": "node scripts/check-identity-color.mjs",
     "check:output-ownership": "node scripts/check-output-ownership.mjs",
-    "check:output-control-runtime": "node scripts/check-output-control-runtime.mjs",
+    "check:output-control-runtime": "node scripts/check-output-control-runtime.mjs && node scripts/check-standby-sync-output-lease-ui.mjs",
     "check:video-output-routing-runtime": "node scripts/check-video-output-routing-runtime.mjs",
     "check:video-output-window-runtime": "node scripts/check-video-output-window-runtime.mjs",
     "check:video-output-window-observation": "node scripts/check-video-output-window-observation.mjs",
