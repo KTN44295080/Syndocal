@@ -78,6 +78,52 @@ cannot obtain its app-owned output-ID/HWND observation. The 90-check harness
 self-test still passes, but that proves only the harness's fail-closed logic;
 it is not native three-display or content acceptance.
 
+## Alpha.40 admission failure and alpha.41 repair checkpoint
+
+The exact alpha.40 artifact was built and launched from `d39383d` before live
+authoring. It is `61,690,368` bytes, has SHA-256
+`389664BBF9FA01315CC2D504E0375F137587E481650A951E8C75541B4CD1D86F`, and
+opened exactly one responsive maximized Syndocal window. The first native
+screen then reported that `register_project_transaction_owner` was not in the
+reviewed admission inventory. No project mutation or Display Add was attempted
+after that failure.
+
+The old path froze 502 Tauri routes before
+`set_video_composition_timeline_layers` was registered. The count/hash mismatch
+invalidated the complete admission table, so even an already classified route
+such as `register_project_transaction_owner` failed closed. The alpha.41 source
+path freezes the exact 503-route inventory at SHA-256
+`0ed47baf1361c273562b24ccd704ac52f421603f0a1f011fb76ed0e2a2bbe996`, classifies
+the new route beside `set_video_composition_layers` as
+`RendererTicketedProjectMutation`, and asserts that exact route/class pair.
+The adjacent generated Engine inventory tripwire is also corrected from 271
+to 273 with explicit presence assertions for
+`SendDsf2026ArtNetAcceptanceProbe` and
+`SetVideoCompositionTimelineLayers`; this is test-only and changes no runtime
+behavior.
+
+Because the previous Add surface collapsed all unknown native failures to a
+generic sentence, alpha.41 retains that short localized operator summary but
+adds a closed, local-only diagnostic disclosure. It records the captured
+monitor identity, physical dimensions, and a one-line 2048-character error
+after control/Bidi removal and secret redaction. Authorization/Bearer/Basic,
+token/secret/credential/password, and all tested `apikey`, `api_key`,
+`api-key`, `API Key`, and URL-query spellings are redacted before the cap. A
+flight token and epoch prevent Display -> NDI -> Display ABA or stale monitor
+discovery/selection results from restoring an old failure. The operator can
+clear the disclosure explicitly, and its long values wrap inside the pane.
+
+Supervisor evidence is Syndocal control-plane `28/28`, Engine inventory `1/1`,
+backend operator contract 503 commands / 131 transactional mutations, Display
+target contract PASS, frontend routing 443 / 131 / 31, frontend invoke inventory
+443, localization `3644/3644`, TypeScript/Vite PASS, release gate PASS,
+`cargo fmt --all -- --check`, and `git diff --check`; exact MSVC
+`14.44.35207` was pinned and first for the Cargo gates, with first-party
+warnings `0`. Independent admission, Engine-inventory, and final raw-diagnostic
+reviews are `GO` with P0/P1 `0`. This is source acceptance only: alpha.41 still
+requires a clean pushed native build, CDP-enabled QA launch, alpha12 authoring,
+two canonical Display Adds, and the 2 s / 5 s / 9 s physical proof.
+
 ## Current P0 composition boundary (frozen source implementation)
 
 The split route is now represented by the additive

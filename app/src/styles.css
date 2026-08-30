@@ -38761,6 +38761,41 @@ button.timelineExternalSourceCard:active,
   min-height: 36px;
 }
 
+.videoOutputAddDiagnosticBody,
+.videoOutputAddDiagnosticBody dl,
+.videoOutputAddDiagnosticBody dl > div,
+.videoOutputAddDiagnosticValue,
+.videoOutputAddDiagnosticCode {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.videoOutputAddDiagnosticBody dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.videoOutputAddDiagnosticBody dl > div {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.videoOutputAddDiagnosticBody dd {
+  margin: 0;
+}
+
+.videoOutputAddDiagnosticValue,
+.videoOutputAddDiagnosticCode {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.videoOutputAddDiagnosticCode {
+  display: block;
+}
+
 /* B4 shared Clip Slot bank.  The same eight-column, 16:9 contain grid is
  * mounted in Edit and Control; the pane scrolls internally rather than asking
  * the application viewport to grow. */

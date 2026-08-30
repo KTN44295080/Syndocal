@@ -139,20 +139,67 @@ assert.doesNotMatch(panelSource, /disabled=\{[^}]*isEditorMonitor/);
 // explicit UI note beside it; no frontend confirmation route is introduced.
 assert.match(panelSource, /const \[addPending, setAddPending\] = createSignal\(false\)/);
 assert.match(panelSource, /const addSelectedDisplayOutput = async \(\) =>/);
-assert.match(panelSource, /if \(addPending\(\)\) return/);
+assert.match(panelSource, /if \(addPending\(\) \|\| props\.kind !== "Display"\) return/);
+assert.match(panelSource, /let addEpoch = 0/);
+assert.match(panelSource, /let activeAddFlight: symbol \| null = null/);
+assert.match(panelSource, /const invalidateDisplayAdd = \(clearStatus = false\) =>/);
+assert.match(panelSource, /addEpoch \+= 1;[\s\S]*setAddDiagnostic\(null\)/);
 assert.match(panelSource, /onAddDisplayOutput: \(monitor: VideoDisplayMonitorDescriptor\) => Promise<void>/);
 assert.match(setupSource, /onAddDisplayOutput: \(monitor: VideoDisplayMonitorDescriptor\) => Promise<void>/);
 assert.match(panelSource, /await props\.onAddDisplayOutput\(monitor\)/);
-assert.match(panelSource, /finally \{\s*setAddPending\(false\);\s*\}/s);
+assert.match(panelSource, /const flight = Symbol\("display-add"\)/);
+assert.match(panelSource, /const operationEpoch = \+\+addEpoch/);
+assert.match(panelSource, /activeAddFlight = flight/);
+assert.match(panelSource, /finally \{[\s\S]*activeAddFlight === flight[\s\S]*setAddPending\(false\);[\s\S]*\}/s);
 assert.match(panelSource, /disabled=\{monitorDiscovery\(\) !== "ready" \|\| !selectedMonitor\(\) \|\| addPending\(\)\}/);
 assert.match(panelSource, /onClick=\{\(\) => \{ void addSelectedDisplayOutput\(\); \}\}/);
 assert.match(panelSource, /disabled=\{monitorDiscovery\(\) !== "ready" \|\| monitors\(\)\.length === 0 \|\| addPending\(\)\}/);
 assert.match(panelSource, /const \[addStatus, setAddStatus\] = createSignal<VideoOutputAddStatus \| null>\(null\)/);
+assert.match(panelSource, /const \[addDiagnostic, setAddDiagnostic\] = createSignal<VideoOutputAddDiagnostic \| null>\(null\)/);
 assert.match(panelSource, /setAddStatus\(\{ kind: "pending", message: "Adding display output…" \}\)/);
 assert.match(panelSource, /setAddStatus\(\{ kind: "success", message: "Display output added\." \}\)/);
+assert.match(panelSource, /displayAddDiagnosticText\(error\)/);
+assert.match(panelSource, /monitorIdentity: monitor\.identity/);
+assert.match(panelSource, /width: target\.width/);
+assert.match(panelSource, /height: target\.height/);
+const addEpochGuards = panelSource.match(/if \(operationEpoch !== addEpoch \|\| props\.kind !== "Display"\) return/g) ?? [];
+assert.equal(addEpochGuards.length, 2, "await and catch must both require the captured Add epoch and Display kind");
 assert.match(panelSource, /displayAddErrorMessage\(error, loadUiLocale\(\)\)/);
 assert.match(localizationSource, /export function displayAddErrorMessage\(/);
+assert.match(localizationSource, /export const displayAddDiagnosticMaxLength = 2048/);
+assert.match(localizationSource, /export function displayAddDiagnosticText\(error: unknown\): string \| null/);
+assert.match(localizationSource, /\.replace\(\/\\s\+\/gu, " "\)/);
 assert.match(panelSource, /data-video-output-add-status=\{status\(\)\.kind\}/);
+assert.match(panelSource, /data-video-output-add-diagnostic/);
+assert.match(panelSource, /<summary>Display add diagnostics<\/summary>/);
+assert.match(panelSource, /<dt>Raw error<\/dt>/);
+assert.match(panelSource, /<dt>Monitor identity<\/dt>/);
+assert.match(panelSource, /<dt>Display dimensions<\/dt>/);
+assert.match(panelSource, /videoOutputAddDiagnosticValue/);
+assert.match(panelSource, /videoOutputAddDiagnosticCode/);
+assert.match(panelSource, /data-video-output-add-diagnostic-clear/);
+assert.match(panelSource, /onClick=\{\(\) => setAddDiagnostic\(null\)\}/);
+assert.doesNotMatch(panelSource, /data-video-output-add-diagnostic[^>]*open/);
+const diagnosticSurfaceStart = panelSource.indexOf("data-video-output-add-diagnostic");
+const diagnosticSurfaceEnd = panelSource.indexOf("</details>", diagnosticSurfaceStart);
+assert.doesNotMatch(panelSource.slice(diagnosticSurfaceStart, diagnosticSurfaceEnd), /console\.|fetch\(|invokeCommand|XMLHttpRequest/iu);
+const diagnosticHelperStart = localizationSource.indexOf("const safeDisplayAddErrorText");
+const diagnosticHelperEnd = localizationSource.indexOf("/** Convert AddDisplay failures", diagnosticHelperStart);
+assert.ok(diagnosticHelperStart >= 0 && diagnosticHelperEnd > diagnosticHelperStart, "Add diagnostic helper boundary must remain discoverable");
+assert.match(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /safeDisplayAddErrorText/);
+assert.match(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /displayAddAuthorizationPattern/);
+assert.match(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /displayAddSensitiveValuePattern/);
+assert.match(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /displayAddBearerBasicPattern/);
+assert.match(localizationSource, /api\(\?:\[_-\]\|\\s\|%20\)\*key/);
+assert.match(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /catch \{\s*return null;\s*\}/s);
+assert.doesNotMatch(localizationSource.slice(diagnosticHelperStart, diagnosticHelperEnd), /console\.|fetch\(|XMLHttpRequest/iu);
+assert.match(stylesSource, /\.videoOutputAddDiagnosticCode/);
+assert.match(stylesSource, /\.videoOutputAddDiagnosticValue/);
+assert.match(stylesSource, /videoOutputAddDiagnostic(?:Code|Value)[\s\S]*overflow-wrap: anywhere/);
+assert.match(stylesSource, /videoOutputAddDiagnostic(?:Code|Value)[\s\S]*word-break: break-word/);
+assert.match(stylesSource, /videoOutputAddDiagnostic(?:Body|Code|Value)[\s\S]*max-width: 100%/);
+assert.match(stylesSource, /videoOutputAddDiagnostic(?:Body|Code|Value)[\s\S]*min-width: 0/);
+assert.match(localizationSource, /"Clear diagnostics":/);
 assert.match(panelSource, /data-video-output-native-dialog-note/);
 assert.match(panelSource, /The native display confirmation dialog will appear when this output is added\./);
 
@@ -172,6 +219,86 @@ const addOnce = async () => {
 };
 await Promise.all([addOnce(), addOnce()]);
 assert.equal(pendingInvokes.length, 1, "double-click must invoke add exactly once");
+
+// A controlled Promise proves that a stale Add cannot commit after an ABA
+// kind transition. The old flight stays the singleflight owner until it
+// settles, and only its own finally may release the pending guard.
+const createDisplayAddEpochHarness = () => {
+  let epoch = 0;
+  let pending = false;
+  let activeFlight = null;
+  let kind = "Display";
+  let status = null;
+  let diagnostic = null;
+  let invokes = 0;
+  const invalidate = () => {
+    epoch += 1;
+    diagnostic = null;
+    if (!pending) status = null;
+  };
+  const setKind = (nextKind) => {
+    kind = nextKind;
+    epoch += 1;
+    if (kind !== "Display") {
+      diagnostic = null;
+      status = null;
+    }
+  };
+  const add = async (result) => {
+    if (pending || kind !== "Display") return;
+    const flight = Symbol("display-add");
+    const capturedEpoch = ++epoch;
+    activeFlight = flight;
+    pending = true;
+    invokes += 1;
+    diagnostic = null;
+    status = "pending";
+    try {
+      await result;
+      if (capturedEpoch !== epoch || kind !== "Display") return;
+      diagnostic = null;
+      status = "success";
+    } catch {
+      if (capturedEpoch !== epoch || kind !== "Display") return;
+      diagnostic = "error";
+      status = "error";
+    } finally {
+      if (activeFlight === flight) {
+        activeFlight = null;
+        pending = false;
+        if (capturedEpoch !== epoch || kind !== "Display") status = null;
+      }
+    }
+  };
+  return {
+    add,
+    invalidate,
+    setKind,
+    get pending() { return pending; },
+    get status() { return status; },
+    get diagnostic() { return diagnostic; },
+    get invokes() { return invokes; },
+  };
+};
+let releaseAba;
+const abaResult = new Promise((resolve) => { releaseAba = resolve; });
+const abaHarness = createDisplayAddEpochHarness();
+const oldAbaFlight = abaHarness.add(abaResult);
+assert.equal(abaHarness.pending, true, "Add must remain pending while its controlled Promise is unresolved");
+abaHarness.invalidate();
+abaHarness.setKind("NdiSender");
+abaHarness.setKind("Display");
+const blockedAbaFlight = abaHarness.add(Promise.resolve());
+await blockedAbaFlight;
+assert.equal(abaHarness.invokes, 1, "ABA must not start a second Add while the old flight is pending");
+releaseAba();
+await oldAbaFlight;
+assert.equal(abaHarness.pending, false, "the settled old flight must release its own pending guard");
+assert.equal(abaHarness.status, null, "stale ABA success must not commit status");
+assert.equal(abaHarness.diagnostic, null, "stale ABA success must not commit diagnostics");
+await abaHarness.add(Promise.resolve());
+assert.equal(abaHarness.invokes, 2, "a fresh Display Add may start after the old flight settles");
+assert.equal(abaHarness.status, "success", "fresh Add must commit after ABA settles");
 
 // Requirement 4: stale DTOs fail closed rather than silently falling back to
 // a primary/index-derived target.
@@ -287,6 +414,88 @@ assert.equal(
   "unknown Add errors must use deterministic Japanese fallback",
 );
 assert.doesNotMatch(localizedUnknownError, /opaque backend detail/);
+assert.equal(localizationRuntime.translateUiText("Clear diagnostics", "ja"), "診断情報をクリア");
+
+const diagnosticMaxLength = localizationRuntime.displayAddDiagnosticMaxLength;
+assert.equal(diagnosticMaxLength, 2048, "Add diagnostics must keep the explicit 2048-character cap");
+assert.equal(
+  localizationRuntime.displayAddDiagnosticText(new Error("Display Add authority query is busy")),
+  "Display Add authority query is busy",
+  "busy Add raw error must remain available in the local diagnostic",
+);
+assert.equal(
+  localizationRuntime.displayAddDiagnosticText(new Error("opaque backend detail: 7f3d")),
+  "opaque backend detail: 7f3d",
+  "unknown Add raw error must remain available in the local diagnostic",
+);
+assert.equal(
+  localizationRuntime.displayAddDiagnosticText(new Error("  line one\n\tline two  ")),
+  "line one line two",
+  "Add raw error whitespace must normalize to one bounded line",
+);
+assert.equal(
+  localizationRuntime.displayAddDiagnosticText(new Error(" \n\t ")),
+  null,
+  "blank Add raw errors must not create an empty diagnostic",
+);
+const oversizedDiagnostic = "x".repeat(diagnosticMaxLength + 17);
+const boundedDiagnostic = localizationRuntime.displayAddDiagnosticText(new Error(oversizedDiagnostic));
+assert.equal(boundedDiagnostic.length, diagnosticMaxLength, "oversized Add raw errors must be capped");
+assert.equal(boundedDiagnostic, oversizedDiagnostic.slice(0, diagnosticMaxLength), "diagnostic cap must retain the leading raw text exactly");
+assert.equal(localizationRuntime.displayAddDiagnosticText(undefined), null, "missing Add errors must not create a diagnostic");
+const secretDiagnostics = [
+  ["Authorization: Bearer bearer-secret-123", ["bearer-secret-123"]],
+  ["authorization=Basic basic-secret-456", ["basic-secret-456"]],
+  ["token=token-secret-789&secret:secret-value", ["token-secret-789", "secret-value"]],
+  ["credential: credential-value password='password-value' api_key:api-key-value", ["credential-value", "password-value", "api-key-value"]],
+  ["https://example.test/path?token=query-token-value&password=query-password-value&ok=1", ["query-token-value", "query-password-value"]],
+  ["API Key: spaced-api-key-value", ["spaced-api-key-value"]],
+  ["X-API Key: x-api-key-value", ["x-api-key-value"]],
+  ["api key=plain-spaced-api-key-value", ["plain-spaced-api-key-value"]],
+  ["https://example.test/path?api%20key=query-spaced-api-key-value&ok=1", ["query-spaced-api-key-value"]],
+  ["apikey=bare-api-key-value", ["bare-api-key-value"]],
+  ["https://example.test/path?apikey=query-bare-api-key-value&ok=1", ["query-bare-api-key-value"]],
+  ["Bearer standalone-secret-321", ["standalone-secret-321"]],
+  ["Basic: colon-secret-654", ["colon-secret-654"]],
+  ['"token":"json-secret-987"', ["json-secret-987"]],
+  ["t\u200Boken=hidden-secret-246", ["hidden-secret-246"]],
+];
+for (const [rawSecretMessage, rawSecrets] of secretDiagnostics) {
+  const sanitized = localizationRuntime.displayAddDiagnosticText(new Error(rawSecretMessage));
+  assert.ok(sanitized?.includes("[REDACTED]"), "secret-bearing Add diagnostic must expose a redaction marker: " + rawSecretMessage);
+  for (const rawSecret of rawSecrets) {
+    assert(!sanitized?.includes(rawSecret), "secret-bearing Add diagnostic must not retain the raw value: " + rawSecretMessage);
+  }
+}
+const oversizedSecret = "s".repeat(diagnosticMaxLength + 17);
+assert.equal(
+  localizationRuntime.displayAddDiagnosticText(new Error("token=" + oversizedSecret)),
+  "token=[REDACTED]",
+  "secret values must be redacted before the diagnostic length cap",
+);
+const bidiDiagnostic = localizationRuntime.displayAddDiagnosticText(new Error("left\u202Eright\u200B"));
+assert.equal(bidiDiagnostic, "leftright", "bidi and zero-width format controls must be removed from Add diagnostics");
+assert.equal(localizationRuntime.displayAddDiagnosticText(new Error("left\u0000right")), "left right", "C0 controls must be made safe in Add diagnostics");
+assert.equal(localizationRuntime.displayAddDiagnosticText(new Error("\u202E\u200B")), null, "invisible-only Add errors must not create a diagnostic");
+const throwingStringError = { toString() { throw new Error("conversion failed"); } };
+assert.equal(localizationRuntime.displayAddDiagnosticText(throwingStringError), null, "throwing String conversion must fail closed");
+assert.equal(
+  localizationRuntime.displayAddErrorMessage(throwingStringError, "ja"),
+  "ディスプレイ出力を追加できませんでした。選択した画面と出力状態を確認して再試行してください。",
+  "throwing String conversion must not prevent stable summary rendering",
+);
+const pendingClearIndex = panelSource.indexOf("setAddPending(true);");
+const pendingClearSource = panelSource.slice(pendingClearIndex, panelSource.indexOf("try {", pendingClearIndex));
+assert.match(pendingClearSource, /setAddDiagnostic\(null\)/, "starting Add must clear prior diagnostics");
+const successBranchStart = panelSource.indexOf("await props.onAddDisplayOutput(monitor);");
+const successBranchEnd = panelSource.indexOf("} catch (error)", successBranchStart);
+assert.match(panelSource.slice(successBranchStart, successBranchEnd), /setAddDiagnostic\(null\);\s*setAddStatus\(\{ kind: "success"/, "successful Add must clear diagnostics");
+assert.match(panelSource, /const kind = props\.kind;[\s\S]*addEpoch \+= 1;[\s\S]*if \(kind === "Display"\) return;[\s\S]*setAddDiagnostic\(null\);[\s\S]*setAddStatus\(null\);/, "switching away from Display must invalidate and clear Add diagnostics and status");
+assert.match(panelSource, /onMount\(\(\) => \{[\s\S]*invalidateDisplayAdd\(true\);/, "display discovery reload must invalidate and clear prior Add evidence");
+assert.equal((panelSource.match(/invalidateDisplayAdd\(true\)/g) ?? []).length, 3, "discovery start, success, and failure must invalidate Add epoch");
+const selectMonitorStart = panelSource.indexOf("const selectMonitor =");
+const selectMonitorEnd = panelSource.indexOf("const addSelectedDisplayOutput", selectMonitorStart);
+assert.match(panelSource.slice(selectMonitorStart, selectMonitorEnd), /invalidateDisplayAdd\(\)/, "changing monitor must invalidate and clear diagnostics");
 
 // Execute the production Add adapter end-to-end with a deterministic Tauri
 // invoke seam. This exercises query -> authority fence -> canonical Add v2,
@@ -611,4 +820,4 @@ assert.match(stylesSource, /\.videoOutputQuickCreate/);
 assert.match(stylesSource, /grid-template-columns: minmax\(0, 1fr\) auto/);
 assert.match(stylesSource, /\.videoOutputQuickCreate > button[\s\S]*min-height: 36px/);
 
-console.log("video display target contract: PASS (exactly one editor, first non-editor default, editor warning, stale DTO fail-closed, four-sub add sequence, local add singleflight, adjacent status, strict Add authority parser, executable query-to-Add-v2 exactly-once flow, post-commit refresh lifecycle, zero-mutation negatives, no pre-enable/fallback, Japanese Add errors, native dialog notice, localized 1280-safe surface)");
+console.log("video display target contract: PASS (exactly one editor, first non-editor default, editor warning, stale DTO fail-closed, four-sub add sequence, local add singleflight, adjacent status, bounded/redacted local Add diagnostics with raw-error retention, bidi removal, safe conversion, clear lifecycle/button, strict Add authority parser, executable query-to-Add-v2 exactly-once flow, post-commit refresh lifecycle, zero-mutation negatives, no pre-enable/fallback, Japanese Add errors, native dialog notice, localized 1280-safe surface)");

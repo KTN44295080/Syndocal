@@ -3,8 +3,9 @@ export type UiLocale = "en" | "ja";
 export const uiLocaleStorageKey = "syndocal.uiLocale.v1";
 
 /** Stable, operator-facing copy for fail-closed machine authority reasons.
- * Raw backend codes remain protocol diagnostics and are never rendered into
- * the UI. Unknown codes intentionally collapse to a safe recovery prompt. */
+ * Raw backend codes remain protocol diagnostics; the Add Display surface owns
+ * a separate bounded local diagnostic helper below. Unknown codes intentionally
+ * collapse to a safe recovery prompt. */
 export const djLinkMachineBlockReasonText = (reason: string): string => ({
   corrupt_machine_settings: "DJ Link machine settings are corrupt. Keep the file for recovery and repair it before continuing.",
   future_machine_settings_version: "DJ Link machine settings were created by a newer version. Keep the file and update this application.",
@@ -125,6 +126,11 @@ const japaneseText: Record<string, string> = {
   "Add display output": "ディスプレイ出力を追加",
   "Adding display output…": "ディスプレイ出力を追加中…",
   "Display output added.": "ディスプレイ出力を追加しました。",
+  "Display add diagnostics": "ディスプレイ追加の診断情報",
+  "Raw error": "生エラー",
+  "Monitor identity": "モニターID",
+  "Display dimensions": "ディスプレイ寸法",
+  "Clear diagnostics": "診断情報をクリア",
   "Could not add display output. Check the selected screen and output state, then try again.":
     "ディスプレイ出力を追加できませんでした。選択した画面と出力状態を確認して再試行してください。",
   "Display output authority is busy. Try again shortly.":
@@ -4251,15 +4257,45 @@ export function translateUiText(value: string, locale: UiLocale): string {
   return value;
 }
 
-/**
- * Convert AddDisplay failures into short operator-facing copy. Backend error
- * text is deliberately not rendered verbatim beside the Add button: it may
- * contain internal fence/transport detail. The raw Error remains available
- * to the caller for diagnostics, while the visible message is stable and
- * localized.
- */
+export const displayAddDiagnosticMaxLength = 2048;
+
+const displayAddAuthorizationPattern = /(["']?authorization["']?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)/giu;
+// Keep this deliberately narrow: support the observed raw/space/percent-20
+// API Key spellings without decoding arbitrary URL input or introducing an
+// exception-prone whole-string URL parser.
+const displayAddSensitiveValuePattern = /(["']?(?:token|secret|credential|password|api(?:[_-]|\s|%20)*key)["']?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)/giu;
+const displayAddBearerBasicPattern = /\b(bearer|basic)(\s+|[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)/giu;
+
+const safeDisplayAddErrorText = (error: unknown): string | null => {
+  if (error === null || error === undefined) return null;
+  try {
+    const raw = error instanceof Error ? error.message : String(error);
+    return typeof raw === "string" ? raw : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Keep the local AddDisplay evidence one-line, bounded, and absent when the
+ * thrown value does not contain usable text. Secret-bearing fields are
+ * replaced before the cap is applied, and this helper performs no I/O. */
+export function displayAddDiagnosticText(error: unknown): string | null {
+  const raw = safeDisplayAddErrorText(error);
+  if (raw === null) return null;
+  const normalized = raw
+    .replace(/\s+/gu, " ")
+    .replace(/[\u0000-\u001F\u007F-\u009F]/gu, " ")
+    .replace(/\p{Cf}/gu, "")
+    .replace(displayAddAuthorizationPattern, "$1[REDACTED]")
+    .replace(displayAddSensitiveValuePattern, "$1[REDACTED]")
+    .replace(displayAddBearerBasicPattern, "$1$2[REDACTED]")
+    .trim();
+  return normalized.length > 0 ? normalized.slice(0, displayAddDiagnosticMaxLength) : null;
+}
+
+/** Convert AddDisplay failures into short, stable operator-facing copy. */
 export function displayAddErrorMessage(error: unknown, locale: UiLocale): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = safeDisplayAddErrorText(error) ?? "";
   const source = /busy|overloaded|contention/i.test(raw)
     ? "Display output authority is busy. Try again shortly."
     : /stale|changed|refresh screen detection|no longer available/i.test(raw)

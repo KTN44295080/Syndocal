@@ -51,12 +51,11 @@ back to the top. This closes the current-native context-menu dismissal/hierarchy
 and DJ Link/Web Remote reachability visual checks only. It does not add a
 hardware, network, or remote-server acceptance claim.
 
-The current read-only storage inventory is `target` `94,214,143,142` logical
-bytes across `86,760` files, `app/node_modules` `545,338,492` bytes,
-`tools/asio-bridge/target` `1,774,985,879` bytes, and `app/dist` `5,204,539`
-bytes. Git also reported one approximately `568 KiB` garbage object. Cleanup
-conditions are not satisfied; no cleanup Apply or ad-hoc deletion ran and
-reclaimed bytes remain `0`.
+The current read-only storage inventory is `target` `119,395,192,153` logical
+bytes across `100,307` files, `app/node_modules` `545,338,492` bytes,
+`tools/asio-bridge/target` `1,774,985,879` bytes, and `app/dist` `5,221,332`
+bytes. Cleanup-harness eligibility has not changed; no cleanup Apply or ad-hoc
+deletion ran and reclaimed bytes remain `0`.
 
 ## 2026-08-30 native three-display source checkpoint (live acceptance pending)
 
@@ -77,12 +76,34 @@ five viewports including `1366x768` and `1280x720`, with document/app scroll
 zero and Advanced details internally scrollable; independent UI review is
 `GO`. First-party warnings are `0` for the evidenced source checks.
 
-This is not native or physical acceptance. The exact alpha.40 native build,
-two canonical Add Display transactions, distinct LED/projector composition
-routes, and joint 2 s / 5 s / 9 s visual proof remain pending. If Add fails,
-the new executable must be launched with stderr captured and the first raw
-`OutputControl operation syndocal.output.display.add.v2 failed before publication`
-line recorded; a PublicationFailed/in-doubt result must not be blindly retried.
+The exact alpha.40 native build completed, but its first maximized native
+screen exposed a stale 502-route admission freeze after the 503rd Tauri route
+was added. That mismatch invalidated the whole table and rejected project
+transaction owner registration. No project mutation or Display Add followed.
+The alpha.41 source repair freezes all 503 routes, explicitly classifies the
+new Timeline-composition route, and repairs the adjacent Engine inventory
+tripwire to 273. Exact MSVC 14.44 supervisor tests pass Syndocal control-plane
+`28/28` and Engine inventory `1/1`, with first-party warnings 0; independent
+reviews are GO.
+
+Alpha.41 also replaces the unusable generic-only Add failure boundary with a
+closed local diagnostic disclosure while preserving the short localized
+operator summary. The disclosure redacts tested authorization/token/password/
+API-key spellings before a 2048-character cap, removes control/Bidi characters,
+wraps long values, records the captured monitor identity and dimensions, and
+uses an epoch/flight token to reject stale or ABA results. Independent final
+review is GO with P0/P1 0. This is not native or physical acceptance. The clean
+alpha.41 native build, two canonical Add Display transactions, distinct
+LED/projector composition routes, and joint 2 s / 5 s / 9 s visual proof remain
+pending. If Add fails or becomes in-doubt, record the local diagnostic and
+authoritative output/lease state, then stop without blindly retrying.
+
+The same checkpoint repairs the stale frontend routing checker from 439/130 to
+the exact 443 frontend routes / 131 renderer-ticketed mutations. It asserts the
+three DSF2026 Art-Net probe routes outside both project-mutation categories and
+the Timeline-composition route inside the renderer-ticketed category; backend-
+authoritative mutations remain 31. The routing checker and the independent 443
+invoke inventory both pass.
 
 ## 2026-08-30 read-only live-audit checkpoint
 

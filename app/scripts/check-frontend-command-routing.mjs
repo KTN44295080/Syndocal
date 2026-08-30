@@ -339,14 +339,51 @@ const backendRendererMutations = rustClassification(
 // renderer-ticketed and 31 backend-authoritative project mutations. Alpha.30
 // adds one machine-local explicit-WDM CUE test route, bringing it to 438. The
 // same-PC fixed show Spout pair then adds one payloadless R4 ingress, bringing
-// the manifest to 439. The
-// ASIO transport-generation helper is intentionally internal and has no
-// dormant WebView IPC route. The later R4 video-output
-// composition assignment replaces the retired direct route one-for-one and
-// remains outside both generic project-mutation classifiers; the machine-local
-// DJ authority routes are neither category.
-assert.equal(manifest.length, 439, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 130, "backend renderer-ticketed classification count drifted");
+// the manifest to 439. The d39383d follow-up adds exactly four frontend
+// routes with no removals: the DSF2026 Art-Net probe send, acknowledgement,
+// and status-query routes, plus the video-composition timeline-layer route.
+// The first three remain outside both generic project-mutation classifiers;
+// only the timeline-layer route is renderer-ticketed. The ASIO
+// transport-generation helper is intentionally internal and has no dormant
+// WebView IPC route. The machine-local DJ authority routes are neither
+// project-mutation category.
+const d393FrontendRouteAdditions = [
+  "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+  "query_dsf2026_artnet_acceptance_probe_status_v1",
+  "send_dsf2026_artnet_acceptance_probe_v1",
+  "set_video_composition_timeline_layers",
+];
+const d393FrontendRouteAdditionSet = new Set(d393FrontendRouteAdditions);
+assert.equal(
+  d393FrontendRouteAdditionSet.size,
+  d393FrontendRouteAdditions.length,
+  "d393 frontend route additions must be unique",
+);
+assert.equal(manifestSet.size, manifest.length, "frontend Tauri manifest contains duplicate routes");
+assert.deepEqual(
+  manifest.filter((command) => d393FrontendRouteAdditionSet.has(command)).sort(),
+  [...d393FrontendRouteAdditionSet].sort(),
+  "d393 frontend route additions must be present exactly once",
+);
+assert.deepEqual(
+  rendererMutations.filter((command) => d393FrontendRouteAdditionSet.has(command)).sort(),
+  ["set_video_composition_timeline_layers"],
+  "d393 frontend route additions must retain their exact renderer-ticketed category",
+);
+assert.deepEqual(
+  serverMutations.filter((command) => d393FrontendRouteAdditionSet.has(command)),
+  [],
+  "d393 frontend route additions must remain outside the server-authoritative project-mutation category",
+);
+for (const command of [
+  "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+  "query_dsf2026_artnet_acceptance_probe_status_v1",
+  "send_dsf2026_artnet_acceptance_probe_v1",
+]) {
+  assert(!rendererMutationSet.has(command), `${command} must remain outside renderer-ticketed project mutations`);
+}
+assert.equal(manifest.length, 443, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 131, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),

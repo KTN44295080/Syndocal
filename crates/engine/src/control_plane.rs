@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 271;
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 273;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -104,6 +104,8 @@ mod tests {
         );
         assert!(variant_names.contains("EnableShowSpoutOutputsPublished"));
         assert!(variant_names.contains("RetireShowSpoutOutputsPublished"));
+        assert!(variant_names.contains("SendDsf2026ArtNetAcceptanceProbe"));
+        assert!(variant_names.contains("SetVideoCompositionTimelineLayers"));
         assert_eq!(
             descriptors
                 .iter()

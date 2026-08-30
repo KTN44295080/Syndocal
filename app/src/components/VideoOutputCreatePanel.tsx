@@ -1,11 +1,18 @@
-import { For, onMount, Show, createMemo, createSignal } from "solid-js";
+import { For, onMount, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
-import { displayAddErrorMessage, loadUiLocale } from "../uiLocalization";
+import { displayAddDiagnosticText, displayAddErrorMessage, loadUiLocale } from "../uiLocalization";
 import type { VideoOutputKind } from "../types";
 
 type VideoOutputAddStatus = {
   kind: "pending" | "success" | "error";
   message: string;
+};
+
+type VideoOutputAddDiagnostic = {
+  rawError: string;
+  monitorIdentity: string;
+  width: number;
+  height: number;
 };
 
 export interface VideoDisplayMonitorDescriptor {
@@ -109,9 +116,26 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
   const [monitorDiscovery, setMonitorDiscovery] = createSignal<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [addPending, setAddPending] = createSignal(false);
   const [addStatus, setAddStatus] = createSignal<VideoOutputAddStatus | null>(null);
+  const [addDiagnostic, setAddDiagnostic] = createSignal<VideoOutputAddDiagnostic | null>(null);
+  let addEpoch = 0;
+  let activeAddFlight: symbol | null = null;
   const selectedMonitor = createMemo(() => {
     const identity = selectedMonitorIdentity();
     return identity ? monitors().find((monitor) => monitor.identity === identity) : undefined;
+  });
+
+  const invalidateDisplayAdd = (clearStatus = false) => {
+    addEpoch += 1;
+    setAddDiagnostic(null);
+    if (clearStatus || !addPending()) setAddStatus(null);
+  };
+
+  createEffect(() => {
+    const kind = props.kind;
+    addEpoch += 1;
+    if (kind === "Display") return;
+    setAddDiagnostic(null);
+    setAddStatus(null);
   });
 
   const isTauriRuntime = () =>
@@ -126,6 +150,7 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
     const monitor = monitors().find((candidate) => candidate.identity === identity);
     if (!monitor) return;
     setSelectedMonitorIdentity(monitor.identity);
+    invalidateDisplayAdd();
     if (!addPending()) setAddStatus(null);
     props.onMonitorId(monitor.index);
     const target = videoDisplayTargetSummary(monitor);
@@ -136,22 +161,46 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
   };
 
   const addSelectedDisplayOutput = async () => {
-    if (addPending()) return;
+    if (addPending() || props.kind !== "Display") return;
     const monitor = selectedMonitor();
     if (!monitor) return;
+    const flight = Symbol("display-add");
+    const operationEpoch = ++addEpoch;
+    activeAddFlight = flight;
     setAddPending(true);
+    setAddDiagnostic(null);
     setAddStatus({ kind: "pending", message: "Adding display output…" });
     try {
       await props.onAddDisplayOutput(monitor);
+      if (operationEpoch !== addEpoch || props.kind !== "Display") return;
+      setAddDiagnostic(null);
       setAddStatus({ kind: "success", message: "Display output added." });
     } catch (error) {
+      if (operationEpoch !== addEpoch || props.kind !== "Display") return;
+      const target = videoDisplayTargetSummary(monitor);
+      const rawError = displayAddDiagnosticText(error);
+      setAddDiagnostic(rawError
+        ? {
+            rawError,
+            monitorIdentity: monitor.identity,
+            width: target.width,
+            height: target.height,
+          }
+        : null);
       setAddStatus({ kind: "error", message: displayAddErrorMessage(error, loadUiLocale()) });
     } finally {
-      setAddPending(false);
+      if (activeAddFlight === flight) {
+        activeAddFlight = null;
+        setAddPending(false);
+        if (operationEpoch !== addEpoch || props.kind !== "Display") setAddStatus(null);
+      }
     }
   };
 
   onMount(() => {
+    // This panel has no project identifier; discovery reload/remount is the
+    // observable boundary for discarding display failure evidence.
+    invalidateDisplayAdd(true);
     if (!isTauriRuntime()) {
       setMonitorDiscovery("unavailable");
       return;
@@ -159,6 +208,7 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
     setMonitorDiscovery("loading");
     void props.invokeCommand<VideoDisplayMonitorDescriptor[]>("list_video_display_monitors")
       .then((nextMonitors) => {
+        invalidateDisplayAdd(true);
         const validMonitors = normalizeVideoDisplayMonitors(nextMonitors);
         const hasValidTargets = Array.isArray(nextMonitors)
           && validMonitors.length === nextMonitors.length
@@ -170,7 +220,10 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
         const initial = hasValidTargets ? initialVideoDisplayMonitor(validMonitors) : undefined;
         if (initial) selectMonitor(initial.identity);
       })
-      .catch(() => setMonitorDiscovery("unavailable"));
+      .catch(() => {
+        invalidateDisplayAdd(true);
+        setMonitorDiscovery("unavailable");
+      });
   });
 
   return (
@@ -239,6 +292,35 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
               >
                 {status().message}
               </p>
+            )}</Show>
+            <Show when={addDiagnostic()}>{(diagnostic) => (
+              <details class="ioDisclosure videoOutputQuickHint" data-video-output-add-diagnostic>
+                <summary>Display add diagnostics</summary>
+                <div class="ioDisclosureBody videoOutputAddDiagnosticBody">
+                  <dl>
+                    <div>
+                      <dt>Raw error</dt>
+                      <dd class="videoOutputAddDiagnosticValue"><code class="videoOutputAddDiagnosticCode" data-no-localize>{diagnostic().rawError}</code></dd>
+                    </div>
+                    <div>
+                      <dt>Monitor identity</dt>
+                      <dd class="videoOutputAddDiagnosticValue"><code class="videoOutputAddDiagnosticCode" data-no-localize>{diagnostic().monitorIdentity}</code></dd>
+                    </div>
+                    <div>
+                      <dt>Display dimensions</dt>
+                      <dd class="videoOutputAddDiagnosticValue tabularNums" data-no-localize>{diagnostic().width}×{diagnostic().height}</dd>
+                    </div>
+                  </dl>
+                  <button
+                    type="button"
+                    class="videoOutputAddDiagnosticClear"
+                    data-video-output-add-diagnostic-clear
+                    onClick={() => setAddDiagnostic(null)}
+                  >
+                    Clear diagnostics
+                  </button>
+                </div>
+              </details>
             )}</Show>
             <p class="hint videoOutputQuickHint" data-video-output-native-dialog-note>
               The native display confirmation dialog will appear when this output is added.

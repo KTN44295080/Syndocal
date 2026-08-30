@@ -108,6 +108,54 @@ tool is retired or updated. Physical native build and the 2 s / 5 s / 9 s
 two-output content acceptance remain pending. The first safe action is now the
 exact native build and live sequence from this source-reviewed checkpoint.
 
+### 2026-08-30 alpha.41 native-admission repair checkpoint
+
+The first alpha.40 launch from `d39383d` was responsive and maximized, but the
+UI immediately reported that project transaction owner registration was not in
+the reviewed Tauri admission inventory. The artifact was 61,690,368 bytes with
+SHA-256 `389664BBF9FA01315CC2D504E0375F137587E481650A951E8C75541B4CD1D86F`.
+No authoring mutation or Display Add was attempted after the failure.
+
+Root cause was an old frozen count/hash for 502 Tauri handlers after
+`set_video_composition_timeline_layers` became the 503rd production handler.
+Because the admission registry validates atomically, the mismatch correctly
+failed the entire table closed and made every route appear unreviewed. The
+alpha.41 source repair freezes the exact 503-route hash, explicitly classifies
+the new route as the same `RendererTicketedProjectMutation` class as
+`set_video_composition_layers`, and asserts the exact mapping. It also updates
+the stale generated Engine inventory test from 271 to 273 and asserts the two
+new variants; runtime Engine behavior is unchanged.
+
+Add Display failures now keep the stable localized summary and optionally show
+a closed local diagnostic with redacted/bounded raw detail, captured monitor
+identity, and dimensions. The helper redacts authorization, tokens, passwords,
+and tested API-key spellings before its 2048-character cap, removes control and
+Bidi characters, wraps long values, and provides explicit clear. An operation
+epoch/flight token prevents kind ABA and stale monitor selection/discovery from
+committing an old result. No storage, console, network, or telemetry path was
+added.
+
+Supervisor evidence: exact MSVC 14.44 Cargo control-plane `28/28` and Engine
+inventory `1/1`, backend operator contract 503/131, Display checker PASS,
+frontend routing 443/131/31, frontend invoke inventory 443, localization
+`3644/3644`, TypeScript/Vite PASS, release gate PASS, fmt/diff PASS,
+first-party warnings 0. The routing checker names the three new Art-Net probe
+routes as non-project mutations and the new Timeline-composition route as the
+only renderer-ticketed addition. Independent admission, Engine, and final
+diagnostic reviews are GO with no P0/P1. Product metadata is advanced to
+`1.2.0-alpha.41`; no alpha.41 native artifact or hardware claim exists yet.
+The next safe action is commit/push this source checkpoint, terminate only the
+exact checkout-owned alpha.40 process immediately before build, perform the
+exact-linker alpha.41 native build, launch it with isolated loopback CDP and log
+capture, verify one responsive maximized window, then author/save alpha12 and
+perform each physical Display Add once.
+
+The checkpoint's read-only storage inventory is `target`
+`119,395,192,153` logical bytes / `100,307` files, `app/node_modules`
+`545,338,492` bytes, `tools/asio-bridge/target` `1,774,985,879` bytes, and
+`app/dist` `5,221,332` bytes. The reviewed recurring-cleanup eligibility is not
+satisfied, so no deletion ran and reclaimed bytes are `0`.
+
   A subsequent bounded native show-UI pass used the same exact responsive,
   maximized alpha.39 PID `87640` / window id `2033716740` and left the opened
   project paused and unsaved. Right-clicking its Timeline Audio Clip opened the
