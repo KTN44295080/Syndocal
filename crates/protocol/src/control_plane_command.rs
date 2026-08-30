@@ -3250,12 +3250,46 @@ impl OutputControlLeaseResultV2 {
         };
         match transition_outcome {
             OutputLeaseReceiptOutcomeV2::Authorized => {
-                if before_generation != after_generation
-                    || change.before_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
-                    || change.after_phase != Some(OutputLeaseReceiptPhaseV2::HeldActive)
-                    || change.before_resources != self.resources
-                    || change.after_resources != self.resources
-                {
+                let standard_authorization = before_generation == after_generation
+                    && change.before_phase == Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                    && change.after_phase == Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                    && change.before_resources == self.resources
+                    && change.after_resources == self.resources;
+                let exact_both_resources = self.resources.as_slice()
+                    == [
+                        OutputControlTargetRoleV1::Lighting,
+                        OutputControlTargetRoleV1::Video,
+                    ];
+                // Only the two physical Display operations may carry the
+                // private-candidate recovery transition. All other
+                // Authorized operations remain generation-invariant.
+                let display_recovery = matches!(
+                    operation_id,
+                    OUTPUT_DISPLAY_ADD_OPERATION_ID | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+                ) && exact_both_resources
+                    && change.before_resources == self.resources
+                    && change.after_resources == self.resources
+                    && match (
+                        before_generation,
+                        after_generation,
+                        change.before_phase,
+                        change.after_phase,
+                    ) {
+                        (
+                            Some(before),
+                            Some(after),
+                            Some(OutputLeaseReceiptPhaseV2::HeldOrphaned),
+                            Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                        ) => Some(after) == before.checked_add(1),
+                        (
+                            Some(before),
+                            Some(after),
+                            Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                            Some(OutputLeaseReceiptPhaseV2::HeldActive),
+                        ) => Some(after) == before.checked_add(2),
+                        _ => false,
+                    };
+                if !standard_authorization && !display_recovery {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
@@ -4320,6 +4354,144 @@ mod tests {
         assert!(forged_acquire
             .validate_for_operation(OUTPUT_ENABLE_OPERATION_ID)
             .is_err());
+    }
+
+    fn authorized_display_recovery_lease_result(
+        before_generation: u64,
+        after_generation: u64,
+        before_phase: OutputLeaseReceiptPhaseV2,
+    ) -> OutputControlLeaseResultV2 {
+        let resources = vec![
+            OutputControlTargetRoleV1::Lighting,
+            OutputControlTargetRoleV1::Video,
+        ];
+        let mut authority = lease_authority();
+        authority.generation = after_generation;
+        OutputControlLeaseResultV2 {
+            authority,
+            resources: resources.clone(),
+            phase: OutputLeaseReceiptPhaseV2::HeldActive,
+            outcome: OutputLeaseReceiptOutcomeV2::Authorized,
+            audit_sequence: 1,
+            changes: vec![OutputLeaseReceiptChangeV2 {
+                lease_id: "lease-0000000000000001".to_string(),
+                before_generation: Some(before_generation),
+                after_generation: Some(after_generation),
+                before_resources: resources.clone(),
+                after_resources: resources,
+                before_phase: Some(before_phase),
+                after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+            }],
+        }
+    }
+
+    #[test]
+    fn display_authorized_recovery_accepts_only_exact_both_generation_transitions() {
+        let display_operations = [
+            OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+        ];
+        for operation_id in display_operations {
+            for (before_generation, after_generation, before_phase) in [
+                (1, 2, OutputLeaseReceiptPhaseV2::HeldOrphaned),
+                (1, 3, OutputLeaseReceiptPhaseV2::HeldActive),
+            ] {
+                let lease_result = authorized_display_recovery_lease_result(
+                    before_generation,
+                    after_generation,
+                    before_phase,
+                );
+                assert_eq!(
+                    lease_result.validate_for_operation(operation_id),
+                    Ok(()),
+                    "{operation_id} accepts its exact display recovery transition"
+                );
+
+                let mut fence_after = output_fence();
+                if operation_id == OUTPUT_DISPLAY_ADD_OPERATION_ID {
+                    fence_after.output_generation += 1;
+                }
+                let receipt = OutputControlReceiptV2 {
+                    operation_id: operation_id.to_string(),
+                    request_id: 100,
+                    shape_sha256: hash('b'),
+                    argument_fingerprint: hash('c'),
+                    audit_sequence: 1,
+                    fence_before: output_fence(),
+                    fence_after,
+                    outcome: OutputControlReceiptOutcomeV2::Applied,
+                    lease_result: Some(lease_result),
+                };
+                let serialized = serde_json::to_value(&receipt)
+                    .expect("display recovery receipt must serialize after validation");
+                assert_eq!(
+                    serde_json::from_value::<OutputControlReceiptV2>(serialized)
+                        .expect("display recovery receipt must deserialize after serialization"),
+                    receipt,
+                    "{operation_id} recovery receipt preserves its validated wire shape"
+                );
+            }
+        }
+
+        // The same recovery evidence is not a new general Authorized shape:
+        // ordinary Assign remains generation-invariant, while its existing
+        // generation-invariant Both shape remains valid.
+        let recovery =
+            authorized_display_recovery_lease_result(1, 2, OutputLeaseReceiptPhaseV2::HeldOrphaned);
+        assert!(recovery
+            .validate_for_operation(OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID)
+            .is_err());
+        assert!(authorized_both_lease_result()
+            .validate_for_operation(OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID)
+            .is_ok());
+        for recovery_shape in [
+            authorized_display_recovery_lease_result(1, 2, OutputLeaseReceiptPhaseV2::HeldOrphaned),
+            authorized_display_recovery_lease_result(1, 3, OutputLeaseReceiptPhaseV2::HeldActive),
+        ] {
+            for operation_id in [
+                OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+                OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+                OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+            ] {
+                assert!(
+                    recovery_shape.validate_for_operation(operation_id).is_err(),
+                    "{operation_id} rejects the display recovery transition shape"
+                );
+            }
+        }
+
+        for operation_id in display_operations {
+            let mut wrong_resources = recovery.clone();
+            wrong_resources.resources = vec![OutputControlTargetRoleV1::Lighting];
+            wrong_resources.changes[0].before_resources = vec![OutputControlTargetRoleV1::Lighting];
+            wrong_resources.changes[0].after_resources = vec![OutputControlTargetRoleV1::Lighting];
+            assert!(wrong_resources
+                .validate_for_operation(operation_id)
+                .is_err());
+
+            let mut wrong_phase = recovery.clone();
+            wrong_phase.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldActive);
+            assert!(wrong_phase.validate_for_operation(operation_id).is_err());
+
+            let mut wrong_orphan_delta = recovery.clone();
+            wrong_orphan_delta.authority.generation = 3;
+            wrong_orphan_delta.changes[0].after_generation = Some(3);
+            assert!(wrong_orphan_delta
+                .validate_for_operation(operation_id)
+                .is_err());
+
+            let expired = authorized_display_recovery_lease_result(
+                1,
+                3,
+                OutputLeaseReceiptPhaseV2::HeldActive,
+            );
+            let mut wrong_expired_delta = expired.clone();
+            wrong_expired_delta.authority.generation = 2;
+            wrong_expired_delta.changes[0].after_generation = Some(2);
+            assert!(wrong_expired_delta
+                .validate_for_operation(operation_id)
+                .is_err());
+        }
     }
 
     #[test]

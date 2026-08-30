@@ -259,7 +259,8 @@ function Wait-ForMinimumClientDimensions {
   param(
     [Parameter(Mandatory = $true)][IntPtr]$Handle,
     [Parameter(Mandatory = $true)]$Minimum,
-    [int]$TimeoutSeconds = 20
+    [int]$TimeoutSeconds = 20,
+    [switch]$RequireMaximized
   )
 
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -272,12 +273,13 @@ function Wait-ForMinimumClientDimensions {
     $largeEnough =
       $last.Width -ge ($Minimum.Width - $TolerancePx) -and
       $last.Height -ge ($Minimum.Height - $TolerancePx)
-    if ($largeEnough -and $currentKey -eq $lastKey) {
+    $requiredModeReached = -not $RequireMaximized -or [SyndocalNativeWindow]::IsZoomed($Handle)
+    if ($largeEnough -and $requiredModeReached -and $currentKey -eq $lastKey) {
       $stableMatches += 1
       if ($stableMatches -ge 3) {
         return $last
       }
-    } elseif ($largeEnough) {
+    } elseif ($largeEnough -and $requiredModeReached) {
       $stableMatches = 1
     } else {
       $stableMatches = 0
@@ -285,7 +287,8 @@ function Wait-ForMinimumClientDimensions {
     $lastKey = $currentKey
     Start-Sleep -Milliseconds 200
   }
-  throw "Timed out waiting for at least $($Minimum.Width)x$($Minimum.Height); last client was $($last.Width)x$($last.Height)."
+  $modeRequirement = if ($RequireMaximized) { " in app-owned maximized mode" } else { "" }
+  throw "Timed out waiting for at least $($Minimum.Width)x$($Minimum.Height)$modeRequirement; last client was $($last.Width)x$($last.Height)."
 }
 
 function Test-Dimensions {
@@ -2546,17 +2549,12 @@ try {
   }
   $qaWindowVerified = $true
 
-  [void][SyndocalNativeWindow]::ShowWindowAsync($qaWindow, 3)
-  Start-Sleep -Seconds 2
+  $maximized = Wait-ForMinimumClientDimensions -Handle $qaWindow -Minimum $minimumMaximizedSize -RequireMaximized
   $monitorSize = Get-MonitorDimensions -Handle $qaWindow
   if (-not (Test-Dimensions -Actual $monitorSize -Expected $expectedFullscreenSize -AllowedTolerancePx 0)) {
     throw "The QA window monitor is $($monitorSize.Width)x$($monitorSize.Height), but the primary gate requires $ExpectedFullscreen."
   }
 
-  $maximized = Wait-ForMinimumClientDimensions -Handle $qaWindow -Minimum $minimumMaximizedSize
-  if (-not [SyndocalNativeWindow]::IsZoomed($qaWindow)) {
-    throw "The QA window reached $($maximized.Width)x$($maximized.Height) but Windows does not report it as maximized."
-  }
   $maximizedScreenshot = Join-Path $EvidenceDir "01-maximized-$($maximized.Width)x$($maximized.Height).png"
   $maximizedVisual = Save-VerifiedClientScreenshot -Handle $qaWindow -Path $maximizedScreenshot -Stage "Maximized"
   Write-Host "PASS maximized client $($maximized.Width)x$($maximized.Height)"
@@ -2667,11 +2665,7 @@ try {
     throw "The restarted '$qaTitle' window is not a fresh instance of the current isolated QA executable: PID $qaProcessId, path '$($qaProcess.Path)'."
   }
   $qaWindowVerified = $true
-  [void][SyndocalNativeWindow]::ShowWindowAsync($qaWindow, 3)
-  $restartedMaximizedClient = Wait-ForMinimumClientDimensions -Handle $qaWindow -Minimum $minimumMaximizedSize
-  if (-not [SyndocalNativeWindow]::IsZoomed($qaWindow)) {
-    throw "The restarted QA window reached $($restartedMaximizedClient.Width)x$($restartedMaximizedClient.Height) but Windows does not report it as maximized."
-  }
+  $restartedMaximizedClient = Wait-ForMinimumClientDimensions -Handle $qaWindow -Minimum $minimumMaximizedSize -RequireMaximized
 
   $restartMainPage = Wait-ForCdpAppPage -Port $CdpPort -QaProcessId $qaProcessId -ExpectedMode "main" -TimeoutSeconds 60
   $restoredExpectation = Get-NativePaneMainExpectation -DetachedPanes @("stage", "timeline")

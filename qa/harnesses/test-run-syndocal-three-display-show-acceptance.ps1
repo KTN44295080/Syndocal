@@ -15,15 +15,15 @@ $script:CheckoutRoot = Join-Path $script:SandboxRoot "checkout"
 $script:ExpectedPath = Join-Path $script:CheckoutRoot "target\release\syndocal.exe"
 $script:GoodPid = [uint32]4242
 $script:WrongPid = [uint32]4243
-$script:GoodHash = "D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1"
+$script:GoodHash = "60550028DB42BD931C2AD147B197878D7E4911A3CF1A0BB379566619C8E0507C"
 $script:WrongHash = ("cd" * 32)
-$script:GoodSize = [uint64]59807744
-$script:WrongSize = [uint64]59807745
-$script:GoodVersion = "1.2.0-alpha.25"
-$script:StaleVersion = "1.2.0-alpha.21"
+$script:GoodSize = [uint64]61691392
+$script:WrongSize = [uint64]61691393
+$script:GoodVersion = "1.2.0-alpha.42"
+$script:StaleVersion = "1.2.0-alpha.41"
 $script:WrongVersion = "9.9.9-wrong"
-$script:GoodArtifactHead = "566a7101b0d5c9307e8d0efa5ccf499aba3eb404"
-$script:GoodHead = "566a7101b0d5c9307e8d0efa5ccf499aba3eb404"
+$script:GoodArtifactHead = "64f3cab58dca0ff0b524c925ae895415a7c56f6a"
+$script:GoodHead = "64f3cab58dca0ff0b524c925ae895415a7c56f6a"
 $script:GoodDescendantHead = ("6" * 40)
 $script:GoodShowArtifactHead = ("a" * 40)
 $script:GoodShowEvidenceHead = ("b" * 40)
@@ -370,7 +370,7 @@ function Invoke-FocusedChecks {
       New-Check -Passed $passed -Detail $(if ($details.Count -eq 0) { "all Git repo/index/object/config authority overrides rejected" } else { $details -join "; " })
     } })
 
-    $checks.Add([pscustomobject]@{ Name = "alpha.25 authority binds exact artifact metadata"; Run = {
+    $checks.Add([pscustomobject]@{ Name = "alpha.42 authority binds exact artifact metadata"; Run = {
       $authority = $config.artifact_authority
       $passed =
         ([string]$authority.product_version -ceq $script:GoodVersion) -and
@@ -479,15 +479,15 @@ function Invoke-FocusedChecks {
       Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) throw "Fail closed: exact $($script:GoodVersion) artifact acceptance requires a clean checkout; git status reported 1 change(s)." }
       try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "requires a clean checkout" } finally { Set-TestSeam "Test-ThreeDisplayCheckoutClean" { param($CheckoutRootPath) $true } }
     } })
-    $checks.Add([pscustomobject]@{ Name = "stale alpha.21 configuration is rejected"; Run = {
-      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:StaleVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.25"
+    $checks.Add([pscustomobject]@{ Name = "historical alpha.41 configuration is rejected"; Run = {
+      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:GoodHash -ProductVersion $script:StaleVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exactly 1.2.0-alpha.42"
     } })
-    $checks.Add([pscustomobject]@{ Name = "wrong alpha.25 hash authority is rejected"; Run = {
-      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:WrongHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exact 1.2.0-alpha.25 artifact authority"
+    $checks.Add([pscustomobject]@{ Name = "wrong alpha.42 hash authority is rejected"; Run = {
+      Assert-Throws { New-ThreeDisplayConfiguration -IsApply $true -ExecutablePath $script:ExpectedPath -Sha256 $script:WrongHash -ProductVersion $script:GoodVersion -GitHead $script:GoodHead -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot } "exact 1.2.0-alpha.42 artifact authority"
     } })
-    $checks.Add([pscustomobject]@{ Name = "current harness HEAD may equal alpha.25 artifact source HEAD"; Run = {
+    $checks.Add([pscustomobject]@{ Name = "current harness HEAD may equal alpha.42 artifact source HEAD"; Run = {
       $passed = ([string]$config.expected_git_head -ceq $script:GoodHead) -and ([string]$config.artifact_source_head -ceq $script:GoodArtifactHead) -and ([string]$config.expected_git_head -ceq [string]$config.artifact_source_head)
-      New-Check -Passed $passed -Detail "current harness HEAD may equal the exact StandardRelease artifact source HEAD"
+      New-Check -Passed $passed -Detail "current harness HEAD may equal the exact alpha.42 StandardRelease artifact source HEAD"
     } })
     $checks.Add([pscustomobject]@{ Name = "current clean descendant harness HEAD is accepted with separate artifact source authority"; Run = {
       $priorCurrentHead = $script:CurrentHead
@@ -509,7 +509,7 @@ function Invoke-FocusedChecks {
       $prior = $script:CurrentBranch; $script:CurrentBranch = $script:WrongBranch
       try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "differs from required StandardRelease source branch" } finally { $script:CurrentBranch = $prior }
     } })
-    $checks.Add([pscustomobject]@{ Name = "alpha.25 artifact source HEAD not ancestor is rejected"; Run = {
+    $checks.Add([pscustomobject]@{ Name = "alpha.42 artifact source HEAD not ancestor is rejected"; Run = {
       $prior = $script:SourceAncestorResult; $script:SourceAncestorResult = $false
       try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "not an ancestor" } finally { $script:SourceAncestorResult = $prior }
     } })
@@ -759,10 +759,10 @@ function Invoke-FocusedChecks {
       $r = Assert-Throws { New-ShowConfiguration -ExecutablePath $foreignLeaf } "must end in exactly syndocal-show-asio.exe"
       New-Check -Passed ($r.Passed) -Detail $r.Detail
     } })
-    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal does not inherit StandardRelease alpha.25 product lock"; Run = {
+    $checks.Add([pscustomobject]@{ Name = "ShowAsioLocal does not inherit StandardRelease alpha.42 product lock"; Run = {
       $showAlpha14 = New-ThreeDisplayConfiguration -IsApply $false -AuthorityMode ShowAsioLocal -ExecutablePath "" -Sha256 $script:GoodHash -ProductVersion "1.2.0-alpha.14" -GitHead $script:GoodShowEvidenceHead -ArtifactSourceHead $script:GoodShowArtifactHead -ArtifactSourceBranch $script:GoodBranch -EditorIdentity $script:EditorIdentity -LedIdentity $script:LedIdentity -ProjectorIdentity $script:ProjectorIdentity -LedId 41 -LedLabel "LED Program" -ProjectorId 42 -ProjectorLabel "Projector Program" -CdpPort 5189 -IntervalMs 200 -Attempts 3 -CheckoutRootPath $script:CheckoutRoot -ShowAsioNodeExecutablePath ""
       $passed = ([string]$showAlpha14.expected_product_version -ceq "1.2.0-alpha.14") -and ($null -eq $showAlpha14.artifact_authority) -and ([uint64]$showAlpha14.expected_byte_size -eq 0)
-      New-Check -Passed $passed -Detail "ShowAsioLocal retains checker/manifest-bound product/version authority; StandardRelease alpha.25 metadata is not applied"
+      New-Check -Passed $passed -Detail "ShowAsioLocal retains checker/manifest-bound product/version authority; StandardRelease alpha.42 metadata is not applied"
     } })
     $checks.Add([pscustomobject]@{ Name = "nonzero Show-ASIO checker exit fails closed before any derivation"; Run = {
       [void](New-ShowArtifactFixture)
@@ -1019,8 +1019,8 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "runner static contract forbids process and output mutations"; Run = {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
-      if ($text.Contains("1.2.0-alpha.21")) { return New-Check $false "stale alpha.21 authority remains in the runner" }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.25", "D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1", "59807744", "566a7101b0d5c9307e8d0efa5ccf499aba3eb404", "source_provenance", "artifact_source_head", "artifact_source_branch", "ExpectedArtifactSourceHead", "ExpectedArtifactSourceBranch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", '--artifact-source', '--evidence-head', '--source-branch', 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
+      if ($text.Contains("1.2.0-alpha.41")) { return New-Check $false "historical alpha.41 authority remains in the runner" }
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.42", "60550028DB42BD931C2AD147B197878D7E4911A3CF1A0BB379566619C8E0507C", "61691392", "64f3cab58dca0ff0b524c925ae895415a7c56f6a", "source_provenance", "artifact_source_head", "artifact_source_branch", "ExpectedArtifactSourceHead", "ExpectedArtifactSourceBranch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", '--artifact-source', '--evidence-head', '--source-branch', 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
        foreach ($token in @("Assert-ThreeDisplayGitEnvironmentSafe", "--no-replace-objects", "ThreeDisplayShowAsioSourceIdentityCount = 70", 'app\src\uiLocalization.ts')) { if (-not $text.Contains($token)) { return New-Check $false "required source/Git authority token $token missing" } }
        if (([regex]::Matches($text, [regex]::Escape("--no-replace-objects")).Count) -ne 4) { return New-Check $false "all four harness Git authority calls must disable refs/replace object substitution" }

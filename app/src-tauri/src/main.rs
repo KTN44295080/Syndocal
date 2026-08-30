@@ -136926,6 +136926,8 @@ fn main() {
         .setup(move |app| {
             #[cfg(target_os = "windows")]
             if let Some(main_window) = app.get_webview_window("main") {
+                let main_window_startup_ready = Arc::new(AtomicBool::new(false));
+                let shortcut_startup_ready = Arc::clone(&main_window_startup_ready);
                 let shortcut_window = main_window.clone();
                 main_window.with_webview(move |webview| unsafe {
                     use webview2_com::{
@@ -136980,6 +136982,9 @@ fn main() {
                                         // window only after this UI-thread callback returns; querying
                                         // the window synchronously here can deadlock wry's dispatcher.
                                         args.SetHandled(true)?;
+                                        if !shortcut_startup_ready.load(Ordering::Acquire) {
+                                            return Ok(());
+                                        }
                                         let event_window = shortcut_window.clone();
                                         tauri::async_runtime::spawn(async move {
                                             let result = event_window.is_fullscreen().and_then(|fullscreen| {
@@ -137041,6 +137046,12 @@ fn main() {
                         );
                     }
                 })?;
+                // WebView2 controller creation must happen while the native
+                // window is windowed on mixed-DPI multi-monitor desktops.
+                // Enter the operational maximized state only after the
+                // callback has completed, then admit native F11 handling.
+                main_window.maximize()?;
+                main_window_startup_ready.store(true, Ordering::Release);
             }
             let directory = app_data_subdirectory(app.handle(), CRASH_REPORT_DIRECTORY)?;
             app_data_subdirectory(app.handle(), PROJECT_BACKUP_DIRECTORY)?;

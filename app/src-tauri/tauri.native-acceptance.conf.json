@@ -14,7 +14,7 @@
         "height": 1080,
         "minWidth": 960,
         "minHeight": 640,
-        "maximized": true,
+        "maximized": false,
         "resizable": true,
         "decorations": false
       }

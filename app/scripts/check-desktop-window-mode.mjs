@@ -6,6 +6,9 @@ const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json",
 const nativeAcceptanceConfig = JSON.parse(
   await readFile(new URL("../src-tauri/tauri.native-acceptance.conf.json", import.meta.url), "utf8"),
 );
+const f11FocusConfig = JSON.parse(
+  await readFile(new URL("../src-tauri/tauri.f11-focus-qa.conf.json", import.meta.url), "utf8"),
+);
 const capability = JSON.parse(
   await readFile(new URL("../src-tauri/capabilities/main.json", import.meta.url), "utf8"),
 );
@@ -679,7 +682,11 @@ assert.throws(
   "a failed cancel re-query without the re-armed failure flag must fail the dialog-consumption contract",
 );
 
-assert.equal(config.app.windows[0].maximized, true, "the primary desktop window must start maximized");
+assert.equal(
+  config.app.windows[0].maximized,
+  false,
+  "the primary desktop window must create WebView2 windowed before the mounted controller maximizes it",
+);
 assert.equal(config.app.windows[0].decorations, false, "the primary desktop window must be frameless");
 assert.equal(config.app.windows[0].resizable, true, "the frameless primary window must stay resizable");
 assert.notEqual(
@@ -690,7 +697,16 @@ assert.notEqual(
 assert.equal(nativeAcceptanceConfig.app.windows[0].title, "Syndocal QA - Native 1920 Acceptance");
 assert.equal(nativeAcceptanceConfig.app.windows[0].width, 1920);
 assert.equal(nativeAcceptanceConfig.app.windows[0].height, 1080);
-assert.equal(nativeAcceptanceConfig.app.windows[0].maximized, true);
+assert.equal(
+  nativeAcceptanceConfig.app.windows[0].maximized,
+  false,
+  "native acceptance must exercise the same windowed WebView2 creation boundary before runtime maximize",
+);
+assert.equal(
+  f11FocusConfig.app.windows[0].maximized,
+  false,
+  "F11 focus QA must not reintroduce maximized-at-WebView2-creation startup",
+);
 assert.equal(
   nativeAcceptanceConfig.app.windows[0].decorations,
   false,
@@ -793,8 +809,32 @@ assert.ok(
   "the DOM controller must arbitrate native Escape in dialog, editor, then fullscreen order without recursive handling",
 );
 assert.ok(
-  controller.includes("await appWindow.maximize()"),
-  "runtime startup must enforce maximized mode when the platform does not honor the config default",
+  controller.includes("Starting already maximized can strand the controller") &&
+    controller.includes("void enterOperationalWindowMode()") &&
+    controller.includes("await appWindow.maximize()") &&
+    controller.includes("if (transitionInFlight) return") &&
+    controller.includes('mode() === "error"') &&
+    controller.includes('shortcut: "RESTART APP"'),
+  "runtime startup must maximize only after the mounted WebView2 controller is available",
+);
+const nativeWebViewHook = backend.indexOf('main_window.with_webview(move |webview| unsafe {');
+const nativeStartupMaximize = backend.indexOf('main_window.maximize()?;', nativeWebViewHook);
+const nativeStartupReady = backend.indexOf(
+  'main_window_startup_ready.store(true, Ordering::Release);',
+  nativeStartupMaximize,
+);
+assert.ok(
+  nativeWebViewHook >= 0 &&
+    nativeStartupMaximize > nativeWebViewHook &&
+    nativeStartupReady > nativeStartupMaximize &&
+    backend.includes('if !shortcut_startup_ready.load(Ordering::Acquire)') &&
+    backend.includes('main_window_startup_ready = Arc::new(AtomicBool::new(false))'),
+  "Windows startup must create the WebView2 controller windowed, maximize natively, then admit F11",
+);
+assert.ok(
+  nativeAcceptance.includes('-RequireMaximized') &&
+    !nativeAcceptance.includes('[void][SyndocalNativeWindow]::ShowWindowAsync($qaWindow, 3)'),
+  "native acceptance must observe app-owned startup maximization without manufacturing it",
 );
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");

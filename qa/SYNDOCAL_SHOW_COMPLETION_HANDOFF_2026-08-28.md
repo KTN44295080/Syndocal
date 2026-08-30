@@ -4,6 +4,39 @@ Status date: 2026-08-30 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-08-30 alpha.42 three-display source checkpoint
+
+- The source checkpoint starts from branch `codex/syndocal-v1.2` at
+  `64f3cab58dca0ff0b524c925ae895415a7c56f6a`; the checkpoint commit is the
+  commit containing this entry. The Windows main window now creates WebView2
+  while windowed, maximizes only after controller creation, and admits native
+  F11 only after that boundary. The acceptance harness observes this app-owned
+  maximization and no longer manufactures it.
+- The bounded OutputControl receipt repair accepts a generation-changing
+  `Authorized` result only for Display Add and Display-window-open, only for
+  exact logical `Both = [Lighting, Video]`, and only for
+  `HeldOrphaned G -> HeldActive G+1` or expired
+  `HeldActive G -> HeldActive G+2`. Assign, Arm, Spout, Art-Net, wrong resource,
+  phase, and delta shapes remain rejected. Independent Terra xHigh review is
+  `GO` with P0/P1/P2 `0`. Supervisor protocol proof is `201/201` unit tests and
+  `4/4` doc-tests with `RUSTFLAGS=-D warnings`; first-party warnings are `0`.
+- The saved acceptance project is
+  `C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-three-display-acceptance.sdc`.
+  It persists exactly two strict Spout outputs and two ordinary native Display
+  outputs: LED `PX160 WAVE` routes fixed Foreground Video 1, while projector
+  `MPG321UX OLED` routes Background Timeline Video 2 -> MiraBox -> Video 2.
+  After explicit local media verification, physical seeks at approximately
+  2 s and 9 s showed Video 2 on the projector and the foreground remained
+  Video 1. HDMI input was intentionally unplugged, so the MiraBox interval's
+  black/no-signal frame is expected and is not HDMI-content acceptance.
+- `pnpm --dir app run check:desktop-window` passes. The three-display harness
+  self-test passes in PowerShell 7 and Windows PowerShell 5.1 at `90/90` in
+  each host. The next action after this source checkpoint is an exact
+  MSVC `14.44.35207` native release build from the committed source, followed
+  by reopen/readback of this project and the same physical 2 s / 5 s / 9 s
+  sequence. No final alpha.42 EXE identity or post-restart physical acceptance
+  is claimed by this source checkpoint.
+
 ## Source authority
 
 - Current alpha.39 native checkpoint is on branch `codex/syndocal-v1.2`; the

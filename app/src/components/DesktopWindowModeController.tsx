@@ -36,7 +36,7 @@ const noticeForMode = (mode: DesktopWindowMode) => {
     case "windowed":
       return { label: "WINDOW", shortcut: "F11 FULL SCREEN" };
     case "error":
-      return { label: "WINDOW MODE ERROR", shortcut: "F11 RETRY" };
+      return { label: "WINDOW MODE ERROR", shortcut: "RESTART APP" };
     default:
       return null;
   }
@@ -82,7 +82,9 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   const showNotice = () => {
     window.clearTimeout(noticeTimer);
     setNoticeVisible(true);
-    noticeTimer = window.setTimeout(() => setNoticeVisible(false), NOTICE_DURATION_MS);
+    noticeTimer = mode() === "error"
+      ? undefined
+      : window.setTimeout(() => setNoticeVisible(false), NOTICE_DURATION_MS);
   };
 
   onMount(() => {
@@ -141,7 +143,13 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
     };
 
     const enterOperationalWindowMode = async () => {
+      if (transitionInFlight) return;
+      transitionInFlight = true;
       try {
+        // Keep the native config windowed until WebView2 has created its
+        // controller.  Starting already maximized can strand the controller
+        // on mixed-DPI multi-monitor desktops; the mounted DOM is the safe
+        // boundary for entering the operational maximized workspace.
         if (!(await appWindow.isFullscreen()) && !(await appWindow.isMaximized())) {
           await appWindow.maximize();
         }
@@ -150,6 +158,8 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
         if (disposed) return;
         updateMode("error");
         showNotice();
+      } finally {
+        transitionInFlight = false;
       }
     };
 
