@@ -1,5 +1,39 @@
 # DSF2026 same-PC output acceptance — current 2026-08-30
 
+## 2026-08-30 alpha.42 final native checkpoint
+
+This is the current alpha.42 native authority and supersedes the older
+alpha39/alpha10 current claims below. Branch `codex/syndocal-v1.2` is at `HEAD
+b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
+build passed with first-party warnings `0`; the exact
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.42`, `61,691,904` bytes, SHA-256
+`E82B570C7BF850BB99D9DEDC529FC96ADFE952C602BA066394EA885617F17376`.
+
+The persisted acceptance project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-three-display-acceptance.sdc`.
+It persists exactly two strict Spout outputs and two ordinary native Display
+routes. `Display 1` / LED `PX160 WAVE` (`1920x1080`) uses composition 2 with
+fixed Video 1; `Display 5` / projector `MPG321UX OLED` (`3840x2160`) uses
+composition 3 with Timeline Video 2 -> MiraBox -> Video 2. Foreground fixed
+Video 1 works. With HDMI unplugged, the MiraBox interval is an expected
+no-signal frame; black versus flat fill may vary and is not camera content
+proof.
+
+The startup gate keeps WebView2/controller creation before app-owned
+maximize/F11. The desktop-window checker and final physical observation proved
+that gate; the separate acceptance harness permits only its narrowly revalidated
+`SW_MAXIMIZE` seam before readback. The Add receipt repair is fixed and
+independently `GO`. The remaining UX
+issue is the Video Output state label `Authored enabled`, localized as
+`作成権を有効化`, which still looks like an operation button. Final physical
+recheck passed at `1957 ms`, `5002 ms`, and `8989 ms`: `Display 1` stayed on the
+same fixed Video 1 orange/red-bordered frame, while `Display 5` showed Video 2,
+the expected no-signal frame, and recovered Video 2, respectively. Native route
+switching/recovery, foreground independence, and both native Display windows
+are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
+physical hardware acceptance remain unconfirmed.
+
 ## Scope
 
 This is the show-critical output contract for the 2026-08-30 DSF performance.
@@ -12,9 +46,9 @@ local Spout senders. The replacement must retain the existing output-control
 lease, safety, publication, acknowledgement, and rollback boundaries; it must
 not fall back to a generic unreviewed output mutation.
 
-## 2026-08-30 alpha.39 native checkpoint
+## 2026-08-30 alpha.39 native checkpoint (historical; superseded by alpha.42 above)
 
-The current product checkpoint is `1.2.0-alpha.39` on branch
+At that historical checkpoint, the product was `1.2.0-alpha.39` on branch
 `codex/syndocal-v1.2`. The native build source was
 `ec93e9160da853ad181de70aee4db7b4a75fafbb`; the later documentation-only
 checkpoint reached clean `HEAD == upstream ==
@@ -83,7 +117,7 @@ the exact MSVC `14.44` native build and launch gate, then close Daslight/Easy
 View, start the exact Unity receiver as sole UDP `6454` owner, and capture the
 approved one-shot result without retrying an in-doubt operation.
 
-## 2026-08-30 live readiness audit
+## 2026-08-30 live readiness audit (pre-alpha42; superseded)
 
 The current same-PC candidate remains
 `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc`,
@@ -210,7 +244,7 @@ Generic Spout creation must fail visibly while the show pair is authored,
 starting, or active; a pending startup with either reserved name must be fully
 joined and harvested before a fresh show-output request may reuse that name.
 
-## Current evidence and open gates
+## Historical source evidence and open gates (superseded by alpha.42 above)
 
 Static evidence already confirms the low-level ArtDmx encoder uses opcode
 `0x5000`, wire Universe 0, a 512-byte payload, and `frame[0] -> payload[0]`.

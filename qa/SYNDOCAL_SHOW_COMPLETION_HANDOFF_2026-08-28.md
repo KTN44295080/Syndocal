@@ -4,14 +4,48 @@ Status date: 2026-08-30 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-08-30 alpha.42 three-display source checkpoint
+## 2026-08-30 alpha.42 final native three-display checkpoint
+
+This is the current alpha.42 native authority and supersedes the older
+source-only/current claims below. Branch `codex/syndocal-v1.2` is at `HEAD
+b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
+build passed with first-party warnings `0`; the exact
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.42`, `61,691,904` bytes, SHA-256
+`E82B570C7BF850BB99D9DEDC529FC96ADFE952C602BA066394EA885617F17376`.
+
+The persisted acceptance project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-three-display-acceptance.sdc`.
+It persists exactly two strict Spout outputs and two ordinary native Display
+outputs. `Display 1` / LED `PX160 WAVE` (`1920x1080`) uses composition 2 with
+fixed Video 1; `Display 5` / projector `MPG321UX OLED` (`3840x2160`) uses
+composition 3 with Timeline Video 2 -> MiraBox -> Video 2. Foreground fixed
+Video 1 works. The HDMI input is unplugged, so the MiraBox interval is expected
+no-signal; black versus flat fill may vary and is not camera content proof.
+
+The startup gate keeps WebView2/controller creation before app-owned
+maximize/F11. The desktop-window checker and final physical observation proved
+that gate; the separate acceptance harness permits only its narrowly revalidated
+`SW_MAXIMIZE` seam before readback. The Add receipt repair is fixed and
+independently `GO`. A remaining UX
+issue is the Video Output state label `Authored enabled`, localized as
+`作成権を有効化`, which still looks like an operation button. Final physical
+recheck passed at `1957 ms`, `5002 ms`, and `8989 ms`: `Display 1` stayed on the
+same fixed Video 1 orange/red-bordered frame, while `Display 5` showed Video 2,
+the expected no-signal frame, and recovered Video 2, respectively. Native route
+switching/recovery, foreground independence, and both native Display windows
+are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
+physical hardware acceptance remain unconfirmed.
+
+## 2026-08-30 alpha.42 three-display source checkpoint (superseded by final native checkpoint above)
 
 - The source checkpoint starts from branch `codex/syndocal-v1.2` at
   `64f3cab58dca0ff0b524c925ae895415a7c56f6a`; the checkpoint commit is the
   commit containing this entry. The Windows main window now creates WebView2
   while windowed, maximizes only after controller creation, and admits native
-  F11 only after that boundary. The acceptance harness observes this app-owned
-  maximization and no longer manufactures it.
+  F11 only after that boundary. The acceptance harness can separately perform
+  only its narrowly revalidated editor `SW_MAXIMIZE` seam before strict
+  readback; it does not create or reposition either output window.
 - The bounded OutputControl receipt repair accepts a generation-changing
   `Authorized` result only for Display Add and Display-window-open, only for
   exact logical `Both = [Lighting, Video]`, and only for
@@ -25,10 +59,12 @@ This is the concise authoritative resume note for the final show-critical tranch
   It persists exactly two strict Spout outputs and two ordinary native Display
   outputs: LED `PX160 WAVE` routes fixed Foreground Video 1, while projector
   `MPG321UX OLED` routes Background Timeline Video 2 -> MiraBox -> Video 2.
-  After explicit local media verification, physical seeks at approximately
-  2 s and 9 s showed Video 2 on the projector and the foreground remained
-  Video 1. HDMI input was intentionally unplugged, so the MiraBox interval's
-  black/no-signal frame is expected and is not HDMI-content acceptance.
+  Preliminary local seek observations at approximately 2 s and 9 s showed the
+  intended Video 2/projector and foreground Video 1 arrangement. HDMI input was
+  intentionally unplugged, so the MiraBox interval's black/no-signal frame is
+  expected and is not HDMI-content acceptance. At that source checkpoint the
+  final physical 2 s / 5 s / 9 s recheck was pending; its result is recorded in
+  the final native checkpoint above.
 - `pnpm --dir app run check:desktop-window` passes. The three-display harness
   self-test passes in PowerShell 7 and Windows PowerShell 5.1 at `90/90` in
   each host. The next action after this source checkpoint is an exact
@@ -37,9 +73,9 @@ This is the concise authoritative resume note for the final show-critical tranch
   sequence. No final alpha.42 EXE identity or post-restart physical acceptance
   is claimed by this source checkpoint.
 
-## Source authority
+## Historical source authority (alpha.39; superseded by alpha.42 final native checkpoint above)
 
-- Current alpha.39 native checkpoint is on branch `codex/syndocal-v1.2`; the
+- The historical alpha.39 native checkpoint was on branch `codex/syndocal-v1.2`; the
   build source/docs `HEAD` and upstream were both
   `ec93e9160da853ad181de70aee4db7b4a75fafbb`. This tranche repairs the Timeline
   authoring-output selector's
@@ -107,7 +143,7 @@ build/launch from the frozen source checkpoint; then close Daslight/Easy View,
   start the exact Unity receiver as sole UDP `6454` owner, and perform one
   approved probe capture without retrying an in-doubt operation.
 
-### 2026-08-30 native three-display composition source checkpoint
+### 2026-08-30 native three-display composition source checkpoint (superseded)
 
 The distinct native Display route is frozen at source for review. Its custom
 composition membership uses `TimelineVideoLayerRef { timeline_id, layer_id }`.
@@ -141,7 +177,7 @@ tool is retired or updated. Physical native build and the 2 s / 5 s / 9 s
 two-output content acceptance remain pending. The first safe action is now the
 exact native build and live sequence from this source-reviewed checkpoint.
 
-### 2026-08-30 alpha.41 native-admission repair checkpoint
+### 2026-08-30 alpha.41 native-admission repair checkpoint (historical)
 
 The first alpha.40 launch from `d39383d` was responsive and maximized, but the
 UI immediately reported that project transaction owner registration was not in
@@ -201,7 +237,7 @@ satisfied, so no deletion ran and reclaimed bytes are `0`.
   This is native visual evidence for context-menu dismissal/hierarchy and
   Web Remote/DJ Link reachability only, not DJ/network/remote-server acceptance.
 
-### 2026-08-30 read-only live-audit checkpoint
+### 2026-08-30 read-only live-audit checkpoint (pre-alpha42; historical)
 
 The read-only FOH/show audit at `2026-08-30 07:10–07:14 JST` ran on branch
 `codex/syndocal-v1.2` with `HEAD == @{upstream} ==
@@ -939,7 +975,7 @@ integrated source checkpoint above is authoritative for current source status.
   satisfied, so no cleanup Apply or ad-hoc deletion ran and reclaimed bytes
   remain `0`.
 
-## Required remaining acceptance
+## Required remaining acceptance (superseded by alpha.42 final native checkpoint above)
 
 1. The alpha.39 native checkpoint is recorded from source/docs `HEAD` and
    upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`: exact MSVC `14.44.35207`
@@ -973,7 +1009,7 @@ integrated source checkpoint above is authoritative for current source status.
 10. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
 11. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
 
-## First safe resume actions
+## First safe resume actions (superseded by alpha.42 final native checkpoint above)
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - The exact alpha.38 PID `55624` and its maximized window are historical

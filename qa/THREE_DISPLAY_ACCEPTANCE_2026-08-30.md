@@ -1,5 +1,39 @@
 # Syndocal native three-display acceptance — 2026-08-30
 
+## 2026-08-30 alpha.42 final native checkpoint
+
+This is the current alpha.42 native authority and supersedes the older
+source-only/current wording below. Branch `codex/syndocal-v1.2` is at `HEAD
+b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
+build passed with first-party warnings `0`; the exact
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.42`, `61,691,904` bytes, SHA-256
+`E82B570C7BF850BB99D9DEDC529FC96ADFE952C602BA066394EA885617F17376`.
+
+The persisted acceptance project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-three-display-acceptance.sdc`.
+It contains exactly two strict Spout senders and two ordinary native Display
+routes: `Display 1` / LED `PX160 WAVE` at `1920x1080` uses composition 2 with
+fixed Video 1, while `Display 5` / projector `MPG321UX OLED` at `3840x2160`
+uses composition 3 with Timeline Video 2 -> MiraBox -> Video 2. The foreground
+fixed Video 1 path works. With HDMI unplugged, the MiraBox interval is an
+expected no-signal frame; black versus flat fill may vary and is not camera
+content proof.
+
+The startup gate retains WebView2/controller creation before app-owned
+maximize/F11. The desktop-window checker and final physical observation proved
+that gate; the separate acceptance harness permits only its narrowly revalidated
+`SW_MAXIMIZE` seam before readback. The Add receipt repair is fixed and
+independently `GO`. The remaining UX
+issue is the Video Output state label `Authored enabled`, localized as
+`作成権を有効化`, which still looks like an action button. Final physical
+2 s / 5 s / 9 s recheck passed: at `1957 ms`, `5002 ms`, and `8989 ms`,
+`Display 1` remained on the same fixed Video 1 orange/red-bordered frame, while
+`Display 5` showed Video 2, the expected no-signal frame, and recovered Video 2,
+respectively. Native route switching/recovery, foreground independence, and
+the two native Display windows are `PASS`. MiraBox actual HDMI content proof,
+Unity/GPU/Art-Net, and other physical hardware acceptance remain unconfirmed.
+
 ## Contract
 
 For this show, “three-display” means one Syndocal editor/operator window plus
@@ -16,7 +50,7 @@ editor. Spout remains a separate same-PC transport and does not satisfy this
 native-window acceptance row. Mirroring the Main composition to both Display
 windows also does not satisfy it.
 
-## Alpha.42 route-transaction source checkpoint
+## Alpha.42 route-transaction source checkpoint (superseded source snapshot)
 
 The alpha.42 source checkpoint is based on branch `codex/syndocal-v1.2` at
 parent `6456412f3569e5c47aa6b18b870e996d9ddd9b0a`; the checkpoint commit is the
@@ -47,13 +81,14 @@ barrier `3/3`, Syndocal video-output assignment `3/3`, `cargo fmt --check`,
 are `0`; the intentional caught poison regression prints its expected panic-hook
 line only.
 
-This is source proof only. No alpha.42 native artifact, physical route, distinct
+This is the pre-build source-only snapshot and does not override the final
+native checkpoint above. No alpha.42 native artifact, physical route, distinct
 foreground/background content, Timeline Video 2 -> MiraBox -> Video 2 sequence,
 or saved/reopened alpha.42 project is claimed here. The next safe action is the
 exact native release build from this committed source, followed by one canonical
 route attempt per distinct non-editor monitor and strict readback after each.
 
-## Current physical inventory
+## Pre-build physical inventory (superseded by final native checkpoint above)
 
 A read-only run of
 `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` recorded the
@@ -87,13 +122,13 @@ show-program media:
   SHA-256 `DC6E6C4B173D09A9FABDF674D75FD27ED85B1084A55F633F52F85211F4D1473F`,
   1280x720 at 30 fps;
 - Background camera: the persisted MiraBox camera identity requesting MJPEG
-  1920x1080 at 60 fps from the current alpha11 acceptance project.
+  1920x1080 at 60 fps from the alpha42 acceptance project above.
 
 FFmpeg signal statistics at 2 s measured luma averages 63.59 and 157.36 for
 Video 1 and Video 2 respectively, so the two file sources are non-black and
 visually distinguishable before native output acceptance.
 
-## Harness status
+## Pre-build harness status (superseded by final native checkpoint above)
 
 The deterministic harness self-test passes in both PowerShell 7 and Windows
 PowerShell 5.1: `90 checks / 0 failed` in each host. It proves exact executable
@@ -104,16 +139,16 @@ bounds, effective DPI, three consecutive stable samples, and a narrowly scoped
 editor maximize operation. It never creates, moves, closes, or substitutes an
 output window.
 
-The StandardRelease authority is still pinned to the historical alpha.25
-artifact. It must be rebound only after the current alpha.40 source checkpoint
-is committed and the exact clean-source native artifact has been built. The
-new product version, byte size, SHA-256, source commit, branch, and provenance
-must then be updated together and both 90-check self-tests rerun before Apply.
+The StandardRelease authority is rebound to the exact alpha.42 artifact above:
+Product/FileVersion `1.2.0-alpha.42`, `61,691,904` bytes, SHA-256
+`E82B570C7BF850BB99D9DEDC529FC96ADFE952C602BA066394EA885617F17376`,
+source branch `codex/syndocal-v1.2`, and source HEAD
+`b1f6d760c75b430a4255ead71e5f4bb964501cf4`. Both PowerShell hosts pass the
+rebound self-test at `90/90`.
 
-The current alpha.40 process has no loopback CDP listener, so the harness
-cannot obtain its app-owned output-ID/HWND observation. The 90-check harness
-self-test still passes, but that proves only the harness's fail-closed logic;
-it is not native three-display or content acceptance.
+The final physical content observations above used the verified native windows,
+not a CDP-enabled harness `-Apply`; that separate acceptance claim remains open
+until a clean checkpoint is launched with an isolated loopback CDP endpoint.
 
 ## Alpha.40 admission failure and alpha.41 repair checkpoint
 
@@ -211,7 +246,7 @@ project. Its old schema-key list remains an explicit nonblocking P2 until that
 tool is retired or updated; it is not evidence for the alpha12 composition
 route.
 
-## Remaining live sequence
+## Pre-alpha42 remaining live sequence (superseded by final native checkpoint above)
 
 - Load the updated video-switch acceptance project. The current alpha11 file
   has the fixed Spout pair, only Main composition, one MP4 plus MiraBox, and no

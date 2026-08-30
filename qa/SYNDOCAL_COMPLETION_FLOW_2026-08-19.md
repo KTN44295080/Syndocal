@@ -4,6 +4,40 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-30 alpha.42 final native three-display checkpoint
+
+This is the current alpha.42 native authority and supersedes older current
+claims below. Branch `codex/syndocal-v1.2` is at `HEAD
+b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
+build passed with first-party warnings `0`; the exact
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.42`, `61,691,904` bytes, SHA-256
+`E82B570C7BF850BB99D9DEDC529FC96ADFE952C602BA066394EA885617F17376`.
+
+The persisted acceptance project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-three-display-acceptance.sdc`.
+It contains exactly two strict Spout outputs and two ordinary native Display
+routes: `Display 1` / LED `PX160 WAVE` (`1920x1080`) uses composition 2 with
+fixed Video 1; `Display 5` / projector `MPG321UX OLED` (`3840x2160`) uses
+composition 3 with Timeline Video 2 -> MiraBox -> Video 2. Foreground fixed
+Video 1 works. With HDMI unplugged, the MiraBox interval is an expected
+no-signal frame; black versus flat fill may vary and is not camera content
+proof.
+
+The startup gate keeps WebView2/controller creation before app-owned
+maximize/F11. The desktop-window checker and final physical observation proved
+that gate; the separate acceptance harness permits only its narrowly revalidated
+`SW_MAXIMIZE` seam before readback. The Add receipt repair is fixed and
+independently `GO`. The remaining UX
+issue is the Video Output state label `Authored enabled`, localized as
+`作成権を有効化`, which still looks like an operation button. Final physical
+recheck passed at `1957 ms`, `5002 ms`, and `8989 ms`: `Display 1` stayed on the
+same fixed Video 1 orange/red-bordered frame, while `Display 5` showed Video 2,
+the expected no-signal frame, and recovered Video 2, respectively. Native route
+switching/recovery, foreground independence, and both native Display windows
+are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
+physical hardware acceptance remain unconfirmed.
+
 ## 2026-08-22 superseding local Windows show-core scope
 
 The active completion target is now the operator's current Windows PC and the
@@ -21,7 +55,9 @@ and completion reporting:
 - the local separately built Windows ASIO path, including fail-closed driver,
   buffer, callback, fault, and restart behavior.
 
-NDI and Spout are deferred from this target, not cancelled. macOS/Linux control and native proof,
+NDI remains deferred from this target, not cancelled. The alpha.42 checkpoint
+above includes exactly two strict local Spout senders and two ordinary native
+Display routes. macOS/Linux control and native proof,
 distribution, signing, installer/updater publication, and legal/package disposition
 are also deferred rather than removed. They remain recorded follow-on work and must not be described as complete,
 but they do not block the local Windows show-core stop condition.
@@ -354,7 +390,8 @@ evidence. No unavailable physical device is a passing hardware result.
 ### 4.1 Current release train
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; current product metadata is `1.2.0-alpha.39` on
+alpha checkpoints; the superseded alpha.39 checkpoint is recorded below, while
+the current product metadata is `1.2.0-alpha.42` on
 `codex/syndocal-v1.2`. The alpha.39 native checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
 the build checkpoint. It
@@ -410,11 +447,13 @@ Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256
 LastWrite `2026-08-28T06:20:27.6424691+09:00`, PID `83252`, handle
 `60826240`, title `Syndocal`, and responsive/maximized state verified. Native
 I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering were
-accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` remains
-the StandardRelease authority for that exact historical alpha.25 version,
+accepted. At that historical checkpoint,
+`qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` was the
+StandardRelease authority for that exact alpha.25 version,
 `59,807,744`-byte size, SHA-256, and source HEAD; PowerShell 7 and Windows
 PowerShell 5.1 self-tests both passed `88/88`, with syntax passing in both. No
-Apply or hardware acceptance was run. DJ TCP re-established the `.50.2` peer,
+Apply or hardware acceptance was run. The current harness authority is the
+alpha.42 artifact recorded at the top of this document. DJ TCP re-established the `.50.2` peer,
 but `Untitled.sdc`/its mapping was not authoritative. The preceding alpha.23 source checkpoint remains
 historical at exact committed/pushed, upstream-equal source
 `5e7d27df7f5864449d4838782f6eca2f9b81d360`; alpha.22 authoritative Scene
@@ -2945,7 +2984,7 @@ refresh is recorded in the current status and authoritative handoff. The
 reviewed recurring-cleanup harness was not approved for Apply, so no deletion
 ran and reclaimed bytes remained 0.
 
-## 64. 2026-08-29 CURRENT alpha.33 camera-capture source tranche (native pending)
+## 64. 2026-08-29 HISTORICAL alpha.33 camera-capture source tranche (superseded by alpha.42 final native checkpoint above)
 
 The product identity is `1.2.0-alpha.33`; this is a source checkpoint and not
 yet a versioned native acceptance. The old camera route
