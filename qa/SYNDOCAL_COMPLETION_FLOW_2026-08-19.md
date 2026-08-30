@@ -6,9 +6,9 @@ Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
 ## 2026-08-31 alpha.43 source-integration checkpoint
 
-The pushed alpha.43 implementation checkpoint is branch
+The pushed alpha.43 implementation/QA checkpoint is branch
 `codex/syndocal-v1.2` at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
 `HEAD`/upstream equality. That committed source checkpoint
 advances all distributed product-version surfaces from `1.2.0-alpha.42` to
 `1.2.0-alpha.43`: workspace Cargo and lock,
@@ -57,6 +57,15 @@ The content artifact keeps the authored route disabled as `EnttecOpenDmx` at
 it must be enumerated and explicitly selected on the show PC, not persisted as
 the historical development-machine `COM3`.
 
+The exact `dance.dvc` input (`268,702` bytes, SHA-256
+`33E1EAD49F59B511D6A812FD06F506A89FF23721AE6CD99A927FDC89877B6B65`)
+has one imported Super Scene at `TIMELINE / New Scene` `#8.1`: 18 lanes, 194
+resolved Lighting blocks, one audio block, and `201090 ms` duration. The other
+same-named cue, `ber / New Scene` `#15.2`, is independently a normal Static
+scene. The exact external acceptance passed `1/1` with first-party warnings `0`
+under the pinned MSVC 14.44 gate; the one unavailable audio source remains an
+explicit relink task.
+
 Next safe action: obtain explicit confirmation that the currently open, unsaved
 Syndocal project is saved. Only then initialize and verify the exact MSVC `14.44`
 linker, stop only the exact checkout-owned alpha.42 Syndocal executable, build
@@ -66,8 +75,8 @@ native/physical result before those steps complete.
 
 ## 2026-08-30 current show-critical checkpoint
 
-Current pushed KDMX source/QA authority is
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b` on
+Current pushed KDMX implementation/QA authority is
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619` on
 `codex/syndocal-v1.2`, equal to `origin/codex/syndocal-v1.2`. The fixed alpha.42
 Art-Net derivative generator/tests were introduced at
 `42cb17ce3ae0272a43f7671da70361d3f2520e98`; DJ production-authority
@@ -511,8 +520,8 @@ evidence. No unavailable physical device is a passing hardware result.
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; the superseded alpha.39 checkpoint is recorded below. Current
-source metadata is `1.2.0-alpha.43` at pushed checkpoint
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, where local `HEAD` and upstream
+source metadata is `1.2.0-alpha.43` at pushed implementation/QA checkpoint
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, where local `HEAD` and upstream
 were recorded equal, on
 `codex/syndocal-v1.2`, while the current native authority remains alpha.42 and
 alpha.43 native build/launch verification is pending. The alpha.39 native

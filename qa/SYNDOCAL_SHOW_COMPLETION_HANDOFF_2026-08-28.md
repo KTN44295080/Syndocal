@@ -6,9 +6,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## 2026-08-31 alpha.43 source-integration handoff
 
-The pushed alpha.43 implementation checkpoint is branch
+The pushed alpha.43 implementation/QA checkpoint is branch
 `codex/syndocal-v1.2` at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
 `HEAD`/upstream equality. That committed source checkpoint
 advances the product consistently to `1.2.0-alpha.43` across workspace
 Cargo/lock, frontend package, Tauri
@@ -61,6 +61,14 @@ unknown and fail closed. Its disabled `EnttecOpenDmx` route persists
 enumerated and deliberately selected on the show PC; historical `COM3` is not
 an authored production requirement.
 
+The exact `C:\Users\kouty\Downloads\dance.dvc` input is `268,702` bytes,
+SHA-256 `33E1EAD49F59B511D6A812FD06F506A89FF23721AE6CD99A927FDC89877B6B65`.
+`TIMELINE / New Scene` `#8.1` is the imported child Timeline (18 lanes, 194
+resolved Lighting blocks, one audio block, `201090 ms`); `ber / New Scene`
+`#15.2` is a separate correct Static scene. The exact external acceptance
+passed `1/1`, first-party warnings `0`, under the pinned MSVC 14.44 gate. The
+audio path is unavailable and must be relinked; the Lighting blocks are intact.
+
 Next safe action: obtain explicit confirmation that the currently open, unsaved
 Syndocal project is saved. Afterwards, under the exact pinned and `where.exe`-first MSVC
 `14.44` linker, terminate only the exact checkout-owned alpha.42 Syndocal
@@ -70,8 +78,8 @@ or native result until those actions have actually completed.
 
 ## 2026-08-30 current source, process, and external-boundary checkpoint
 
-The current pushed source/QA checkpoint is branch `codex/syndocal-v1.2` at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, exactly equal to
+The current pushed implementation/QA checkpoint is branch `codex/syndocal-v1.2` at
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, exactly equal to
 `origin/codex/syndocal-v1.2`. The fixed alpha.42 Art-Net derivative generator
 and tests were introduced at `42cb17ce3ae0272a43f7671da70361d3f2520e98`.
 The DJ production-authority documentation checkpoint was introduced at

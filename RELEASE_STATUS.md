@@ -5,9 +5,9 @@ Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.43`.
 
 ## 2026-08-31 current alpha.43 source checkpoint
 
-Alpha.43 is the current source checkpoint on branch `codex/syndocal-v1.2`,
-with pushed `HEAD`/upstream equal at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`. It covers the synchronized
+Alpha.43 is the current implementation/QA checkpoint on branch
+`codex/syndocal-v1.2`, with pushed `HEAD`/upstream equal at
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`. It includes the synchronized
 version metadata and Timeline follow-hint/fail-closed 4-viewport harness
 source. `check:release`, `check:release:self-test`, the four viewport checks,
 Timeline performance, context-menu, DJ Link, localization `3644/3644`,
@@ -23,6 +23,15 @@ than a production operator artifact. Its authored DMX route remains disabled as
 machine-local and must be enumerated and deliberately selected on the show PC.
 The tracked authoring gate uses `--require-content-artifact`; the retired
 `--require-final-artifact` spelling is rejected rather than retained as a shim.
+
+The exact `C:\Users\kouty\Downloads\dance.dvc` input is `268,702` bytes with
+SHA-256 `33E1EAD49F59B511D6A812FD06F506A89FF23721AE6CD99A927FDC89877B6B65`.
+Its `TIMELINE / New Scene` cue `#8.1` imports as one child Timeline with 18
+lanes, 194 resolved Lighting blocks, one audio block, and duration `201090 ms`.
+The separate `ber / New Scene` cue `#15.2` has no Timeline and is correctly
+Static; the shared label is not data loss. The exact external acceptance ran
+under the pinned MSVC 14.44 linker and passed `1/1`, first-party warnings `0`.
+Only the imported audio source is unavailable and requires relinking.
 
 ## 2026-08-30 historical alpha.39 native checkpoint
 

@@ -2,9 +2,9 @@
 
 Date: 2026-08-21
 Updated: 2026-08-31
-Status: Required; the pushed KDMX alpha.43 implementation checkpoint is on
+Status: Required; the pushed KDMX alpha.43 implementation/QA checkpoint is on
 `codex/syndocal-v1.2` at commit
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`, recorded with local
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
 `HEAD`/upstream equality. The current native authority is
 still `1.2.0-alpha.42`; no alpha.43 native build, executable identity, launch,
 or native UI acceptance is claimed. The current rb-output source authority is
@@ -20,8 +20,8 @@ Source authority: replacement user specifications received 2026-08-20 and 2026-0
 
 ## Current alpha.43 source, show-artifact, and peer authority — 2026-08-31
 
-The active KDMX source metadata is `1.2.0-alpha.43` at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`; the built and running native
+The active KDMX source metadata is `1.2.0-alpha.43` at implementation/QA
+checkpoint `8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the built and running native
 authority remains alpha.42. Three separate, immutable artifacts have bounded
 roles:
 
@@ -248,8 +248,8 @@ The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete ten-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX source authority
-is `1.2.0-alpha.43` at
-`a6586ea87b02a33dbcd8e069305a538d0f8d978b`; the current native authority
+is `1.2.0-alpha.43` at implementation/QA checkpoint
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the current native authority
 remains alpha.42, and alpha.43 native build/launch/UI acceptance is pending. The
 bounded alpha9 content, alpha.42 three-display, and alpha.42 Art-Net probe
 artifact identities are recorded above. None is an approved production operator
