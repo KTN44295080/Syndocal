@@ -1,8 +1,54 @@
-# Syndocal 2026-08-30 show completion handoff
+# Syndocal 2026-08-31 show completion handoff
 
-Status date: 2026-08-30 JST
+Status date: 2026-08-31 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
+
+## 2026-08-31 alpha.43 source-integration handoff (pre-commit)
+
+The current integration base is branch `codex/syndocal-v1.2` at local `HEAD`
+and `origin/codex/syndocal-v1.2`
+`aa9747509174edbc4854c8413230388d6281cbf9`, before the next commit. The
+uncommitted integrated source set advances the product consistently to
+`1.2.0-alpha.43` across workspace Cargo/lock, frontend package, Tauri
+configuration, release-check metadata, README, macOS bundle artifact naming,
+and Windows workflow artifact naming. It also contains the Timeline
+follow-hint wrapping change and the control-upper-workspaces fresh-child
+viewport harness work in `app/src/styles.css`,
+`app/scripts/check-control-upper-workspaces-browser.mjs`, and new
+`app/scripts/run-control-upper-workspaces-browser.mjs`. `app/package.json`
+contains both the version and harness command changes and is a shared
+integration file; do not separately overwrite or commit either half.
+
+`pnpm --dir app run check:release` and
+`pnpm --dir app run check:release:self-test` are `PASS`. The final
+control-upper-workspaces runner passed `3840x2160`, `2560x1440`, `1920x1080`,
+and `1280x720` in that exact order with zero CDP runtime exceptions, errors,
+warnings, or harness errors. Timeline performance, context-menu, DJ Link,
+localization (`3644/3644`, zero unprotected labels), TypeScript, Cargo format,
+and diff checks passed. Independent Terra xHigh adversarial review returned GO
+after Vite/CDP endpoint identity, fail-closed input, and cleanup proof were
+closed. No alpha.43 native build, executable or artifact identity, window
+launch/maximize verification, release, or physical acceptance is claimed. No
+process-control action was taken for this source checkpoint; preserve the show
+processes and rediscover/verify the exact checkout-owned executable before
+native QA.
+
+The alpha.42 executable identity, fixed Art-Net probe derivative and hashes,
+Art-Net wire boundary, and native three-display/physical observations in the
+following historical sections are immutable evidence. They must remain
+verbatim and do not prove alpha.43. Production DJ configuration/token/Show-LAN
+and hardware acceptance remain pending. The standalone Rekordbox local
+physical F14 beat transition and F13 HPF -> ChannelFader fade -> Stop edge
+remain operator-run pending work.
+
+Next safe action: commit and push this independently reviewed integrated source
+checkpoint with its final dirty-file inventory. Afterwards, under the exact
+pinned and `where.exe`-first MSVC `14.44` linker, terminate
+only an exact checkout-owned running Syndocal executable if present, build,
+launch, and maximize the verified Syndocal window before separately controlled
+QA. Do not supply a final commit hash or alpha.43 artifact identity until
+those actions have actually completed.
 
 ## 2026-08-30 current source, process, and external-boundary checkpoint
 

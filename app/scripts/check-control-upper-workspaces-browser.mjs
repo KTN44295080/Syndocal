@@ -2,28 +2,39 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { connect as createTcpConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer as createViteServer } from "vite";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const host = "127.0.0.1";
-const vitePort = 5197;
-const cdpPort = 9247;
-const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
-const faviconUrl = `http://${host}:${vitePort}/favicon.ico`;
+let vitePort;
+let cdpPort;
+let baseUrl;
+let faviconUrl;
 const screenshotDir = resolve(
   process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR ?? "C:\\TEMP\\syndocal-control-ui-checkpoints",
 );
 const productMinimumWindow = { width: 960, height: 640 };
 // The show-core uses these four physical desktop classes. Smaller browser and
 // detached-pane tests remain supplemental and do not define this acceptance.
-const viewports = [
+const defaultViewports = [
   { width: 3840, height: 2160 },
   { width: 2560, height: 1440 },
   { width: 1920, height: 1080 },
   { width: 1280, height: 720 },
 ];
+const selectedViewport = process.env.SYNDOCAL_CONTROL_VIEWPORT;
+const viewports = (() => {
+  if (selectedViewport === undefined) return defaultViewports;
+  const match = defaultViewports.find(({ width, height }) => `${width}x${height}` === selectedViewport);
+  if (!match) {
+    throw new Error(`SYNDOCAL_CONTROL_VIEWPORT must be one exact supported viewport; received ${JSON.stringify(selectedViewport)}`);
+  }
+  return [match];
+})();
 const browserCandidates = [
   process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -32,12 +43,6 @@ const browserCandidates = [
 ].filter(Boolean);
 
 const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
-const stopChild = async (child) => {
-  if (!child || child.exitCode !== null) return;
-  const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
-  child.kill();
-  await Promise.race([exited, sleep(2_000)]);
-};
 const waitFor = async (check, label, timeoutMs = 30_000) => {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -51,6 +56,94 @@ const waitFor = async (check, label, timeoutMs = 30_000) => {
     await sleep(100);
   }
   throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError}` : ""}`);
+};
+
+const childHasExited = (child) => !child || child.exitCode !== null || child.signalCode !== null;
+const assertChildAlive = (child, label) => {
+  if (!child) throw new Error(`${label} was not spawned`);
+  if (child.spawnError) throw new Error(`${label} failed to spawn: ${child.spawnError.message}`);
+  if (childHasExited(child)) {
+    throw new Error(`${label} exited before readiness (status=${child.exitCode}, signal=${child.signalCode})`);
+  }
+};
+
+const waitForChildExit = async (child, label, timeoutMs = 5_000) => {
+  if (!child || childHasExited(child)) return;
+  await new Promise((resolveExit, rejectExit) => {
+    let timer;
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      callback();
+    };
+    const onExit = () => {
+      finish(resolveExit);
+    };
+    child.once("exit", onExit);
+    timer = setTimeout(() => {
+      finish(() => rejectExit(new Error(`${label} did not exit after termination`)));
+    }, timeoutMs);
+    if (childHasExited(child)) finish(resolveExit);
+  });
+  if (!childHasExited(child)) throw new Error(`${label} exit could not be verified`);
+};
+
+const runTaskkillTree = (pid) => new Promise((resolveKill, rejectKill) => {
+  const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  killer.once("error", rejectKill);
+  killer.once("exit", (status, signal) => resolveKill({ status, signal }));
+});
+
+const stopChild = async (child, label) => {
+  if (!child || childHasExited(child)) return;
+  if (!child.pid) throw new Error(`${label} has no spawned PID`);
+  if (process.platform === "win32") {
+    const result = await runTaskkillTree(child.pid);
+    if (result.status !== 0 || result.signal !== null) {
+      throw new Error(`${label} tree termination failed (status=${result.status}, signal=${result.signal})`);
+    }
+  } else {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
+  await waitForChildExit(child, label);
+};
+
+const tcpPortIsHeld = (port) => new Promise((resolveHeld) => {
+  const socket = createTcpConnection({ host, port });
+  let settled = false;
+  const finish = (held) => {
+    if (settled) return;
+    settled = true;
+    socket.destroy();
+    resolveHeld(held);
+  };
+  socket.once("connect", () => finish(true));
+  socket.once("error", (error) => {
+    if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(error?.code)) {
+      finish(false);
+      return;
+    }
+    finish(true);
+  });
+  socket.setTimeout(500, () => finish(true));
+});
+
+const waitForEndpointRelease = async (port, label, required = false) => {
+  if (!Number.isInteger(port)) {
+    if (required) throw new Error(`${label} endpoint identity was never established`);
+    return;
+  }
+  await waitFor(async () => !(await tcpPortIsHeld(port)), `${label} TCP endpoint release`, 5_000);
 };
 
 class CdpClient {
@@ -720,31 +813,102 @@ let vite;
 let browser;
 let client;
 let profileDir;
+let gateFailure;
+let browserSpawned = false;
 try {
   const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
   assert.ok(browserPath, "Chrome or Edge is required for the Control upper workspace browser gate");
   await assertMainWindowMinimum();
   await mkdir(screenshotDir, { recursive: true });
-  vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", host, "--port", String(vitePort), "--strictPort"], {
-    cwd: appRoot,
-    stdio: "ignore",
+  vite = await createViteServer({
+    root: appRoot,
+    clearScreen: false,
+    logLevel: "silent",
+    server: {
+      host,
+      port: 0,
+      strictPort: true,
+    },
   });
-  await waitFor(async () => (await fetch(baseUrl)).ok, "Vite fixture server");
+  await vite.listen();
+  const viteAddress = vite.httpServer?.address();
+  assert.ok(viteAddress && typeof viteAddress === "object", "Vite fixture server did not expose its owned TCP address");
+  vitePort = viteAddress.port;
+  assert.ok(Number.isInteger(vitePort) && vitePort >= 1 && vitePort <= 65_535, "Vite fixture server exposed an invalid owned TCP port");
+  baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+  faviconUrl = `http://${host}:${vitePort}/favicon.ico`;
+  await waitFor(async () => {
+    try {
+      return (await fetch(baseUrl)).ok;
+    } catch {
+      return false;
+    }
+  }, "Vite fixture server");
   profileDir = await mkdtemp(join(tmpdir(), "syndocal-control-upper-workspaces-"));
   browser = spawn(browserPath, [
     "--headless=new",
     "--disable-gpu",
     "--no-first-run",
     "--no-default-browser-check",
-    `--remote-debugging-port=${cdpPort}`,
+    "--remote-debugging-port=0",
     `--user-data-dir=${profileDir}`,
     "about:blank",
-  ], { stdio: "ignore" });
+  ], { stdio: "ignore", windowsHide: true, detached: true });
+  browserSpawned = Boolean(browser.pid);
+  browser.once("error", (error) => { browser.spawnError = error; });
+  const activePortPath = join(profileDir, "DevToolsActivePort");
+  const devToolsEndpoint = await waitFor(async () => {
+    assertChildAlive(browser, "headless browser");
+    if (!existsSync(activePortPath)) return null;
+    const [portText, browserPath] = (await readFile(activePortPath, "utf8")).trim().split(/\r?\n/);
+    const port = Number(portText);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(`Invalid DevToolsActivePort value: ${JSON.stringify(portText)}`);
+    }
+    if (!/^\/devtools\/browser\/[0-9a-f-]+$/i.test(browserPath ?? "")) {
+      throw new Error(`Invalid DevToolsActivePort browser identity: ${JSON.stringify(browserPath)}`);
+    }
+    return { port, browserPath };
+  }, "headless browser DevToolsActivePort");
+  cdpPort = devToolsEndpoint.port;
+  const browserVersion = await waitFor(async () => {
+    assertChildAlive(browser, "headless browser");
+    try {
+      const response = await fetch(`http://${host}:${cdpPort}/json/version`);
+      return response.ok ? response.json() : null;
+    } catch {
+      return null;
+    }
+  }, "headless browser CDP identity");
+  const browserWebSocketUrl = new URL(browserVersion.webSocketDebuggerUrl);
+  assert.equal(browserWebSocketUrl.protocol, "ws:", "CDP browser endpoint must use ws");
+  assert.equal(browserWebSocketUrl.hostname, host, "CDP browser endpoint must remain on the checker loopback host");
+  assert.equal(Number(browserWebSocketUrl.port), cdpPort, "CDP browser endpoint port must match DevToolsActivePort");
+  assert.equal(browserWebSocketUrl.pathname, devToolsEndpoint.browserPath, "CDP browser endpoint identity must match the exact spawned profile");
+  assert.equal(browserWebSocketUrl.username, "", "CDP browser endpoint must not contain credentials");
+  assert.equal(browserWebSocketUrl.password, "", "CDP browser endpoint must not contain credentials");
+  assert.equal(browserWebSocketUrl.search, "", "CDP browser endpoint must not contain a query");
+  assert.equal(browserWebSocketUrl.hash, "", "CDP browser endpoint must not contain a fragment");
   const target = await waitFor(async () => {
-    const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" });
-    return response.ok ? response.json() : null;
+    assertChildAlive(browser, "headless browser");
+    try {
+      const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" });
+      return response.ok ? response.json() : null;
+    } catch {
+      return null;
+    }
   }, "headless browser CDP target");
-  client = new CdpClient(target.webSocketDebuggerUrl);
+  const targetWebSocketUrl = new URL(target.webSocketDebuggerUrl);
+  assert.equal(targetWebSocketUrl.protocol, "ws:", "CDP page endpoint must use ws");
+  assert.equal(targetWebSocketUrl.hostname, host, "CDP page endpoint must remain on the checker loopback host");
+  assert.equal(Number(targetWebSocketUrl.port), cdpPort, "CDP page endpoint port must match the exact spawned browser");
+  assert.match(targetWebSocketUrl.pathname, /^\/devtools\/page\/[0-9a-f-]+$/i, "CDP page endpoint must expose an exact page identity");
+  assert.equal(targetWebSocketUrl.username, "", "CDP page endpoint must not contain credentials");
+  assert.equal(targetWebSocketUrl.password, "", "CDP page endpoint must not contain credentials");
+  assert.equal(targetWebSocketUrl.search, "", "CDP page endpoint must not contain a query");
+  assert.equal(targetWebSocketUrl.hash, "", "CDP page endpoint must not contain a fragment");
+  const pinnedTargetWebSocketUrl = `ws://${host}:${cdpPort}${targetWebSocketUrl.pathname}`;
+  client = new CdpClient(pinnedTargetWebSocketUrl);
   await client.ready();
   const diagnosticsOrigin = client.diagnosticCursor();
   await client.send("Page.enable");
@@ -1026,20 +1190,65 @@ try {
   const finalDiagnostics = client.diagnosticsSince(diagnosticsOrigin);
   console.log(`Final CDP diagnostics: ${JSON.stringify(diagnosticCounts(finalDiagnostics))}`);
   assertNoCdpErrors(finalDiagnostics, "Final cumulative gate");
-  console.log(`Control upper workspace browser gate passed; screenshots=${screenshotDir}`);
+} catch (error) {
+  gateFailure = error;
 } finally {
-  client?.close();
-  await stopChild(browser);
-  await stopChild(vite);
+  const cleanupFailures = [];
+  const recordCleanupFailure = (label, error) => {
+    cleanupFailures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  };
+  try {
+    client?.close();
+  } catch (error) {
+    recordCleanupFailure("CDP client close", error);
+  }
+  try {
+    await stopChild(browser, "headless browser");
+  } catch (error) {
+    recordCleanupFailure("headless browser tree cleanup", error);
+  }
+  try {
+    await vite?.close();
+  } catch (error) {
+    recordCleanupFailure("Vite fixture server handle cleanup", error);
+  }
+  try {
+    await waitForEndpointRelease(cdpPort, "headless browser", browserSpawned);
+  } catch (error) {
+    recordCleanupFailure("headless browser endpoint cleanup", error);
+  }
+  try {
+    await waitForEndpointRelease(vitePort, "Vite fixture server", Boolean(vite));
+  } catch (error) {
+    recordCleanupFailure("Vite fixture server endpoint cleanup", error);
+  }
   if (profileDir) {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        await rm(profileDir, { recursive: true, force: true });
-        break;
-      } catch (error) {
-        if (attempt === 4) throw error;
-        await sleep(250);
+    try {
+      let removed = false;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await rm(profileDir, { recursive: true, force: true });
+          removed = !existsSync(profileDir);
+          if (removed) break;
+        } catch (error) {
+          if (attempt === 4) throw error;
+          await sleep(250);
+        }
       }
+      if (!removed) throw new Error(`profile directory still exists: ${profileDir}`);
+    } catch (error) {
+      recordCleanupFailure("browser profile cleanup", error);
+    }
+  }
+  if (cleanupFailures.length > 0) {
+    const cleanupError = new Error(`Test cleanup failed: ${cleanupFailures.join("; ")}`);
+    if (gateFailure) {
+      console.error(`${cleanupError.message}; preserving primary gate failure: ${gateFailure instanceof Error ? gateFailure.message : String(gateFailure)}`);
+    } else {
+      gateFailure = cleanupError;
     }
   }
 }
+
+if (gateFailure) throw gateFailure;
+console.log(`Control upper workspace browser gate passed; screenshots=${screenshotDir}`);

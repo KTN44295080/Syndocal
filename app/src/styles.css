@@ -39377,6 +39377,8 @@ button.timelineExternalSourceCard:active,
   grid-column: 1 / -1;
   color: var(--text-dim);
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 900px) {

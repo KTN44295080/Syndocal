@@ -4,6 +4,48 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-31 alpha.43 source-integration checkpoint (pre-commit)
+
+The integration base is branch `codex/syndocal-v1.2` at local `HEAD` and
+`origin/codex/syndocal-v1.2`
+`aa9747509174edbc4854c8413230388d6281cbf9`, before the next source commit.
+The uncommitted integrated set advances all distributed product-version
+surfaces from `1.2.0-alpha.42` to `1.2.0-alpha.43`: workspace Cargo and lock,
+frontend package, Tauri configuration, release metadata checker, README,
+macOS bundle name, and Windows workflow artifact name. It also contains the
+Timeline follow-hint wrapping fix and the fresh-child viewport harness/runner
+work (`app/src/styles.css`,
+`app/scripts/check-control-upper-workspaces-browser.mjs`, and the new
+`app/scripts/run-control-upper-workspaces-browser.mjs`). `app/package.json` is
+shared by the version and harness changes and must be integrated as one file.
+
+`pnpm --dir app run check:release` and
+`pnpm --dir app run check:release:self-test` passed for this source state. The
+final control-upper-workspaces runner passed the exact physical viewport order
+`3840x2160`, `2560x1440`, `1920x1080`, and `1280x720`, with zero CDP runtime
+exceptions, errors, warnings, or harness errors. Timeline performance,
+context-menu, DJ Link, localization (`3644/3644`, zero unprotected labels),
+TypeScript, Cargo format, and diff checks also passed. Independent Terra xHigh
+adversarial review returned GO after the Vite/CDP endpoint ownership and
+cleanup proof was made fail-closed. No native build, released alpha.43
+executable/artifact, Syndocal window launch, or alpha.43 physical acceptance
+is claimed. Existing show processes were preserved; rediscover and verify them
+immediately before any native action.
+
+The alpha.42 native executable, fixed Art-Net derivative, source/destination
+hashes, packet boundary, and physical three-display observations below are
+immutable historical evidence. They are not alpha.43 proof and must not be
+rewritten or relabelled. Production DJ configuration/token/Show-LAN and
+hardware boundaries remain pending, as do the standalone Rekordbox local
+physical F13/F14 edge checks.
+
+Next safe action: commit and push the independently reviewed integrated source
+checkpoint. Only after that, initialize and verify the exact MSVC
+`14.44` linker, stop only the exact checkout-owned Syndocal executable if it
+is running, build, launch and maximize the verified Syndocal window, and run
+the separately controlled QA. Do not invent a commit hash, artifact identity,
+or native/physical result before those steps complete.
+
 ## 2026-08-30 current show-critical checkpoint
 
 Current pushed KDMX source/QA authority is
