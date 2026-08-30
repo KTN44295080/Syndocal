@@ -38,6 +38,37 @@ switching/recovery, foreground independence, and both native Display windows
 are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
 physical hardware acceptance remain unconfirmed.
 
+### 2026-08-30 alpha.42 Art-Net probe-only derivative
+
+The fixed-path generator
+`qa/harnesses/derive-dsf2026-alpha42-artnet-probe.mjs` created the ignored
+current-alpha42 probe derivative
+`target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha42-artnet-probe-acceptance.sdc`
+once from the exact three-display source (`1,120,320` bytes,
+SHA-256 `2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`).
+The derivative is `1,120,306` bytes,
+SHA-256 `4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`.
+Deep diff proves the only changes are the two route protocol paths,
+`snapshot.dmx_outputs[0].protocol` and `snapshot.output.protocol`,
+`EnttecOpenDmx` -> `ArtNet`; both routes remain disabled at
+`127.0.0.1:6454`, wire U0, empty serial port, baud `250000`, and all strict
+Spout/Display/Timeline content is preserved.
+
+This derivative is probe-only and does not replace production or close the
+physical Art-Net gate. Unity/UDP `6454` is recorded as prepared, but the
+one-shot remains unsent/unconsumed; generation performed no UDP I/O. Focused
+Node tests, syntax, and diff checks pass. Under the exact pinned and
+`where.exe`-first MSVC `14.44.35207` linker, the Syndocal packet/route tests pass
+`2/2` and the Engine no-route-mutation test passes `1/1`; first-party warnings
+are `0`. The next physical action remains the separately controlled
+native/Unity one-shot run; do not retry an in-doubt send.
+
+Recorded focused commands (all exit `0`) are the dedicated Node test, generator
+and test `node --check`, and `git diff --check` on the owned tracked
+documentation paths, plus the focused Syndocal `show_artnet_acceptance_probe::tests`
+and Engine `dsf2026_probe_engine_boundary_sends_one_exact_u0_packet_without_route_mutation`
+Cargo tests under the exact linker gate; first-party warning count is `0`.
+
 ## 2026-08-22 superseding local Windows show-core scope
 
 The active completion target is now the operator's current Windows PC and the

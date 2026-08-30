@@ -37,6 +37,42 @@ switching/recovery, foreground independence, and both native Display windows
 are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
 physical hardware acceptance remain unconfirmed.
 
+### 2026-08-30 alpha.42 Art-Net probe-only derivative
+
+The ignored QA artifact
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-artnet-probe-acceptance.sdc`
+was created once by
+`qa/harnesses/derive-dsf2026-alpha42-artnet-probe.mjs` from the exact
+`DSF2026-show-alpha42-three-display-acceptance.sdc` source identity:
+`1,120,320` bytes,
+SHA-256 `2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`.
+The derivative is `1,120,306` bytes,
+SHA-256 `4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`.
+
+The exact deep diff is limited to
+`snapshot.dmx_outputs[0].protocol` and `snapshot.output.protocol`, both
+`EnttecOpenDmx` -> `ArtNet`; both routes otherwise remain disabled at
+`127.0.0.1:6454`, wire U0, empty serial port, and baud `250000`. Spout,
+Display, and Timeline content remains unchanged. The generator is fixed-path,
+strict-schema/count, exact-literal, reparse-safe, and create-new/no-overwrite;
+its focused Node tests, `node --check`, and `git diff --check` pass. Under the
+exact pinned and `where.exe`-first MSVC `14.44.35207` linker, the Syndocal
+packet/route tests pass `2/2` and the Engine no-route-mutation test passes `1/1`;
+first-party warnings are `0`.
+
+This is a probe-only current-alpha42 derivative, not a production replacement
+or physical acceptance. Unity/UDP `6454` is recorded as prepared for the
+eventual physical run, but the generation/verification sent no UDP and the
+one-shot remains unsent/unconsumed. No native build, receiver capture, or
+fixture observation is claimed.
+
+Recorded focused commands (all exit `0`) are
+`node qa/tests/derive-dsf2026-alpha42-artnet-probe.test.mjs`, both generator
+and test `node --check` commands, and `git diff --check` on the owned tracked
+documentation paths, plus the focused Syndocal `show_artnet_acceptance_probe::tests`
+and Engine `dsf2026_probe_engine_boundary_sends_one_exact_u0_packet_without_route_mutation`
+Cargo tests under the exact linker gate; first-party warning count is `0`.
+
 ## 2026-08-30 alpha.42 three-display source checkpoint (superseded by final native checkpoint above)
 
 - The source checkpoint starts from branch `codex/syndocal-v1.2` at

@@ -34,6 +34,47 @@ switching/recovery, foreground independence, and both native Display windows
 are `PASS`. MiraBox actual HDMI content proof, Unity/GPU/Art-Net, and other
 physical hardware acceptance remain unconfirmed.
 
+## 2026-08-30 alpha.42 Art-Net probe-only derivative
+
+The fixed generator
+`qa/harnesses/derive-dsf2026-alpha42-artnet-probe.mjs` created the ignored QA
+artifact
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-artnet-probe-acceptance.sdc`
+once, from the exact current alpha42 three-display source
+`DSF2026-show-alpha42-three-display-acceptance.sdc` (`1,120,320` bytes,
+SHA-256
+`2D8B4D760E51009344D5A3195A39A61D0674F993027CD440A49F6F7D8F1F355C`). The
+derived artifact is `1,120,306` bytes with SHA-256
+`4130599CEB73F2D97C7BB22DBCAD6A9187BD02F53DAC3946491BEB32E33776D9`.
+
+The publication is byte-preserving except for exactly these two parsed paths:
+`snapshot.dmx_outputs[0].protocol` and `snapshot.output.protocol`, each changed
+from `EnttecOpenDmx` to `ArtNet`. Both routes remain `enabled:false`,
+`127.0.0.1:6454`, wire Universe `0`, `serial_port:""`, and baud `250000`.
+Strict Spout/Display/timeline content and every other JSON value are unchanged
+by deep-diff verification. The generator fails closed on fixed source identity,
+schema/count, literal-count, reparse, existing-target, and overwrite-boundary
+violations; production CLI paths are fixed and the target is create-new only.
+
+This is a probe-only current-alpha42 derivative, not a production replacement
+and not physical acceptance. Unity and UDP `6454` are recorded as prepared for
+the eventual one-shot run, but this generation/verification invoked no UDP send
+and the one-shot remains unsent/unconsumed. Focused Node tests, `node --check`,
+and `git diff --check` pass. With the exact MSVC `14.44.35207` linker pinned and
+first in `where.exe`, the Syndocal packet/route tests pass `2/2` and the Engine
+no-route-mutation test passes `1/1`; first-party warnings are `0`. No native
+release build or physical receiver/fixture observation is claimed here.
+
+Recorded focused commands (all exit `0`) are
+`node qa/tests/derive-dsf2026-alpha42-artnet-probe.test.mjs`,
+`node --check qa/harnesses/derive-dsf2026-alpha42-artnet-probe.mjs`,
+`node --check qa/tests/derive-dsf2026-alpha42-artnet-probe.test.mjs`, and
+`git diff --check` on the owned tracked documentation paths. The Rust commands
+are `cargo test -p syndocal show_artnet_acceptance_probe::tests -- --nocapture
+--test-threads=1` and `cargo test -p engine
+dsf2026_probe_engine_boundary_sends_one_exact_u0_packet_without_route_mutation
+-- --nocapture --test-threads=1` under that exact linker gate.
+
 ## Scope
 
 This is the show-critical output contract for the 2026-08-30 DSF performance.
