@@ -7,39 +7,169 @@ This is the short execution companion to
 acceptance authority and must not promote a row from a static gate, preflight,
 socket, or `CONNECTED` label alone.
 
-## 2026-08-30 CURRENT v1.1.11 operator authority
+## 2026-08-30 CURRENT product source 1.1.12 / production v1.1.11 operator authority
 
 This section is the only current DJ-PC launch and pedal authority in this
 document. Sections 1.1 through 2.1 below are immutable historical evidence and
 must not be executed as current instructions. The current external source
-checkout is branch `beta-v1.1.2`, exact clean `HEAD` and upstream
-`a13d7bff59db5e7c00e19655f87c69db7cb52005`, product source version `1.1.11`.
-No v1.1.11 installer, tag, public release, or hardware acceptance is claimed;
-HW-4 remains exactly **0/12** until the physical rows are observed.
+authority is `C:\Users\kouty\Desktop\rb-output`, branch `beta-v1.1.2`, exact
+clean `HEAD` and upstream
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`, product source version `1.1.12`.
+This is a controlled source route; no v1.1.12 installer, tag, public release,
+or hardware acceptance is claimed. Production strict schema/config remains
+v1.1.11. The production target is the checkout-external file
+`C:\SyndocalShow\dj-agent-v1.1.11.json`, but on the current
+`C:\SyndocalShow` only the separate
+`rb-output-rekordbox-local-test-v1.json` is present; the production config and
+token are absent. No production HELLO/ACK/STATE_SYNC or physical F13/F14 proof
+has been recorded. HW-4 remains exactly **0/12** until the physical rows are
+observed.
 
-The only current show configuration is the checkout-external file
-`C:\SyndocalShow\dj-agent-v1.1.11.json`. From one PowerShell in the verified
-DJ-PC checkout:
+Run the following blocks from the verified `C:\Users\kouty\Desktop\rb-output`
+checkout. They are deliberately separate: do not paste the provisioning blocks
+together, and do not continue past either block's explicit stop.
+
+### Immutable source identity gate (run before config or launch)
+
+This gate accepts only the reviewed source checkpoint. It performs no `git pull`;
+do not pull to an unreviewed source and silently continue. If a pull is required,
+stop, obtain a new reviewed checkpoint, and rerun this gate with its new exact
+values recorded here first.
 
 ```powershell
-git pull --ff-only
-git status --short
-git rev-parse HEAD
-git rev-parse '@{upstream}'
-
-# Run once only when the exact validated v1.1.10 predecessor exists.
-.\start-all.bat --upgrade-config
-
-$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.11.json'
-.\start-all.bat --preflight-only
-.\start-all.bat
+$ErrorActionPreference = 'Stop'
+$ExpectedCheckout = 'C:\Users\kouty\Desktop\rb-output'
+$ExpectedBranch = 'beta-v1.1.2'
+$ExpectedPeerHead = '59df968d91bca71a327ef2a57ee5ab15de9f9947'
+$ExpectedPeerVersion = '1.1.12'
+$ExpectedOriginRef = 'origin/beta-v1.1.2'
+if ((Get-Location).Path -cne $ExpectedCheckout) {
+  throw "Wrong checkout path: $((Get-Location).Path)"
+}
+$branch = (git branch --show-current).Trim()
+$branchExit = $LASTEXITCODE
+$dirty = @(git status --porcelain=v1)
+$dirtyExit = $LASTEXITCODE
+$head = (git rev-parse HEAD).Trim()
+$headExit = $LASTEXITCODE
+$origin = (git rev-parse $ExpectedOriginRef).Trim()
+$originExit = $LASTEXITCODE
+$version = (node -p "require('./package.json').version").Trim()
+$versionExit = $LASTEXITCODE
+if ($branchExit -ne 0 -or $branch -cne $ExpectedBranch -or
+    $dirtyExit -ne 0 -or $dirty.Count -ne 0 -or
+    $headExit -ne 0 -or $head -cne $ExpectedPeerHead -or
+    $originExit -ne 0 -or $origin -cne $ExpectedPeerHead -or
+    $versionExit -ne 0 -or $version -cne $ExpectedPeerVersion) {
+  throw 'DJ-PC source identity is not exact; stop before config or launch.'
+}
+[pscustomobject]@{
+  Checkout=(Get-Location).Path; Branch=$branch; Clean=($dirty.Count -eq 0)
+  Head=$head; Origin=$origin; PackageVersion=$version
+}
 ```
 
-`--upgrade-config` is a one-way, non-overwriting migration from the exact known
-v1.1.10 predecessor. If it rejects the predecessor or target, stop and diagnose;
-do not copy an older template, synthesize JSON from this runbook, or weaken the
-strict validator. `--preflight-only` starts no show-side process. The no-argument
-launcher is the current controlled-source runtime path.
+### Path A — exclusive one-time predecessor upgrade
+
+Use this block only when the exact validated v1.1.10 predecessor exists. Do not
+run Path B as well. The command is one-way and non-overwriting; the explicit
+stop is intentional so a pasted sequence cannot proceed to launch.
+
+```powershell
+$ProductionConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.11.json'
+$PredecessorConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.10.json'
+if (-not (Test-Path -LiteralPath $PredecessorConfigPath -PathType Leaf)) {
+  throw 'Path A requires the exact v1.1.10 predecessor; stop and use Path B only if the production target is also absent.'
+}
+if (Test-Path -LiteralPath $ProductionConfigPath -PathType Leaf) {
+  throw 'Path A refuses to overwrite an existing v1.1.11 production target; stop.'
+}
+$env:DJ_AGENT_CONFIG_PATH = $PredecessorConfigPath
+.\start-all.bat --upgrade-config
+if ($LASTEXITCODE -ne 0) { throw 'Path A --upgrade-config failed; stop.' }
+if (-not (Test-Path -LiteralPath $ProductionConfigPath -PathType Leaf)) {
+  throw 'Path A did not create the v1.1.11 production target; stop.'
+}
+$env:DJ_AGENT_CONFIG_PATH = $ProductionConfigPath
+throw 'STOP_AFTER_PATH_A: provision and verify the real v1.1.11 token, then open a new PowerShell.'
+```
+
+### Path B — exclusive one-time initialization
+
+Use this block only when both the exact predecessor and the v1.1.11 target are
+absent. Do not run Path A as well. This creates the token-free target once and
+stops before any preflight or launch.
+
+```powershell
+$ProductionConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.11.json'
+$PredecessorConfigPath = 'C:\SyndocalShow\dj-agent-v1.1.10.json'
+if (Test-Path -LiteralPath $PredecessorConfigPath -PathType Leaf) {
+  throw 'Path B refuses to bypass the exact v1.1.10 predecessor; stop and use Path A.'
+}
+if (Test-Path -LiteralPath $ProductionConfigPath -PathType Leaf) {
+  throw 'Path B refuses to overwrite an existing v1.1.11 production target; stop.'
+}
+.\start-all.bat --init-config
+if ($LASTEXITCODE -ne 0) { throw 'Path B --init-config failed; stop.' }
+if (-not (Test-Path -LiteralPath $ProductionConfigPath -PathType Leaf)) {
+  throw 'Path B did not create the v1.1.11 production target; stop.'
+}
+$env:DJ_AGENT_CONFIG_PATH = $ProductionConfigPath
+throw 'STOP_AFTER_PATH_B: provision and verify the real v1.1.11 token, then open a new PowerShell.'
+```
+
+The one-time operator decision is to provision and verify the real production
+token in `C:\SyndocalShow\dj-agent-v1.1.11.json` after exactly one path stops.
+Never copy an older template, synthesize JSON from this runbook, weaken the
+strict validator, or select the standalone local-test file for production.
+
+### Post-provisioning production preflight and launch (separate block)
+
+After the token decision is complete, open a new PowerShell. Do not rerun either
+provisioning path. Rerun the immutable source identity gate above first if any
+source operation occurred; a future upstream advance is not silently accepted.
+`--preflight-only` starts no show-side process, and launch is attempted only if
+its explicit failure check passes.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ExpectedCheckout = 'C:\Users\kouty\Desktop\rb-output'
+$ExpectedBranch = 'beta-v1.1.2'
+$ExpectedPeerHead = '59df968d91bca71a327ef2a57ee5ab15de9f9947'
+$ExpectedPeerVersion = '1.1.12'
+$ExpectedOriginRef = 'origin/beta-v1.1.2'
+if ((Get-Location).Path -cne $ExpectedCheckout) { throw 'Wrong checkout path; stop.' }
+$branch = (git branch --show-current).Trim(); $branchExit = $LASTEXITCODE
+$dirty = @(git status --porcelain=v1); $dirtyExit = $LASTEXITCODE
+$head = (git rev-parse HEAD).Trim(); $headExit = $LASTEXITCODE
+$origin = (git rev-parse $ExpectedOriginRef).Trim(); $originExit = $LASTEXITCODE
+$version = (node -p "require('./package.json').version").Trim(); $versionExit = $LASTEXITCODE
+if ($branchExit -ne 0 -or $branch -cne $ExpectedBranch -or
+    $dirtyExit -ne 0 -or $dirty.Count -ne 0 -or
+    $headExit -ne 0 -or $head -cne $ExpectedPeerHead -or
+    $originExit -ne 0 -or $origin -cne $ExpectedPeerHead -or
+    $versionExit -ne 0 -or $version -cne $ExpectedPeerVersion) {
+  throw 'DJ-PC source identity is not exact; stop before config or launch.'
+}
+$env:DJ_AGENT_CONFIG_PATH = 'C:\SyndocalShow\dj-agent-v1.1.11.json'
+.\start-all.bat --preflight-only
+if ($LASTEXITCODE -ne 0) { throw 'Production preflight failed; launch was not attempted.' }
+.\start-all.bat
+if ($LASTEXITCODE -ne 0) { throw 'Production launch failed; stop.' }
+```
+
+The no-argument launcher is the current controlled-source runtime path.
+
+The separate standalone mode reads only
+`C:\SyndocalShow\rb-output-rekordbox-local-test-v1.json`, uses no production
+token, NIC, or Syndocal network, and reports `not-applicable/local-only`.
+Standalone local acceptance does not replace production and cannot satisfy
+production HELLO/ACK/STATE_SYNC or advance HW-4.
+
+The common self-launched Rekordbox injection path now uses a fixed 15-second
+identity settle with continuous PID/path/name/create-time checks. Fresh/cold
+auto-launch remains unaccepted; existing-running injection and standalone
+local results are not substitutes for production proof.
 
 Owner selection is any-deck and does not require Rekordbox MASTER. It admits an
 actually playing deck whose NFC-normalized title case-sensitively contains
@@ -91,10 +221,10 @@ Immediately before the build:
    responsive maximized `Syndocal` window before UI acceptance.
 
 The build commit is whatever exact clean, upstream-equal KDMX `HEAD` is recorded
-at execution time. The current checkpoint is alpha.26 source-only: native
-alpha.26 build, artifact identity, launch, and UI acceptance remain
+at execution time. The alpha.26 source-only state recorded below is historical:
+its native build, artifact identity, launch, and UI acceptance remain
 unverified. Never substitute an older source hash or an alpha.24-or-earlier
-process as the current alpha.26 artifact identity.
+process as that historical alpha.26 artifact identity.
 
 ### 1.1 Historical alpha.20 / Follow / Stage 2 execution gate — 2026-08-27
 
@@ -189,7 +319,7 @@ project/mapping, target-DJ-PC token and NIC, Rekordbox, pedal/MIDI, reconnect,
 three-display, physical output, and all HW-4 observations remain open. HW-4 is
 still exactly **0/12**.
 
-### 1.4 Current alpha.26 source-only operator checkpoint — 2026-08-28
+### 1.4 Historical alpha.26 source-only operator checkpoint — 2026-08-28
 
 Product metadata is synchronized to `1.2.0-alpha.26` for the current App
 structural split. Alpha.26 native build, artifact identity, launch, and native
@@ -211,7 +341,7 @@ bytes, SHA-256
 `A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`,
 LastWriteTime `2026-08-28 07:10:32 JST`.
 
-## 2. DJ-PC controlled source
+## 2. SUPERSEDED / HISTORICAL — DJ-PC controlled source (v1.1.9)
 
 Open one PowerShell inside the actual target-DJ-PC checkout. Resolve and verify
 that checkout rather than copying a workstation-specific path:
@@ -295,7 +425,7 @@ marker `0`); the ignored peer `dist` remained stale but was outside that source
 acceptance checkpoint. These observations do not promote native or HW-4
 acceptance.
 
-### 2.1 Migrate an older external show config
+### 2.1 SUPERSEDED / HISTORICAL — Migrate an older external show config
 
 An existing v1.1.8-or-earlier JSON is not a v1.1.9 config. Strict readiness
 rejects it when the top-level `version` is not `1.1.9` or when the exact
@@ -587,7 +717,8 @@ the checkbox open and name the missing subcheck.
   repeated absolute measured `DJ_LOOP_STATE` down through `1/64`. Record MIDI
   monitor and payload timestamps. A true no-response prediction is separate and
   must never replace a stale/invalid/contradictory measurement.
-- [ ] **HW-4.6 — Stage 1 release policy.** Current controlled v1.1.9 requires
+- [ ] **HW-4.6 — Stage 1 release policy.** Current v1.1.11 production, implemented
+  by product source 1.1.12, requires
   `releaseMacro.enabled=true`, exact sequence `filter-then-fade-then-stop`, and
   `releaseFade.enabled=true`. On the accepted F13 edge, prove that owner-channel
   HPF CC16 starts `64 -> 127` over `1000 ms` in `50 ms` updates and exactly one

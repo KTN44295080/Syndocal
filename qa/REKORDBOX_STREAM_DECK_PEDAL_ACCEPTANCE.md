@@ -1,8 +1,8 @@
 # Syndocal × rekordbox-DJ-Link-ForPCDJ acceptance
 
 Date: 2026-08-21
-Updated: 2026-08-28
-Status: Required; current KDMX product checkpoint is source-only `1.2.0-alpha.27` on `codex/syndocal-v1.2`; the authored final-show artifact is independently pinned below, while the post-freeze native build, artifact identity, launch, and native UI acceptance remain unverified. Controlled rb-output authority is the committed/pushed `1.1.10` source at exact peer commit `4e26da201fef2ff204c28c7041b368e7283faebe`; the separate dirty `1.1.11` one-way updater is explicitly NO-GO and not deployable. The physical matrix remains unaccepted, with hardware acceptance exactly 0/12
+Updated: 2026-08-30
+Status: Required; current KDMX product checkpoint is source-only `1.2.0-alpha.27` on `codex/syndocal-v1.2`; the authored final-show artifact is independently pinned below, while the post-freeze native build, artifact identity, launch, and native UI acceptance remain unverified. The current rb-output source authority is branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit `59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version `1.1.12`. No v1.1.12 installer, tag, public release, or hardware acceptance is claimed. Production strict schema/config remains v1.1.11 (`C:\SyndocalShow\dj-agent-v1.1.11.json`); on the current `C:\SyndocalShow`, only `rb-output-rekordbox-local-test-v1.json` is present and the production config/token are absent. The standalone local acceptance is separate and does not replace production. The physical matrix remains unaccepted, with hardware acceptance exactly 0/12
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
 ## Current alpha.27 show/artifact and peer authority — 2026-08-28
@@ -26,23 +26,42 @@ artifact-absent behavior is isolated under the named test-only
 required-gate failure before continuing generated-contract tests; it is not a
 release or final acceptance invocation.
 
-The only deployable peer source for this checkpoint is branch `beta-v1.1.2`,
-version `1.1.10`, clean and upstream-equal at
-`4e26da201fef2ff204c28c7041b368e7283faebe`, pushed to
-`origin/beta-v1.1.2`. The v1.1.11 one-way config upgrader is a dirty,
-uncommitted and unpushed worktree based on that v1.1.10 commit; its independent
-review is **NO-GO** pending source/target filesystem-race repair. Do not deploy
-or use v1.1.11 for acceptance. No HELLO/ACK, pedal, Rekordbox MIDI, COM3
-fixture-output, reconnect, or other physical row is accepted here; HW-4 remains
+The current controlled source authority for this checkpoint is branch
+`beta-v1.1.2`, product source version `1.1.12`, clean and upstream-equal at
+exact peer commit `59df968d91bca71a327ef2a57ee5ab15de9f9947`, pushed to
+`origin/beta-v1.1.2`. This is a controlled source route, not a claim of a
+v1.1.12 installer, tag, public release, or deployable package. Production strict
+schema/config remains v1.1.11, with the expected checkout-external target
+`C:\SyndocalShow\dj-agent-v1.1.11.json`; that production config and its token are
+absent on the current `C:\SyndocalShow`. The only present config is the separate
+`C:\SyndocalShow\rb-output-rekordbox-local-test-v1.json` standalone test config.
+Local standalone acceptance does not replace production and cannot satisfy
+production HELLO/ACK/STATE_SYNC or advance HW-4. No production HELLO/ACK/
+STATE_SYNC, pedal, Rekordbox MIDI, COM3 fixture-output, reconnect, or other
+physical F13/F14 proof or other physical row is accepted here; HW-4 remains
 exactly **0/12 checked (0%)**.
 
-### Short operator sequence (after the v1.1.11 updater is repaired and reviewed)
+The common self-launched Rekordbox injection path now uses a fixed 15-second
+identity settle with continuous identity checks; the fresh/cold auto-launch path
+remains unaccepted. Existing-running Rekordbox injection and standalone local
+results do not substitute for that production acceptance.
 
-1. **Identity and alpha4:** verify the clean, upstream-equal v1.1.10 peer above;
-   keep the dirty v1.1.11 updater out of the target DJ PC. Load the exact
-   alpha4 `.sdc`, verify its byte count/SHA-256 and JSON contract, and leave its
-   DMX route staged `enabled:false` as `EnttecOpenDmx` / `COM3` / `250000`.
-2. **HELLO/ACK:** start the reviewed v1.1.10 peer and KDMX over the wired
+### Short production operator sequence (after the v1.1.11 config/token is provisioned and reviewed)
+
+1. **Identity, exclusive config, and alpha4:** in the companion
+   `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`, run its **Immutable source
+   identity gate** first. Then choose exactly one mutually exclusive block:
+   **Path A — exclusive one-time predecessor upgrade** only when the exact
+   v1.1.10 predecessor exists, or **Path B — exclusive one-time initialization**
+   only when both the predecessor and v1.1.11 target are absent. Never paste or
+   run both blocks; each has an explicit `LASTEXITCODE` check and intentional
+   stop. After the one-time operator token decision, open a new PowerShell and
+   run only the runbook's **Post-provisioning production preflight and launch**
+   block. Do not use the standalone local-test config for production. Load the exact alpha4 `.sdc`,
+   verify its byte count/SHA-256 and JSON contract, and leave its DMX route
+   staged `enabled:false` as `EnttecOpenDmx` / `COM3` / `250000`.
+2. **HELLO/ACK:** start the reviewed product-source `1.1.12` peer with the
+   external v1.1.11 production config and KDMX over the wired
    `/dj-link` v3 route. Capture HELLO/authentication and the correlated ACK;
    admit only one exact `deck/deckId/playSessionId` owner after an accepted or
    duplicate `DJ_TRACK_ACTIVE`.
@@ -192,7 +211,7 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-## Current v3 execution authority — alpha.27 / v1.1.10 — 2026-08-28
+## Current v3 execution authority — alpha.27 / source 1.1.12 / production v1.1.11 — 2026-08-30
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
@@ -204,16 +223,27 @@ contract are recorded in the current section above, while the post-freeze native
 build, launch, and native UI acceptance remain unverified. The accepted alpha.25
 artifact and native checks are historical and must not be rebound to alpha.27.
 
-The only current controlled rb-output checkout is version `1.1.10` at exact
-peer commit `4e26da201fef2ff204c28c7041b368e7283faebe`, clean and upstream-equal
-and pushed to `origin/beta-v1.1.2`. The separate v1.1.11 one-way updater is
-dirty/uncommitted/unpushed and independently **NO-GO** pending source/target
-filesystem-race repair; it is not a current peer artifact. Target-DJ-PC
-checkout/config/token/NIC identity and all physical observations remain
-unverified, so no physical row is accepted. Any later text that calls alpha.26,
-v1.1.9, v2, alpha.18, or peer v1.1.8 current is dated historical evidence and
-is superseded by this section, the alpha.27 section above, and
+The only current controlled rb-output source is branch `beta-v1.1.2`, product
+source version `1.1.12`, clean and upstream-equal at exact peer commit
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`, pushed to `origin/beta-v1.1.2`.
+This is a controlled source route; no v1.1.12 installer, tag, public release,
+or deployable package is claimed. Production strict schema/config remains
+v1.1.11, with checkout-external target
+`C:\SyndocalShow\dj-agent-v1.1.11.json`. That production config and token are
+absent on the current `C:\SyndocalShow`; only the separate
+`C:\SyndocalShow\rb-output-rekordbox-local-test-v1.json` is present. Local
+standalone acceptance does not replace production and cannot satisfy production
+HELLO/ACK/STATE_SYNC or advance HW-4. Target-DJ-PC config/token/NIC identity and
+all physical observations remain unverified, so no physical row is accepted.
+Any later text that calls alpha.26, v1.1.9, v2, alpha.18, or peer v1.1.8
+current is dated historical evidence and is superseded by this section, the
+alpha.27 section above, and
 `qa/DJ_HW4_OPERATOR_RUNBOOK_2026-08-27.md`.
+
+The common self-launched Rekordbox injection path uses a fixed 15-second
+identity settle with continuous PID/path/name/create-time checks. The
+fresh/cold auto-launch path remains unaccepted; existing-running injection and
+standalone local results do not substitute for that production proof.
 
 Stage 1 keeps two independent truths after a mapped `DJ_TRACK_ACTIVE` ACK admits
 one exact deck/deckId/playSessionId owner. Stage 1 F14 is the local Rekordbox
@@ -427,7 +457,8 @@ In Stage 1, the accepted F13 edge begins the local HPF ramp and synchronously
 routes exactly one correlated, idempotent `DJ_RELEASE` before local MIDI can
 complete. The independent local release macro then runs against the admitted
 owner deck: HPF, that deck's `ChannelFader` fade, Cue/Stop, and HPF/fader reset.
-The current v1.1.10 profile is strict: `releaseMacro.enabled=true`,
+The current v1.1.11 production profile, implemented by product source `1.1.12`,
+is strict: `releaseMacro.enabled=true`,
 `sequence:"filter-then-fade-then-stop"`, and `releaseFade.enabled=true`. HPF CC16 ramps
 `64 -> 127`; after HPF completes, the independent ChannelFader CC17 leg ramps
 `127 -> 0`, each over `1000 ms` with `50 ms` updates, followed by Cue/Stop Note37
@@ -818,7 +849,7 @@ denominator, which remains **19/71 (26.8%)**.
 | [ ] HW-4.3 | Actual mapped playback on any deck emits one `DJ_TRACK_ACTIVE` and starts one mapped Timeline; additionally prove the explicit production arbitration: zero title positives may select only fresh playing Deck 1 after the 1400 ms metadata wait, while multiple positives prefer fresh playing Deck 1 and otherwise the lowest valid positive deck | Required / Peer and hardware pending |
 | [ ] HW-4.4 | Concurrent playing decks cannot steal an admitted owner; terminal release permits a later mapped deck/session | Required / Peer and hardware pending |
 | [ ] HW-4.5 | Stage 1 F14 local Rekordbox LoopHalf MIDI action plus repeated absolute measured-loop `DJ_LOOP_STATE` reports | Required / Peer and hardware pending |
-| [ ] HW-4.6 | Current v1.1.10 Stage 1 F13: HPF CC16 start plus immediate exactly-once `DJ_RELEASE`, then ChannelFader CC17 fade, Cue/Stop, HPF/fader reset; local MIDI failures do not gate Release | Required / Peer and hardware pending |
+| [ ] HW-4.6 | Current v1.1.11 production Stage 1 F13: HPF CC16 start plus immediate exactly-once `DJ_RELEASE`, then ChannelFader CC17 fade, Cue/Stop, HPF/fader reset; local MIDI failures do not gate Release | Required / Peer and hardware pending |
 | [ ] HW-4.7 | Stage 1 F13 Release, ACK/rejection/timeout, and retry disposition | Required / Peer and hardware pending |
 | [ ] HW-4.8 | Stage 2 authoritative `running` + exact correlation; F13 alone toggles the retained current loop ON/OFF, Stage 2 F14 sends active-Timeline-only `DJ_TIMELINE_LOOP_HALF` for an active loop, F15 is `+4`; strict `transitionHoldActive` remains diagnostic only, with no `-4` or MIDI | Required / Source review, peer deployment, and hardware pending |
 | [ ] HW-4.9 | Disconnect/local Stage 1 operation, reconnect State Sync, and Stage 2 fail-closed behavior | Required / Peer and hardware pending |
@@ -827,13 +858,14 @@ denominator, which remains **19/71 (26.8%)**.
 | [ ] HW-4.12 | Art-Net/sACN traffic sharing the wired network during the DJ run | Required / Peer and hardware pending |
 
 The separately developed DJ-Link peer's current controlled source is branch
-`beta-v1.1.2`, package version `1.1.10`, clean and upstream-equal at exact
-checkout authority `4e26da201fef2ff204c28c7041b368e7283faebe`, pushed to
-`origin/beta-v1.1.2`. The v1.1.11 one-way config-upgrader worktree is dirty,
-uncommitted, unpushed, and independently **NO-GO** pending source/target
-filesystem-race repair; it must not be installed or used for this matrix. The
-only permitted path is the reviewed v1.1.10 target-DJ-PC source checkout with
-its checkout-external configuration and real current token, not an installer.
+`beta-v1.1.2`, product source version `1.1.12`, clean and upstream-equal at
+exact checkout authority `59df968d91bca71a327ef2a57ee5ab15de9f9947`, pushed to
+`origin/beta-v1.1.2`. Production strict schema/config remains v1.1.11. The
+checkout-external production target and real token are absent on the current
+`C:\SyndocalShow`; only the separate local-test config is present. The local
+standalone route is not a production substitute. The only permitted production
+path is this reviewed source checkout with a provisioned v1.1.11 external
+configuration and real current token, not an installer.
 Until identity binding, wired-LAN HELLO/ACK, and the hardware matrix pass, this
 feature remains `Required / Peer and hardware pending`; Syndocal-side automated
 completion is not an end-to-end completion claim.
@@ -1037,7 +1069,8 @@ the whole-product accepted denominator remains **19/71 (26.8%)**.
 
 ## SUPERSEDED — historical v1.1.6 controlled-source preflight
 
-Do not execute this dated subsection. Use the current v1.1.10 authority at the
+Do not execute this dated subsection. Use the current product-source 1.1.12 /
+production v1.1.11 authority at the
 top of this document and the current operator runbook below instead.
 
 The next acceptance action uses only the clean, upstream-equal target-DJ-PC source
@@ -1146,7 +1179,8 @@ checks no HW-4 row.
 
 ## SUPERSEDED — historical v1.1.6 HW-4 companion snapshot
 
-Do not execute this dated subsection. It is superseded by the current v1.1.10
+Do not execute this dated subsection. It is superseded by the current
+product-source 1.1.12 / production v1.1.11
 authority at the top of this document and the updated operator runbook.
 
 The concise operator sequence is
@@ -1215,7 +1249,8 @@ the ordered hardware and bounded fault cases below are captured.
 ## SUPERSEDED / HISTORICAL v1.1.8 controlled-source authority — 2026-08-27
 
 This dated section superseded the historical v1.1.7 section above but is now
-superseded by current v1.1.10 authority. At this historical checkpoint the target-DJ-PC source was
+superseded by the current product-source 1.1.12 / production v1.1.11 authority.
+At this historical checkpoint the target-DJ-PC source was
 branch `beta-v1.1.2`, clean and upstream-equal at exact commit
 `0f3e8c6851857c8542c132a89a7d44289002b1f5`, package version `1.1.8`,
 with external show configuration
@@ -1345,7 +1380,8 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## SUPERSEDED / HISTORICAL — alpha.19 Follow-hold / Stage 2 authority — 2026-08-27
 
 This dated alpha.19 record is retained as historical provenance only and is not
-current execution guidance. The current alpha.27/v1.1.10 truth is in the sections
+current execution guidance. The current alpha.27 / product-source 1.1.12 /
+production v1.1.11 truth is in the sections
 above: Stage 1 F14 is Rekordbox LoopHalf MIDI, Stage 2 F13 owns
 `DJ_TIMELINE_LOOP_SET`, and Stage 2 F14 sends active-Timeline-only
 `DJ_TIMELINE_LOOP_HALF`. KDMX source at this historical checkpoint was
