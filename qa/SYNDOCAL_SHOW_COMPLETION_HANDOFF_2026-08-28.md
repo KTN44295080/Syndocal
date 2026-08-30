@@ -4,6 +4,45 @@ Status date: 2026-08-30 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-08-30 current source, process, and external-boundary checkpoint
+
+The current pushed source/QA checkpoint is branch `codex/syndocal-v1.2` at
+`42cb17ce3ae0272a43f7671da70361d3f2520e98`, exactly equal to
+`origin/codex/syndocal-v1.2` before this documentation-only entry. The commit
+contains the fixed alpha.42 Art-Net derivative generator and its tests. The
+immediately preceding DJ production-authority documentation checkpoint is
+`d7449d02dccc686bb99d7b6878a147262868f0b0`. The documentation checkpoint is
+the commit containing this entry and is accepted only after local `HEAD` again
+equals the upstream branch.
+
+The external DJ Agent authority is the clean, upstream-equal
+`C:\Users\kouty\Desktop\rb-output` checkout on `beta-v1.1.2` at
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`, product source `1.1.12`.
+Its standalone process remains PID `55684`, listening only on
+`127.0.0.1:8787` and UDP `127.0.0.1:22346`; Rekordbox `7.2.18` remains the
+responsive PID `49440`. The mode is explicitly `REKORDBOX LOCAL TEST / NO
+SYNDOCAL`, Syndocal is disabled in that mode, and the latest observed Deck 1
+state is `no-track` / `track-not-loaded`. Physical Hook-measured F14 `2 -> 1`
+beat and F13 HPF -> ChannelFader fade -> Stop still require the operator to
+load/play Deck 1 and press the pedals. The fresh self-launch/cold-launch
+acceptance also remains pending. These local checks do not replace production
+strict-v3 provisioning, LAN, token, HELLO/ACK/STATE_SYNC, reconnect, or
+Timeline acceptance; HW-4 remains open.
+
+The exact checkout-owned alpha.42 Syndocal executable remains responsive as
+PID `115592`; its immutable native identity is recorded in the next section.
+Unity remains responsive as PID `112488` and is the sole observed UDP `6454`
+owner. The Art-Net derivative one-shot is unsent, physical receiver/fixture
+observation is open, MiraBox HDMI-content proof is open, audible rehearsal
+audio and ASIO real-device acceptance are open, and the production DJ show
+configuration/token and Show-LAN proof are not present on this PC.
+
+A read-only logical-size inventory of `target`, `qa`, `app`, and `.pnpm-store`
+was bounded at 30 seconds and stopped without a complete result. No cleanup
+target has newly passed the recurring exact-path/adversarial gate, the generated
+Art-Net artifact is current QA evidence, no deletion ran, and reclaimed bytes
+remain `0`.
+
 ## 2026-08-30 alpha.42 final native three-display checkpoint
 
 This is the current alpha.42 native authority and supersedes the older

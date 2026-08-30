@@ -4,6 +4,33 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-30 current show-critical checkpoint
+
+Current pushed KDMX source/QA authority is
+`42cb17ce3ae0272a43f7671da70361d3f2520e98` on
+`codex/syndocal-v1.2`, equal to `origin/codex/syndocal-v1.2` before this
+documentation-only entry. It contains the fixed alpha.42 Art-Net probe
+derivative generator/tests. DJ production-authority documentation is pushed at
+`d7449d02dccc686bb99d7b6878a147262868f0b0`. The external clean DJ Agent source
+authority is `beta-v1.1.2` at
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`, product source `1.1.12`.
+
+The running local DJ-only lane deliberately excludes Syndocal: Rekordbox PID
+`49440` and standalone Agent PID `55684` are responsive, and the latest Deck 1
+state is `no-track` / `track-not-loaded`. The next operator action is load/play
+Deck 1, wait for admission, then prove Hook-measured F14 `2 -> 1` beat and F13
+HPF -> ChannelFader fade -> Stop. A fresh self-launch/cold-launch pass follows.
+Production strict-v3 config/token/LAN/HELLO/ACK/STATE_SYNC/reconnect and Timeline
+hardware acceptance remain separate and open.
+
+Syndocal PID `115592` and Unity PID `112488` remain responsive; Unity is the
+sole observed UDP `6454` owner. Art-Net physical one-shot, receiver/fixture
+observation, MiraBox HDMI content, audible rehearsal audio, ASIO real-device,
+and the remaining production DJ hardware boundaries are unverified. A bounded
+30-second read-only workspace-size inventory did not complete; it was stopped
+without deletion. No cleanup target is newly approved, the current QA artifact
+is protected, and reclaimed bytes remain `0`.
+
 ## 2026-08-30 alpha.42 final native three-display checkpoint
 
 This is the current alpha.42 native authority and supersedes older current
